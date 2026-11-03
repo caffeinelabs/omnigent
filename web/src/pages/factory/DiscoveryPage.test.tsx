@@ -136,24 +136,47 @@ describe("Discovery off", () => {
     expect(off).toHaveTextContent("Every source needs an owner");
     expect(off).toHaveTextContent("$10 a day");
     expect(reads("/discovery")).toBe(0);
+    // The outside sources are each the owner's explicit tick; the team's is not asked.
+    const repo = within(off).getByTestId("discovery-starter-approve-repo");
+    const web = within(off).getByTestId("discovery-starter-approve-web");
+    expect(repo).not.toBeChecked();
+    expect(web).not.toBeChecked();
+    expect(within(off).queryByTestId("discovery-starter-approve-team")).toBeNull();
+    fireEvent.click(repo);
+    expect(repo).toBeChecked();
+    expect(within(off).getByTestId("discovery-starter-source-web")).toHaveTextContent(
+      "Not approved: added waiting for an owner; nothing reads it.",
+    );
 
     fireEvent.click(within(off).getByTestId("discovery-starter-review"));
     const staged = await screen.findByTestId("discovery-starter-preview");
     expect(staged).toHaveTextContent("Staged: definition v13");
+    expect(within(staged).getByTestId("discovery-starter-waiting")).toHaveTextContent(
+      "Waits for an owner's approval: The open web.",
+    );
     const [preview] = sent("POST", "/definition/preview") as {
       changes: { path: string; value: unknown }[];
     }[];
-    expect(preview!.changes.map((c) => c.path)).toEqual([
-      "discovery.enabled",
-      "discovery.sources",
-      "discovery.sources",
-      "discovery.sources",
+    expect(preview!.changes[0]).toEqual({
+      op: "replace",
+      path: "discovery.enabled",
+      value: true,
+    });
+    const added = preview!.changes
+      .filter((c) => c.path === "discovery.sources")
+      .map((c) => [(c.value as { id: string }).id, (c.value as { state: string }).state]);
+    expect(added).toEqual([
+      ["repo", "trial"],
+      ["web", "pending"],
+      ["team", "active"],
     ]);
     expect(JSON.stringify(preview)).not.toMatch(/secret|token|key"/i);
 
     fireEvent.click(within(staged).getByTestId("discovery-starter-apply"));
     const toast = await screen.findByTestId("factory-toast");
-    expect(toast).toHaveTextContent("Discovery is on (definition v13).");
+    expect(toast).toHaveTextContent(
+      "Discovery is on (definition v13). The open web waits for your approval in Needs you.",
+    );
     const [put] = sent("PUT", "/definition") as { changes: unknown[]; base_version: number }[];
     expect(put!.changes).toEqual(preview!.changes);
     const before = definitionResponse().def_version;

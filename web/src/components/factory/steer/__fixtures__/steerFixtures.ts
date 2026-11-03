@@ -104,6 +104,8 @@ export interface SteerDefinitionOptions {
   undoable?: boolean;
   /** The environment profile at its defaults: a factory the deployment seeded none for. */
   noEnvironment?: boolean;
+  /** The web source waits for an owner's approval (the starter left it unticked). */
+  pendingWeb?: boolean;
 }
 
 /** The sample environment profile (what a deployment's seed gives a factory). */
@@ -187,6 +189,9 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
   disc.enabled = discovery;
   disc.seat = { model: "sonnet" };
   disc.sources = discovery && !options.noSources ? clone(SAMPLE_SOURCES) : [];
+  if (options.pendingWeb) {
+    disc.sources = disc.sources.map((s) => (s.id === "web" ? { ...s, state: "pending" } : s));
+  }
   disc.rubric.decay_half_life_days = 45;
   effective.briefs = options.bare
     ? (Object.fromEntries(

@@ -16,6 +16,7 @@ import {
   previewFactoryDefinition,
   restoreFactoryDefinition,
 } from "@/lib/factoryApi";
+import { approveSource } from "@/lib/factoryDiscoveryApi";
 import { setSourcePaused } from "@/lib/factoryPaletteApi";
 import {
   type GatesResponse,
@@ -147,6 +148,15 @@ export function usePauseSource(factoryId: string) {
   return useMutation({
     mutationFn: ({ source, paused }: { source: string; paused: boolean }) =>
       setSourcePaused(factoryId, source, paused),
+    onSettled: invalidate,
+  });
+}
+
+/** An owner approves a source that waits for one (`POST …/sources/{id}/approve`). */
+export function useApproveSource(factoryId: string) {
+  const invalidate = useInvalidateLearn(factoryId);
+  return useMutation({
+    mutationFn: (source: string) => approveSource(factoryId, source),
     onSettled: invalidate,
   });
 }

@@ -346,6 +346,16 @@ export const SourcesMobile = phone(steer("/steer/sources"));
 /** Discovery runs, but no source is connected yet. */
 export const SourcesEmpty = steer("/steer/sources", { noSources: true, proposals: [] });
 
+/** The web source waits for an owner's approval (the starter left it unticked): Approve. */
+export const SourcesWebWaitsForOwner = steer("/steer/sources", { pendingWeb: true });
+
+export const SourcesWebWaitsForOwnerLight = steer("/steer/sources", {
+  pendingWeb: true,
+  ...light,
+});
+
+export const SourcesWebWaitsForOwnerMobile = phone(steer("/steer/sources", { pendingWeb: true }));
+
 /** Removing the forum staged. */
 export const SourcesStaged = steer("/steer/sources", {
   staging: () =>

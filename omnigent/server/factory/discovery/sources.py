@@ -45,6 +45,8 @@ SUBJECT_PREFIX: Final = "source:"
 HOLD_KEY: Final = "hold"
 LAST_SYNC_KEY: Final = "last_sync_at"
 PAUSED_FROM_KEY: Final = "paused_from"
+STOPPED: Final = frozenset({"paused", "pending"})
+"""Source states nothing reads: paused by a person, or pending an owner's approval."""
 
 
 def today(now: int | None = None) -> str:
@@ -149,9 +151,16 @@ def held(state: FactorySourceState | None) -> dict[str, Any] | None:
 
 
 def require_running(source: Source, state: FactorySourceState | None) -> None:
-    """:raises CockpitError: 409 ``source_paused`` or ``source_failing``."""
+    """:raises CockpitError: 409 ``source_paused``, ``source_pending`` or ``source_failing``."""
     if source.state == "paused":
         raise CockpitError(409, "source_paused", f"source {source.id} is paused", source=source.id)
+    if source.state == "pending":
+        raise CockpitError(
+            409,
+            "source_pending",
+            f"source {source.id} waits for an owner's approval; nothing reads it until then",
+            source=source.id,
+        )
     hold = held(state)
     if hold is not None:
         # The hold's reason may quote what the source sent: it stays in the log, for people.
@@ -297,6 +306,7 @@ __all__ = [
     "LAST_SYNC_KEY",
     "PAUSED_FROM_KEY",
     "SEATS",
+    "STOPPED",
     "WRITE_LOOKING",
     "Source",
     "charge",

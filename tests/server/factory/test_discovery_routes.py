@@ -252,6 +252,32 @@ async def test_opportunities_carry_evidence_score_status_and_next_step(cockpit: 
     assert detail["lifecycle"][1] == {"step": "validated", "reached": True, "current": True}
 
 
+async def test_the_panels_quotes_are_peoples_words_one_per_account_before_pages(
+    cockpit: Cockpit,
+) -> None:
+    # Three people asked a week ago; two public pages without an account came in today.
+    people = ingest(
+        cockpit,
+        "repo-issues",
+        [f"I want to show a draft first {i} (sample)" for i in range(3)],
+        age_days=7,
+    )
+    pages = ingest(
+        cockpit,
+        "web",
+        ["A forum thread about private drafts (sample)", "A review of draft sharing (sample)"],
+        accounts=[None, None],
+        age_days=0,
+    )
+    label(cockpit, people + pages, "workaround")
+    make_opportunity(cockpit, people + pages)
+
+    said = (await get(cockpit, "/opportunities/O-1")).json()["quotes"]["said"]
+
+    assert {q["signal"] for q in said} == {s.ref for s in people}
+    assert all(q["source_kind"] == "repo" for q in said)
+
+
 async def test_an_unknown_opportunity_says_where_it_may_be(cockpit: Cockpit) -> None:
     resp = await get(cockpit, "/opportunities/O-99")
 

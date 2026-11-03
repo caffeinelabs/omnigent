@@ -2944,7 +2944,8 @@ export interface SourceDef {
   budget: { calls_per_day: number };
   /** Minutes between syncs; 0 is query-only. */
   interval_min: number;
-  state: "trial" | "active" | "paused";
+  /** `pending`: listed but not approved by an owner yet; nothing reads it (nor a paused one). */
+  state: "trial" | "active" | "paused" | "pending";
 }
 
 /** The rank's numbers; its formula is code. */

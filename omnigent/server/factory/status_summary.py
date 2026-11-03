@@ -454,6 +454,8 @@ class StatusInputs:
     :param usd_per_h_alert: The factory's hourly spend alert, for the verdict's rate.
     :param proposals: Pending, co-signing and trial proposals (``ProposalView``-like
         dicts), which the "Needs you" list sorts into bets, sources and the rest.
+    :param pending_sources: Discovery sources that wait for an owner's approval
+        (``{id, label, kind, since}``; only while discovery runs for the factory).
     """
 
     snapshot: Mapping[str, Any]
@@ -466,6 +468,7 @@ class StatusInputs:
     owners: Mapping[str, str] = field(default_factory=dict)
     usd_per_h_alert: float | None = None
     proposals: Sequence[Mapping[str, Any]] = ()
+    pending_sources: Sequence[Mapping[str, Any]] = ()
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -1762,6 +1765,7 @@ def load_inputs(
     proposals = [proposal_row(row) for row in open_proposals]
     return StatusInputs(
         proposals=proposals,
+        pending_sources=pending_sources(deps, root_id),
         usd_per_h_alert=detectors.threshold(root_id, "usd_per_hour_alert"),
         snapshot=body,
         user_id=user_id,
@@ -1772,6 +1776,36 @@ def load_inputs(
         notified=raw.notified,
         owners=owners,
     )
+
+
+def pending_sources(deps: FactoryDeps, root_id: str) -> list[dict[str, Any]]:
+    """
+    The discovery sources that wait for an owner's approval (state ``pending``),
+    each with when it was added; none while discovery does not run.
+    """
+    from omnigent.server.factory import definition
+
+    if not definition.discovery_enabled(deps, root_id):
+        return []
+    out: list[dict[str, Any]] = []
+    for source in definition.value(deps, root_id, "discovery.sources", []) or []:
+        if not isinstance(source, Mapping) or source.get("state") != "pending":
+            continue
+        sid = str(source.get("id") or "")
+        if not sid:
+            continue
+        added = deps.factory_store.find_events(
+            root_id, ["source.added"], 0, f"source:{sid}", limit=1, newest_first=True
+        )
+        out.append(
+            {
+                "id": sid,
+                "label": str(source.get("label") or sid),
+                "kind": str(source.get("kind") or "source"),
+                "since": added[0].ts // 1000 if added else None,
+            }
+        )
+    return out
 
 
 PROPOSAL_ASK_STATUSES: Final = ("pending", "awaiting_cosign", "trial")

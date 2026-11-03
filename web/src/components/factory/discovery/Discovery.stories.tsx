@@ -74,6 +74,31 @@ export const DiscoveryOffStarterStaged: Story = {
   },
 };
 
+/**
+ * The owner ticks the repos and leaves the web unticked: the staged change
+ * says the web waits for an owner's approval.
+ */
+export const DiscoveryOffStarterApproval: Story = {
+  ...discovery("", { state: "off" }),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByTestId("discovery-starter-approve-repo"));
+    await userEvent.click(await body.findByTestId("discovery-starter-review"));
+    await body.findByTestId("discovery-starter-waiting");
+  },
+};
+
+export const DiscoveryOffStarterApprovalDark: Story = {
+  ...DiscoveryOffStarterApproval,
+  ...discovery("", { state: "off" }, { theme: "dark" }),
+  play: DiscoveryOffStarterApproval.play,
+};
+
+export const DiscoveryOffStarterApprovalMobile: Story = {
+  ...phone(discovery("", { state: "off" })),
+  play: DiscoveryOffStarterApproval.play,
+};
+
 /** An operator sees what discovery does and that an owner turns it on. */
 export const DiscoveryOffOperator = discovery(
   "",
@@ -182,6 +207,23 @@ export const SourcePeekHeldLight = discovery(
 
 export const SourcePeekHeldMobile = phone(
   discovery("", { heldSource: true }, { search: "?peek=source:trk" }),
+);
+
+/** A listed source the owner did not approve yet: nothing reads it; an owner approves it. */
+export const SourcePeekWaitsForOwner = discovery(
+  "",
+  { state: "cold", pendingWeb: true },
+  { search: "?peek=source:web" },
+);
+
+export const SourcePeekWaitsForOwnerDark = discovery(
+  "",
+  { state: "cold", pendingWeb: true },
+  { theme: "dark", search: "?peek=source:web" },
+);
+
+export const SourcePeekWaitsForOwnerMobile = phone(
+  discovery("", { state: "cold", pendingWeb: true }, { search: "?peek=source:web" }),
 );
 
 /** A source an agent proposed, waiting for an owner. */

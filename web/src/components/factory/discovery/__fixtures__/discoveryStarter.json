@@ -1,0 +1,50 @@
+{
+  "about": "The discovery starter as an owner applies it to a factory with discovery off and the default definition: what discoveryStarter.ts builds, and what the server's eval-mode smoke test applies. Sources in approval_needed reach outside the factory: each is applied only when the owner ticks it, else it waits for an owner as its own proposal.",
+  "approval_needed": ["repo", "web"],
+  "changes": [
+    { "op": "replace", "path": "discovery.enabled", "value": true },
+    { "op": "replace", "path": "discovery.seat.model", "value": "sonnet" },
+    {
+      "op": "add",
+      "path": "discovery.sources",
+      "value": {
+        "id": "repo",
+        "label": "The factory's repos",
+        "kind": "repo",
+        "params": { "since_days": 90 },
+        "roles": ["scout"],
+        "budget": { "calls_per_day": 100 },
+        "interval_min": 360,
+        "state": "trial"
+      }
+    },
+    {
+      "op": "add",
+      "path": "discovery.sources",
+      "value": {
+        "id": "web",
+        "label": "The open web",
+        "kind": "web",
+        "params": { "changelogs": true },
+        "roles": ["scout"],
+        "budget": { "calls_per_day": 30 },
+        "interval_min": 10080,
+        "state": "trial"
+      }
+    },
+    {
+      "op": "add",
+      "path": "discovery.sources",
+      "value": {
+        "id": "team",
+        "label": "The factory's people",
+        "kind": "team",
+        "params": {},
+        "roles": ["scout"],
+        "budget": { "calls_per_day": 100 },
+        "interval_min": 0,
+        "state": "active"
+      }
+    }
+  ]
+}

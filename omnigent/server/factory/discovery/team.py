@@ -45,7 +45,7 @@ def _store(app_state: Any, event: FactoryEvent) -> tuple[Any, str] | None:
         return None
     kind, text = found
     source = ledger.team_source(deps, event.factory_id)
-    if source.state == "paused":
+    if source.state in ("paused", "pending"):
         return None
     try:
         row, existed = ledger.add_conviction(

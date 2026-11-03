@@ -940,7 +940,8 @@ export function outlineValue(section: SteerSection, facts: OutlineFacts): string
     }
     case "sources": {
       const all = doc.discovery?.sources ?? [];
-      const on = all.filter((s) => s.state !== "paused").length;
+      // Paused sources and those waiting for an owner's approval read nothing.
+      const on = all.filter((s) => s.state !== "paused" && s.state !== "pending").length;
       return `${on} on${facts.sourcesWaiting ? ` · ${facts.sourcesWaiting} ${facts.sourcesWaiting === 1 ? "waits" : "wait"} for you` : ""}`;
     }
     case "rubric": {

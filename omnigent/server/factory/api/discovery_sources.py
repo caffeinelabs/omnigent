@@ -13,7 +13,8 @@ People (prefix ``/v1/factory/factories/{fid}``; writes carry the human-origin
 check): ``POST /sources/{id}/test`` (EDIT; one call, nothing stored),
 ``POST /sources/{id}/pause`` (EDIT; a definition version, with Undo),
 ``POST /sources/{id}/resume`` (owners resume a paused source; EDIT lifts the
-server's hold after failures), ``GET /sources/{id}/log`` (READ).
+server's hold after failures), ``POST /sources/{id}/approve`` (owners approve a
+source that waits for them; it starts its trial), ``GET /sources/{id}/log`` (READ).
 
 Everything answers ``404 discovery_off`` unless the server env
 ``OMNIGENT_FACTORY_DISCOVERY`` and the factory's ``discovery.enabled`` are on.
@@ -128,6 +129,19 @@ async def resume_source(
     async def run() -> dict[str, Any]:
         user_id, root = await _root(request, factory_id)
         return await gateway.resume(request.app.state, root, user_id, source_id, payload)
+
+    return await _guard(run)
+
+
+@router.post(f"{_BASE}/approve", response_model=None, dependencies=HUMAN_ORIGIN)
+async def approve_source(
+    request: Request, factory_id: str, source_id: str, payload: Annotated[Any, Body()] = None
+) -> dict[str, Any] | JSONResponse:
+    """Approve a source that waits for an owner (owners; a definition version, with Undo)."""
+
+    async def run() -> dict[str, Any]:
+        user_id, root = await _root(request, factory_id)
+        return await gateway.approve(request.app.state, root, user_id, source_id, payload)
 
     return await _guard(run)
 

@@ -119,6 +119,36 @@ async def test_new_signals_bring_the_sweep_and_the_first_synthesis(
     assert 'load_skill("discovery-synthesis")' in synthesis
 
 
+async def test_the_synthesis_names_the_weeks_hunches_for_a_cheapest_test(
+    cockpit: Cockpit, scout: str
+) -> None:
+    ingest(cockpit, "repo-issues", ["Exports time out (sample)"])
+    added = await cockpit.post(
+        base(cockpit, "/hunches"),
+        {"text": "I think exports fail on big projects because of the size cap (sample)"},
+    )
+    assert added.status_code == 201, added.text
+    hunch = added.json()["signal"]["id"]
+
+    assert "synthesis" in await _beat(cockpit, 25 * HOUR)
+    [synthesis] = _texts(cockpit, scout, "[Factory discovery · synthesis")
+    assert "2 new signals · 1 unsorted · 1 hunches ·" in synthesis
+    assert f"People's hunches this week ({hunch}): give each one with value a cheapest test" in (
+        synthesis
+    )
+    # Ids only: a hunch's words never go into a beat.
+    assert "size cap" not in synthesis
+    [event] = cockpit.events(beats.KIND_SYNTHESIS)
+    assert event.data["hunches"] == 1
+
+
+def test_the_synthesis_text_names_at_most_a_few_hunches() -> None:
+    many = [f"S-{n}" for n in range(1, 12)]
+    text = beats.synthesis_text(20, 4, 1.0, 10.0, many)
+    assert "(S-1, S-2, S-3, S-4, S-5, S-6, S-7, S-8 and 3 more)" in text
+    assert "hunches" not in beats.synthesis_text(20, 4, 1.0, 10.0).split("]", 1)[1]
+
+
 async def test_the_daily_sweep_needs_new_signals(cockpit: Cockpit, scout: str) -> None:
     ingest(cockpit, "repo-issues", ["Exports time out (sample)"])
     assert await _beat(cockpit, 3 * HOUR) == ["sweep"]

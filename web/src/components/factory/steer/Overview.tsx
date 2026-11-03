@@ -8,7 +8,7 @@
  */
 
 import { CompassIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Ask } from "@/lib/factoryAsksApi";
 import type { DefinitionView } from "@/lib/factoryApi";
@@ -21,12 +21,13 @@ import { type SteerSection, steerPageHref } from "../factoryRoutes";
 import { type LoopLeads, homeAgentRows, loopLeads } from "../home/homeModel";
 import { SectionCard } from "../project/projectParts";
 import { MemberAvatar } from "../ui/MemberAvatar";
-import { MEANING } from "../ui/statusTokens";
+import { FOCUS_RING, MEANING } from "../ui/statusTokens";
 import { useFactoryToast } from "../ui/Toast";
 import {
   STARTER_SOURCES,
   STARTER_USD_PER_DAY,
   STARTER_WORDS,
+  needsApproval,
   stageStarter,
 } from "./discoveryStarter";
 import { useSteer } from "./SteerContext";
@@ -74,9 +75,11 @@ function StarterCard() {
   const steer = useSteer();
   const toast = useFactoryToast();
   const staged = steer.isStaged("discovery.enabled");
+  // Outside sources an owner ticks are approved in the same apply; the rest wait for one.
+  const [approved, setApproved] = useState<ReadonlySet<string>>(() => new Set());
   const stage = () => {
     const before = steer.staging;
-    steer.setStaging((prev) => stageStarter(prev, steer.effective));
+    steer.setStaging((prev) => stageStarter(prev, steer.effective, approved));
     toast.show({
       message: "Staged the discovery starter. See what it reads and costs, then apply it.",
       undo: () => steer.setStaging(before),
@@ -107,13 +110,33 @@ function StarterCard() {
       </p>
       <ul className="flex flex-col gap-1 text-sm">
         {STARTER_SOURCES.map((s) => (
-          <li key={s.id} className="flex gap-2">
+          <li key={s.id} className="flex gap-2" data-testid={`steer-starter-source-${s.id}`}>
             <span className="w-12 shrink-0 font-mono text-xs leading-5 text-muted-foreground">
               {s.kind}
             </span>
-            <span>
-              <b className="font-medium">{s.label}.</b>{" "}
-              {STARTER_WORDS[s.id as "repo" | "web" | "team"]}
+            <span className="min-w-0">
+              <b className="font-medium">{s.label}.</b> {STARTER_WORDS[s.id]}
+              {needsApproval(s.id) && steer.owner && !staged && (
+                <label className="mt-0.5 flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={approved.has(s.id)}
+                    onChange={(e) =>
+                      setApproved((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(s.id);
+                        else next.delete(s.id);
+                        return next;
+                      })
+                    }
+                    data-testid={`steer-starter-approve-${s.id}`}
+                    className={cn("accent-status-blue", FOCUS_RING)}
+                  />
+                  {approved.has(s.id)
+                    ? "Approved: Scout reads it from the start"
+                    : "Not approved yet: added waiting for an owner"}
+                </label>
+              )}
             </span>
           </li>
         ))}
@@ -173,7 +196,7 @@ export function Overview({
         {
           label: "Sources",
           section: "sources",
-          value: `${sources.filter((s) => s.state !== "paused").length} on`,
+          value: `${sources.filter((s) => s.state !== "paused" && s.state !== "pending").length} on`,
         },
         {
           label: "Product profile",

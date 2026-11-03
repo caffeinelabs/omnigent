@@ -342,6 +342,10 @@ def _refuse_source(source: SourceRef) -> None:
         )
     if source.state == "paused":
         raise CockpitError(409, "source_paused", f"source {source.id} is paused")
+    if source.state == "pending":
+        raise CockpitError(
+            409, "source_pending", f"source {source.id} waits for an owner's approval"
+        )
 
 
 def _kind(source: SourceRef, item: Item) -> str | None:

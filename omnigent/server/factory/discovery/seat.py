@@ -158,7 +158,11 @@ def brief_text(deps: FactoryDeps, factory_id: str, mail_id: str, *, revived: boo
     discovery = data.get("discovery") or {}
     goals = [g for g in strategy.get("goals") or [] if isinstance(g, dict)]
     unmeasured = sum(1 for g in goals if not g.get("metric"))
-    readable = [s.id for s in sources.listed(deps, factory_id) if ROLE_SCOUT in s.roles]
+    readable = [
+        s.id
+        for s in sources.listed(deps, factory_id)
+        if ROLE_SCOUT in s.roles and s.state not in sources.STOPPED
+    ]
     budgets = discovery.get("budgets") or {}
     how = "woke you again" if revived else "seated you"
     lines = [

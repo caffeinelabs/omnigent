@@ -2,9 +2,11 @@
  * Steer › Sources: one card per evidence source (its kind, state, what it
  * reads, privacy, retention, key or not, calls today against its cap and
  * signals this week) with Pause / Resume (at once, with Undo), Test and the
- * access log; sources an agent proposed wait in amber for an owner. Add
- * source opens the four-step sheet, which stages a definition change. The
- * rules every source follows (Tier 0) close the section.
+ * access log; a listed source that waits for an owner's approval (the
+ * starter leaves an unticked one so) and sources someone proposed wait in
+ * amber for an owner, who approves them here. Add source opens the four-step
+ * sheet, which stages a definition change. The rules every source follows
+ * (Tier 0) close the section.
  */
 
 import { CheckIcon, PlusIcon, XIcon } from "lucide-react";
@@ -21,8 +23,14 @@ import { useFactoryToast } from "../ui/Toast";
 import { AddSourceSheet } from "./AddSourceSheet";
 import { useSteer } from "./SteerContext";
 import { STAGED_CONTROL, StagedChip, TierZero } from "./steerFields";
-import { agentProposals, proposerName, stageProposal, stagedList } from "./steerModel";
-import { usePauseSource, useSourceCounts, useSourceLog, useTestSource } from "./steerQueries";
+import { proposerName, stageProposal, stageable, stagedList } from "./steerModel";
+import {
+  useApproveSource,
+  usePauseSource,
+  useSourceCounts,
+  useSourceLog,
+  useTestSource,
+} from "./steerQueries";
 
 const SECRET_KINDS = new Set([
   "analytics",
@@ -67,6 +75,11 @@ function stateChip(state: string, held: boolean) {
       return { text: "on", cls: cn(MEANING.working.surface, MEANING.working.text) };
     case "trial":
       return { text: "on trial", cls: cn(MEANING.selected.surface, MEANING.selected.text) };
+    case "pending":
+      return {
+        text: "waits for an owner",
+        cls: cn(MEANING.needsYou.surface, MEANING.needsYou.text),
+      };
     default:
       return { text: "paused", cls: "bg-muted text-foreground/80" };
   }
@@ -125,6 +138,7 @@ function SourceCard({
   const steer = useSteer();
   const toast = useFactoryToast();
   const pause = usePauseSource(steer.factoryId);
+  const approve = useApproveSource(steer.factoryId);
   const pin = usePinDefinition(steer.factoryId);
   const test = useTestSource(steer.factoryId);
   const [tested, setTested] = useState<{ ok: boolean; text: string } | null>(null);
@@ -133,7 +147,27 @@ function SourceCard({
   const cap = counts?.callsPerDay ?? source.budget?.calls_per_day ?? null;
   const used = counts?.callsToday ?? null;
   const paused = source.state === "paused";
+  const unapproved = source.state === "pending";
   const live = !source.staged;
+  const approveIt = () =>
+    approve.mutate(source.id, {
+      onSuccess: (res) =>
+        toast.show({
+          message: res.changed
+            ? `Approved ${source.label}. Scout reads it in a 14-day trial.`
+            : `${source.label} was already approved.`,
+          undo:
+            res.undo?.pin != null
+              ? () =>
+                  pin.mutate(res.undo!.pin, {
+                    onSuccess: () =>
+                      toast.show({ message: `${source.label} waits for an owner again.` }),
+                    onError: (error) => toast.show({ message: `Could not undo: ${error.message}` }),
+                  })
+              : undefined,
+        }),
+      onError: (error) => toast.show({ message: `Not done: ${error.message}` }),
+    });
   const toggle = () =>
     pause.mutate(
       { source: source.id, paused: !paused },
@@ -171,6 +205,7 @@ function SourceCard({
       aria-label={source.label}
       className={cn(
         "flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card p-3",
+        unapproved && !source.staged && MEANING.needsYou.border,
         source.staged && STAGED_CONTROL,
       )}
     >
@@ -198,6 +233,11 @@ function SourceCard({
         )}
       </div>
       <p className="text-sm text-foreground/85">{readsText(source)}</p>
+      {unapproved && (
+        <p data-testid={`steer-source-pending-${source.id}`} className="text-xs text-foreground/80">
+          Nothing reads it until an owner approves it; then it runs a 14-day trial.
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">
         {source.kind} · privacy {source.privacy?.level ?? "—"} · kept{" "}
         {source.privacy?.keep_days ?? "—"} days ·{" "}
@@ -236,7 +276,18 @@ function SourceCard({
       )}
       {live && (
         <div className="flex flex-wrap items-center gap-1.5">
-          {steer.canEdit && (paused ? steer.owner : true) && (
+          {unapproved && steer.owner && (
+            <Button
+              size="xs"
+              onClick={approveIt}
+              loading={approve.isPending}
+              data-testid={`steer-source-approve-${source.id}`}
+              componentId="factory.steer.source_approve"
+            >
+              Approve
+            </Button>
+          )}
+          {steer.canEdit && !unapproved && (paused ? steer.owner : true) && (
             <Button
               size="xs"
               variant="outline"
@@ -248,7 +299,7 @@ function SourceCard({
               {paused ? "Resume" : "Pause"}
             </Button>
           )}
-          {steer.canEdit && !paused && (
+          {steer.canEdit && !paused && !unapproved && (
             <Button
               size="xs"
               variant="ghost"
@@ -346,11 +397,17 @@ export function Sources({ proposals }: { proposals: readonly ProposalView[] | un
     "discovery.sources",
     steer.effective.discovery?.sources ?? [],
   );
-  const waiting = agentProposals(proposals ?? []).filter((p) =>
-    p.ops.some(
-      (op) => op.op === "add" && String(op.path).replace("/", ".") === "discovery.sources",
-    ),
-  );
+  // Every pending proposal that adds a source waits here, a person's as well as an agent's.
+  const waiting = (proposals ?? [])
+    .filter(
+      (p) =>
+        (p.status === "pending" || p.status === "awaiting_cosign") &&
+        stageable(p) &&
+        p.ops.some(
+          (op) => op.op === "add" && String(op.path).replace("/", ".") === "discovery.sources",
+        ),
+    )
+    .sort((a, b) => a.number - b.number);
   const countOf = (id: string) => counts.data?.find((c) => c.id === id) ?? null;
   return (
     <div data-testid="steer-sources" className="flex min-w-0 flex-col gap-4">

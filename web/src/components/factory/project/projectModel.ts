@@ -248,6 +248,11 @@ export interface OpportunityFacts {
   rank: number | null;
   /** Signals per source (`forum 22 · trk 12`). */
   bySource: Record<string, number>;
+  /**
+   * The newest readout written back to the opportunity, from its own why-chain
+   * (`ref` like `C-31-d7`, `label` like `day 7 · won`); null before any.
+   */
+  readout: { ref: string; label: string } | null;
 }
 
 /** The ledger's opportunity (`GET …/opportunities/O-n`), read field by field. */
@@ -265,12 +270,22 @@ export function opportunityFacts(raw: unknown): OpportunityFacts | null {
       if (typeof value === "number" && value > 0) bySource[key] = value;
     }
   }
+  const chain = Array.isArray(row.why) ? (row.why as unknown[]) : [];
+  const link = chain.find(
+    (l): l is Record<string, unknown> =>
+      Boolean(l) && typeof l === "object" && (l as Record<string, unknown>).kind === "readout",
+  );
+  const readout =
+    link && link.missing !== true && typeof link.ref === "string" && typeof link.label === "string"
+      ? { ref: link.ref, label: link.label }
+      : null;
   return {
     accounts: num(evidence.accounts),
     hunches: num(evidence.hunches),
     level: typeof evidence.level === "string" ? evidence.level : null,
     rank: num(row.rank),
     bySource,
+    readout,
   };
 }
 
@@ -337,16 +352,25 @@ export function projectWhyChain(project: ProjectView, options: WhyChainOptions =
     detail: stopped ? "stopped" : STAGE_STEP_LABEL[stageStepOf(project.stage)],
   });
   const days = why?.measurement?.readout_days ?? [];
-  links.push({
-    kind: "readout",
-    value: "not yet",
-    detail: why?.metric
-      ? days.length
-        ? `day ${days.join(" and ")} after release`
-        : "after release"
-      : "not measured",
-    missing: true,
-  });
+  // The ledger's newest readout counts here only when it is this project's bet's (`C-31-d7`).
+  const readout =
+    facts?.readout && why?.proposal && facts.readout.ref.startsWith(`${why.proposal}-`)
+      ? facts.readout
+      : null;
+  links.push(
+    readout
+      ? { kind: "readout", value: readout.label, detail: readout.ref }
+      : {
+          kind: "readout",
+          value: "not yet",
+          detail: why?.metric
+            ? days.length
+              ? `day ${days.join(" and ")} after release`
+              : "after release"
+            : "not measured",
+          missing: true,
+        },
+  );
   return links;
 }
 
