@@ -61,7 +61,7 @@ from omnigent.factory import (
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
 )
-from omnigent.server.factory import chat_routing, events, live
+from omnigent.server.factory import chat_routing, events, live, node_refs
 from omnigent.server.factory.actor import Actor, find_refs, parse_ref
 from omnigent.server.factory.chat_routing import Agent, Members, Route
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps, factory_deps
@@ -211,7 +211,8 @@ def resolve_thread(deps: FactoryDeps, factory_id: str, raw: object) -> Thread:
     Resolve a thread a caller names to its canonical key.
 
     :param raw: ``"factory"``, ``"improvements"``, ``"project:<slug>"`` or
-        ``"pr:<id or number>"`` (``#…``, ``p:<slug>`` and ``!<n>`` too).
+        ``"pr:<id or number>"`` (``#…``, ``p:<slug>`` and ``!<n>`` too, and the
+        node refs of those threads: ``product``, ``fx``, a project's slug, ``PR-<n>``).
     :raises CockpitError: 400 ``invalid_thread``, 404 ``unknown_project`` /
         ``unknown_pr`` / ``discovery_off`` (``#discovery`` exists while discovery
         runs; while it is off ``#discovery`` still names a project called that),
@@ -248,12 +249,27 @@ def resolve_thread(deps: FactoryDeps, factory_id: str, raw: object) -> Thread:
         canonical = f"{THREAD_PR_PREFIX}{norm_id(pr.id)}"
         title = thread_title(canonical, pr.number)
         return Thread(canonical, "pr", title, project=pr.project_slug, pr=pr)
+    spelled = _node_thread(deps, factory_id, key)
+    if spelled is not None:
+        return resolve_thread(deps, factory_id, spelled)
     raise CockpitError(
         400,
         "invalid_thread",
         f"{raw!r} is no thread: use factory, improvements, project:<slug> or pr:<number>",
         field="thread",
     )
+
+
+def _node_thread(deps: FactoryDeps, factory_id: str, key: str) -> str | None:
+    """The thread a node ref names: ``product``, ``fx``, a project's slug or ``PR-<n>``."""
+    ref = node_refs.parse(key)
+    if ref is None or ref.kind not in ("product", "fx", "project", "pr"):
+        return None
+    if ref.kind == "pr":
+        return f"{THREAD_PR_PREFIX}{ref.id}"
+    if ref.kind == "project" and deps.factory_store.get_project(factory_id, ref.id) is None:
+        return None
+    return node_refs.thread_key(ref.text)
 
 
 def _find_pr(deps: FactoryDeps, factory_id: str, ref: str, raw: str) -> FactoryPr:

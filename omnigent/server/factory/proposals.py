@@ -2038,7 +2038,9 @@ async def apply_now(
                     decided_at=now,
                     applied_at=now,
                     undo_until=_undo_until(plan, now),
-                    result=None,
+                    # The claim on the answer stays while it applies, so a proposal
+                    # filed meanwhile finds it (answer_authority.claimed_by).
+                    result={"authority": dict(authority)} if authority else None,
                 )
             )
             or row

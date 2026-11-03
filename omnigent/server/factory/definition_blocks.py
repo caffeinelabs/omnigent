@@ -4,9 +4,10 @@ Everything a factory knows about its product is data in these blocks of the
 versioned definition (:mod:`.definition`): what the product is and how it is
 delivered (``product``), how its dev env and previews run (``environment``),
 what the factory is trying to achieve (``strategy``), how it finds out what
-users need (``discovery``), what each role is told (``briefs``) and which
-vendor and model a role runs on (``role_defaults``). No product name, metric,
-source or prompt text lives in code.
+users need (``discovery``), what each role is told (``briefs``), which
+vendor and model a role runs on (``role_defaults``) and what the cockpit's
+levels are called, who answers on each and who changes them (``structure``).
+No product name, metric, source or prompt text lives in code.
 
 The blocks are inert until a reader uses them; discovery stays dark behind
 ``discovery.enabled`` (off by default) and the server env :data:`DISCOVERY_ENV`.
@@ -880,6 +881,288 @@ class RoleDefaultsDef(_Block):
         return self
 
 
+# ── structure: the cockpit's levels ────────────────────────────
+
+PRODUCT_TREE: Final = "product"
+FACTORY_TREE: Final = "factory"
+PRODUCT_LEVELS: Final = ("product", "goal", "need", "feature", "project", "task", "change", "run")
+"""The product tree, root first. Keys and order are code; names and visibility are data."""
+FACTORY_LEVELS: Final = ("fx", "area", "item")
+"""The factory tree (rules, team, environments, health, the definition), root first."""
+TREES: Final[dict[str, tuple[str, ...]]] = {
+    PRODUCT_TREE: PRODUCT_LEVELS,
+    FACTORY_TREE: FACTORY_LEVELS,
+}
+LEVEL_KINDS: Final = ("study",)
+"""Kinds that answer, steer and are changed apart from their level (a study sits on the
+feature level): their responders, verbs and authority are their own."""
+TILES_MAX_BOUNDS: Final = (1, 60)
+
+Show = Literal["always", "when_any", "when_many", "inline"]
+"""``when_any``: hidden while no node is on it; ``when_many``: while at most one is;
+``inline``: drawn inside its parent's row, never as a column of its own."""
+Seat = Literal["owner", "operator", "atlas", "scout", "sentinel", "lead", "server"]
+Approval = Literal["none", "autonomy", "owner", "budget", "ledger"]
+"""How a structural change on a level is approved: at once (Undo), by the subtree's
+autonomy, by an owner, within a research budget, or by the discovery ledger's rules."""
+Responder = Literal["atlas", "scout", "sentinel", "lead"]
+Verb = Literal[
+    "talk", "add", "start", "research", "team", "auto", "pause", "move", "name", "rename"
+]
+LevelName = Annotated[str, _strip(40, 1)]
+ColumnName = Annotated[str, _strip(40, 1)]
+
+
+def _unique_seats(items: list[str]) -> list[str]:
+    if len(set(items)) != len(items):
+        raise ValueError("a seat is listed twice")
+    return items
+
+
+Seats = Annotated[list[Seat], AfterValidator(_unique_seats), Field(max_length=7)]
+
+
+class AuthorityDef(_Block):
+    """
+    Who changes the nodes of one level (Tier 0 and autonomy still apply on top).
+
+    :param create: Seats that add, split, order and close nodes here.
+    :param move: Seats that move a node to another parent (one level up); empty:
+        nodes here never move.
+    :param approval: How such a change is approved (:data:`Approval`).
+    """
+
+    create: Seats = Field(default_factory=list)
+    move: Seats = Field(default_factory=list)
+    approval: Approval = "owner"
+
+
+class LevelDef(_Block):
+    """
+    One level: what people call it and when it shows.
+
+    :param debug: Shown only when someone descends into it (a run).
+    """
+
+    name: LevelName
+    plural: LevelName
+    show: Show = "always"
+    debug: bool = False
+    authority: AuthorityDef = Field(default_factory=AuthorityDef)
+
+
+def _level(
+    name: str,
+    plural: str,
+    *,
+    show: Show = "always",
+    debug: bool = False,
+    create: tuple[Seat, ...] = (),
+    move: tuple[Seat, ...] = (),
+    approval: Approval = "owner",
+) -> Any:
+    def make() -> LevelDef:
+        return LevelDef(
+            name=name,
+            plural=plural,
+            show=show,
+            debug=debug,
+            authority=AuthorityDef(create=list(create), move=list(move), approval=approval),
+        )
+
+    return Field(default_factory=make)
+
+
+class LevelsDef(_Block):
+    """Every level of both trees (:data:`TREES`), each renamed or hidden on its own."""
+
+    product: LevelDef = _level("Product", "Products")
+    goal: LevelDef = _level("Goal", "Goals", show="when_any", create=("owner",))
+    need: LevelDef = _level(
+        "Need", "Needs", create=("scout", "operator", "owner"), approval="ledger"
+    )
+    feature: LevelDef = _level("Feature", "Features", create=("atlas", "owner"), move=("atlas",))
+    project: LevelDef = _level(
+        "Project",
+        "Projects",
+        create=("atlas", "lead", "operator", "owner"),
+        move=("atlas",),
+        approval="autonomy",
+    )
+    task: LevelDef = _level("Task", "Tasks", create=("lead",), move=("atlas",), approval="none")
+    change: LevelDef = _level(
+        "Change", "Changes", show="inline", create=("lead",), approval="none"
+    )
+    run: LevelDef = _level("Run", "Runs", debug=True, create=("server",), approval="none")
+    fx: LevelDef = _level("Factory", "Factories")
+    area: LevelDef = _level("Area", "Areas")
+    item: LevelDef = _level("Item", "Items", create=("atlas", "sentinel", "owner"))
+
+
+class HomeDef(_Block):
+    """The level each tree's home page shows (grouped under the level above it)."""
+
+    product: Literal["goal", "need", "feature", "project", "task"] = "feature"
+    factory: Literal["area", "item"] = "area"
+
+
+class RespondersDef(_Block):
+    """Who answers a node's thread, per level (and per :data:`LEVEL_KINDS`); ``None``: nobody."""
+
+    product: Responder | None = "atlas"
+    goal: Responder | None = "atlas"
+    need: Responder | None = "scout"
+    feature: Responder | None = "atlas"
+    study: Responder | None = "scout"
+    project: Responder | None = "lead"
+    task: Responder | None = "lead"
+    change: Responder | None = "lead"
+    run: Responder | None = None
+    fx: Responder | None = "sentinel"
+    area: Responder | None = "sentinel"
+    item: Responder | None = "sentinel"
+
+
+def _unique_verbs(items: list[str]) -> list[str]:
+    if len(set(items)) != len(items):
+        raise ValueError("a verb is listed twice")
+    return items
+
+
+Verbs = Annotated[list[Verb], AfterValidator(_unique_verbs), Field(max_length=10)]
+
+
+def _verbs(*names: Verb) -> Any:
+    return Field(default_factory=lambda: list(names))
+
+
+class VerbsDef(_Block):
+    """The verbs a node may offer, per level (whether one is enabled is the server's call)."""
+
+    product: Verbs = _verbs("talk", "add")
+    goal: Verbs = _verbs("talk", "add")
+    need: Verbs = _verbs("talk", "add", "research", "name")
+    feature: Verbs = _verbs("talk", "add", "auto", "pause", "move", "name")
+    study: Verbs = _verbs("talk", "research")
+    project: Verbs = _verbs("talk", "add", "start", "team", "auto", "pause", "move")
+    task: Verbs = _verbs("talk", "pause", "move")
+    change: Verbs = _verbs("talk")
+    run: Verbs = _verbs()
+    fx: Verbs = _verbs("talk")
+    area: Verbs = _verbs("talk")
+    item: Verbs = _verbs("talk", "rename")
+
+
+KIND_IS_LEVEL: Final[dict[str, str]] = {
+    "product": "product",
+    "goal": "goal",
+    "feature": "feature",
+    "project": "project",
+    "task": "task",
+    "run": "run",
+    "factory": "fx",
+    "area": "area",
+    "item": "item",
+}
+"""Kinds of node called what their level is called (kind -> level key): renaming the level
+renames them, so :class:`KindsDef` names only the other kinds."""
+
+
+class KindsDef(_Block):
+    """
+    What each kind of node is called, for the kinds not named after their level
+    (:data:`KIND_IS_LEVEL`; the kinds themselves come from the adapters).
+    """
+
+    opportunity: LevelName = "Opportunity"
+    ask: LevelName = "Ask"
+    question: LevelName = "Question"
+    proposal: LevelName = "From a proposal"
+    study: LevelName = "Study"
+    adhoc: LevelName = "Task (no ticket)"
+    pr: LevelName = "Pull request"
+    commit: LevelName = "Local commit"
+    rule: LevelName = "Rule"
+    agent: LevelName = "Agent"
+    env: LevelName = "Environment"
+    alarm: LevelName = "Alarm"
+    decision: LevelName = "Decision"
+    definition: LevelName = "Definition"
+
+
+class KindAuthorityDef(_Block):
+    """
+    Who changes the nodes of a kind that is changed apart from its level
+    (:data:`LEVEL_KINDS`): a study sits on the feature level, but Scout starts one
+    within the need's research budget.
+    """
+
+    study: AuthorityDef = Field(
+        default_factory=lambda: AuthorityDef(create=["scout"], approval="budget")
+    )
+
+
+def _unique_columns(items: list[str]) -> list[str]:
+    if len({c.casefold() for c in items}) != len(items):
+        raise ValueError("a column name is listed twice")
+    return items
+
+
+class OrderDef(_Block):
+    """
+    Column titles for siblings ordered by their dependencies, and for held work.
+
+    :param cols: First, second, … column; deeper orderings reuse the last title.
+    """
+
+    cols: Annotated[
+        list[ColumnName], AfterValidator(_unique_columns), Field(min_length=1, max_length=6)
+    ] = Field(default_factory=lambda: ["First", "Then", "After that", "Last"])
+    later: ColumnName = "Later (held)"
+
+
+class StructureDef(_Block):
+    """
+    The cockpit's levels: names, visibility, who answers, verbs and authority per level.
+
+    The level keys, their order and the adapters that fill them are code
+    (:data:`TREES`); everything people read is data. Only owners change it,
+    and no agent proposes it (:data:`AGENT_NEVER`).
+
+    :param kinds: Names of the kinds not named after their level (the others
+        read their level's name: :data:`KIND_IS_LEVEL`).
+    :param kind_authority: Who changes the kinds changed apart from their
+        level (:data:`LEVEL_KINDS`).
+    :param tiles_max: Children shown as tiles up to this many; rows past it.
+    :param fold_single_child: ``implicit_only``: an implicit parent with one
+        child shows as that child; ``never``: every parent shows.
+    """
+
+    levels: LevelsDef = Field(default_factory=LevelsDef)
+    home: HomeDef = Field(default_factory=HomeDef)
+    responders: RespondersDef = Field(default_factory=RespondersDef)
+    verbs: VerbsDef = Field(default_factory=VerbsDef)
+    kinds: KindsDef = Field(default_factory=KindsDef)
+    kind_authority: KindAuthorityDef = Field(default_factory=KindAuthorityDef)
+    order: OrderDef = Field(default_factory=OrderDef)
+    tiles_max: int = Field(12, ge=TILES_MAX_BOUNDS[0], le=TILES_MAX_BOUNDS[1])
+    fold_single_child: Literal["implicit_only", "never"] = "implicit_only"
+
+    @model_validator(mode="after")
+    def _distinct_names(self) -> StructureDef:
+        for tree, keys in TREES.items():
+            for attr in ("name", "plural"):
+                seen: dict[str, str] = {}
+                for key in keys:
+                    said = getattr(getattr(self.levels, key), attr).casefold()
+                    if said in seen:
+                        raise ValueError(
+                            f"levels.{key}.{attr}: the {tree} tree already calls {seen[said]} that"
+                        )
+                    seen[said] = key
+        return self
+
+
 LEGACY_MODELS: Final[dict[str, str]] = {
     "models.ic": "role_defaults.ic.model",
     "models.reviewer": "role_defaults.reviewer.model",
@@ -1087,11 +1370,20 @@ def seq_of(doc: dict[str, Any], spec: ListSpec, items: list[Any]) -> int:
 
 # ── Who may change what ────────────────────────────────────────
 
-BLOCKS: Final = ("product", "environment", "strategy", "discovery", "briefs", "role_defaults")
+BLOCKS: Final = (
+    "product",
+    "environment",
+    "strategy",
+    "discovery",
+    "briefs",
+    "role_defaults",
+    "structure",
+)
 """The blocks of this module (agents may propose only some of their paths; none of
-``environment``, whose facts reach shell commands)."""
+``environment``, whose facts reach shell commands, nor ``structure``)."""
 NOT_TRIALABLE_REASON: Final = "judged on outcomes"
 ENV_FACTS: Final = "facts, not a way of working"
+HOW_WORK_SHOWS: Final = "how work is shown, not how it is done"
 NEEDS_DISCOVERY_GUARDS: Final = "needs discovery guards"
 TOO_FEW_PRS: Final = "too few merged PRs per team"
 NO_PROJECT_FOLLOWS: Final = "no project follows a template"
@@ -1103,6 +1395,7 @@ NOT_TRIALABLE: Final[dict[str, str]] = {
     "briefs.scout": NEEDS_DISCOVERY_GUARDS,
     "team.projects": TOO_FEW_PRS,
     "team.templates": NO_PROJECT_FOLLOWS,
+    "structure": HOW_WORK_SHOWS,
 }
 """
 Paths a trial would judge on the wrong metrics, and why: they apply as a version.
@@ -1137,9 +1430,13 @@ AGENT_NEVER: Final[Mapping[str, str]] = {
         "and never merge"
     ),
     "autonomy": "owners set the factory's autonomy in Steer; agents never propose it",
+    "structure": (
+        "the levels (their names, who answers, verbs and authority) are set by owners in "
+        "the cockpit; agents never propose them"
+    ),
 }
-"""Paths no agent proposes, whatever its seat, and why: which PRs the server merges and how
-much the agents may do alone are the owners' call."""
+"""Paths no agent proposes, whatever its seat, and why: which PRs the server merges, how
+much the agents may do alone and how work is shown are the owners' call."""
 
 
 def under(path: str, prefix: str) -> bool:
@@ -1266,10 +1563,15 @@ __all__ = [
     "DISCOVERY_TRIALS",
     "ENV_FACTS",
     "EVIDENCE_LEVELS",
+    "FACTORY_LEVELS",
+    "FACTORY_TREE",
     "GOAL_ID_RE",
+    "HOW_WORK_SHOWS",
     "KEEP_DAYS",
+    "KIND_IS_LEVEL",
     "LEGACY_MODELS",
     "LEVEL_KEY",
+    "LEVEL_KINDS",
     "LISTS",
     "MIXED_GUARDS",
     "NEEDS_DISCOVERY_GUARDS",
@@ -1277,12 +1579,17 @@ __all__ = [
     "NOT_TRIALABLE_REASON",
     "NO_PROJECT_FOLLOWS",
     "PRIVACY_RANK",
+    "PRODUCT_LEVELS",
+    "PRODUCT_TREE",
     "REDACT_FLOOR",
     "SECRET_REFUSAL",
     "SOURCE_PRIVACY",
+    "TILES_MAX_BOUNDS",
     "TOO_FEW_PRS",
+    "TREES",
     "USER_ID",
     "VENDORS_BY_ROLE",
+    "AuthorityDef",
     "AutoMergeTargetDef",
     "BriefsDef",
     "DeliveryDef",
@@ -1290,13 +1597,22 @@ __all__ = [
     "DiscoveryDef",
     "EnvironmentDef",
     "GoalDef",
+    "HomeDef",
+    "KindAuthorityDef",
+    "KindsDef",
+    "LevelDef",
+    "LevelsDef",
     "ListSpec",
+    "OrderDef",
     "ProductDef",
+    "RespondersDef",
     "RoleDefaultsDef",
     "RubricDef",
     "ServiceDef",
     "SourceDef",
     "StrategyDef",
+    "StructureDef",
+    "VerbsDef",
     "agent_may_propose",
     "agent_never",
     "agent_never_reason",

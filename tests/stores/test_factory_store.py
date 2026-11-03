@@ -156,6 +156,17 @@ def test_pr_update_and_state_filter(store: FactoryStore) -> None:
         store.update_pr(open_pr.id, state="reopened")
 
 
+def test_list_prs_by_number_reads_one_number_in_every_repo(store: FactoryStore) -> None:
+    mine, _ = store.upsert_pr(FID, REPO, 77)
+    docs, _ = store.upsert_pr(FID, "sample-org/sample-docs", 77)
+    store.upsert_pr(FID, REPO, 78)
+    store.upsert_pr(OTHER_FID, REPO, 77)
+
+    assert {p.id for p in store.list_prs(FID, number=77)} == {mine.id, docs.id}
+    assert store.list_prs(FID, states=["merged"], number=77) == []
+    assert store.list_prs(FID, number=79) == []
+
+
 def test_prs_due_for_polling(store: FactoryStore) -> None:
     now = 10_000
     never, _ = store.upsert_pr(FID, REPO, 1)

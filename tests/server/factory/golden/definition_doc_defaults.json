@@ -237,6 +237,271 @@
     },
     "non_goals": []
   },
+  "structure": {
+    "fold_single_child": "implicit_only",
+    "home": {
+      "factory": "area",
+      "product": "feature"
+    },
+    "kind_authority": {
+      "study": {
+        "approval": "budget",
+        "create": [
+          "scout"
+        ],
+        "move": []
+      }
+    },
+    "kinds": {
+      "adhoc": "Task (no ticket)",
+      "agent": "Agent",
+      "alarm": "Alarm",
+      "ask": "Ask",
+      "commit": "Local commit",
+      "decision": "Decision",
+      "definition": "Definition",
+      "env": "Environment",
+      "opportunity": "Opportunity",
+      "pr": "Pull request",
+      "proposal": "From a proposal",
+      "question": "Question",
+      "rule": "Rule",
+      "study": "Study"
+    },
+    "levels": {
+      "area": {
+        "authority": {
+          "approval": "owner",
+          "create": [],
+          "move": []
+        },
+        "debug": false,
+        "name": "Area",
+        "plural": "Areas",
+        "show": "always"
+      },
+      "change": {
+        "authority": {
+          "approval": "none",
+          "create": [
+            "lead"
+          ],
+          "move": []
+        },
+        "debug": false,
+        "name": "Change",
+        "plural": "Changes",
+        "show": "inline"
+      },
+      "feature": {
+        "authority": {
+          "approval": "owner",
+          "create": [
+            "atlas",
+            "owner"
+          ],
+          "move": [
+            "atlas"
+          ]
+        },
+        "debug": false,
+        "name": "Feature",
+        "plural": "Features",
+        "show": "always"
+      },
+      "fx": {
+        "authority": {
+          "approval": "owner",
+          "create": [],
+          "move": []
+        },
+        "debug": false,
+        "name": "Factory",
+        "plural": "Factories",
+        "show": "always"
+      },
+      "goal": {
+        "authority": {
+          "approval": "owner",
+          "create": [
+            "owner"
+          ],
+          "move": []
+        },
+        "debug": false,
+        "name": "Goal",
+        "plural": "Goals",
+        "show": "when_any"
+      },
+      "item": {
+        "authority": {
+          "approval": "owner",
+          "create": [
+            "atlas",
+            "sentinel",
+            "owner"
+          ],
+          "move": []
+        },
+        "debug": false,
+        "name": "Item",
+        "plural": "Items",
+        "show": "always"
+      },
+      "need": {
+        "authority": {
+          "approval": "ledger",
+          "create": [
+            "scout",
+            "operator",
+            "owner"
+          ],
+          "move": []
+        },
+        "debug": false,
+        "name": "Need",
+        "plural": "Needs",
+        "show": "always"
+      },
+      "product": {
+        "authority": {
+          "approval": "owner",
+          "create": [],
+          "move": []
+        },
+        "debug": false,
+        "name": "Product",
+        "plural": "Products",
+        "show": "always"
+      },
+      "project": {
+        "authority": {
+          "approval": "autonomy",
+          "create": [
+            "atlas",
+            "lead",
+            "operator",
+            "owner"
+          ],
+          "move": [
+            "atlas"
+          ]
+        },
+        "debug": false,
+        "name": "Project",
+        "plural": "Projects",
+        "show": "always"
+      },
+      "run": {
+        "authority": {
+          "approval": "none",
+          "create": [
+            "server"
+          ],
+          "move": []
+        },
+        "debug": true,
+        "name": "Run",
+        "plural": "Runs",
+        "show": "always"
+      },
+      "task": {
+        "authority": {
+          "approval": "none",
+          "create": [
+            "lead"
+          ],
+          "move": [
+            "atlas"
+          ]
+        },
+        "debug": false,
+        "name": "Task",
+        "plural": "Tasks",
+        "show": "always"
+      }
+    },
+    "order": {
+      "cols": [
+        "First",
+        "Then",
+        "After that",
+        "Last"
+      ],
+      "later": "Later (held)"
+    },
+    "responders": {
+      "area": "sentinel",
+      "change": "lead",
+      "feature": "atlas",
+      "fx": "sentinel",
+      "goal": "atlas",
+      "item": "sentinel",
+      "need": "scout",
+      "product": "atlas",
+      "project": "lead",
+      "run": null,
+      "study": "scout",
+      "task": "lead"
+    },
+    "tiles_max": 12,
+    "verbs": {
+      "area": [
+        "talk"
+      ],
+      "change": [
+        "talk"
+      ],
+      "feature": [
+        "talk",
+        "add",
+        "auto",
+        "pause",
+        "move",
+        "name"
+      ],
+      "fx": [
+        "talk"
+      ],
+      "goal": [
+        "talk",
+        "add"
+      ],
+      "item": [
+        "talk",
+        "rename"
+      ],
+      "need": [
+        "talk",
+        "add",
+        "research",
+        "name"
+      ],
+      "product": [
+        "talk",
+        "add"
+      ],
+      "project": [
+        "talk",
+        "add",
+        "start",
+        "team",
+        "auto",
+        "pause",
+        "move"
+      ],
+      "run": [],
+      "study": [
+        "talk",
+        "research"
+      ],
+      "task": [
+        "talk",
+        "pause",
+        "move"
+      ]
+    }
+  },
   "supervisor": {
     "blocked_escalate_s": 1800,
     "quiet_beats": true,

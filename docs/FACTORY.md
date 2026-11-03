@@ -922,6 +922,44 @@ floor. What it leaves out comes from its kind: `chat` and `feedback` are
 `personal` or `sensitive` source stays paused. Changes to these blocks are not
 mailed to members (their readers fetch them as data).
 
+**The levels** (`structure`, read by cockpit v3) name the two trees work is
+shown in: the product tree (product › goal › need › feature › project › task
+› change › run) and the factory tree (fx › area › item). The keys and their
+order are code; per level the block holds `name`, `plural`, `show`
+(`always`, `when_any`: hidden while no node is on it, `when_many`: while at
+most one is, `inline`: drawn inside the parent's row), `debug` and
+`authority` {`create`, `move`: seats, `approval`: `none`, `autonomy`,
+`owner`, `budget` or `ledger`}; beside them `home` (the level each tree's
+home shows), `responders` and `verbs` per level (and for the study kind),
+`kinds` (what the kinds not named after their level are called: a feature,
+project or task reads its level's name), `kind_authority` (a study: Scout,
+within the need's research budget), `order` {`cols`, `later`} (the sibling
+column titles), `tiles_max` and `fold_single_child`. Owners rename a level,
+and the kind named after it, with one change
+(`structure.levels.feature.name`); the block is owner-only, never a trial,
+and no agent proposes it (403 `path_not_allowed`).
+`GET …/factories/{fid}/levels` returns both trees with `hidden` computed for
+this factory (a level counts the implicit parents its nodes get), the maps
+above and the definition `version`.
+
+**Node refs** (`node_refs.py`) give every node one address that never
+changes when it moves and is safe in a URL: `product`, `G-n`, `O-n`,
+`ask:<message id>`, `need:<implicit key>`, `I-n`, `R-n`,
+`feature:<implicit key>`, a project's slug, `T-n`, `adhoc:<pr id>`, `PR-n`,
+`commit:<sha>`, `run:<session id>`, and in the factory tree `fx`,
+`fx:<area>`, `C-n`, `D-n`, `member:<id>`, `env:<name>`. `normalize()` reads
+any spelling (refs, the stored keys such as `task:T-4`, `project:<slug>`,
+`pr:<repo>#<n>`, `member:<id>`, the chat's `!9630` and `#<slug>`, and with
+the store `pr:<id>`, `task:<slug>/<key>` and `loop:<id>`) as the ref, and
+`resolve()` finds the node behind it; unknown text is `None`, never a guess
+(a spelling that names a repo never resolves to another repo's PR).
+Decisions' subjects, issues' targets, events' subjects and chat thread names
+are normalized on write to the node's key (`T-4` is stored as `task:T-4`); a
+decision stores `PR-9630` as `pr:<id>` when the store knows the PR, while
+events, issues and an unknown PR store `pr:9630`. Every key the server
+writes is stored as it is, so old rows read back through `normalize()` with
+no migration.
+
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to
 carry: `repo` (the repo whose projects run it; unset: every project's),
@@ -1036,6 +1074,7 @@ previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
 | `discovery.budgets.*` | A when lower (editors apply it at once), else B (owners) |
 | `discovery.cadence.*` | A when slower or off, else B (owners) |
 | other `discovery.*`, `briefs.*`, `role_defaults.*` | B (owners) |
+| `structure.*` | B (owners only: agents never propose it); never a trial, applies as a version |
 | `team.templates.*` | B (owners); never a trial (a template reaches a project only on a switch) |
 | `team.projects.<slug>` member added, vendor or model changed, brief | B (owners) |
 | `team.projects.<slug>` member removed or renamed | A (editors apply it) |
@@ -1043,7 +1082,7 @@ previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
 | any `team.projects.<slug>` change | never a trial (one team merges about one PR a day) |
 
 Owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`, and
-the six blocks), except the class-A changes editors apply (below). For agents
+the seven blocks), except the class-A changes editors apply (below). For agents
 the class of those paths does not matter: an agent's proposal of one always
 waits for the owners (class B), whatever the table says. Editors
 (`PUT …/definition`) apply a change that only narrows a team or a source, or
@@ -1056,7 +1095,7 @@ spends anything waits for an owner. The preview shows the table's class. In
 the blocks, agents propose only their seat's paths (403
 `path_not_allowed` otherwise): Scout `product`, `strategy` and
 `discovery.sources`; Sentinel `discovery.rubric`, `discovery.thresholds` and
-`briefs.scout`; Atlas none; nobody `environment`.
+`briefs.scout`; Atlas none; nobody `environment` or `structure`.
 
 **Proposals** (`C-n`, `sys_factory_propose`): leads propose tuning, rules and
 code; a PL proposes rules for its own project. Each cites evidence ids (422

@@ -128,7 +128,8 @@ async def test_an_agent_decision_about_a_pr_number_records_its_span_on_that_pr(
     (span,) = _spans(w, "decision")
     assert (span.name, span.pr_id, span.project_slug) == ("D-1", pr.id, PROJECT)
     assert span.trace_key == f"pr:{pr.id}"
-    assert (span.attrs or {})["subject"] == subject.format(row=pr.id)
+    # Whatever the agent wrote, the decision names the PR by its key.
+    assert (span.attrs or {})["subject"] == f"pr:{pr.id}"
     # The PR's timeline reads its spans by pr_id: the decision is on it.
     assert [s.id for s in _store(w).list_spans(_fid(w), pr_id=pr.id)] == [span.id]
     assert "could not record" not in caplog.text

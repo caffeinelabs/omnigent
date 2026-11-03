@@ -16,7 +16,7 @@ from typing import Any
 from omnigent.db.db_models import InvalidUuidError, uuid_to_bytes
 from omnigent.db.enum_codecs import FACTORY_EVENT_SEVERITY, decode_factory_event_severity
 from omnigent.entities.factory import EventDraft, FactoryEvent
-from omnigent.server.factory import live
+from omnigent.server.factory import live, node_refs
 
 _logger = logging.getLogger(__name__)
 
@@ -63,7 +63,14 @@ def _clip(value: str | None, limit: int) -> str | None:
 
 
 def stored_subject(subject: str | None) -> str | None:
-    """:returns: *subject* as :func:`emit` stores it (clipped), for exact-match queries."""
+    """
+    :returns: *subject* as :func:`emit` stores it, for exact-match queries: a
+        node in its one key spelling (:func:`.node_refs.canonical_key`), clipped.
+    """
+    try:
+        subject = node_refs.canonical_key(subject)
+    except Exception:  # noqa: BLE001 - an odd subject is stored as given
+        _logger.warning("factory: could not normalize event subject %r", subject, exc_info=True)
     return _clip(subject, _SUBJECT_MAX)
 
 
@@ -149,7 +156,8 @@ async def emit(
     :param project: Project slug.
     :param from_id: Acting session id; a non-session actor is kept in ``data["from"]``.
     :param to_id: Target session id; likewise ``data["to"]``.
-    :param subject: e.g. ``"pr:sample-org/sample-app#9630"``.
+    :param subject: e.g. ``"pr:sample-org/sample-app#9630"``; a node is stored in its
+        key spelling (``T-4`` as ``task:T-4``), every key the server writes as it is.
     :param summary: One line (clipped to 300 chars).
     :param data: JSON payload.
     :param ts: Epoch milliseconds, for callers on their own clock; defaults to now.
@@ -171,7 +179,7 @@ async def emit(
             project_slug=_clip(project, _SLUG_MAX),
             from_id=_session_or_data(from_id, "from", payload),
             to_id=_session_or_data(to_id, "to", payload),
-            subject=_clip(subject, _SUBJECT_MAX),
+            subject=stored_subject(subject),
             data=payload or None,
             ts=ts,
             id=event_id,

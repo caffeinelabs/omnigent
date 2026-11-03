@@ -1015,7 +1015,7 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore
             return _pr(row) if row is not None else None
 
     def list_prs(
-        self, factory_id: str, states: Sequence[str] | None = None
+        self, factory_id: str, states: Sequence[str] | None = None, *, number: int | None = None
     ) -> builtins.list[FactoryPr]:
         fid = norm_id(factory_id)
         stmt = select(SqlFactoryPr).where(
@@ -1024,6 +1024,8 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore
         )
         if states is not None:
             stmt = stmt.where(SqlFactoryPr.state.in_([encode_factory_pr_state(s) for s in states]))
+        if number is not None:
+            stmt = stmt.where(SqlFactoryPr.number == number)
         with self._session("list_factory_prs") as session:
             rows = (
                 session.execute(stmt.order_by(SqlFactoryPr.created_at, SqlFactoryPr.id))
