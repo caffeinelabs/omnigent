@@ -1505,6 +1505,13 @@ def editor_may_apply(diff: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
+EDITOR_TRIAL_REFUSAL: Final = (
+    "an editor's change applies at once, with Undo for "
+    f"{definition.UNDO_WINDOW_S // 60} minutes; owners run trials"
+)
+"""Why an editor's change never runs as a trial (``PUT …/definition`` and its preview)."""
+
+
 def projects_name(actor: Actor) -> str:
     from omnigent.server.factory.projects import actor_name
 
@@ -1720,6 +1727,13 @@ async def human_edit(
         from omnigent.server.factory import evaluate
 
         await asyncio.to_thread(evaluate.check_trial, deps, root.id, diff_paths(diff))
+        # An editor's change (class A) applies at once, with Undo: owners run trials.
+        if (
+            team_only
+            and (await asyncio.to_thread(people.viewer_level, deps, root.id, user_id))
+            < LEVEL_MANAGE
+        ):
+            raise CockpitError(403, "owners_only", EDITOR_TRIAL_REFUSAL)
     kind = "rules" if all(c.path == "rules" for c in changes) else "tuning"
     trial_h = definition.trial_hours(diff_paths(diff), body.trial_h, factory_id=root.id)
     row, _ = await asyncio.to_thread(
@@ -2169,6 +2183,7 @@ async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None)
 
 
 __all__ = [
+    "EDITOR_TRIAL_REFUSAL",
     "KINDS",
     "UNDONE_KIND",
     "DefinitionEditIn",

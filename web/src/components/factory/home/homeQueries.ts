@@ -4,7 +4,7 @@
 // opportunities, which a server without the discovery ledger (or with
 // discovery off) answers 404: Home then shows the loop without them.
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, queryOptions, useQuery } from "@tanstack/react-query";
 import {
   COCKPIT_MIN_REFRESH_MS,
   FACTORY_FALLBACK_POLL_MS,
@@ -35,30 +35,36 @@ export function isMissing(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
 
+/**
+ * The asks query's own options. Every observer of the key shares them: the
+ * last observer to render sets what an invalidation's refetch runs with.
+ */
+function asksQueryOptions(factoryId: string) {
+  return queryOptions<AsksResponse>({
+    queryKey: factoryAsksKey(factoryId),
+    queryFn: ({ signal }) => fetchFactoryAsks(factoryId, signal),
+    retry: retryTransient,
+  });
+}
+
 /** The viewer's Needs you, one row per subject. */
 export function useFactoryAsks(factoryId: string) {
   const connected = useSessionUpdatesConnected();
   return useQuery<AsksResponse>({
-    queryKey: factoryAsksKey(factoryId),
-    queryFn: ({ signal }) => fetchFactoryAsks(factoryId, signal),
+    ...asksQueryOptions(factoryId),
     enabled: Boolean(factoryId),
     placeholderData: keepPreviousData,
     refetchInterval: connected ? COCKPIT_MIN_REFRESH_MS : FACTORY_FALLBACK_POLL_MS,
     refetchOnWindowFocus: true,
-    retry: retryTransient,
   });
 }
 
 /**
  * The Needs you list as Home last read it, from the cache only: it never
- * fetches (the shell's count uses it while Home holds answers).
+ * fetches (the shell's count uses it when it is the newer read).
  */
 export function useCachedFactoryAsks(factoryId: string): AsksResponse | undefined {
-  return useQuery<AsksResponse>({
-    queryKey: factoryAsksKey(factoryId),
-    queryFn: ({ signal }) => fetchFactoryAsks(factoryId, signal),
-    enabled: false,
-  }).data;
+  return useQuery<AsksResponse>({ ...asksQueryOptions(factoryId), enabled: false }).data;
 }
 
 async function readOptional(path: string, signal?: AbortSignal): Promise<unknown> {

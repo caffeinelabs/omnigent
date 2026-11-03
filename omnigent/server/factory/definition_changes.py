@@ -222,7 +222,12 @@ def _trial_info(
     *,
     restore: int | None,
     trial_h: int | None,
+    editor: bool = False,
 ) -> dict[str, Any]:
+    """
+    :param editor: The viewer is an editor applying their own class-A change,
+        which applies at once (owners run trials).
+    """
     if restore is not None:
         return {
             "ok": False,
@@ -237,6 +242,14 @@ def _trial_info(
             dict.fromkeys(definition.not_trialable(paths, factory_id=factory_id).values())
         )
         return {"ok": False, "code": evaluate.NOT_TRIALABLE, "reason": reason, "why": why}
+    if editor:
+        refusal = tuning.EDITOR_TRIAL_REFUSAL
+        return {
+            "ok": False,
+            "code": evaluate.NOT_TRIALABLE,
+            "reason": f"{refusal[0].upper()}{refusal[1:]}.",
+            "why": "owners run trials",
+        }
     found = evaluate.overlapping_trial(deps, factory_id, paths)
     if found is not None:
         error = evaluate.overlap_error(found[0], found[1], now_s())
@@ -435,7 +448,14 @@ def _preview(
         "blocked": blocked,
         "effects": effects,
         "rerank": _rerank(deps, root.id, resolved.stored, after, paths),
-        "trialable": _trial_info(deps, root.id, paths, restore=body.restore, trial_h=body.trial_h),
+        "trialable": _trial_info(
+            deps,
+            root.id,
+            paths,
+            restore=body.restore,
+            trial_h=body.trial_h,
+            editor=editor_applies and LEVEL_EDIT <= level < LEVEL_MANAGE,
+        ),
         "restore": (
             {"version": body.restore, "ends": [proposal_ref(r.number) for r in ending]}
             if body.restore is not None

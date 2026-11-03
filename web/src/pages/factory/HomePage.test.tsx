@@ -97,7 +97,7 @@ function serve({
   answer?: () => Response;
   /** The definition read: discovery off in the factory, on this server, by default. */
   definition?: DefinitionResponse;
-  extra?: Record<string, () => Response>;
+  extra?: Record<string, () => Response | Promise<Response>>;
 } = {}) {
   const built: AsksResponse = asksOf(snapshot, {
     incidents: round3IssueList(),
@@ -282,6 +282,66 @@ describe("Home", () => {
     await waitFor(() => expect(badge()).toHaveTextContent(String(total - 1)));
     expect(count()).toHaveTextContent(String(total - 1));
     expect(screen.queryByTestId("need-D-2")).toBeNull();
+  });
+
+  it("counts from the list when its read after a send lands before the summary's", async () => {
+    const snapshot = round3Snapshot("operator");
+    const built = asksOf(snapshot, { incidents: round3IssueList(), proposals: roomProposals() });
+    const summary = statusSummaryOf(snapshot, { incidents: round3IssueList() });
+    const total = built.counts.total;
+    let sent = false;
+    const gate: { release: (() => void) | null } = { release: null };
+    const later = built.generated_at + 5;
+    serve({
+      snapshot,
+      asks: () =>
+        json(
+          sent
+            ? { ...built, generated_at: later, asks: built.asks.filter((a) => a.id !== "D-2") }
+            : built,
+        ),
+      answer: () => {
+        sent = true;
+        return json({ decision: {} });
+      },
+      extra: {
+        // After the send the summary's read is held back: the list's read lands first.
+        [`GET ${SNAPSHOT}/status-summary`]: () => {
+          const counted = (needs: number, at: number) =>
+            json({ ...summary, generated_at: at, counts: { ...summary.counts, needs_you: needs } });
+          if (!sent) return counted(total, built.generated_at);
+          return new Promise<Response>((resolve) => {
+            gate.release = () => resolve(counted(total - 1, later));
+          });
+        },
+      },
+    });
+    renderAt("");
+    const badge = () => screen.getByTestId("cockpit-tab-home-count");
+    const count = () => within(screen.getByTestId("home-needs")).getByTestId("home-needs-count");
+    await screen.findByTestId("need-D-2");
+    await waitFor(() => expect(badge()).toHaveTextContent(String(total)));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    fireEvent.click(screen.getByTestId("need-D-2-option-a"));
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_UNDO_MS + 100);
+    });
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    await waitFor(() => expect(gate.release).not.toBeNull());
+    await waitFor(() => expect(reads("/asks").length).toBeGreaterThan(1));
+
+    // The summary's read is still out, and nothing is held any more: the newer list counts.
+    await waitFor(() => expect(count()).toHaveTextContent(String(total - 1)));
+    expect(screen.queryByTestId("need-D-2")).toBeNull();
+    expect({ badge: badge().textContent, home: count().textContent }).toEqual({
+      badge: String(total - 1),
+      home: String(total - 1),
+    });
+    await act(async () => {
+      gate.release?.();
+    });
+    await waitFor(() => expect(badge()).toHaveTextContent(String(total - 1)));
   });
 
   it("keeps Undo for a second answer while the first one goes out", async () => {

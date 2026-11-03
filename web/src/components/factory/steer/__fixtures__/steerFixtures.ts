@@ -631,6 +631,7 @@ export function previewRestore(): DefinitionPreviewResponse {
 /**
  * The preview of a lower dollar budget (400 → 300 a day by default), as the
  * server words it: class A, which owners and editors apply at once with Undo.
+ * Only an owner may run it as a trial.
  */
 export function previewBudgetLower(
   role: "owner" | "editor" = "owner",
@@ -654,6 +655,16 @@ export function previewBudgetLower(
     you_can_apply: true,
     you_can_propose: true,
     effects: [{ kind: "mail", text: "5 member(s) get the new values by mail.", count: 5 }],
+    trialable:
+      role === "owner"
+        ? { ok: true, trial_h: 48, blocks: ["budgets"] }
+        : {
+            ok: false,
+            code: "not_trialable",
+            reason:
+              "An editor's change applies at once, with Undo for 10 minutes; owners run trials.",
+            why: "owners run trials",
+          },
   };
 }
 

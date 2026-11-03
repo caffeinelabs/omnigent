@@ -104,11 +104,15 @@ export function CockpitShell({
   const asks = useCachedFactoryAsks(fid);
   // One count: the rows of Needs you (older servers: what waits on the viewer).
   const needsYou = shellNeedsCount(
-    summary?.counts.needs_you ??
-      summary?.counts.waiting_for_you ??
-      split.mine.length + split.role.length,
+    {
+      count:
+        summary?.counts.needs_you ??
+        summary?.counts.waiting_for_you ??
+        split.mine.length + split.role.length,
+      at: summary?.counts.needs_you != null ? summary.generated_at : null,
+    },
     held,
-    asks?.factory_id === fid ? asks.asks : null,
+    asks?.factory_id === fid ? asks : null,
   );
   // Until the server's verdict is in (or when the read fails, or an older
   // server has none) the snapshot's facts speak, and they never say green.

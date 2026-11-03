@@ -5,8 +5,10 @@ A lower dollar budget (the factory's ``budgets.*``, discovery's
 it is class A and an editor's ``PUT …/definition`` applies it as a version,
 with the editor's 10-minute Undo. Raising one, or mixing it with an owner
 change, waits for an owner (403 ``owners_only``), and an agent's proposal of
-any budget still waits for the owners. ``alice`` owns the factory, ``carol``
-is an editor (operator), ``bob`` has no access.
+any budget still waits for the owners. An editor's lowering never runs as a
+trial (owners run trials), and a $0 ask budget is a cap like any other.
+``alice`` owns the factory, ``carol`` is an editor (operator), ``bob`` has no
+access.
 """
 
 from __future__ import annotations
@@ -29,6 +31,13 @@ from tests.server.factory.definition_helpers import (
     url,
     version,
 )
+from tests.server.factory.discovery_helpers import (
+    base,
+    discovery_cockpit,
+    ingest,
+    label,
+    make_opportunity,
+)
 
 DAY = "budgets.factory_usd_per_day"
 
@@ -42,6 +51,14 @@ async def cockpit(
     world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Cockpit]:
     async for value in definition_cockpit(world, db_uri, monkeypatch):
+        yield value
+
+
+@pytest_asyncio.fixture()
+async def discovering(
+    world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Cockpit]:
+    async for value in discovery_cockpit(world, db_uri, monkeypatch):
         yield value
 
 
@@ -181,3 +198,44 @@ async def test_an_agent_s_lower_budget_still_waits_for_the_owners(cockpit: Cockp
     assert resp.status_code == 200, resp.text
     assert (resp.json()["class"], row(cockpit).status) == ("B", "pending")
     assert _value(cockpit, DAY) == 400
+
+
+async def test_an_editor_s_lower_budget_applies_at_once_never_as_a_trial(
+    cockpit: Cockpit,
+) -> None:
+    before = version(cockpit)
+
+    trial = await put(cockpit, _set(DAY, 300), user="carol", trial=True)
+    seen = (await _preview(cockpit, _set(DAY, 300), user="carol")).json()["trialable"]
+    owners = (await _preview(cockpit, _set(DAY, 300), user="alice")).json()["trialable"]
+
+    assert (trial.status_code, error_code(trial)) == (403, "owners_only")
+    assert "owners run trials" in trial.json()["error"]["message"]
+    assert version(cockpit) == before and _value(cockpit, DAY) == 400
+    assert (seen["ok"], seen["code"]) == (False, "not_trialable")
+    assert seen["reason"].startswith("An editor's change applies at once")
+    assert owners["ok"] is True
+    owner = await put(cockpit, _set(DAY, 300), trial=True)
+    assert (owner.status_code, owner.json()["status"]) == (200, "trial")
+
+
+async def test_an_editor_s_zero_ask_budget_holds_for_their_asks(discovering: Cockpit) -> None:
+    signals = ingest(discovering, "repo-issues", ["Can I show a draft first? (sample)"])
+    label(discovering, signals, "workaround")
+    make_opportunity(discovering, signals)
+    ask = base(discovering, "/opportunities/O-1/research")
+    assert (await put(discovering, _set("discovery.budgets.per_ask", 1))).status_code == 200
+
+    lowered = await put(discovering, _set("discovery.budgets.per_ask", 0), user="carol")
+    default = await discovering.post(ask, {"question": "Who shares? (sample)"}, user="carol")
+    over = await discovering.post(
+        ask, {"question": "Dig deeper (sample)", "budget_usd": 1}, user="carol"
+    )
+
+    assert lowered.status_code == 200 and lowered.json()["status"] == "applied"
+    assert default.status_code == 200, default.text
+    assert default.json()["research"]["budget_usd"] == 0
+    assert (over.status_code, error_code(over)) == (403, "owners_only")
+    owner = await discovering.post(ask, {"question": "Dig deeper (sample)", "budget_usd": 3})
+    assert owner.status_code == 200, owner.text
+    assert owner.json()["research"]["budget_usd"] == 3

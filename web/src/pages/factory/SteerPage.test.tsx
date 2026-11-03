@@ -335,6 +335,11 @@ describe("Steer", () => {
       ),
     );
     expect(within(column).queryByTestId("steer-propose")).toBeNull();
+    // Owners run trials: the editor's change applies at once.
+    expect(within(column).getByTestId("steer-trial-rule")).toHaveTextContent(
+      "No trial for this change. An editor's change applies at once",
+    );
+    expect(within(column).queryByTestId("steer-apply-trial")).toBeNull();
     fireEvent.click(await within(column).findByTestId("steer-apply"));
 
     await waitFor(() =>

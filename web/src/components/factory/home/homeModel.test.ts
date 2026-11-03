@@ -222,18 +222,28 @@ describe("needs you", () => {
     ]);
   });
 
-  it("gives the top bar Home's count while answers are held, else the server's", () => {
-    const asks = [ask("D-1"), ask("D-2"), ask("D-3")];
+  it("gives the top bar the fresher count: Home's while answers are held", () => {
+    const list = (at: number, ...ids: string[]) => ({
+      asks: ids.map((id) => ask(id)),
+      generated_at: at,
+    });
+    const none = new Set<string>();
 
-    // Nothing held: the server's count stands, even when the list says otherwise.
-    expect(shellNeedsCount(4, new Set(), asks)).toBe(4);
-    // Held (or sent and still listed): Home's list without them.
-    expect(shellNeedsCount(3, new Set(["D-2"]), asks)).toBe(2);
-    // Sent and gone from a newer list, while the server's count is older: still Home's.
-    expect(shellNeedsCount(3, new Set(["D-2"]), [ask("D-1"), ask("D-3")])).toBe(2);
+    // Nothing held and the server's read is newer: its count stands.
+    expect(shellNeedsCount({ count: 4, at: 200 }, none, list(100, "D-1", "D-2", "D-3"))).toBe(4);
+    // The list is as new or newer (its refetch after a send landed first): Home's count.
+    expect(shellNeedsCount({ count: 3, at: 100 }, none, list(100, "D-1", "D-3"))).toBe(2);
+    expect(shellNeedsCount({ count: 3, at: 100 }, none, list(130, "D-1", "D-3"))).toBe(2);
+    // Held (or sent and still listed): Home's list without them, however old.
+    expect(
+      shellNeedsCount({ count: 3, at: 200 }, new Set(["D-2"]), list(100, "D-1", "D-2", "D-3")),
+    ).toBe(2);
+    // No summary in yet: the list speaks.
+    expect(shellNeedsCount({ count: 0, at: null }, none, list(100, "D-1"))).toBe(1);
     // Before the list is read, the held rows come off the server's count.
-    expect(shellNeedsCount(3, new Set(["D-2"]), null)).toBe(2);
-    expect(shellNeedsCount(0, new Set(["D-2"]), null)).toBe(0);
+    expect(shellNeedsCount({ count: 3, at: 100 }, new Set(["D-2"]), null)).toBe(2);
+    expect(shellNeedsCount({ count: 0, at: 100 }, new Set(["D-2"]), null)).toBe(0);
+    expect(shellNeedsCount({ count: 3, at: 100 }, none, null)).toBe(3);
   });
 
   it("states the row's facts: who, what waiting costs, age and deadline", () => {

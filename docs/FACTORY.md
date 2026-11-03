@@ -944,14 +944,18 @@ previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
 | `team.projects.<slug>.builders_at_once`, `.budget_usd` | A when lower, else B |
 | any `team.projects.<slug>` change | never a trial (one team merges about one PR a day) |
 
-Only owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`,
-and the five blocks), so their class matters only for agents: an agent's
-proposal of one always waits for the owners (class B), whatever the table
-says. Editors (`PUT …/definition`) apply a change that only narrows a team or
-a source, or only lowers dollar budgets (`budgets.*`, `discovery.budgets.*`,
-`loops.*.usd`: lowering one only reduces spend), and may Undo their own for
-10 minutes; raising a budget stays the owners'. The preview shows the table's
-class. In the blocks, agents propose only their seat's paths (403
+Owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`, and
+the five blocks), except the class-A changes editors apply (below). For agents
+the class of those paths does not matter: an agent's proposal of one always
+waits for the owners (class B), whatever the table says. Editors
+(`PUT …/definition`) apply a change that only narrows a team or a source, or
+only lowers dollar budgets (`budgets.*`, `discovery.budgets.*`, `loops.*.usd`:
+lowering one only reduces spend), and may Undo their own for 10 minutes;
+raising a budget stays the owners', and so do trials (an editor's change
+applies at once, never as a trial: 403 `owners_only`). A $0 budget is a cap
+like any other: with `discovery.budgets.per_ask` at 0, a research ask that
+spends anything waits for an owner. The preview shows the table's class. In
+the blocks, agents propose only their seat's paths (403
 `path_not_allowed` otherwise): Scout `product`, `strategy` and
 `discovery.sources`; Sentinel `discovery.rubric`, `discovery.thresholds` and
 `briefs.scout`; Atlas none.
