@@ -47,7 +47,7 @@ export const ROOM_NOW_S = ROUND3_NOW_S;
 export const ATLAS_ID = round3Snapshot().factory.root_session_id;
 
 /**
- * The Room's threads as `GET …/chat/threads` lists them (Luka's unread
+ * The Room's threads as `GET …/chat/threads` lists them (Lena's unread
  * counts): the fixed ones, one per project of `snapshot` (quiet ones with no
  * messages yet), then the PR threads.
  */
@@ -129,7 +129,7 @@ export function proposalInState(
       return {
         ...p,
         status: "applied",
-        decided_by: "mia@caffeine.ai",
+        decided_by: "mia@example.com",
         decided_at: nowS - 20,
         applied_at: nowS - 20,
         undo_until: nowS + 580,
@@ -151,7 +151,7 @@ export function proposalInState(
       return {
         ...p,
         status: "refused",
-        decided_by: "luka@caffeine.ai",
+        decided_by: "lena@example.com",
         result: { error: "over_caps" },
         updated_at: nowS - 60,
       };
@@ -159,7 +159,7 @@ export function proposalInState(
       return {
         ...p,
         status: "rejected",
-        decided_by: "luka@caffeine.ai",
+        decided_by: "lena@example.com",
         decided_at: nowS - 300,
         result: { note: "billing waits for Q1; keep the API contract stable" },
         updated_at: nowS - 300,
@@ -172,7 +172,7 @@ export function proposalInState(
       return {
         ...p,
         status: "undone",
-        reverted_by: "mia@caffeine.ai",
+        reverted_by: "mia@example.com",
         reverted_at: nowS - 30,
         updated_at: nowS - 30,
       };
@@ -182,7 +182,7 @@ export function proposalInState(
 /** A thread with `count` messages (people and agents talking), for paging and long text. */
 export function busyThread(thread = "factory", count = 120): ChatMessageView[] {
   const base = roomMessages("factory")[0]!;
-  const people = ["luka@caffeine.ai", "mia@caffeine.ai"];
+  const people = ["lena@example.com", "mia@example.com"];
   const out: ChatMessageView[] = [];
   for (let i = 1; i <= count; i += 1) {
     const agent = i % 3 === 0;
@@ -194,12 +194,12 @@ export function busyThread(thread = "factory", count = 120): ChatMessageView[] {
       seq: 1000 + i,
       author_kind: agent ? "agent" : "human",
       author,
-      author_title: agent ? "Atlas" : author === people[0] ? "Luka" : "Mia",
+      author_title: agent ? "Atlas" : author === people[0] ? "Lena" : "Mia",
       author_role: agent ? "lead" : author === people[0] ? "owner" : "operator",
       body: agent
         ? `Step ${i}: re-ran the CI for !9631 and posted D-${30 + (i % 5)}; #db-version waits on T-4.`
         : i % 17 === 0
-          ? `A long note to check wrapping: ${"supercalifragilistic-expialidocious-".repeat(4)} and a very long path services/caffeine-api/src/modules/db/migrations/knex/2026-10-27-add-version-table.ts`
+          ? `A long note to check wrapping: ${"supercalifragilistic-expialidocious-".repeat(4)} and a very long path services/sample-api/src/modules/db/migrations/knex/2026-10-27-add-version-table.ts`
           : `@atlas message ${i} about #api-version`,
       mentions: agent ? [] : ["@atlas"],
       refs: [],
@@ -286,8 +286,8 @@ function personRow(seq: number, atS: number, body: string, agent = false): ChatM
     : {
         ...row,
         author_kind: "human",
-        author: "luka@caffeine.ai",
-        author_title: "Luka",
+        author: "lena@example.com",
+        author_title: "Lena",
         author_role: "owner",
       };
 }
@@ -331,7 +331,7 @@ function sha40(n: number): string {
 /**
  * #factory with a busy main: twelve one-move lines an older server wrote in a
  * row, one batched line of 7 moves since 13:12, a lone move (reads as
- * before) and a temp-main line, with people talking between them.
+ * before) and a develop line, with people talking between them.
  */
 export function manyBaseMovesThread(nowS = ROOM_NOW_S): ChatMessageView[] {
   const legacy = Array.from({ length: 12 }, (_, i) =>
@@ -364,19 +364,19 @@ export function manyBaseMovesThread(nowS = ROOM_NOW_S): ChatMessageView[] {
         type: "system",
         ref: null,
         id: null,
-        meta: { kind: "base.moved", repo: "caffeinelabs/app", base: "main", moves: batched },
+        meta: { kind: "base.moved", repo: "sample-org/sample-app", base: "main", moves: batched },
       },
     ),
     personRow(3104, nowS - 40 * 60, "@pl:db-version rebase once main settles"),
     systemRow(
       3105,
       temp[0]!.at,
-      `base temp-main moved 3 times since ${utcTime(temp[0]!.at)} UTC → ${sha40(43).slice(0, 7)}`,
+      `base develop moved 3 times since ${utcTime(temp[0]!.at)} UTC → ${sha40(43).slice(0, 7)}`,
       {
         type: "system",
         ref: null,
         id: null,
-        meta: { kind: "base.moved", repo: "caffeinelabs/app", base: "temp-main", moves: temp },
+        meta: { kind: "base.moved", repo: "sample-org/sample-app", base: "develop", moves: temp },
       },
     ),
     systemRow(
@@ -389,7 +389,7 @@ export function manyBaseMovesThread(nowS = ROOM_NOW_S): ChatMessageView[] {
         id: null,
         meta: {
           kind: "base.moved",
-          repo: "caffeinelabs/app",
+          repo: "sample-org/sample-app",
           base: "main",
           moves: [{ at: nowS - 3 * 60, from_sha: sha40(27), to_sha: sha40(28), pr: 9631 }],
         },
@@ -450,8 +450,20 @@ export function afterDeployThread(nowS = ROOM_NOW_S): ChatMessageView[] {
     pr: null,
   });
   rows.push(
-    batchedLine(4015, "caffeinelabs/infra", "main", [move(80, 30), move(81, 25)], "main (infra)"),
-    batchedLine(4016, "caffeinelabs/app", "main", [move(66, 20), move(67, 8)], "main (app)"),
+    batchedLine(
+      4015,
+      "sample-org/sample-infra",
+      "main",
+      [move(80, 30), move(81, 25)],
+      "main (sample-infra)",
+    ),
+    batchedLine(
+      4016,
+      "sample-org/sample-app",
+      "main",
+      [move(66, 20), move(67, 8)],
+      "main (sample-app)",
+    ),
   );
   return rows;
 }
@@ -632,7 +644,7 @@ export function workGraph40(): WorkGraphResponse {
       to: t.id,
       kind: "decision",
       met: false,
-      assignee: "mia@caffeine.ai",
+      assignee: "mia@example.com",
       status: "open",
     })),
     project_edges: [
@@ -728,7 +740,7 @@ export function busGraph12(nowMs = ROOM_NOW_S * 1000): BusGraphResponse {
     snapshot.members.find((m) => m.title === "env_keeper" && m.project === "db-version")!,
   ];
   const nodes: BusGraphResponse["nodes"] = [
-    { id: "human:luka@caffeine.ai", kind: "human", title: "luka@caffeine.ai" },
+    { id: "human:lena@example.com", kind: "human", title: "lena@example.com" },
     { id: "human:operators", kind: "human", title: "operators" },
     { id: "server", kind: "server", title: "server" },
     ...agents.map((m) => ({
@@ -788,7 +800,7 @@ export function busGraph12(nowMs = ROOM_NOW_S * 1000): BusGraphResponse {
       { from: plDb!, to: ic!, kind: "spawn" },
       {
         from: plDb!,
-        to: "human:luka@caffeine.ai",
+        to: "human:lena@example.com",
         kind: "waits_on",
         label: "D-2",
         blocking: true,

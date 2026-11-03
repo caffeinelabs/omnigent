@@ -36,7 +36,7 @@ export const projectDemosPath = (slug: string) => `${SNAPSHOT_PATH}/projects/${s
 /** How long the committed sample recording runs. */
 const SAMPLE_SECONDS = 9.3;
 
-const LANDING: [string, string] = ["Caffeine", "Build apps by chatting with AI"];
+const LANDING: [string, string] = ["Sample App", "A sample landing page"];
 const ABOUT: [string, string] = ["Settings · About", "API version  7767f0d"];
 
 /** Stills by file name, with per-demo overrides keyed `<demo id>:<name>`. */

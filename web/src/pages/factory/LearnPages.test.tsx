@@ -129,7 +129,7 @@ describe("Insights", () => {
     expect(screen.getByTestId("insights-mark-img-ver-0bb15c1")).toHaveTextContent("img 0bb15c1");
     expect(await screen.findByTestId("insights-flow")).toBeInTheDocument();
     expect(screen.getByTestId("insights-where-rows-api-version")).toBeInTheDocument();
-    expect(screen.getByTestId("insights-people-table")).toHaveTextContent("mia@caffeine.ai");
+    expect(screen.getByTestId("insights-people-table")).toHaveTextContent("mia@example.com");
   });
 
   it("calls small samples inconclusive and hides their deltas", async () => {
@@ -473,7 +473,7 @@ describe("Improvements", () => {
     const rejected = {
       ...learnProposals().find((p) => p.ref === "C-15")!,
       status: "rejected" as const,
-      decided_by: "luka@caffeine.ai",
+      decided_by: "lena@example.com",
       result: { note: "Plan human-only steps in the charter instead" },
     };
     serve("creator", {
@@ -482,7 +482,7 @@ describe("Improvements", () => {
     renderAt("/improvements/C-15");
 
     expect(await screen.findByTestId("proposal-C-15-outcome")).toHaveTextContent(
-      "Rejected by luka: “Plan human-only steps in the charter instead”",
+      "Rejected by lena: “Plan human-only steps in the charter instead”",
     );
     expect(screen.queryByTestId("proposal-C-15-reject")).toBeNull();
   });

@@ -32,7 +32,7 @@ function withStills(snapshot: FactorySnapshot): FactorySnapshot {
   for (const pr of snapshot.prs) {
     for (const file of pr.demo?.files ?? []) {
       if (file.content_type.startsWith("image/") && !file.url.startsWith("data:")) {
-        file.url = mockScreenshot("Caffeine", "Build apps by chatting with AI");
+        file.url = mockScreenshot("Sample App", "A sample landing page");
       }
     }
   }

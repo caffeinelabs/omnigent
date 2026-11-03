@@ -19,7 +19,7 @@ from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit
 HEAD = "5e1c2d4" + "a" * 33
 OLD = "1" * 40
 SLUG = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 def _pr(**fields: Any) -> FactoryPr:
@@ -28,7 +28,7 @@ def _pr(**fields: Any) -> FactoryPr:
         "factory_id": "f" * 32,
         "repo": REPO,
         "number": 9631,
-        "url": "https://github.com/caffeinelabs/app/pull/9631",
+        "url": "https://github.com/sample-org/sample-app/pull/9631",
         "head_sha": HEAD,
         "state": "open",
         "is_draft": False,
@@ -48,7 +48,7 @@ def _gates(**states: str) -> dict[str, Any]:
         "protected_paths": "pass",
     }
     out.update(states)
-    out["evidence"] = {"checks": {"failing_names": ["caffeine-api test", "lint"]}}
+    out["evidence"] = {"checks": {"failing_names": ["sample-api test", "lint"]}}
     return out
 
 
@@ -338,7 +338,7 @@ def test_next_step_table(
     found = next_step(pr, gates, loops_, preview, [], sentinel)
     assert (found.name, found.cause) == (step, cause)
     if step == "FIX_CI":
-        assert found.args == {"checks": "caffeine-api test, lint"}
+        assert found.args == {"checks": "sample-api test, lint"}
     if step == "DEMO":
         assert found.args["app"] == READY_PREVIEW["urls"]["app"]
 
@@ -380,9 +380,9 @@ def test_next_step_for_every_gate_combination(
 def test_hint_texts() -> None:
     pr = _pr()
     step = Step("PREVIEW", HEAD, "review APPROVE", {"pr": 9631})
-    assert hint_text(pr, step, base="temp-main") == (
+    assert hint_text(pr, step, base="develop") == (
         f"[Factory engine · NEXT · PR #9631 @5e1c2d4 · review APPROVE → PREVIEW pr=9631 "
-        f"head={HEAD} base=temp-main]"
+        f"head={HEAD} base=develop]"
     )
     assert hint_text(pr, Step("FIX_CI", HEAD, "CI failed", {"checks": "lint"}), base="x") == (
         "[Factory engine · NEXT · PR #9631 @5e1c2d4 · CI failed → FIX_CI checks=lint]"
@@ -415,7 +415,7 @@ async def cockpit(
             SLUG,
             title="API version",
             repo=REPO,
-            base_branch="temp-main",
+            base_branch="develop",
             charter={"goal": "GET /version", "budget_ics": 2},
             pl_session_id=world.id("pl"),
         )
@@ -431,7 +431,7 @@ def _store_pr(cockpit: Cockpit, number: int, **gates: str) -> FactoryPr:
         project_slug=SLUG,
         head_sha=HEAD,
         head_ref=f"factory/{SLUG}/t{number}",
-        base_ref="temp-main",
+        base_ref="develop",
         gates=_gates(**gates),
         title=f"PR {number}",
     )
@@ -482,7 +482,7 @@ async def test_next_hints_coalesce_per_pl_over_the_window(cockpit: Cockpit) -> N
     assert mails[1].splitlines() == [
         f"[Factory engine · NEXT · PR #9632 @5e1c2d4 · CI green → REVIEW head={HEAD}]",
         f"[Factory engine · NEXT · PR #9633 @5e1c2d4 · review APPROVE → PREVIEW pr=9633 "
-        f"head={HEAD} base=temp-main]",
+        f"head={HEAD} base=develop]",
     ]
     assert cockpit.events("engine.next")[-1].data["coalesced"] == 2
 

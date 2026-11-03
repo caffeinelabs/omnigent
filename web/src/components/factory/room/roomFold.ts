@@ -194,7 +194,7 @@ export function namesRepos(snapshot: FactorySnapshot, items: readonly FoldedItem
   return repos.size > 1;
 }
 
-/** `infra` for `caffeinelabs/infra`. */
+/** `sample-infra` for `sample-org/sample-infra`. */
 export function repoName(repo: string): string {
   return repo.slice(repo.lastIndexOf("/") + 1);
 }

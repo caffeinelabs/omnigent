@@ -11,7 +11,7 @@ import {
 } from "../projectForm";
 
 /** (sample) The repo the sample projects run on. */
-export const SAMPLE_REPO = "caffeinelabs/app";
+export const SAMPLE_REPO = "sample-org/sample-app";
 
 /** (sample) The three projects, on the default base when it is the sample repo's. */
 export function sampleProjects(defaults?: FactoryDefaultsDraft): ProjectDraft[] {

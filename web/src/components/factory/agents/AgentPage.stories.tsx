@@ -55,22 +55,22 @@ export const LiveMobile = phone(agent(IC_ROUTE_R2));
 
 export const LiveMobileDark = phone(agent(IC_ROUTE_R2, { theme: "dark" }));
 
-/** Mia (operator) watching with Luka: presence faces, every lever open. */
+/** Mia (operator) watching with Lena: presence faces, every lever open. */
 export const MultiUser = agent(IC_ROUTE_R2, {
   snapshot: (() => {
     const snapshot = round3Snapshot("operator");
     snapshot.presence = [
-      ...(snapshot.presence ?? []).filter((p) => p.user_id !== "luka@caffeine.ai"),
+      ...(snapshot.presence ?? []).filter((p) => p.user_id !== "lena@example.com"),
       {
-        user_id: "luka@caffeine.ai",
-        name: "Luka",
+        user_id: "lena@example.com",
+        name: "Lena",
         location: `agent:${IC_ROUTE_R2}`,
         idle: false,
         since: ROUND3_NOW_S - 60,
         sessions: [],
       },
       {
-        user_id: "ops@caffeine.ai",
+        user_id: "ops@example.com",
         name: "Ops",
         location: `agent:${IC_ROUTE_R2}`,
         idle: true,
@@ -148,7 +148,7 @@ export const EnvKeeper = agent(ENV_DB);
 
 const LONG_TITLE = "ic:route-r2-with-a-very-long-worker-name-from-a-long-task-key";
 const LONG_ARG =
-  "pnpm -F caffeine-api test -- --reporter=verbose --runInBand src/modules/db/version.test.ts src/modules/db/migrations.test.ts";
+  "pnpm -F sample-api test -- --reporter=verbose --runInBand src/modules/db/version.test.ts src/modules/db/migrations.test.ts";
 
 /** ic:route-r2 with a long title and tool argument, in its detail and in the fleet row. */
 function longRow<T extends { title: string; now: { tool_arg: string | null } | null }>(row: T): T {

@@ -77,7 +77,7 @@
    "data": {
     "agent": "ic",
     "name": "Bash",
-    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Run API tests\",\"timeout\":600000}",
+    "arguments": "{\"command\":\"pnpm -F sample-api test\",\"description\":\"Run API tests\",\"timeout\":600000}",
     "call_id": "toolu_test0"
    }
   },
@@ -97,7 +97,7 @@
    "data": {
     "agent": "ic",
     "name": "Bash",
-    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Re-run the API tests\",\"timeout\":600000}",
+    "arguments": "{\"command\":\"pnpm -F sample-api test\",\"description\":\"Re-run the API tests\",\"timeout\":600000}",
     "call_id": "toolu_test1"
    }
   },
@@ -117,7 +117,7 @@
    "data": {
     "agent": "ic",
     "name": "Bash",
-    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Run tests again\",\"timeout\":600000}",
+    "arguments": "{\"command\":\"pnpm -F sample-api test\",\"description\":\"Run tests again\",\"timeout\":600000}",
     "call_id": "toolu_test2"
    }
   },
@@ -137,7 +137,7 @@
    "data": {
     "agent": "ic",
     "name": "Bash",
-    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Try the tests\",\"timeout\":600000}",
+    "arguments": "{\"command\":\"pnpm -F sample-api test\",\"description\":\"Try the tests\",\"timeout\":600000}",
     "call_id": "toolu_test3"
    }
   },
@@ -157,7 +157,7 @@
    "data": {
     "agent": "ic",
     "name": "Bash",
-    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Run API tests\",\"timeout\":600000}",
+    "arguments": "{\"command\":\"pnpm -F sample-api test\",\"description\":\"Run API tests\",\"timeout\":600000}",
     "call_id": "toolu_test4"
    }
   },
@@ -192,7 +192,7 @@
    "data": {
     "agent": "ic",
     "name": "Bash",
-    "arguments": "{\"command\":\"NPM_TOKEN=notarealtoken123 pnpm -F caffeine-api db:seed && pnpm -F caffeine-api test --reporter=dot\",\"description\":\"Seed and test\"}",
+    "arguments": "{\"command\":\"NPM_TOKEN=notarealtoken123 pnpm -F sample-api db:seed && pnpm -F sample-api test --reporter=dot\",\"description\":\"Seed and test\"}",
     "call_id": "toolu_seed"
    }
   }

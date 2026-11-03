@@ -2,7 +2,7 @@
 
 Agents report through these routes; the cockpit renders what they write. The
 tests seed the shared factory world (Atlas + Sentinel, one PL with its team)
-with a project row for ``api-version`` on caffeinelabs/app, then check that
+with a project row for ``api-version`` on sample-org/sample-app, then check that
 each route writes the right row, scopes writes to the caller's factory and
 project, and refuses what it should with a stable error code.
 """
@@ -29,11 +29,11 @@ from tests.server.factory.conftest import FactoryApi, FactoryWorld, _native, _re
 from tests.server.helpers import build_agent_bundle
 
 PROJECT = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 PR_URL = f"https://github.com/{REPO}/pull/9630"
 SHA = "7767f0d1" + "b" * 32
-APP = "https://app-1a2b-p9630.envs.sandbox.caffeinelabs.io"
-API = "https://api-1a2b-p9630.envs.sandbox.caffeinelabs.io"
+APP = "https://app-1a2b-p9630.envs.sandbox.example.com"
+API = "https://api-1a2b-p9630.envs.sandbox.example.com"
 
 
 @dataclass
@@ -348,7 +348,7 @@ async def test_a_human_hold_is_why_a_passing_pr_is_not_ready(cockpit: Cockpit) -
         human_review={
             "verdict": "changes_requested",
             "text": "Pad it.",
-            "by": "luka",
+            "by": "lena",
             "at": 1,
             "head_sha": head,
             "source": "cockpit",
@@ -356,7 +356,7 @@ async def test_a_human_hold_is_why_a_passing_pr_is_not_ready(cockpit: Cockpit) -
     )
     body = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
     assert body["ready"] is False
-    assert body["reasons"] == [f"changes requested by luka @{head[:7]}"]
+    assert body["reasons"] == [f"changes requested by lena @{head[:7]}"]
     assert (body["claim_status"], body["claim_gates"]) == ("refuted", ["changes requested"])
     claim = cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)[-1]
     assert claim.data is not None
@@ -381,15 +381,15 @@ async def test_pr_registration_returns_the_projects_base_branch(cockpit: Cockpit
     body = (await cockpit.pr("pl")).json()
     assert (body["project_base"], body["base_ref"]) == ("main", None)
 
-    cockpit.store.upsert_project(cockpit.factory_id, PROJECT, base_branch="temp-main")
+    cockpit.store.upsert_project(cockpit.factory_id, PROJECT, base_branch="develop")
     cockpit.store.update_pr(body["pr_id"], base_ref="main")
     body = (await cockpit.pr("pl")).json()
-    assert (body["project_base"], body["base_ref"]) == ("temp-main", "main")
+    assert (body["project_base"], body["base_ref"]) == ("develop", "main")
 
 
 async def test_a_pr_on_a_foreign_repo_is_refused(cockpit: Cockpit) -> None:
-    foreign = await cockpit.pr("pl", url="https://github.com/caffeinelabs/infra/pull/12")
-    not_pr = await cockpit.pr("pl", url="https://github.com/caffeinelabs/app/issues/12")
+    foreign = await cockpit.pr("pl", url="https://github.com/sample-org/sample-infra/pull/12")
+    not_pr = await cockpit.pr("pl", url="https://github.com/sample-org/sample-app/issues/12")
 
     assert foreign.status_code == 403 and code(foreign) == "pr_out_of_factory"
     assert not_pr.status_code == 400 and code(not_pr) == "not_a_pr_url"
@@ -400,7 +400,8 @@ async def test_a_launch_workspace_counts_before_project_rows_exist(
     world: FactoryWorld, api: FactoryApi
 ) -> None:
     world.store.set_labels(
-        world.id("pl"), {"omnigent.sandbox.repo.0": "https://github.com/Caffeinelabs/App#main"}
+        world.id("pl"),
+        {"omnigent.sandbox.repo.0": "https://github.com/Sample-Org/Sample-App#main"},
     )
     resp = await api.client.post(
         "/v1/factory/agent/prs", json={"from_session_id": world.id("pl"), "url": PR_URL}
@@ -475,12 +476,12 @@ async def test_dev_env_report_writes_the_project_env(cockpit: Cockpit) -> None:
     resp = await cockpit.env(
         "env_keeper",
         urls={
-            "app": "https://app-1a2b.envs.sandbox.caffeinelabs.io",
+            "app": "https://app-1a2b.envs.sandbox.example.com",
             # Old sandboxes still report the Tilt UI link; it is kept, never shown.
             "tilt_ui": "http://localhost:10350",
         },
         deployed={"sha": SHA, "ref": "origin/main"},
-        resources=[{"name": "caffeine-api", "status": "ok"}],
+        resources=[{"name": "sample-api", "status": "ok"}],
         note="UP",
     )
     assert resp.status_code == 200, resp.text
@@ -492,7 +493,7 @@ async def test_dev_env_report_writes_the_project_env(cockpit: Cockpit) -> None:
     assert reported["urls"]["tilt_ui"] == "http://localhost:10350"
     # A dev env stores DeployedRef ({sha, ref}); preview-only keys are dropped.
     assert reported["deployed"] == {"sha": SHA, "ref": "origin/main"}
-    assert reported["resources"] == [{"name": "caffeine-api", "status": "ok"}]
+    assert reported["resources"] == [{"name": "sample-api", "status": "ok"}]
     schemas.EnvView.model_validate(project.env)
     assert cockpit.store.list_prs(cockpit.factory_id) == []
     assert cockpit.kinds() == ["env.reported"]
@@ -517,7 +518,7 @@ async def test_preview_report_upserts_the_pr_and_writes_its_preview(cockpit: Coc
         namespace="env-1a2b-p9630",
         urls={"app": APP, "api": API},
         deployed={"sha": SHA, "ref": "factory/api-version/version", "tooling_overlay": "abc1234"},
-        resources=[{"name": "caffeine-api", "ready": False, "restarts": 0}],
+        resources=[{"name": "sample-api", "ready": False, "restarts": 0}],
     )
     assert resp.status_code == 200, resp.text
     row = cockpit.store.get_pr_by_number(cockpit.factory_id, REPO, 9630)
@@ -569,11 +570,11 @@ async def test_only_env_keeper_and_the_pl_report_envs(cockpit: Cockpit, key: str
 @pytest.mark.parametrize(
     ("extra", "error"),
     [
-        ({"urls": {"app": "http://app-1a2b.envs.sandbox.caffeinelabs.io"}}, "invalid_url"),
+        ({"urls": {"app": "http://app-1a2b.envs.sandbox.example.com"}}, "invalid_url"),
         ({"urls": {"api": "https://api.example.com"}}, "invalid_url"),
-        ({"urls": {"app": "https://a.b.envs.sandbox.caffeinelabs.io"}}, "invalid_url"),
+        ({"urls": {"app": "https://a.b.envs.sandbox.example.com"}}, "invalid_url"),
         ({"urls": {"tilt_ui": "javascript:alert(1)"}}, "invalid_url"),
-        ({"urls": {"grafana": "https://g.envs.sandbox.caffeinelabs.io"}}, "invalid_url"),
+        ({"urls": {"grafana": "https://g.envs.sandbox.example.com"}}, "invalid_url"),
         ({"state": "deploying"}, "invalid_state"),
         ({"state": "degraded", "pr": 9630}, "invalid_state"),
         ({"deployed": {"sha": "not-a-sha"}}, "invalid_sha"),

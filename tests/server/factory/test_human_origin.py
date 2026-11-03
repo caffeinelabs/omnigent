@@ -95,7 +95,7 @@ def runner_bearer(provider: UnifiedAuthProvider, user: str = "alice") -> dict[st
 
 def _pr(cockpit: Cockpit) -> FactoryPr:
     pr, _ = cockpit.store.upsert_pr(
-        cockpit.fid, "caffeinelabs/app", 9631, project_slug="api-version", head_sha=HEAD
+        cockpit.fid, "sample-org/sample-app", 9631, project_slug="api-version", head_sha=HEAD
     )
     return pr
 
@@ -126,19 +126,23 @@ def _project(cockpit: Cockpit) -> str:
         cockpit.fid,
         "api-version",
         title="API version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         charter={"goal": "Add GET /version."},
         pl_session_id=cockpit.world.id("pl"),
     )
     return "api-version"
 
 
-_NEW_PROJECT = {"slug": "db-version", "repo": "caffeinelabs/app", "goal": "Show the DB version."}
+_NEW_PROJECT = {
+    "slug": "db-version",
+    "repo": "sample-org/sample-app",
+    "goal": "Show the DB version.",
+}
 
 
 def _unstaffed_project(cockpit: Cockpit) -> str:
     cockpit.store.upsert_project(
-        cockpit.fid, "db-version", title="DB version", repo="caffeinelabs/app", charter={}
+        cockpit.fid, "db-version", title="DB version", repo="sample-org/sample-app", charter={}
     )
     return "db-version"
 

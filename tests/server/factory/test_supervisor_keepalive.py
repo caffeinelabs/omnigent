@@ -103,7 +103,7 @@ def _preview_pr(
     w = supervision.world
     w.app_state.factory.factory_store.upsert_pr(
         w.id("lead_a"),
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         number,
         project_slug=project,
         state=state,

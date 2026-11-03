@@ -357,9 +357,9 @@ async def test_task_actions_need_edit_on_the_pl(cockpit: Cockpit) -> None:
 def _pr(cockpit: Cockpit, state: str = "open") -> Any:
     row, _ = cockpit.store.upsert_pr(
         cockpit.fid,
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         number=9630,
-        url="https://github.com/caffeinelabs/app/pull/9630",
+        url="https://github.com/sample-org/sample-app/pull/9630",
         project_slug="api-version",
         head_sha=HEAD,
         state=state,
@@ -384,7 +384,7 @@ async def test_rerun_demo_and_review_send_the_pl_controls(cockpit: Cockpit) -> N
         "[Factory control · REVIEW pr=#9630 · by carol] Re-run the cross-vendor review of "
         "PR #9630 at 5e1c2d4"
     )
-    assert _event(demo)["subject"] == "pr:caffeinelabs/app#9630"
+    assert _event(demo)["subject"] == "pr:sample-org/sample-app#9630"
     assert _event(review)["data"]["target_role"] == "project_lead"
 
 

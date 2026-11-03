@@ -86,7 +86,7 @@ def parse_sha(payload: object) -> str | None:
     """
     Find a commit sha in a version payload.
 
-    :param payload: e.g. ``{"service": "caffeine-api", "gitSha": "7767f0d…"}``; one
+    :param payload: e.g. ``{"service": "sample-api", "gitSha": "7767f0d…"}``; one
         nested object is searched too.
     :returns: The lowercased sha (7-40 hex chars), or ``None``.
     """

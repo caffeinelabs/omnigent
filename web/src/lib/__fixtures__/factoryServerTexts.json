@@ -10,10 +10,10 @@
   },
   {
     "name": "brief",
-    "text": "[Factory brief · from Luka via cockpit · id=mail_00000000000000aa]\nStart the factory.",
+    "text": "[Factory brief · from Lena via cockpit · id=mail_00000000000000aa]\nStart the factory.",
     "expect": {
       "kind": "brief",
-      "by": "Luka",
+      "by": "Lena",
       "mailId": "mail_00000000000000aa"
     }
   },
@@ -36,26 +36,26 @@
   },
   {
     "name": "control_pause",
-    "text": "[Factory control · PAUSE · by Luka] Pause the project.",
+    "text": "[Factory control · PAUSE · by Lena] Pause the project.",
     "expect": {
       "kind": "control",
       "action": "PAUSE",
-      "by": "Luka"
+      "by": "Lena"
     }
   },
   {
     "name": "control_preview",
-    "text": "[Factory control · PREVIEW pr=#9630 · by Luka] Deploy the preview.",
+    "text": "[Factory control · PREVIEW pr=#9630 · by Lena] Deploy the preview.",
     "expect": {
       "kind": "control",
       "action": "PREVIEW",
       "pr": 9630,
-      "by": "Luka"
+      "by": "Lena"
     }
   },
   {
     "name": "control_preview_down",
-    "text": "[Factory control · PREVIEW_DOWN pr=#9630 · by Luka] Take it down.",
+    "text": "[Factory control · PREVIEW_DOWN pr=#9630 · by Lena] Take it down.",
     "expect": {
       "kind": "control",
       "action": "PREVIEW_DOWN",
@@ -64,7 +64,7 @@
   },
   {
     "name": "control_env_status",
-    "text": "[Factory control · ENV STATUS · by Luka] Report env status.",
+    "text": "[Factory control · ENV STATUS · by Lena] Report env status.",
     "expect": {
       "kind": "control",
       "action": "ENV STATUS"
@@ -72,35 +72,35 @@
   },
   {
     "name": "control_new_sandbox",
-    "text": "[Factory control · NEW SANDBOX · by Luka] You run on a new sandbox: files, worktrees, the dev env and previews of the old one are gone. The server kept your charter, tasks, PRs and decisions. Load your playbook, rebuild plan.md from sys_factory_task(op=\"ready\") and sys_factory_roster(), re-drive the tasks that were running, bring the dev env UP if ICs need it and run PREVIEW for each open PR; reply once: sys_session_post(to=\"parent\", kind=\"reply\").\nThe node pool was full.",
+    "text": "[Factory control · NEW SANDBOX · by Lena] You run on a new sandbox: files, worktrees, the dev env and previews of the old one are gone. The server kept your charter, tasks, PRs and decisions. Load your playbook, rebuild plan.md from sys_factory_task(op=\"ready\") and sys_factory_roster(), re-drive the tasks that were running, bring the dev env UP if ICs need it and run PREVIEW for each open PR; reply once: sys_session_post(to=\"parent\", kind=\"reply\").\nThe node pool was full.",
     "expect": {
       "kind": "control",
       "action": "NEW SANDBOX",
-      "by": "Luka"
+      "by": "Lena"
     }
   },
   {
     "name": "control_charter_update",
-    "text": "[Factory control · CHARTER UPDATE · by Luka] Your charter changed: follow the new one from your next step, update plan.md, and reply once: sys_session_post(to=\"parent\", kind=\"reply\").\n```diff\n-goal: a\n+goal: b\n```",
+    "text": "[Factory control · CHARTER UPDATE · by Lena] Your charter changed: follow the new one from your next step, update plan.md, and reply once: sys_session_post(to=\"parent\", kind=\"reply\").\n```diff\n-goal: a\n+goal: b\n```",
     "expect": {
       "kind": "control",
       "action": "CHARTER UPDATE",
-      "by": "Luka"
+      "by": "Lena"
     }
   },
   {
     "name": "decision_answered",
-    "text": "[Factory decision · D-3 answered by Luka · \"Header, right\"]\nUse the right side.\nQuestion: Where should the ENV badge go?",
+    "text": "[Factory decision · D-3 answered by Lena · \"Header, right\"]\nUse the right side.\nQuestion: Where should the ENV badge go?",
     "expect": {
       "kind": "decision",
       "seq": 3,
-      "by": "Luka",
+      "by": "Lena",
       "option": "Header, right"
     }
   },
   {
     "name": "decision_withdrawn",
-    "text": "[Factory decision · D-3 withdrawn by Luka]\nNo longer needed.\nQuestion: Where should the ENV badge go?",
+    "text": "[Factory decision · D-3 withdrawn by Lena]\nNo longer needed.\nQuestion: Where should the ENV badge go?",
     "expect": {
       "kind": "decision",
       "seq": 3,
@@ -109,7 +109,7 @@
   },
   {
     "name": "decision_info_copy",
-    "text": "[Factory notice · D-3 answered by Luka · \"Header, right\" · delivered to \"PL · api-version\"] Info copy of a blocking decision; the asker has the answer.\nQuestion: Where should the ENV badge go?",
+    "text": "[Factory notice · D-3 answered by Lena · \"Header, right\" · delivered to \"PL · api-version\"] Info copy of a blocking decision; the asker has the answer.\nQuestion: Where should the ENV badge go?",
     "expect": {
       "kind": "notice",
       "decisionId": "D-3"
@@ -117,7 +117,7 @@
   },
   {
     "name": "review_changes_cockpit",
-    "text": "[Factory review · CHANGES REQUESTED on PR #9630 @7767f0d by Luka (cockpit)]\nMake it uppercase.",
+    "text": "[Factory review · CHANGES REQUESTED on PR #9630 @7767f0d by Lena (cockpit)]\nMake it uppercase.",
     "expect": {
       "kind": "review",
       "verdict": "changes_requested",
@@ -127,7 +127,7 @@
   },
   {
     "name": "review_approved",
-    "text": "[Factory review · APPROVED PR #9630 @7767f0d by Luka (cockpit)] The human will merge on GitHub; keep the preview up.",
+    "text": "[Factory review · APPROVED PR #9630 @7767f0d by Lena (cockpit)] The human will merge on GitHub; keep the preview up.",
     "expect": {
       "kind": "review",
       "verdict": "approved",
@@ -136,7 +136,7 @@
   },
   {
     "name": "review_changes_github",
-    "text": "[Factory review · CHANGES REQUESTED on PR #9630 @7767f0d by luka (GitHub)]\nPlease rename it.",
+    "text": "[Factory review · CHANGES REQUESTED on PR #9630 @7767f0d by lena (GitHub)]\nPlease rename it.",
     "expect": {
       "kind": "review",
       "verdict": "changes_requested",
@@ -146,7 +146,7 @@
   },
   {
     "name": "review_approved_github",
-    "text": "[Factory review · APPROVED PR #9630 @7767f0d by luka (GitHub)] Their change request is lifted; a human merges it on GitHub once every gate passes. Keep the preview up.\nLGTM after all.",
+    "text": "[Factory review · APPROVED PR #9630 @7767f0d by lena (GitHub)] Their change request is lifted; a human merges it on GitHub once every gate passes. Keep the preview up.\nLGTM after all.",
     "expect": {
       "kind": "review",
       "verdict": "approved",
@@ -156,7 +156,7 @@
   },
   {
     "name": "notice_change_request_dismissed",
-    "text": "[Factory notice · PR caffeinelabs/app#9630 change request by luka @7767f0d dismissed on GitHub] The head is no longer held: it is ready for a human again once every gate passes.",
+    "text": "[Factory notice · PR sample-org/sample-app#9630 change request by lena @7767f0d dismissed on GitHub] The head is no longer held: it is ready for a human again once every gate passes.",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -164,7 +164,7 @@
   },
   {
     "name": "notice_ready",
-    "text": "[Factory notice · PR caffeinelabs/app#9630 READY FOR HUMAN MERGE · 6/6 gates · head 7767f0d] A human merges it on GitHub; keep its preview up and do not merge it. https://github.com/caffeinelabs/app/pull/9630",
+    "text": "[Factory notice · PR sample-org/sample-app#9630 READY FOR HUMAN MERGE · 6/6 gates · head 7767f0d] A human merges it on GitHub; keep its preview up and do not merge it. https://github.com/sample-org/sample-app/pull/9630",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -172,7 +172,7 @@
   },
   {
     "name": "notice_checks_failed",
-    "text": "[Factory notice · PR caffeinelabs/app#9630 checks failed: lint, unit (head 7767f0d)] Dispatch a fix on factory/api-version/version-endpoint. https://github.com/caffeinelabs/app/pull/9630/checks",
+    "text": "[Factory notice · PR sample-org/sample-app#9630 checks failed: lint, unit (head 7767f0d)] Dispatch a fix on factory/api-version/version-endpoint. https://github.com/sample-org/sample-app/pull/9630/checks",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -180,7 +180,7 @@
   },
   {
     "name": "notice_merged",
-    "text": "[Factory notice · PR caffeinelabs/app#9630 merged by @luka as 9c8b7a6 · https://github.com/caffeinelabs/app/pull/9630 · tear down preview p9630] Run your post-merge steps: env_keeper MERGED pr=9630 base=main (tear down its preview), sync sibling worktrees (git merge origin/main), post the milestone to your lead.",
+    "text": "[Factory notice · PR sample-org/sample-app#9630 merged by @lena as 9c8b7a6 · https://github.com/sample-org/sample-app/pull/9630 · tear down preview p9630] Run your post-merge steps: env_keeper MERGED pr=9630 base=main (tear down its preview), sync sibling worktrees (git merge origin/main), post the milestone to your lead.",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -188,7 +188,7 @@
   },
   {
     "name": "notice_closed",
-    "text": "[Factory notice · PR caffeinelabs/app#9630 closed without merge by @luka · tear down preview p9630] Send env_keeper CLOSED pr=9630. D-4 asks the human whether to abandon the task or rework it; do not reopen or replace the PR until it is answered.",
+    "text": "[Factory notice · PR sample-org/sample-app#9630 closed without merge by @lena · tear down preview p9630] Send env_keeper CLOSED pr=9630. D-4 asks the human whether to abandon the task or rework it; do not reopen or replace the PR until it is answered.",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -196,7 +196,7 @@
   },
   {
     "name": "notice_preview_ttl",
-    "text": "[Factory notice · preview p9630 idle 72h · park it] No human has looked at the preview of PR caffeinelabs/app#9630 for 72h. Send env_keeper PREVIEW_DOWN pr=9630 reason=ttl. The demo stays reviewable; the cockpit can redeploy the preview later.",
+    "text": "[Factory notice · preview p9630 idle 72h · park it] No human has looked at the preview of PR sample-org/sample-app#9630 for 72h. Send env_keeper PREVIEW_DOWN pr=9630 reason=ttl. The demo stays reviewable; the cockpit can redeploy the preview later.",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -204,7 +204,7 @@
   },
   {
     "name": "notice_preview_gone",
-    "text": "[Factory notice · preview p9630 unreachable · redeploy] PR caffeinelabs/app#9630: its factory preview failed 3 probes in a row (app no answer, api 502). Send env_keeper PREVIEW pr=9630 head=7767f0d.",
+    "text": "[Factory notice · preview p9630 unreachable · redeploy] PR sample-org/sample-app#9630: its factory preview failed 3 probes in a row (app no answer, api 502). Send env_keeper PREVIEW pr=9630 head=7767f0d.",
     "expect": {
       "kind": "notice",
       "pr": 9630
@@ -219,14 +219,14 @@
   },
   {
     "name": "notice_dev_env_needed",
-    "text": "[Factory notice · dev env needed · bring it up] Project api-version has work again: luka asked for changes on PR #9630. Send env_keeper UP base=temp-main so the IC has its dev env.",
+    "text": "[Factory notice · dev env needed · bring it up] Project api-version has work again: lena asked for changes on PR #9630. Send env_keeper UP base=develop so the IC has its dev env.",
     "expect": {
       "kind": "notice"
     }
   },
   {
     "name": "notice_control",
-    "text": "[Factory notice · Luka paused project api-version via cockpit]\nback at 3",
+    "text": "[Factory notice · Lena paused project api-version via cockpit]\nback at 3",
     "expect": {
       "kind": "notice"
     }

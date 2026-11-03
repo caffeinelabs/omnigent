@@ -30,7 +30,7 @@ describe("ReadyForMergeBanner", () => {
     expect(within(banner).getByTestId("preview-pill-9630")).toHaveAttribute("data-head", "match");
     expect(within(banner).getByTestId("merge-link-9630")).toHaveAttribute(
       "href",
-      "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
+      "https://github.com/sample-org/sample-app/pull/9630#partial-pull-merging",
     );
     fireEvent.click(within(banner).getByTestId("review-open-9630"));
     expect(onReview).toHaveBeenCalledWith(9630);
@@ -74,7 +74,7 @@ describe("ReadyForMergeBanner", () => {
       pr.demo = null;
     });
     expect(within(el).getByTestId("ready-banner-demo-missing-9630")).toHaveTextContent(
-      "No demo, and this PR changes paths that need one (services/caffeine-ux/**)",
+      "No demo, and this PR changes paths that need one (services/sample-ux/**)",
     );
   });
 

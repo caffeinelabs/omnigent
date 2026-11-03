@@ -6,7 +6,7 @@ import { VerdictPill, fallbackVerdict, initialsOf, verdictRate } from "./Factory
 
 describe("the top bar's pieces", () => {
   it("names a person by two letters", () => {
-    expect(initialsOf("luka.rumora@example.com")).toBe("LR");
+    expect(initialsOf("lena.roth@example.com")).toBe("LR");
     expect(initialsOf("ana@example.com")).toBe("AN");
     expect(initialsOf("ops-team")).toBe("OT");
     expect(initialsOf(null)).toBe("?");

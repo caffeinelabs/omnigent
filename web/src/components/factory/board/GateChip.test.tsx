@@ -61,8 +61,8 @@ describe("GateChip", () => {
     renderBoard(<Row pr={wrong} />);
     expect(screen.getByTestId("gate-base-9631")).toHaveAttribute("data-state", "fail");
     const card = await evidence(wrong, "base");
-    expect(card).toHaveTextContent("Targets main; the project’s base is temp-main.");
-    expect(card).toHaveTextContent("gh pr edit https://github.com/caffeinelabs/app/pull/9631");
+    expect(card).toHaveTextContent("Targets main; the project’s base is develop.");
+    expect(card).toHaveTextContent("gh pr edit https://github.com/sample-org/sample-app/pull/9631");
   });
 
   it("reads unknown while GitHub can't be polled, but keeps a skip", () => {
@@ -81,7 +81,7 @@ describe("GateChip", () => {
     expect(card).toHaveTextContent("checks failing: 2 of 14");
     expect(within(card).getByRole("link", { name: /Checks on GitHub/ })).toHaveAttribute(
       "href",
-      "https://github.com/caffeinelabs/app/pull/9631/checks",
+      "https://github.com/sample-org/sample-app/pull/9631/checks",
     );
   });
 
@@ -92,7 +92,7 @@ describe("GateChip", () => {
     expect(card).toHaveTextContent("APPROVE @7767f0d · reviewer (codex)");
     expect(within(card).getByRole("link", { name: /Review comment/ })).toHaveAttribute(
       "href",
-      "https://github.com/caffeinelabs/app/pull/9630#issuecomment-3448812201",
+      "https://github.com/sample-org/sample-app/pull/9630#issuecomment-3448812201",
     );
   });
 
@@ -114,7 +114,7 @@ describe("GateChip", () => {
     renderBoard(<Row pr={pr} />);
     const card = await evidence(pr, "protected_paths");
     expect(card).toHaveTextContent("4 files · 1 protected");
-    expect(within(card).getByText("services/caffeine-api/src/app.ts")).toHaveClass(
+    expect(within(card).getByText("services/sample-api/src/app.ts")).toHaveClass(
       "text-destructive",
     );
   });

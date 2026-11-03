@@ -449,7 +449,7 @@ describe("InboxPage factory decisions", () => {
             ...decision,
             status: "answered",
             answer_option_id: "a",
-            answered_by: "Luka",
+            answered_by: "Lena",
             delivered_mail_id: "mail_1",
           },
         });

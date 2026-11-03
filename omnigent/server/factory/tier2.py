@@ -3,9 +3,10 @@
 Tier 2 turns on only when all three prerequisites hold, checked at server start:
 
 1. ``OMNIGENT_FACTORY_SMITH=1``;
-2. ``caffeinelabs/omnigent`` ``staging`` is protected: the rulesets that apply
-   to it require pull-request review with CODEOWNERS review, and status checks
-   (read through the GitHub API);
+2. the Smith repo's branch (``OMNIGENT_FACTORY_SMITH_REPO``, default
+   :data:`DEFAULT_REPO`, the deployment's omnigent fork) is protected: the
+   rulesets that apply to it require pull-request review with CODEOWNERS
+   review, and status checks (read through the GitHub API);
 3. a dedicated factory GitHub identity is configured
    (``OMNIGENT_FACTORY_SMITH_GITHUB_LOGIN`` with its token in
    ``OMNIGENT_FACTORY_SMITH_GITHUB_TOKEN``) and has neither admin nor maintain

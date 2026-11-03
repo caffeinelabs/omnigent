@@ -33,7 +33,7 @@ function valid(overrides = {}) {
   return emptyProject({
     title: "API status endpoint",
     slug: "api-status",
-    repo: "caffeinelabs/app",
+    repo: "sample-org/sample-app",
     goal: "Add GET /status",
     dod: ["curl -fsS {api}/status"],
     ...overrides,
@@ -118,7 +118,7 @@ describe("validation", () => {
     expect(many.projects).toBe("At most 10 projects (a factory runs 10 project leads)");
     expect(hasErrors(many)).toBe(true);
     draft.projects = draft.projects.slice(0, 10);
-    draft.defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    draft.defaults = emptyDefaults("sample-org/sample-app", "develop");
     expect(validateFactory(draft, 10).projects).toBe(
       "At most 9 projects (a factory runs 10 project leads and one for the live env)",
     );
@@ -126,13 +126,13 @@ describe("validation", () => {
 
   it("checks the defaults row", () => {
     const draft = { ...emptyFactoryDraft(), projects: [valid()] };
-    draft.defaults = emptyDefaults("not a repo", "temp-main");
+    draft.defaults = emptyDefaults("not a repo", "develop");
     expect(validateFactory(draft).defaults).toBe("Use owner/name");
-    draft.defaults = emptyDefaults("caffeinelabs/app", "a..b");
+    draft.defaults = emptyDefaults("sample-org/sample-app", "a..b");
     expect(validateFactory(draft).defaults).toBe("Not a valid branch name");
     draft.defaults = { ...emptyDefaults("", ""), liveEnv: true };
     expect(validateFactory(draft).defaults).toBe("Pick the repo the live env runs");
-    draft.defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    draft.defaults = emptyDefaults("sample-org/sample-app", "develop");
     expect(hasErrors(validateFactory(draft))).toBe(false);
   });
 
@@ -149,7 +149,7 @@ describe("request body", () => {
     expect(on).toEqual({
       title: "API status endpoint",
       slug: "api-status",
-      repo: "caffeinelabs/app",
+      repo: "sample-org/sample-app",
       base_branch: "main",
       goal: "Add GET /status",
       dod: ["a", "b"],
@@ -172,21 +172,21 @@ describe("default repo & base", () => {
   it("prefills from preflight and turns the live env on for a base other than main", () => {
     expect(defaultsFromPreflight(undefined)).toEqual(emptyDefaults());
     const temp = defaultsFromPreflight({
-      github: { connected: true, login: "luka" },
+      github: { connected: true, login: "lena" },
       agents: { factory_lead: true, factory_pl: true },
       sandbox_host: true,
       factory_enabled: true,
-      default_repo: "caffeinelabs/app",
-      default_base: "temp-main",
+      default_repo: "sample-org/sample-app",
+      default_base: "develop",
       max_projects: 10,
     });
     expect(temp).toEqual({
-      repo: "caffeinelabs/app",
-      branch: "temp-main",
+      repo: "sample-org/sample-app",
+      branch: "develop",
       liveEnv: true,
       liveEnvTouched: false,
     });
-    expect(emptyDefaults("caffeinelabs/app", "main").liveEnv).toBe(false);
+    expect(emptyDefaults("sample-org/sample-app", "main").liveEnv).toBe(false);
   });
 
   it("moves the projects still on the old default, and the toggle until it is set by hand", () => {
@@ -194,33 +194,33 @@ describe("default repo & base", () => {
     draft.projects = [
       ...draft.projects,
       valid({ slug: "pinned", branch: "release" }),
-      valid({ slug: "infra", repo: "caffeinelabs/infra" }),
+      valid({ slug: "infra", repo: "sample-org/sample-infra" }),
     ];
-    const moved = withDefaults(draft, "caffeinelabs/app", "temp-main");
+    const moved = withDefaults(draft, "sample-org/sample-app", "develop");
     expect(moved.projects.map((p) => `${p.repo}#${p.branch}`)).toEqual([
-      "caffeinelabs/app#temp-main",
-      "caffeinelabs/app#release",
-      "caffeinelabs/infra#main",
+      "sample-org/sample-app#develop",
+      "sample-org/sample-app#release",
+      "sample-org/sample-infra#main",
     ]);
     expect(moved.defaults.liveEnv).toBe(true);
-    const back = withDefaults(moved, "caffeinelabs/app", "main");
+    const back = withDefaults(moved, "sample-org/sample-app", "main");
     expect(back.projects[0]?.branch).toBe("main");
     expect(back.defaults.liveEnv).toBe(false);
     const touched = {
       ...moved,
       defaults: { ...moved.defaults, liveEnv: false, liveEnvTouched: true },
     };
-    expect(withDefaults(touched, "caffeinelabs/app", "next").defaults.liveEnv).toBe(false);
+    expect(withDefaults(touched, "sample-org/sample-app", "next").defaults.liveEnv).toBe(false);
     expect(defaultProject(moved.defaults)).toMatchObject({
-      repo: "caffeinelabs/app",
-      branch: "temp-main",
+      repo: "sample-org/sample-app",
+      branch: "develop",
     });
   });
 
   it("sends the defaults, with the live env only on a repo", () => {
-    expect(toDefaultsInput(emptyDefaults("caffeinelabs/app", "temp-main"))).toEqual({
-      repo: "caffeinelabs/app",
-      base_branch: "temp-main",
+    expect(toDefaultsInput(emptyDefaults("sample-org/sample-app", "develop"))).toEqual({
+      repo: "sample-org/sample-app",
+      base_branch: "develop",
       integration_env: true,
     });
     expect(toDefaultsInput({ ...emptyDefaults(), liveEnv: true })).toEqual({
@@ -228,13 +228,13 @@ describe("default repo & base", () => {
       base_branch: null,
       integration_env: false,
     });
-    expect(workProjectCap(10, emptyDefaults("caffeinelabs/app", "temp-main"))).toBe(9);
-    expect(workProjectCap(10, emptyDefaults("caffeinelabs/app", "main"))).toBe(10);
+    expect(workProjectCap(10, emptyDefaults("sample-org/sample-app", "develop"))).toBe(9);
+    expect(workProjectCap(10, emptyDefaults("sample-org/sample-app", "main"))).toBe(10);
   });
 
   it("puts the sample projects on the default base", () => {
-    const defaults = emptyDefaults("caffeinelabs/app", "temp-main");
-    expect(sampleProjects(defaults).every((p) => p.branch === "temp-main")).toBe(true);
+    const defaults = emptyDefaults("sample-org/sample-app", "develop");
+    expect(sampleProjects(defaults).every((p) => p.branch === "develop")).toBe(true);
     expect(sampleProjects(emptyDefaults("o/r", "dev")).every((p) => p.branch === "main")).toBe(
       true,
     );
@@ -268,14 +268,14 @@ describe("summary", () => {
       maxPreviews: 4,
       requestedPreviews: 4,
       heartbeats: 42,
-      repos: ["caffeinelabs/app"],
+      repos: ["sample-org/sample-app"],
     });
     draft.cadence = "normal";
     expect(startSummary(draft).heartbeats).toBe(4);
     draft.projects = Array.from({ length: 4 }, (_, i) => valid({ slug: `p${i}`, previewSlots: 3 }));
     expect(startSummary(draft)).toMatchObject({ maxPreviews: 8, requestedPreviews: 12 });
     // The live env adds a sandbox but no heartbeats.
-    draft.defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    draft.defaults = emptyDefaults("sample-org/sample-app", "develop");
     expect(startSummary(draft)).toMatchObject({ sandboxes: 7, heartbeats: 4 });
   });
 

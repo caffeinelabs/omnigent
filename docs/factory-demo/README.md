@@ -44,8 +44,8 @@ preview and no demo.
 
 ## Known limits
 
-Factory previews run only the core tier; app building is not available yet, and
-the chat waits for `caffeine-ai/opencode-manager`. In a preview, the UI is the
+Factory previews run only the env's core tier; parts of the product that need
+another tier are not available in a preview. In a preview, the UI is the
 Vite dev server, so the first load can be slow.
 
 ## Recorded demos

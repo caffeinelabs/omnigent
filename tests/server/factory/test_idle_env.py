@@ -30,7 +30,7 @@ from omnigent.util.session_lifecycle import CLOSED_LABEL_KEY, CLOSED_LABEL_VALUE
 from tests.server.factory.conftest import Supervision
 
 SLUG = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 HEAD = "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16"
 AFTER_S = idle_env.DEFAULT_IDLE_ENV_S
 READY_GATES = {
@@ -47,7 +47,7 @@ PREVIEW = {
     "name": "p9630",
     "state": "ready",
     "env_id": "abc-p9630",
-    "urls": {"app": "https://app-abc-p9630.envs.sandbox.caffeinelabs.io"},
+    "urls": {"app": "https://app-abc-p9630.envs.sandbox.example.com"},
     "deployed": {"sha": HEAD},
 }
 DOWN_NOTICE = (
@@ -58,12 +58,12 @@ DOWN_NOTICE = (
 )
 UP_NOTICE = (
     "[Factory notice · dev env needed · bring it up] Project api-version has work again: "
-    "luka asked for changes on PR #9630. Send env_keeper UP base=temp-main so the IC has "
+    "lena asked for changes on PR #9630. Send env_keeper UP base=develop so the IC has "
     "its dev env."
 )
 UP_AGAIN = "The dev env is still down after the last ask."
 DOWN_AGAIN = "The dev env came back up after the last ask."
-CHANGES = {"verdict": "changes_requested", "by": "luka", "head_sha": HEAD, "at": 1}
+CHANGES = {"verdict": "changes_requested", "by": "lena", "head_sha": HEAD, "at": 1}
 
 
 # ── assess (pure) ──────────────────────────────────────────────
@@ -75,7 +75,7 @@ def _project(**fields: Any) -> FactoryProject:
         "factory_id": "f" * 32,
         "slug": SLUG,
         "title": SLUG,
-        "base_branch": "temp-main",
+        "base_branch": "develop",
     }
     return FactoryProject(**{**base, **fields})
 
@@ -155,10 +155,10 @@ def test_anything_short_of_idle_waits(
         (
             _pr(
                 ready=False,
-                human_review={"verdict": "changes_requested", "by": "luka", "head_sha": HEAD},
+                human_review={"verdict": "changes_requested", "by": "lena", "head_sha": HEAD},
             ),
             [],
-            "luka asked for changes on PR #9630",
+            "lena asked for changes on PR #9630",
         ),
         (
             _pr(ready=False, gates={**READY_GATES, "checks": "fail", "verify": "fail"}),
@@ -201,7 +201,7 @@ def test_a_running_task_on_a_pr_that_is_not_ready_is_work() -> None:
 
 
 def test_a_change_request_on_an_older_head_is_not_work() -> None:
-    held = {"verdict": "changes_requested", "by": "luka", "head_sha": "0" * 40}
+    held = {"verdict": "changes_requested", "by": "lena", "head_sha": "0" * 40}
 
     assert assess(_project(), [_pr(human_review=held)], []).need == NEED_IDLE
 
@@ -279,7 +279,7 @@ def test_notice_texts() -> None:
     idle = assess(project, [_pr()], [])
     work = assess(
         project,
-        [_pr(human_review={"verdict": "changes_requested", "by": "luka", "head_sha": HEAD})],
+        [_pr(human_review={"verdict": "changes_requested", "by": "lena", "head_sha": HEAD})],
         [],
     )
 
@@ -337,7 +337,7 @@ def _report_env(s: Supervision, state: str) -> None:
     _store(s).upsert_project(
         _fid(s),
         SLUG,
-        base_branch="temp-main",
+        base_branch="develop",
         pl_session_id=s.world.id("pl"),
         env={"reported": {"state": state, "env_id": "abc", "urls": {}, "at": int(s.clock.now)}},
     )
@@ -422,7 +422,7 @@ async def test_a_change_request_brings_the_dev_env_back(quiet: Supervision) -> N
     await s.tick()
     assert _notices(s) == [DOWN_NOTICE, UP_NOTICE]
     [up] = _store(s).find_events(_fid(s), UP_KIND, 0)
-    assert up.data["reason"] == "luka asked for changes on PR #9630"
+    assert up.data["reason"] == "lena asked for changes on PR #9630"
     assert _store(s).get_pr(pr.id).preview == pr.preview
 
 
@@ -440,7 +440,7 @@ async def test_a_new_task_brings_the_dev_env_back(quiet: Supervision) -> None:
 
     [_, up] = _notices(s)
     assert up.startswith("[Factory notice · dev env needed · bring it up] Project api-version")
-    assert "task T-2 badge is ready" in up and "UP base=temp-main" in up
+    assert "task T-2 badge is ready" in up and "UP base=develop" in up
 
 
 async def test_idle_again_after_the_work_asks_again(quiet: Supervision) -> None:
@@ -647,7 +647,7 @@ async def test_a_stray_sub_agent_does_not_hold_the_dev_env(
     clock.advance(60)
     await s.tick()
     assert _notices(s)[1:] == [
-        UP_NOTICE.replace("luka asked for changes on PR #9630", f"task {adhoc.ref} y is running")
+        UP_NOTICE.replace("lena asked for changes on PR #9630", f"task {adhoc.ref} y is running")
     ]
 
 

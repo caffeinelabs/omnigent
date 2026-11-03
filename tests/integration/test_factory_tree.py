@@ -141,7 +141,7 @@ def factory_stack(
         # Park the automatic supervisor loop; the test forces its passes.
         "OMNIGENT_FACTORY_TICK_S": "3600",
         # (sample) The env domain the reported preview URLs live under.
-        "OMNIGENT_FACTORY_PREVIEW_DOMAIN": "envs.sandbox.caffeinelabs.io",
+        "OMNIGENT_FACTORY_PREVIEW_DOMAIN": "envs.sandbox.example.com",
     }
     apply_server_env(env, _REPO_ROOT)
     port = find_free_port()
@@ -529,7 +529,7 @@ def test_factory_cockpit_reports_from_a_project_lead(
     pl_model = f"mock-cockpit-pl-{run}"
     slug = f"cockpit-{run}"
     number = 9600 + int(run[:3], 16) % 300
-    pr_url = f"https://github.com/caffeinelabs/app/pull/{number}"
+    pr_url = f"https://github.com/sample-org/sample-app/pull/{number}"
     sha = (run * 5)[:40]
     lead_agent = _register_agent(
         stack, name=f"cockpit-lead-{run}", model=f"mock-cockpit-lead-{run}", role="lead"
@@ -587,8 +587,10 @@ def test_factory_cockpit_reports_from_a_project_lead(
     )
     # The stored project row (what the cockpit's start form writes) scopes PRs to its repo.
     store = SqlAlchemyFactoryStore(stack.db_uri)
-    store.upsert_project(lead, slug, title="ENV badge", repo="caffeinelabs/app", pl_session_id=pl)
-    app = f"https://app-{run}-p{number}.envs.sandbox.caffeinelabs.io"
+    store.upsert_project(
+        lead, slug, title="ENV badge", repo="sample-org/sample-app", pl_session_id=pl
+    )
+    app = f"https://app-{run}-p{number}.envs.sandbox.example.com"
     configure_mock_llm(
         stack.mock_llm_url,
         [
@@ -623,7 +625,7 @@ def test_factory_cockpit_reports_from_a_project_lead(
                         {
                             "state": "ready",
                             "env_id": run,
-                            "urls": {"app": f"https://app-{run}.envs.sandbox.caffeinelabs.io"},
+                            "urls": {"app": f"https://app-{run}.envs.sandbox.example.com"},
                             "deployed": {"sha": sha, "ref": "origin/main"},
                         },
                     ),
@@ -664,7 +666,7 @@ def test_factory_cockpit_reports_from_a_project_lead(
 
     [decision] = store.list_decisions(factory_id=lead, status="open")
     assert decision.asked_by_session_id == pl and decision.project_slug == slug
-    pr = store.get_pr_by_number(lead, "caffeinelabs/app", number)
+    pr = store.get_pr_by_number(lead, "sample-org/sample-app", number)
     assert pr is not None and pr.source == "tool" and pr.project_slug == slug
     assert pr.preview is not None and pr.preview["urls"] == {"app": app}
     assert pr.preview["deployed"]["sha"] == sha

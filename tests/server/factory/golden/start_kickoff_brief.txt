@@ -4,9 +4,9 @@ Started by alice from the cockpit. Cadence: demo (heartbeats: leads 300 s, PLs 6
 Cockpit: /factory/<FID>
 
 Projects (2). Their charters are stored on the server and attach automatically when you spawn each PL:
-1. api-status · API status endpoint · P1 · caffeinelabs/app#main · env + previews (2)
-   Goal: Add GET /status to caffeine-api returning {service, uptimeS, db:"ok"|"down"}.
-2. docs-factory-envs · Factory envs docs · P2 · caffeinelabs/app#main · no env
+1. api-status · API status endpoint · P1 · sample-org/sample-app#main · env + previews (2)
+   Goal: Add GET /status to sample-api returning {service, uptimeS, db:"ok"|"down"}.
+2. docs-factory-envs · Factory envs docs · P2 · sample-org/sample-app#main · no env
    Goal: Add docs/factory-envs.md.
 
 First turn:

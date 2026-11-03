@@ -28,7 +28,7 @@ async def cockpit(
             value.fid,
             SLUG,
             title="API version",
-            repo="caffeinelabs/app",
+            repo="sample-org/sample-app",
             charter={"goal": "GET /version", "budgets": {"project_usd": 100}},
             pl_session_id=world.id("pl"),
         )

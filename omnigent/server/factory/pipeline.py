@@ -7,7 +7,7 @@ returns what a PR needs next (``FIX_CI``, ``REVIEW``, ``PREVIEW``, ``DEMO``,
 head changes, the engine (``assist`` and ``enforce``) mails the PL a hint::
 
     [Factory engine · NEXT · PR #9631 @5e1c2d4 · review APPROVE → PREVIEW pr=9631
-    head=<sha> base=temp-main]
+    head=<sha> base=develop]
 
 Hints wait a short grace (the PL may act on the same news in its own turn),
 are re-checked before they go, are coalesced to one mail per PL per

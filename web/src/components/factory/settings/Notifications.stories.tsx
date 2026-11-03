@@ -64,10 +64,10 @@ function page(options: NotifyStoryOptions = {}, play?: Story["play"]): Story {
               body: {
                 // Before the code proves it is his: no real name, email or zone.
                 account: {
-                  user_id: "U04LUKA9Z",
-                  team_id: "T0CAFE",
-                  name: "luka",
-                  handle: "luka",
+                  user_id: "U04LENA9Z",
+                  team_id: "T0SAMPLE",
+                  name: "lena",
+                  handle: "lena",
                   email: null,
                   tz: null,
                 },
@@ -109,20 +109,20 @@ export const NotSetUpDark = page({ ...linked("unlinked", { app: "unset" }), them
 
 export const NotSetUpMobile = phone(page(linked("unlinked", { app: "unset" })));
 
-/** The app works; Luka has not linked his Slack account. */
+/** The app works; Lena has not linked his Slack account. */
 export const Unlinked = page(linked("unlinked"));
 
 export const UnlinkedDark = page({ ...linked("unlinked"), theme: "dark" });
 
 export const UnlinkedMobile = phone(page(linked("unlinked")));
 
-/** Luka typed his Slack email and pressed Find: confirm it is him, then Send code. */
+/** Lena typed his Slack email and pressed Find: confirm it is him, then Send code. */
 export const Found = page(linked("unlinked"), async ({ canvasElement }) => {
   const body = within(canvasElement.ownerDocument.body);
   // The Team card loads last: once it is there the page has settled.
   await body.findByTestId("notify-team-count", undefined, { timeout: 5000 });
   fireEvent.change(await body.findByTestId("notify-find-input"), {
-    target: { value: "luka@caffeine.ai" },
+    target: { value: "lena@example.com" },
   });
   fireEvent.click(await body.findByTestId("notify-find"));
   await body.findByTestId("notify-found");
@@ -150,7 +150,7 @@ export const FindNotFound = page(findNotFound(), async ({ canvasElement }) => {
   const body = within(canvasElement.ownerDocument.body);
   await body.findByTestId("notify-team-count", undefined, { timeout: 5000 });
   fireEvent.change(await body.findByTestId("notify-find-input"), {
-    target: { value: "luka@caffeine.ai" },
+    target: { value: "lena@example.com" },
   });
   fireEvent.click(await body.findByTestId("notify-find"));
   await body.findByTestId("notify-link-error");
@@ -229,7 +229,7 @@ export const VerifiedTestFailed = page(
   pressTestDm,
 );
 
-/** Slack stopped reaching Luka (messages tab off): link again. */
+/** Slack stopped reaching Lena (messages tab off): link again. */
 export const LinkBroken = page(linked("error"));
 
 export const LinkBrokenDark = page({ ...linked("error"), theme: "dark" });
@@ -339,7 +339,7 @@ export const AlertsAppTestSent = page(
       [`${BASE}/alerts/slack-bot/test`]: {
         body: {
           ok: true,
-          team: "Caffeine Labs",
+          team: "Sample Org",
           bot: "omnigent-factory",
           missing_scopes: [],
           dm: "sent",

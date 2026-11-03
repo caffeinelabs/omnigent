@@ -35,7 +35,7 @@ describe("AddProjectDialog", () => {
 
   it("prefills the factory's repo, validates, then POSTs the project with its preview intent", async () => {
     const { server, snapshot, onOpenChange } = setup();
-    expect(screen.getByTestId("add-project-repo-0")).toHaveTextContent("caffeinelabs/app");
+    expect(screen.getByTestId("add-project-repo-0")).toHaveTextContent("sample-org/sample-app");
     fireEvent.click(screen.getByTestId("add-project-submit"));
     expect(await screen.findByTestId("add-project-error-goal-0")).toHaveTextContent(
       "Say what the project should achieve",
@@ -45,7 +45,7 @@ describe("AddProjectDialog", () => {
     type("add-project-project-title-0", "Settings footer version");
     expect(screen.getByTestId("add-project-slug-0")).toHaveValue("settings-footer-version");
     type("add-project-goal-0", "Show the API version in the Settings footer");
-    type("add-project-dod-0-0", "pnpm -F @caffeine/ux test");
+    type("add-project-dod-0-0", "pnpm -F @sample/ux test");
     fireEvent.click(screen.getByTestId("add-project-slots-0-3"));
     type("add-project-demo-0", "Open Settings and show the footer");
     fireEvent.click(screen.getByTestId("add-project-submit"));
@@ -57,10 +57,10 @@ describe("AddProjectDialog", () => {
       body: {
         title: "Settings footer version",
         slug: "settings-footer-version",
-        repo: "caffeinelabs/app",
+        repo: "sample-org/sample-app",
         base_branch: "main",
         goal: "Show the API version in the Settings footer",
-        dod: ["pnpm -F @caffeine/ux test"],
+        dod: ["pnpm -F @sample/ux test"],
         scope_paths: [],
         constraints: null,
         env_needed: true,
@@ -80,8 +80,8 @@ describe("AddProjectDialog", () => {
   it("starts a new project on the factory's default base", () => {
     const snapshot = liveRunSnapshot();
     snapshot.factory.base = {
-      repo: "caffeinelabs/app",
-      branch: "temp-main",
+      repo: "sample-org/sample-app",
+      branch: "develop",
       head_sha: null,
       moved_at: null,
       env: null,
@@ -92,8 +92,8 @@ describe("AddProjectDialog", () => {
       <AddProjectDialog factoryId={snapshot.factory.id} open onOpenChange={vi.fn()} />,
       snapshot,
     );
-    expect(screen.getByTestId("add-project-repo-0")).toHaveTextContent("caffeinelabs/app");
-    expect(screen.getByTestId("add-project-branch-0")).toHaveTextContent("temp-main");
+    expect(screen.getByTestId("add-project-repo-0")).toHaveTextContent("sample-org/sample-app");
+    expect(screen.getByTestId("add-project-branch-0")).toHaveTextContent("develop");
   });
 
   it("refuses a slug the factory already has, and maps the server's 409 onto it", async () => {

@@ -103,13 +103,13 @@ async def _dispatch(world: FactoryWorld, key: str, spec: AgentSpec, tool: str) -
 async def test_atlas_can_spawn_again_on_a_turn_started_by_factory_mail(
     world: FactoryWorld, lead_spec: AgentSpec, native_runner: list[str]
 ) -> None:
-    await _deliver(world, "lead_a", "[Factory brief · from luka via cockpit] Start.")
+    await _deliver(world, "lead_a", "[Factory brief · from lena via cockpit] Start.")
     first = [await _dispatch(world, "lead_a", lead_spec, "sys_factory_spawn") for _ in range(5)]
     assert first == [ALLOW] * 4 + [DENY]
 
     for text in (
         "[Factory heartbeat · #1]",
-        "[Factory decision · D-1 answered by luka] Spawn it.",
+        "[Factory decision · D-1 answered by lena] Spawn it.",
         "[Factory message · from PL · api-version kind=info] done",
     ):
         await _deliver(world, "lead_a", text)

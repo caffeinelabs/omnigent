@@ -24,7 +24,11 @@ function describe(
         routes={{
           ...GITHUB_STORY_ROUTES,
           "/v1/factory/preflight": {
-            body: { ...preflightOk(), default_repo: "caffeinelabs/app", default_base: "temp-main" },
+            body: {
+              ...preflightOk(),
+              default_repo: "sample-org/sample-app",
+              default_base: "develop",
+            },
           },
           ...options.routes,
         }}
@@ -47,7 +51,7 @@ function body(canvasElement: HTMLElement) {
 async function fill(canvasElement: HTMLElement) {
   const repo = await body(canvasElement).findByTestId("factory-describe-default-repo");
   // The default repo & base arrive with preflight.
-  await waitFor(() => expect(repo).toHaveTextContent("caffeinelabs/app"), { timeout: 6000 });
+  await waitFor(() => expect(repo).toHaveTextContent("sample-org/sample-app"), { timeout: 6000 });
   const brief = body(canvasElement).getByTestId("factory-describe-brief");
   fireEvent.change(brief, { target: { value: BRIEF } });
 }
@@ -60,7 +64,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Prefilled from preflight: caffeinelabs/app#temp-main with its live env, observe, requested. */
+/** Prefilled from preflight: sample-org/sample-app#develop with its live env, observe, requested. */
 export const Empty = describe();
 
 export const EmptyDark = describe({ theme: "dark" });

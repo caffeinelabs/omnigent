@@ -165,7 +165,7 @@ def _cost(day: str, usd: float, project: str = "") -> FactoryCostDaily:
 
 
 def _build(body: dict[str, Any], **inputs: Any) -> dict[str, Any]:
-    params: dict[str, Any] = {"user_id": "luka@caffeine.ai", "level": LEVEL_OWNER, **inputs}
+    params: dict[str, Any] = {"user_id": "lena@example.com", "level": LEVEL_OWNER, **inputs}
     summary = build_status_summary(StatusInputs(snapshot=body, **params), now=NOW)
     StatusSummary.model_validate(summary)
     return summary
@@ -177,8 +177,8 @@ def _build(body: dict[str, Any], **inputs: Any) -> dict[str, Any]:
 def test_waiting_puts_the_viewers_first_then_urgent_then_the_longest_wait() -> None:
     body = _snapshot(
         decisions=[
-            # Mia's, so someone else's for Luka, though it is the oldest and blocking.
-            _decision(1, NOW - 9 * HOUR, assignee="mia@caffeine.ai", blocking=True),
+            # Mia's, so someone else's for Lena, though it is the oldest and blocking.
+            _decision(1, NOW - 9 * HOUR, assignee="mia@example.com", blocking=True),
             _decision(2, NOW - 1 * HOUR),
             _decision(3, NOW - 2 * HOUR, blocking=True),
             _decision(4, NOW - 66 * HOUR),
@@ -224,14 +224,14 @@ def test_who_and_for_you_follow_the_viewers_role() -> None:
         decisions=[
             _decision(1, NOW - HOUR),  # operators
             _decision(2, NOW - HOUR, assignee="owners"),
-            _decision(3, NOW - HOUR, assignee="op@caffeine.ai"),
-            _decision(4, NOW - HOUR, claimed_by="op@caffeine.ai", assignee="owners"),
+            _decision(3, NOW - HOUR, assignee="op@example.com"),
+            _decision(4, NOW - HOUR, claimed_by="op@example.com", assignee="owners"),
         ],
         prs=[_pr("p1", 1, "x", ready=True, ready_since=NOW - HOUR)],
     )
 
-    operator = _build(body, user_id="op@caffeine.ai", level=LEVEL_EDIT)
-    viewer = _build(body, user_id="ana@caffeine.ai", level=LEVEL_READ)
+    operator = _build(body, user_id="op@example.com", level=LEVEL_EDIT)
+    viewer = _build(body, user_id="ana@example.com", level=LEVEL_READ)
 
     by_ref = {i["ref"]: (i["who"], i["for_you"]) for i in operator["waiting"]}
     assert by_ref == {
@@ -326,7 +326,7 @@ def test_server_decisions_say_what_to_do_by_their_source() -> None:
                 "failed 60 minutes ago.",
                 project_slug="db-version",
             ),
-            server(34, "access_request", "ops@caffeine.ai asks for operator access"),
+            server(34, "access_request", "ops@example.com asks for operator access"),
             server(
                 36,
                 "done_check",
@@ -334,7 +334,9 @@ def test_server_decisions_say_what_to_do_by_their_source() -> None:
                 project_slug="docs",
             ),
             server(
-                37, "pr_closed", "PR caffeinelabs/app#9640 (T-2) was closed without merge by @x."
+                37,
+                "pr_closed",
+                "PR sample-org/sample-app#9640 (T-2) was closed without merge by @x.",
             ),
             server(38, "blocked_approval", '"PL · billing" is waiting on a human approval'),
             server(39, "storm", '"PL · billing" hit the message rate limit (30/h)'),
@@ -1026,7 +1028,7 @@ def test_a_project_with_work_left_for_agents_stays_in_progress() -> None:
         (
             _snapshot(
                 projects=[_project("api", "building", NOW - HOUR)],
-                decisions=[_decision(1, NOW - HOUR, assignee="mia@caffeine.ai")],
+                decisions=[_decision(1, NOW - HOUR, assignee="mia@example.com")],
             ),
             "1 project in progress · 1 decision waits on others",
         ),
@@ -1278,18 +1280,18 @@ def test_atlas_note_is_trimmed_at_a_word_and_links_what_it_names() -> None:
 
 def test_a_ready_pr_waits_on_its_projects_owner() -> None:
     body = _snapshot(prs=[_pr("p1", 1, "api", ready=True, ready_since=NOW - HOUR)])
-    owners = {"api": "mia@caffeine.ai"}
+    owners = {"api": "mia@example.com"}
 
-    luka = _build(body, owners=owners)
-    mia = _build(body, owners=owners, user_id="mia@caffeine.ai", level=LEVEL_EDIT)
+    lena = _build(body, owners=owners)
+    mia = _build(body, owners=owners, user_id="mia@example.com", level=LEVEL_EDIT)
 
-    assert [(i["who"], i["for_you"]) for i in luka["waiting"]] == [("mia", False)]
+    assert [(i["who"], i["for_you"]) for i in lena["waiting"]] == [("mia", False)]
     assert [(i["who"], i["for_you"]) for i in mia["waiting"]] == [("you", True)]
-    assert luka["headline"] == "Idle · 1 PR waits on others"
+    assert lena["headline"] == "Idle · 1 PR waits on others"
 
 
 def test_waiting_items_carry_the_viewers_slack_receipts_and_deadlines() -> None:
-    me, other = "luka@caffeine.ai", "mia@caffeine.ai"
+    me, other = "lena@example.com", "mia@example.com"
     decision = _decision(
         19,
         NOW - 6 * HOUR,
@@ -1304,10 +1306,14 @@ def test_waiting_items_carry_the_viewers_slack_receipts_and_deadlines() -> None:
     )
     body = _snapshot(
         decisions=[decision],
-        prs=[_pr("p1", 9826, "api", repo="caffeinelabs/app", ready=True, ready_since=NOW - HOUR)],
+        prs=[
+            _pr(
+                "p1", 9826, "api", repo="sample-org/sample-app", ready=True, ready_since=NOW - HOUR
+            )
+        ],
     )
     notified = {
-        "pr:caffeinelabs/app#9826": [
+        "pr:sample-org/sample-app#9826": [
             {"user_id": me, "at": NOW - 50 * 60, "stage": "ready", "ok": True}
         ],
         "issue:INC-4": [{"user_id": me, "at": NOW - 30 * 60, "stage": "opened", "ok": True}],
@@ -1327,7 +1333,7 @@ def test_waiting_items_carry_the_viewers_slack_receipts_and_deadlines() -> None:
     )
     assert by_ref["PR #9826"]["slack"] == [{"at": NOW - 50 * 60, "stage": "ready"}]
     assert by_ref["INC-4"]["slack"] == [{"at": NOW - 30 * 60, "stage": "opened"}]
-    # Someone else's view shows none of Luka's DMs.
+    # Someone else's view shows none of Lena's DMs.
     mia = _build(body, notified=notified, user_id=other, level=LEVEL_EDIT)
     assert {i["ref"]: len(i["slack"]) for i in mia["waiting"]} == {"D-19": 1, "PR #9826": 0}
 
@@ -1339,9 +1345,9 @@ ROUND3_FIXTURE = WEB_FIXTURES / "__fixtures__/snapshot.round3.json"
 NOW_FIXTURE = WEB_FIXTURES / "overview/__fixtures__/nowSummary.round3.json"
 # The cockpit's round-3 viewers (``shellFixtures.ts``): user and level per role.
 ROUND3_VIEWERS = {
-    "creator": ("luka@caffeine.ai", 3),
-    "operator": ("mia@caffeine.ai", 2),
-    "viewer": ("ops@caffeine.ai", 1),
+    "creator": ("lena@example.com", 3),
+    "operator": ("mia@example.com", 2),
+    "viewer": ("ops@example.com", 1),
 }
 
 
@@ -1372,10 +1378,10 @@ def _live_case() -> dict[str, Any]:
     owner, Slack receipts and a long Atlas note naming ids. The cockpit's
     fixture builder must say the same over it.
     """
-    me = "luka@caffeine.ai"
+    me = "lena@example.com"
     body = _live_factory()
     for pr in body["prs"]:
-        pr["repo"] = "caffeinelabs/app"
+        pr["repo"] = "sample-org/sample-app"
     body["projects"] += [
         _project(
             "asks", "building", NOW - 2 * HOUR, overlay="blocked", overlay_reason="Blocked on D-9"
@@ -1407,7 +1413,14 @@ def _live_case() -> dict[str, Any]:
         ),
     ]
     body["prs"].append(
-        _pr("p9900", 9900, "owned", repo="caffeinelabs/app", ready=True, ready_since=NOW - HOUR)
+        _pr(
+            "p9900",
+            9900,
+            "owned",
+            repo="sample-org/sample-app",
+            ready=True,
+            ready_since=NOW - HOUR,
+        )
     )
     body["decisions"] = [
         _decision(
@@ -1438,12 +1451,12 @@ def _live_case() -> dict[str, Any]:
     body["server_time"] = NOW
     body["viewer"] = {"user_id": me, "level": LEVEL_OWNER}
     notified = {
-        "pr:caffeinelabs/app#9826": [
+        "pr:sample-org/sample-app#9826": [
             {"user_id": me, "at": NOW - 7 * HOUR, "stage": "ready", "ok": True},
-            {"user_id": "mia@caffeine.ai", "at": NOW - 7 * HOUR, "stage": "ready", "ok": True},
+            {"user_id": "mia@example.com", "at": NOW - 7 * HOUR, "stage": "ready", "ok": True},
         ]
     }
-    owners = {"owned": "mia@caffeine.ai"}
+    owners = {"owned": "mia@example.com"}
     inputs = StatusInputs(
         snapshot=body, user_id=me, level=LEVEL_OWNER, notified=notified, owners=owners
     )
@@ -1497,7 +1510,7 @@ def _seed(world: FactoryWorld, api: FactoryApi) -> dict[str, Any]:
     store = factory_deps(api.app.state).factory_store
     fid, pl = world.id("lead_a"), world.id("pl")
     store.upsert_project(
-        fid, "api-version", title="API version", repo="caffeinelabs/app", pl_session_id=pl
+        fid, "api-version", title="API version", repo="sample-org/sample-app", pl_session_id=pl
     )
     pl_decision, _ = store.create_decision(
         fid, dedupe_key="pl-q", question="Which table?", asked_by_session_id=pl

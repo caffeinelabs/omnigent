@@ -186,8 +186,8 @@ describe("Room page", () => {
     expect(screen.getByTestId("room-issue-repeats-INC-14")).toHaveAttribute("data-count", "6");
     const main = screen.getAllByTestId("room-base-moves-main");
     expect(main.map((m) => m.getAttribute("data-moves"))).toEqual(["6", "2", "2"]);
-    expect(main[1]).toHaveTextContent("base main (infra) moved 2 times");
-    expect(main[2]).toHaveTextContent("base main (app) moved 2 times");
+    expect(main[1]).toHaveTextContent("base main (sample-infra) moved 2 times");
+    expect(main[2]).toHaveTextContent("base main (sample-app) moved 2 times");
     // The older server's lines never named a repo.
     expect(main[0]).toHaveTextContent(/^base main moved 6 times/);
   });
@@ -203,7 +203,7 @@ describe("Room page", () => {
     await screen.findByTestId("room-message-3101");
     const main = screen.getAllByTestId("room-base-moves-main");
     expect(main.map((m) => m.getAttribute("data-moves"))).toEqual(["12", "7"]);
-    expect(screen.getByTestId("room-base-moves-temp-main")).toHaveAttribute("data-moves", "3");
+    expect(screen.getByTestId("room-base-moves-develop")).toHaveAttribute("data-moves", "3");
     expect(screen.getByTestId("room-system-3106")).toHaveTextContent("(#9631)");
     fireEvent.click(screen.getAllByTestId("room-base-moves-toggle-main")[1]!);
     const list = screen.getByTestId("room-base-moves-list-main");
@@ -352,7 +352,7 @@ describe("Decisions page", () => {
       role: "operator",
       overrides: {
         "POST /v1/factory/decisions/ae1fb5c75b755a4dbc645077510d63ef/claim": () =>
-          json({ decision: { ...round3Snapshot().decisions[2]!, claimed_by: "mia@caffeine.ai" } }),
+          json({ decision: { ...round3Snapshot().decisions[2]!, claimed_by: "mia@example.com" } }),
       },
     });
     fireEvent.click(await screen.findByTestId("decision-claim-D-31"));

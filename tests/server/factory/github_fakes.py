@@ -86,7 +86,7 @@ class FakePr:
     is_draft: bool = False
     mergeable: str = "MERGEABLE"
     labels: list[str] = field(default_factory=list)
-    files: list[str] = field(default_factory=lambda: ["services/caffeine-api/src/app.ts"])
+    files: list[str] = field(default_factory=lambda: ["services/sample-api/src/app.ts"])
     renames: dict[str, str] = field(default_factory=dict)
     """New path -> old path for renamed files (the new path is also in ``files``)."""
     commits: list[tuple[str, str]] = field(default_factory=list)
@@ -122,7 +122,7 @@ class FakePr:
             }
         )
 
-    def review(self, body: str, at: float, state: str = "COMMENTED", login: str = "luka") -> None:
+    def review(self, body: str, at: float, state: str = "COMMENTED", login: str = "lena") -> None:
         """Add a PR review."""
         n = len(self.reviews) + 1
         self.reviews.append(
@@ -353,7 +353,7 @@ class FakeConnection:
     access_token: str | None = "ghu_factory_test"
     token_expires_at: int | None = None
     refresh_token: str | None = None
-    github_login: str = "luka"
+    github_login: str = "lena"
 
 
 @dataclass
@@ -375,7 +375,7 @@ class FakeGitData:
     any other request fails the test.
     """
 
-    repo: str = "caffeinelabs/factory-demos"
+    repo: str = "sample-org/factory-demos"
     remaining: int = 4900
     empty: bool = False
     delay_s: float = 0.0

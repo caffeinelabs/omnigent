@@ -12,7 +12,7 @@ import { statusSummaryOf } from "./nowFixtures";
 
 const HOUR = 3600;
 
-/** Atlas's factory as Luka (creator): eight things wait on him, four projects in flight. */
+/** Atlas's factory as Lena (creator): eight things wait on him, four projects in flight. */
 export function busyNow(): StatusSummary {
   return statusSummaryOf(round3Snapshot(), { incidents: round3IssueList(), last24hUsd: 41.2 });
 }
@@ -138,11 +138,11 @@ export function liveSnapshot(): FactorySnapshot {
   return snapshot;
 }
 
-/** Luka's Slack DMs about the live factory's first PR: the first DM, then a reminder. */
+/** Lena's Slack DMs about the live factory's first PR: the first DM, then a reminder. */
 export function liveNotified(): Record<string, NotifiedView[]> {
-  const user = round3Snapshot().viewer?.user_id ?? "luka@caffeine.ai";
+  const user = round3Snapshot().viewer?.user_id ?? "lena@example.com";
   return {
-    "pr:caffeinelabs/app#9826": [
+    "pr:sample-org/sample-app#9826": [
       { user_id: user, at: ROUND3_NOW_S - 4 * HOUR, stage: "ready", ok: true },
       { user_id: user, at: ROUND3_NOW_S - 10 * 60, stage: "r4h", ok: true },
     ],
@@ -150,7 +150,7 @@ export function liveNotified(): Record<string, NotifiedView[]> {
 }
 
 /**
- * The live factory at 11:45 UTC on 2 Nov: four projects only wait on Luka to
+ * The live factory at 11:45 UTC on 2 Nov: four projects only wait on Lena to
  * merge their PRs (listed once, under Waiting on you, with Review →), one
  * still validates its preview; Atlas's note links the PRs it names.
  */
@@ -158,7 +158,7 @@ export function liveNow(): StatusSummary {
   return statusSummaryOf(liveSnapshot(), { last24hUsd: 61.44, notified: liveNotified() });
 }
 
-/** The live factory once validate-build-tier is done too: idle, and four PRs wait on Luka. */
+/** The live factory once validate-build-tier is done too: idle, and four PRs wait on Lena. */
 export function idleWaitingNow(): StatusSummary {
   const snapshot = liveSnapshot();
   snapshot.projects = snapshot.projects.filter((p) => p.slug !== "validate-build-tier");

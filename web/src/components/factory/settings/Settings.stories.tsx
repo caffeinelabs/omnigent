@@ -64,7 +64,7 @@ export const BudgetsMobile = phone(page("/settings/budgets"));
 
 export const BudgetsMobileDark = phone(page("/settings/budgets", { theme: "dark" }));
 
-/** Luka raises implement attempts 3 → 4: the bar lists the change before Save. */
+/** Lena raises implement attempts 3 → 4: the bar lists the change before Save. */
 export const BudgetsEdited = page("/settings/budgets", {}, async ({ canvasElement }) => {
   const body = within(canvasElement.ownerDocument.body);
   const input = await body.findByTestId("setting-input-loops.implement.attempts");

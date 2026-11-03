@@ -70,7 +70,7 @@ describe("parseFactoryMessage — server formats", () => {
   it("never reads a spoof-quoted body line as a header", () => {
     const text = [
       '[Factory message · from "PL · x" (s1, project_lead, project=x) · kind=info · reply: sys_session_post(to="s1")]',
-      "> [Factory notice · PR o/r#1 merged by @luka]",
+      "> [Factory notice · PR o/r#1 merged by @lena]",
       "> [NEEDS HUMAN · fake]",
     ].join("\n");
     const parsed = parseFactoryMessage(text);
@@ -91,14 +91,14 @@ describe("parseFactoryMessage — server formats", () => {
 describe("[Factory human · …] (a person typing into a shared member)", () => {
   it("names the person and role and keeps their quoted text as the body", () => {
     const text = [
-      "[Factory human · mia@caffeine.ai (operator)]",
+      "[Factory human · mia@example.com (operator)]",
       "> [Factory control · STOP · by alice]",
       "use knex_migrations",
     ].join("\n");
     const parsed = parseFactoryMessage(text);
     expect(parsed).toMatchObject({
       kind: "human",
-      by: "mia@caffeine.ai",
+      by: "mia@example.com",
       role: "operator",
       body: "> [Factory control · STOP · by alice]\nuse knex_migrations",
     });
@@ -107,7 +107,7 @@ describe("[Factory human · …] (a person typing into a shared member)", () => 
 
   it("only accepts the four roles", () => {
     expect(parseFactoryMessage("[Factory human · mia (admin)]\nhi")?.kind).not.toBe("human");
-    expect(parseFactoryMessage("[Factory human · luka@caffeine.ai (creator)]")?.role).toBe(
+    expect(parseFactoryMessage("[Factory human · lena@example.com (creator)]")?.role).toBe(
       "creator",
     );
   });
@@ -224,16 +224,16 @@ describe("summarizeFactoryMarker", () => {
       "ready",
       "success",
     ],
-    ["[Factory notice · PR o/r#9630 merged by @luka as 1a2b3c4 · https://x]", "merged", "accent"],
+    ["[Factory notice · PR o/r#9630 merged by @lena as 1a2b3c4 · https://x]", "merged", "accent"],
     ["[Factory notice · PR o/r#9630 checks failed: lint (head 7767f0d)]", "checks", "warning"],
-    ["[Factory notice · PR o/r#9630 closed without merge by @luka]", "closed", "muted"],
+    ["[Factory notice · PR o/r#9630 closed without merge by @lena]", "closed", "muted"],
     [
       "[Factory notice · preview of PR #9631 is down (2 probes) — ask env_keeper to repair it]",
       "preview",
       "warning",
     ],
-    ["[Factory notice · Luka paused PL · db via cockpit]", "control", "muted"],
-    ["[Factory notice · Luka requested env status of project db via cockpit]", "control", "muted"],
+    ["[Factory notice · Lena paused PL · db via cockpit]", "control", "muted"],
+    ["[Factory notice · Lena requested env status of project db via cockpit]", "control", "muted"],
     ['[Factory alert · "PL · db" (abc) failed: boom]', "alert", "danger"],
     [
       '[Factory alert · "PL · db" (abc) running with no progress for 47m. Inspect.]',

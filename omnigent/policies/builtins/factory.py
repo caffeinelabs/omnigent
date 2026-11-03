@@ -1531,7 +1531,7 @@ class _RoleGuard:
         DENY ``-c`` / ``--config-env`` on a push, and inline aliases or includes anywhere.
 
         ``git -c push.default=upstream push origin factory/a/b`` lands on the
-        branch's upstream (``temp-main`` for a worktree made from it), and
+        branch's upstream (the base branch for a worktree made from it), and
         ``-c alias.x='push …'`` or ``-c include.path=…`` hides a push entirely.
 
         :param configs: The ``key=value`` entries, e.g. ``["push.default=upstream"]``.
@@ -2069,8 +2069,8 @@ def factory_role_guard(
     :param write_repos: Repos PR writes and URL pushes may target outside a
         factory, e.g. ``["acme/app"]`` (none by default). Ignored for a
         factory member, whose *factory_repos* the server sets.
-    :param protected_branches: Branches no agent pushes to, e.g.
-        ``["main", "master", "staging", "temp-main"]``.
+    :param protected_branches: Branches no agent pushes to (default
+        :data:`DEFAULT_PROTECTED_BRANCHES`), e.g. ``["main", "master", "staging"]``.
     :param deny_repos: Repos no agent writes to even if listed in
         *write_repos*, e.g. ``["acme/infra"]`` (the :data:`ALWAYS_DENY_ENV`
         repos are always denied).

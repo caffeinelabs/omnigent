@@ -106,10 +106,10 @@ function resolvedInc13(): IssueView {
   return {
     ...issue,
     status: "resolved",
-    resolved_by: "mia@caffeine.ai",
+    resolved_by: "mia@example.com",
     resolved_at: issue.last_seen + 300,
     category: "env_flaky",
-    acked_by: "mia@caffeine.ai",
+    acked_by: "mia@example.com",
   };
 }
 

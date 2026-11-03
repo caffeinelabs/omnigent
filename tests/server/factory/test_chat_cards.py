@@ -15,7 +15,7 @@ from omnigent.stores.factory_store import new_event_id
 from tests.server.factory.chat_helpers import RoomEnv, room_env
 from tests.server.factory.conftest import FactoryWorld
 
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 @pytest_asyncio.fixture()
@@ -191,14 +191,14 @@ async def test_loops_and_issues(env: RoomEnv) -> None:
 async def test_factory_lines_and_project_lifecycle(env: RoomEnv) -> None:
     await _emit(env, "people.invited", summary="mia joined as operator")
     await _emit(env, "people.drift_repaired")
-    await _emit(env, "base.moved", summary="temp-main moved to abc1234")
+    await _emit(env, "base.moved", summary="develop moved to abc1234")
     await _emit(env, "member.spawned", project="docs", summary="PL · docs spawned")
     await _emit(env, "project.held", project="docs", summary="docs waits on api-version")
     await _emit(env, "chat.posted")
 
     assert [(t, kind, body) for t, kind, _, body in _cards(env)] == [
         ("factory", "system", "mia joined as operator"),
-        ("factory", "system", "temp-main moved to abc1234"),
+        ("factory", "system", "develop moved to abc1234"),
         ("factory", "system", "PL · docs spawned"),
         ("project:docs", "system", "PL · docs spawned"),
         ("project:docs", "system", "docs waits on api-version"),
@@ -464,13 +464,13 @@ async def test_a_message_after_the_line_starts_a_new_one_ten_minutes_on(env: Roo
     store.append_chat(fid, thread="factory", author_kind="human", author="alice", body="hi")
     await chat_cards.mirror_event(state, _move(env, 1, t0 + 300))  # inside the window
     # Another base's line is no conversation: main's line still takes main's moves.
-    await chat_cards.mirror_event(state, _move(env, 9, t0 + 400, base="temp-main"))
+    await chat_cards.mirror_event(state, _move(env, 9, t0 + 400, base="develop"))
     await chat_cards.mirror_event(state, _move(env, 2, t0 + 500))
     await chat_cards.mirror_event(state, _move(env, 3, t0 + chat_cards.BASE_BATCH_S + 1))
 
     lines = _base_lines(env)
     assert [len(chat_cards.card_meta(m)["moves"]) for m in lines] == [3, 1, 1]
-    assert [chat_cards.card_meta(m)["base"] for m in lines] == ["main", "temp-main", "main"]
+    assert [chat_cards.card_meta(m)["base"] for m in lines] == ["main", "develop", "main"]
     assert [m.body for m in env.messages("factory")][1] == "hi"
 
 
@@ -520,15 +520,15 @@ async def test_a_line_spans_one_utc_day_and_at_most_twelve_hours(env: RoomEnv) -
 async def test_each_repo_has_its_own_line_named_when_there_are_several(env: RoomEnv) -> None:
     state = env.cockpit.app.state
     t0 = 1_793_000_000
-    infra = "caffeinelabs/infra"
+    infra = "sample-org/sample-infra"
     await chat_cards.mirror_event(state, _move(env, 0, t0, repos=2))
     await chat_cards.mirror_event(state, _move(env, 1, t0 + 60, repos=2))
     await chat_cards.mirror_event(state, _move(env, 8, t0 + 120, repo=infra, repos=2, pr=12))
     await chat_cards.mirror_event(state, _move(env, 2, t0 + 180, repos=2))
 
     app, other = _base_lines(env)
-    assert app.body == f"base main (app) moved 3 times since 07:33 UTC → {HEAD[3][:7]}"
-    assert other.body == f"base main (infra) moved {HEAD[8][:7]} → {HEAD[9][:7]} (#12)"
+    assert app.body == f"base main (sample-app) moved 3 times since 07:33 UTC → {HEAD[3][:7]}"
+    assert other.body == f"base main (sample-infra) moved {HEAD[8][:7]} → {HEAD[9][:7]} (#12)"
     assert chat_cards.card_meta(other)["repo"] == infra
     assert chat_cards.base_line_text("main", chat_cards.card_meta(app)["moves"]).startswith(
         "base main moved 3 times"

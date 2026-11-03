@@ -19,7 +19,7 @@ from tests.server.factory.conftest import FactoryWorld
 
 H = 3600
 D = 86400
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 def _event(store: Any, fid: str, kind: str, ts: float, **kw: Any) -> None:

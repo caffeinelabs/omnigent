@@ -218,7 +218,7 @@ describe("UserBubble factory hook", () => {
       </Env>,
     );
     expect(screen.getByText("Preview PR #9631")).toBeInTheDocument();
-    expect(screen.getByText("Luka")).toBeInTheDocument();
+    expect(screen.getByText("Lena")).toBeInTheDocument();
     expect(screen.getByTestId("factory-control-open-review")).toHaveAttribute(
       "href",
       `/factory/${ATLAS.id}?review=9631`,
@@ -322,7 +322,7 @@ describe("link safety", () => {
     ["/\t/evil.example/x", null],
     ["https:evil.example", null],
     ["relative/path", null],
-    ["https://app-1.envs.sandbox.caffeinelabs.io/", "external"],
+    ["https://app-1.envs.sandbox.example.com/", "external"],
     ["http://localhost:5173/x", "external"],
     ["/c/abc", "in-app"],
     ["/factory/f1?review=7", "in-app"],
@@ -604,7 +604,7 @@ describe("FactoryToolLine", () => {
     renderLine(toolItem("pl_api", "sys_factory_env", 0));
     expect(screen.getByTestId("factory-tool-open-preview")).toHaveAttribute(
       "href",
-      "https://app-b693ef0a-2c66-p9630.envs.sandbox.caffeinelabs.io",
+      "https://app-b693ef0a-2c66-p9630.envs.sandbox.example.com",
     );
   });
 

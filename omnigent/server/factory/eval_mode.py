@@ -1,7 +1,7 @@
 """Eval mode: a benchmark factory that runs without waiting for people.
 
-A factory whose root carries ``omnigent.factory.mode=eval`` (the temp-main
-benchmark, ``examples/factory/benchmarks/temp-main/*.json``):
+A factory whose root carries ``omnigent.factory.mode=eval`` (a benchmark,
+``examples/factory/benchmarks/<base>/*.json``):
 
 - every open decision older than 2 minutes is answered with its recommended
   option (else its first actionable one), recorded as ``answered_by="eval-auto"``,

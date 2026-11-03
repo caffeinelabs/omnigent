@@ -25,7 +25,7 @@ from omnigent.server.factory.telemetry.spans import SpanFieldError, close_open, 
 from omnigent.stores.factory_store import FactoryStore, InMemoryFactoryStore
 from tests.server.factory.conftest import FactoryApi, FactoryWorld
 
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 PROJECT = "api-version"
 LOGGER = "omnigent.server.factory.telemetry"
 
@@ -75,7 +75,7 @@ async def _opened(w: FactoryWorld, row: FactoryDecision, ts: int, **data: Any) -
     )
 
 
-async def _answered(w: FactoryWorld, row: FactoryDecision, ts: int, by: str = "luka") -> None:
+async def _answered(w: FactoryWorld, row: FactoryDecision, ts: int, by: str = "lena") -> None:
     _store(w).answer_decision(row.id, option_id=None, text="left", by=by)
     await events.emit(
         w.app_state,
@@ -102,8 +102,8 @@ def _spans(w: FactoryWorld, kind: str, **filters: Any) -> list[Any]:
         "pr:9724",
         "pr:#9724",
         "pr:!9724",
-        "PR: caffeinelabs/app#9724",
-        "pr:https://github.com/caffeinelabs/app/pull/9724",
+        "PR: sample-org/sample-app#9724",
+        "pr:https://github.com/sample-org/sample-app/pull/9724",
         "pr:9724@abc1234",
         "pr:{row}",
     ],
@@ -150,7 +150,7 @@ async def test_a_decision_about_a_pr_not_yet_registered_keeps_its_span_and_links
     await _answered(w, row, 4000)
 
     (span,) = _spans(w, "decision")
-    assert (span.outcome, span.ended_at, span.actor, span.pr_id) == ("ok", 4000, "luka", pr.id)
+    assert (span.outcome, span.ended_at, span.actor, span.pr_id) == ("ok", 4000, "lena", pr.id)
     # Linked late, it joins the PR's trace like a decision linked when it opened.
     assert span.trace_key == f"pr:{pr.id}"
     assert "could not record" not in caplog.text
@@ -189,8 +189,8 @@ async def test_a_bare_pr_number_prefers_the_pr_of_the_decisions_project(
     recorded: FactoryWorld,
 ) -> None:
     w = recorded
-    _pr(w, 42, repo="caffeinelabs/app", project="db-version")
-    mine = _pr(w, 42, repo="caffeinelabs/api", project=PROJECT)
+    _pr(w, 42, repo="sample-org/sample-app", project="db-version")
+    mine = _pr(w, 42, repo="sample-org/sample-api", project=PROJECT)
     row = _decision(w, "which", subject="pr:#42")
 
     await _opened(w, row, 10)
@@ -203,7 +203,7 @@ async def test_a_bare_pr_number_never_links_another_projects_pr(
     recorded: FactoryWorld,
 ) -> None:
     w = recorded
-    other = _pr(w, 42, repo="caffeinelabs/api", project="db-version")
+    other = _pr(w, 42, repo="sample-org/sample-api", project="db-version")
     row = _decision(w, "which", subject="pr:42")
 
     await _opened(w, row, 1000)
@@ -224,9 +224,9 @@ async def test_a_pr_number_with_its_repo_or_of_no_project_links_from_any_project
     recorded: FactoryWorld,
 ) -> None:
     w = recorded
-    other = _pr(w, 42, repo="caffeinelabs/api", project="db-version")
+    other = _pr(w, 42, repo="sample-org/sample-api", project="db-version")
     loose, _ = _store(w).upsert_pr(_fid(w), REPO, 7)
-    for key, subject in (("a", "pr:caffeinelabs/api#42"), ("b", "pr:#7")):
+    for key, subject in (("a", "pr:sample-org/sample-api#42"), ("b", "pr:#7")):
         await _opened(w, _decision(w, key, subject=subject), 10)
 
     assert [(s.name, s.pr_id) for s in _spans(w, "decision")] == [
@@ -357,7 +357,7 @@ async def test_heal_lists_the_factorys_prs_once_for_every_pr_number(
 # ── PR and preview events ────────────────────────────────────────
 
 
-@pytest.mark.parametrize("ref", [9724, "9724", "#9724", "caffeinelabs/app#9724"])
+@pytest.mark.parametrize("ref", [9724, "9724", "#9724", "sample-org/sample-app#9724"])
 async def test_pr_and_preview_events_naming_a_pr_number_land_on_its_row(
     recorded: FactoryWorld, ref: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -389,7 +389,9 @@ async def test_pr_and_preview_events_naming_a_pr_number_land_on_its_row(
 
 
 @pytest.mark.parametrize(
-    "ref", [9724, "9724", "#9724", "caffeinelabs/app#9724"], ids=["int", "str", "hash", "repo"]
+    "ref",
+    [9724, "9724", "#9724", "sample-org/sample-app#9724"],
+    ids=["int", "str", "hash", "repo"],
 )
 async def test_heal_keeps_the_one_ready_wait_recorded_for_a_pr_number(
     recorded: FactoryWorld, ref: Any
@@ -430,7 +432,7 @@ async def test_heal_builds_ready_waits_from_pr_events_naming_a_pr_number(
         ("pr.ready", 1_700_000_000_437, 9724),
         ("pr.not_ready", 1_700_000_100_000, "9724"),
         ("pr.ready", 1_700_000_200_000, "#9724"),
-        ("pr.merged", 1_700_000_300_000, "caffeinelabs/app#9724"),
+        ("pr.merged", 1_700_000_300_000, "sample-org/sample-app#9724"),
     ):
         await events.emit(
             w.app_state, _fid(w), kind, project=PROJECT, summary=kind, data={"pr_id": ref}, ts=ts
@@ -499,7 +501,7 @@ async def test_heal_resolves_or_skips_preview_events_that_name_a_pr_number(
     [
         ("pr_id", "9724"),
         ("pr_id", 9724),
-        ("pr_id", "pr:caffeinelabs/app#9724@abc1234"),
+        ("pr_id", "pr:sample-org/sample-app#9724@abc1234"),
         ("session_id", "PL · ux-env-badge"),
         ("task_id", "T-4"),
         ("loop_id", "loop:implement"),

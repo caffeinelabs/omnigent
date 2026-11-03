@@ -21,8 +21,8 @@ async def test_auth_test_reads_the_team_bot_and_granted_scopes(fake_slack: FakeS
     info = await SlackClient(TOKEN).auth_test()
 
     assert (info.team_id, info.team, info.bot_user_id, info.user) == (
-        "T0CAFE",
-        "Caffeine Labs",
+        "T0SAMPLE",
+        "Sample Org",
         "UBOT",
         "omnigent-factory",
     )
@@ -43,7 +43,7 @@ async def test_users_resolve_by_member_id_and_email(fake_slack: FakeSlack) -> No
         "carol@slack.example",
         "UTC",
     )
-    assert by_email.id == "U0ALICE" and by_email.team_id == "T0CAFE"
+    assert by_email.id == "U0ALICE" and by_email.team_id == "T0SAMPLE"
 
 
 async def test_a_dm_is_never_parsed_or_unfurled(fake_slack: FakeSlack) -> None:

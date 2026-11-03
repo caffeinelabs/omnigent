@@ -54,7 +54,7 @@ describe("parseApiCalls", () => {
   });
 
   it("formats paths and bodies for the table", () => {
-    expect(apiCallPath("https://api-x.envs.sandbox.caffeinelabs.io/db/version?x=1")).toBe(
+    expect(apiCallPath("https://api-x.envs.sandbox.example.com/db/version?x=1")).toBe(
       "/db/version?x=1",
     );
     expect(apiCallPath("/relative")).toBe("/relative");
@@ -89,7 +89,7 @@ describe("gates and demos", () => {
 
   it("never links the Tilt UI an old sandbox still reports", () => {
     const preview = pr(9630).preview!;
-    const tilt = "https://10350-omnigent-managed-b693ef0a-2c6683.sessions.sandbox.caffeinelabs.io";
+    const tilt = "https://10350-omnigent-managed-b693ef0a-2c6683.sessions.sandbox.example.com";
     const old = { ...preview, urls: { ...preview.urls, tilt_ui: tilt } };
     expect(previewLinks(old).map((l) => l.key)).toEqual(["app", "api", "minio"]);
   });
@@ -104,7 +104,7 @@ describe("olderDemos", () => {
     to_id: null,
     from_title: null,
     to_title: null,
-    subject: "pr:caffeinelabs/app#9630",
+    subject: "pr:sample-org/sample-app#9630",
   };
 
   it("lists other demos of the PR, newest first, once each", () => {
@@ -113,14 +113,14 @@ describe("olderDemos", () => {
         ...base,
         id: "1",
         ts: 1_000_000,
-        summary: "demo FAIL of caffeinelabs/app#9630 at aaaaaaa: x",
+        summary: "demo FAIL of sample-org/sample-app#9630 at aaaaaaa: x",
         data: { demo_id: "d1", status: "FAIL" },
       },
       {
         ...base,
         id: "2",
         ts: 2_000_000,
-        summary: "demo PASS of caffeinelabs/app#9630 at bbbbbbb: x",
+        summary: "demo PASS of sample-org/sample-app#9630 at bbbbbbb: x",
         data: { demo_id: "d2", status: "PASS" },
       },
       {
@@ -134,7 +134,7 @@ describe("olderDemos", () => {
         ...base,
         id: "4",
         ts: 4_000_000,
-        subject: "pr:caffeinelabs/app#9631",
+        subject: "pr:sample-org/sample-app#9631",
         summary: "at ddddddd",
         data: { demo_id: "other-pr" },
       },

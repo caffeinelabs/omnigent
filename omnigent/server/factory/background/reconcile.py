@@ -134,7 +134,7 @@ def repo_from_labels(labels: Mapping[str, str]) -> tuple[str | None, str | None]
     The ``owner/name`` and branch of a managed session's first repository.
 
     :param labels: Session labels carrying ``omnigent.sandbox.repo.<i>``.
-    :returns: e.g. ``("caffeinelabs/app", "main")``, or ``(None, None)``.
+    :returns: e.g. ``("sample-org/sample-app", "main")``, or ``(None, None)``.
     """
     from omnigent.server.managed_hosts import read_managed_repo_workspaces
 

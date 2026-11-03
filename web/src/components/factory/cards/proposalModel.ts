@@ -97,7 +97,7 @@ export interface ChangeRow {
   op: string;
   /** e.g. `+ billing-schema`, `split billing`. */
   title: string;
-  /** `P1 · app#temp-main · after billing-schema`. */
+  /** `P1 · sample-app#develop · after billing-schema`. */
   meta: string | null;
   lines: DiffLine[];
 }
@@ -279,7 +279,7 @@ export function actorName(id: string | null, snapshot: FactorySnapshot | null): 
   return title === "another agent" && /^[0-9a-f]{32}$/.test(id) ? "an agent" : title;
 }
 
-/** `"by Atlas for luka"`, `"by Lead B · Sentinel, co-signed Atlas"`. */
+/** `"by Atlas for lena"`, `"by Lead B · Sentinel, co-signed Atlas"`. */
 export function proposerLine(
   proposal: ProposalView,
   snapshot: FactorySnapshot | null = null,

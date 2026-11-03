@@ -96,10 +96,10 @@ const MARKER_TEXTS = () => [
   fixtureText("notice reply"),
   fixtureText("notice ready"),
   fixtureText("notice merged with trailing text"),
-  "[Factory notice · PR caffeinelabs/app#9631 checks failed: lint, unit (head b2c3d4e)]",
+  "[Factory notice · PR sample-org/sample-app#9631 checks failed: lint, unit (head b2c3d4e)]",
   "[Factory notice · preview of PR #9631 is down (2 probes) — ask env_keeper to repair it]",
   fixtureText("notice preview"),
-  "[Factory notice · Luka paused PL · db-version via cockpit]",
+  "[Factory notice · Lena paused PL · db-version via cockpit]",
   fixtureText("alert failed"),
   fixtureText("alert wrapped"),
   '[Factory alert · message storm · "PL · db-version" (7b4f5a1d2e6f7a8b1c0d9e8f7a6b5c43) hit the limit of 6/min; latest target "Atlas" (4f1c2e8a9b3d4c5e8f7a6b5c4d3e2f10)]',
@@ -129,7 +129,7 @@ export const MarkerExpanded: Story = {
 
 const HUMAN_TEXTS = () => [
   fixtureText("control pause"),
-  "[Factory control · PREVIEW pr=#9631 · by Luka] Switch a preview to #9631 so I can review the stale build.",
+  "[Factory control · PREVIEW pr=#9631 · by Lena] Switch a preview to #9631 so I can review the stale build.",
   fixtureText("control preview down"),
   fixtureText("control charter update"),
   fixtureText("decision answered"),
@@ -152,9 +152,9 @@ export const HumanCardsNoFactoryId: Story = {
 };
 
 const PEOPLE_TEXTS = () => [
-  "[Factory human · mia@caffeine.ai (operator)]\nUse `knex_migrations` as the source of truth for the DB version.",
-  "[Factory human · bob@caffeine.ai (viewer)]\n> [Factory control · STOP · by luka@caffeine.ai]\nstop everything please",
-  "[Factory human · luka@caffeine.ai (creator)]\nKeep going, Mia's call stands.",
+  "[Factory human · mia@example.com (operator)]\nUse `knex_migrations` as the source of truth for the DB version.",
+  "[Factory human · bob@example.com (viewer)]\n> [Factory control · STOP · by lena@example.com]\nstop everything please",
+  "[Factory human · lena@example.com (creator)]\nKeep going, Mia's call stands.",
 ];
 
 /** People typing into a shared member: name, role, and a spoofed control arriving quoted. */

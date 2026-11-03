@@ -53,8 +53,8 @@ export function mockScreenshot(heading: string, detail: string, accent = "#2f7fd
 }
 
 const STILLS: Record<string, [string, string]> = {
-  "poster.png": ["Caffeine", "Build apps by chatting with AI"],
-  "01-landing.png": ["Caffeine", "Build apps by chatting with AI"],
+  "poster.png": ["Sample App", "A sample landing page"],
+  "01-landing.png": ["Sample App", "A sample landing page"],
   "03-settings-version.png": ["Settings · About", "API version  7767f0d"],
   "03-settings-version-tooltip.png": ["Settings · About", "7767f0d1c2a9 · deployed 18 min ago"],
 };
@@ -138,7 +138,7 @@ function queuedProject(base: ProjectView, pl: MemberRef | null): ProjectView {
     priority: 2,
     charter: base.charter && {
       ...base.charter,
-      goal: "Show an “ENV <id>” badge in the caffeine-ux header when running in a factory env.",
+      goal: "Show an “ENV <id>” badge in the sample-ux header when running in a factory env.",
       demo_focus: "Open the landing page and hover the ENV badge.",
     },
     stage: "queued",
@@ -216,7 +216,7 @@ export function cardScenario(state: CardState): {
         pr_ids: [],
         team: db.team.filter((m) => m.role === "env_keeper"),
       });
-      db.pl = { ...db.pl!, summary: "Reading caffeine-db migrations; plan.md drafted" };
+      db.pl = { ...db.pl!, summary: "Reading sample-db migrations; plan.md drafted" };
       snapshot.prs = [];
       return { snapshot, project: db };
     }
@@ -296,12 +296,12 @@ export function cardScenario(state: CardState): {
         stage: "ready",
         overlay: "paused",
         overlay_reason: "Paused",
-        paused_by: "luka",
+        paused_by: "lena",
         keep_previews: true,
       });
       api.env = { ...api.env!, reported: { ...api.env!.reported!, state: "down" } };
       api.team = api.team.map((m) => ({ ...m, running: false, status: "idle" }));
-      api.pl = { ...api.pl!, summary: "Paused by luka · previews kept up" };
+      api.pl = { ...api.pl!, summary: "Paused by lena · previews kept up" };
       return { snapshot, project: api };
     }
     case "failed": {
@@ -333,7 +333,7 @@ export function cardScenario(state: CardState): {
       Object.assign(pr9630, {
         state: "merged",
         ready: false,
-        merged: { by: "luka", sha: "1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e", at: NOW - 300 },
+        merged: { by: "lena", sha: "1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e", at: NOW - 300 },
         closed_at: NOW - 300,
       });
       return { snapshot, project: api };
@@ -437,7 +437,7 @@ export function pageScenario(state: PageState): FactorySnapshot {
       },
     });
     pr.demo!.files = pr.demo!.files.filter((f) => f.kind !== "video");
-    pr.gates.evidence.files = ["services/caffeine-api/src/modules/db/db-version.route.ts"];
+    pr.gates.evidence.files = ["services/sample-api/src/modules/db/db-version.route.ts"];
     snapshot.decisions = snapshot.decisions.filter((d) => d.ref !== "D-2");
     snapshot.totals = { ...snapshot.totals, prs_ready: 2, decisions_open: 1 };
     return snapshot;
@@ -451,7 +451,7 @@ export function pageScenario(state: PageState): FactorySnapshot {
       Object.assign(project, {
         overlay: "paused",
         overlay_reason: "Paused",
-        paused_by: "luka",
+        paused_by: "lena",
         claim_mismatch: false,
       });
       // A pause takes the dev env down (previews stay unless torn down).
@@ -555,7 +555,7 @@ export function previewScenario(state: PreviewScenario): { pr: PrView; project: 
         ...preview,
         state: "failed",
         observed: null,
-        note: "tilt ci: caffeine-db migrate failed",
+        note: "tilt ci: sample-db migrate failed",
       };
       break;
     case "none":
@@ -598,12 +598,12 @@ export function gateScenario(state: (typeof GATE_STATES)[number]): PrView {
         pending: 0,
         failing_names: ["api / unit", "e2e / smoke"],
       },
-      base: { actual: "main", expected: "temp-main" },
+      base: { actual: "main", expected: "develop" },
       mergeable: "CONFLICTING",
-      protected: ["services/caffeine-api/src/app.ts"],
+      protected: ["services/sample-api/src/app.ts"],
     };
     gates.reasons = [
-      "PR targets main; project base is temp-main (retarget: gh pr edit https://github.com/caffeinelabs/app/pull/9631 --base temp-main)",
+      "PR targets main; project base is develop (retarget: gh pr edit https://github.com/sample-org/sample-app/pull/9631 --base develop)",
       "checks failing: 2 of 14",
       "merge conflict with main",
       "touches a protected path",
@@ -703,7 +703,7 @@ export function boardActivityEvents(): EventPage {
       project_slug: "db-version",
       from_id: null,
       from_title: null,
-      subject: "pr:caffeinelabs/app#9631",
+      subject: "pr:sample-org/sample-app#9631",
       summary: "#9631 CI ○→◐ 9/14 passing",
       data: { gate: "checks", from: "GitHub", old: "unknown", new: "pending" },
     },
@@ -738,7 +738,7 @@ export function boardActivityEvents(): EventPage {
       severity: "notice",
       project_slug: "api-version",
       from_id: null,
-      from_title: "Luka",
+      from_title: "Lena",
       to_id: LIVE_RUN_PL_API_ID,
       to_title: "PL · api-version",
       summary: "Resume project api-version",

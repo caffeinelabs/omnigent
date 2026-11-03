@@ -101,7 +101,7 @@ def _register_agent(
     return agent_id
 
 
-SAMPLE_ENV_DOMAIN = "envs.sandbox.caffeinelabs.io"
+SAMPLE_ENV_DOMAIN = "envs.sandbox.example.com"
 """(sample) The env domain the fixtures' env and preview URLs live under."""
 
 

@@ -59,10 +59,10 @@ const NEED: Record<keyof ViewerBlock["can"], number> = {
 };
 
 const USER: Record<ViewerRole, string> = {
-  creator: "luka@caffeine.ai",
-  owner: "luka@caffeine.ai",
-  operator: "mia@caffeine.ai",
-  viewer: "ops@caffeine.ai",
+  creator: "lena@example.com",
+  owner: "lena@example.com",
+  operator: "mia@example.com",
+  viewer: "ops@example.com",
 };
 
 /** The snapshot's viewer block for `role` (the server's levels per lever). */
@@ -79,12 +79,12 @@ export function viewerOf(role: ViewerRole, userId: string = USER[role]): ViewerB
   };
 }
 
-/** The base block of a temp-main factory: head 57ab671, the base env at it. */
+/** The base block of a develop factory: head 57ab671, the base env at it. */
 function baseBlock(snapshot: FactorySnapshot): NonNullable<FactorySnapshot["factory"]["base"]> {
   const env = snapshot.projects.find((p) => p.slug === "base-env")?.env ?? null;
   return {
-    repo: "caffeinelabs/app",
-    branch: "temp-main",
+    repo: "sample-org/sample-app",
+    branch: "develop",
     head_sha: BASE_HEAD,
     moved_at: ROUND3_NOW_S - 12 * 60,
     env,
@@ -93,8 +93,8 @@ function baseBlock(snapshot: FactorySnapshot): NonNullable<FactorySnapshot["fact
 }
 
 /**
- * The round-3 factory: Atlas factory on temp-main with 7 projects, 41 agents,
- * Luka (creator) and Mia here, Ops away, D-2 for Mia, a loop at 3/3.
+ * The round-3 factory: Atlas factory on develop with 7 projects, 41 agents,
+ * Lena (creator) and Mia here, Ops away, D-2 for Mia, a loop at 3/3.
  *
  * @param role - Whose view (the viewer block); the creator's by default.
  */
@@ -111,7 +111,7 @@ export function round3People(role: ViewerRole = "creator"): PeopleResponse {
   const data = clone(ROUND3.people);
   return {
     data,
-    runs_as: { user_id: "luka@caffeine.ai", name: "luka@caffeine.ai" },
+    runs_as: { user_id: "lena@example.com", name: "lena@example.com" },
     count: data.length,
     viewer: viewerOf(role),
   };
@@ -199,24 +199,24 @@ export function round3Events(): EventPage {
     event(0.2, "message.delivered", "PL · db-version → ic · route-r2 · re-run with knex seed", {
       project_slug: "db-version",
     }),
-    event(1, "gate.changed", "!9631 CI caffeine-api test FAIL (same check as r0, r1)", {
+    event(1, "gate.changed", "!9631 CI sample-api test FAIL (same check as r0, r1)", {
       project_slug: "db-version",
       severity: "warning",
       subject: "pr:6d8b4c2a1e9f4a7b8c3d5e6f7a8b9c0d",
     }),
-    event(3, "demo.published", "demo PASS of caffeinelabs/app#9630 at 7767f0d", {
+    event(3, "demo.published", "demo PASS of sample-org/sample-app#9630 at 7767f0d", {
       project_slug: "api-version",
       severity: "notice",
     }),
     event(4, "preview.deployed", "preview p9653 at 3c9d8e7", { project_slug: "ux-badge" }),
-    event(6, "people.invited", "ops@caffeine.ai joined as viewer", {
+    event(6, "people.invited", "ops@example.com joined as viewer", {
       severity: "notice",
-      data: { by: "luka@caffeine.ai", user: "ops@caffeine.ai", role: "viewer" },
+      data: { by: "lena@example.com", user: "ops@example.com", role: "viewer" },
     }),
     event(9, "control.pause", "Pause cache-warm · keep previews", {
       project_slug: "cache-warm",
       severity: "notice",
-      data: { by: "mia@caffeine.ai" },
+      data: { by: "mia@example.com" },
     }),
     event(11, "decision.opened", "D-2 · Which table is the source of truth?", {
       project_slug: "db-version",
@@ -229,28 +229,28 @@ export function round3Events(): EventPage {
       project_slug: "api-version",
       severity: "notice",
     }),
-    event(22, "people.role_changed", "mia@caffeine.ai is now operator", {
+    event(22, "people.role_changed", "mia@example.com is now operator", {
       severity: "notice",
-      data: { by: "luka@caffeine.ai" },
+      data: { by: "lena@example.com" },
     }),
-    event(26, "access.requested", "ops@caffeine.ai asks for operator access (D-34)", {
+    event(26, "access.requested", "ops@example.com asks for operator access (D-34)", {
       severity: "notice",
-      data: { by: "ops@caffeine.ai" },
+      data: { by: "ops@example.com" },
     }),
     event(31, "control.relaunch", "Relaunch PL · cache-warm with spec mode", {
       project_slug: "cache-warm",
-      data: { by: "luka@caffeine.ai" },
+      data: { by: "lena@example.com" },
     }),
     event(38, "gate.changed", "!9653 review CHANGES · 3 blocking", { project_slug: "ux-badge" }),
-    event(47, "message.delivered", "Atlas → PL · ux-badge · rebase on temp-main", {
+    event(47, "message.delivered", "Atlas → PL · ux-badge · rebase on develop", {
       project_slug: "ux-badge",
     }),
-    event(55, "env.ready", "base-env temp-main@57ab671 = head", { project_slug: "base-env" }),
+    event(55, "env.ready", "base-env develop@57ab671 = head", { project_slug: "base-env" }),
   ];
   return { data, has_more: false };
 }
 
-/** What Luka asked of #9630 from the cockpit in {@link changesRequestedSnapshot}. */
+/** What Lena asked of #9630 from the cockpit in {@link changesRequestedSnapshot}. */
 export const CHANGES_REQUESTED_TEXT =
   "Give the version row top spacing; it sits flush against the section header.";
 
@@ -263,7 +263,7 @@ export const CHANGES_REQUESTED_TEXT =
 export function requestChanges(
   snapshot: FactorySnapshot,
   number: number,
-  by = "luka@caffeine.ai",
+  by = "lena@example.com",
 ): FactorySnapshot {
   const now = snapshot.server_time;
   const pr = snapshot.prs.find((p) => p.number === number)!;
@@ -284,7 +284,7 @@ export function requestChanges(
   return snapshot;
 }
 
-/** The round-3 factory a minute after Luka asked for changes on #9630 (api-version). */
+/** The round-3 factory a minute after Lena asked for changes on #9630 (api-version). */
 export function changesRequestedSnapshot(role: ViewerRole = "creator"): FactorySnapshot {
   return requestChanges(round3Snapshot(role), 9630);
 }
@@ -298,9 +298,9 @@ export function changesRequestedEvents(): EventPage {
     data: [
       event(0.9, "stage.changed", "api-version: ready → building", extra),
       event(1, "pr.not_ready", "PR #9630 no longer ready", extra),
-      event(1, "pr.human_review", "luka@caffeine.ai requested changes on PR #9630 @7767f0d", {
+      event(1, "pr.human_review", "lena@example.com requested changes on PR #9630 @7767f0d", {
         ...extra,
-        data: { by: "luka@caffeine.ai", verdict: "changes_requested" },
+        data: { by: "lena@example.com", verdict: "changes_requested" },
       }),
       ...page.data,
     ],
@@ -378,7 +378,7 @@ export function scaleSnapshot(projects = 12, agents = 60): FactorySnapshot {
       stage: SCALE_STAGES[i % SCALE_STAGES.length],
       pr_ids: [pr.id],
       open_decision_ids: [],
-      human_owner: i % 2 === 0 ? "mia@caffeine.ai" : null,
+      human_owner: i % 2 === 0 ? "mia@example.com" : null,
     });
     extraProjects.push(template);
   }
@@ -418,7 +418,7 @@ export function shellRoutes(
 export function sharedFactoryList(): FactoryListResponse {
   const atlas = {
     ...summaryOf(round3Snapshot()),
-    shared_by: "luka@caffeine.ai",
+    shared_by: "lena@example.com",
     viewer_role: "operator" as const,
     people_count: 3,
     mine: 2,
@@ -428,7 +428,7 @@ export function sharedFactoryList(): FactoryListResponse {
     ...summaryOf(tenProjectsSnapshot()),
     id: "b1c2d3e4f5a60718293a4b5c6d7e8f90",
     name: "Billing factory",
-    shared_by: "ana@caffeine.ai",
+    shared_by: "ana@example.com",
     viewer_role: "viewer" as const,
     people_count: 5,
     mine: 0,

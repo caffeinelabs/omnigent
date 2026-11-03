@@ -90,7 +90,7 @@ class DevEnvNeed:
     :param need: ``idle`` (only waits for a human merge: the dev env can go),
         ``work`` (an IC has work: the dev env should be up) or ``wait``
         (neither, e.g. a new head's checks are still running: leave it as it is).
-    :param reason: Plain words, e.g. ``"luka asked for changes on PR #9826"``.
+    :param reason: Plain words, e.g. ``"lena asked for changes on PR #9826"``.
     :param since: ``idle`` only: when the last open PR became ready (epoch s).
     :param prs: ``idle`` only: the open PRs, all ready for a human merge.
     :param waiting: ``idle`` only: refs of the other open tasks that wait for

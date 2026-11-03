@@ -197,7 +197,7 @@ def test_round3_has_the_mission_control_shape(r3: Round3) -> None:
     assert len(slugs) == 7 and len(set(slugs)) == 7
     base_env = next(p for p in snap.projects if p.slug == "base-env")
     assert base_env.kind == "integration"
-    assert all(p.base_branch == "temp-main" for p in snap.projects)
+    assert all(p.base_branch == "develop" for p in snap.projects)
     assert len(snap.members) == 41
     assert len({m.session_id for m in snap.members}) == 41
     assert any(m.role == "planner" and not m.is_top_level for m in snap.members)

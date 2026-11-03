@@ -23,9 +23,9 @@ HEAD = "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16"
 ROLES = ("outsider", "viewer", "operator", "owner", "creator")
 USERS = {
     "outsider": "bob",
-    "viewer": "vic@caffeine.ai",
-    "operator": "opal@caffeine.ai",
-    "owner": "owen@caffeine.ai",
+    "viewer": "vic@example.com",
+    "operator": "opal@example.com",
+    "owner": "owen@example.com",
     "creator": "alice",
 }
 DENIED = frozenset({401, 403, 404})
@@ -61,21 +61,21 @@ async def ctx(
         for role in ROLES:
             # Each caller removes its own extra person, so a later caller still finds one.
             await people.set_person(
-                state, cockpit.fid, f"extra-{role}@caffeine.ai", "viewer", by_user="alice"
+                state, cockpit.fid, f"extra-{role}@example.com", "viewer", by_user="alice"
             )
         store = cockpit.store
         store.upsert_project(
             cockpit.fid,
             "api-version",
             title="API version",
-            repo="caffeinelabs/app",
+            repo="sample-org/sample-app",
             base_branch="main",
             pl_session_id=cockpit.world.id("pl"),
             charter={"goal": "GET /version", "dod": ["curl {api}/version"]},
         )
         pr, _ = store.upsert_pr(
             cockpit.fid,
-            "caffeinelabs/app",
+            "sample-org/sample-app",
             9630,
             project_slug="api-version",
             head_sha=HEAD,
@@ -197,7 +197,11 @@ ROUTES: tuple[Route, ...] = (
         "project:add",
         "POST",
         lambda c, _r: f"/v1/factory/factories/{c.cockpit.fid}/projects",
-        lambda _c, r: {"slug": f"badge-{r}", "repo": "caffeinelabs/app", "goal": "Show a badge."},
+        lambda _c, r: {
+            "slug": f"badge-{r}",
+            "repo": "sample-org/sample-app",
+            "goal": "Show a badge.",
+        },
         "operator",
     ),
     Route(
@@ -215,21 +219,21 @@ ROUTES: tuple[Route, ...] = (
             "root_session_id": c.cockpit.fid,
             "name": "Atlas factory",
             "cadence": "demo",
-            "projects": [{"slug": "api-version", "repo": "caffeinelabs/app", "goal": "g"}],
+            "projects": [{"slug": "api-version", "repo": "sample-org/sample-app", "goal": "g"}],
         },
         "creator",
     ),
     Route(
         "people:put",
         "PUT",
-        lambda c, r: f"/v1/factory/factories/{c.cockpit.fid}/people/new-{r}@caffeine.ai",
+        lambda c, r: f"/v1/factory/factories/{c.cockpit.fid}/people/new-{r}@example.com",
         lambda _c, _r: {"role": "viewer"},
         "owner",
     ),
     Route(
         "people:delete",
         "DELETE",
-        lambda c, r: f"/v1/factory/factories/{c.cockpit.fid}/people/extra-{r}@caffeine.ai",
+        lambda c, r: f"/v1/factory/factories/{c.cockpit.fid}/people/extra-{r}@example.com",
         lambda _c, _r: None,
         "owner",
     ),

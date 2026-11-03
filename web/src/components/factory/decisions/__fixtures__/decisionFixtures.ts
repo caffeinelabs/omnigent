@@ -35,7 +35,7 @@ export function answeredDecision(optionId = "a"): DecisionView {
     status: "answered",
     answer_option_id: optionId,
     answer_text: null,
-    answered_by: "Luka",
+    answered_by: "Lena",
     answered_at: LIVE_RUN_NOW_S,
     delivered_mail_id: "mail_9a8b7c6d5e4f3a2b",
     delivered_at: null,
@@ -60,7 +60,7 @@ export function blockedApprovalDecision(): DecisionView {
     source: "blocked_approval",
     blocking: true,
     question: "ic:db-version-route waits on a tool approval for 12 min",
-    context: "`pnpm -F caffeine-db migrate:status` needs your approval in the Inbox.",
+    context: "`pnpm -F sample-db migrate:status` needs your approval in the Inbox.",
     options: [
       {
         id: "open",
@@ -132,7 +132,7 @@ export function answeredNobodyToTell(): DecisionView {
     ...doneCheckDecision(),
     status: "answered",
     answer_option_id: "done",
-    answered_by: "Luka",
+    answered_by: "Lena",
     answered_at: LIVE_RUN_NOW_S,
     delivered_mail_id: null,
     delivered_at: LIVE_RUN_NOW_S,
@@ -198,7 +198,7 @@ export function inboxDecisionItems(): OpenDecisionItem[] {
 
 /**
  * D-19: Atlas's projects proposal for the owners, non-blocking, 2 d 18 h old
- * and 6 h from expiring; Slack DMed Luka when it opened and twice since.
+ * and 6 h from expiring; Slack DMed Lena when it opened and twice since.
  */
 export function slackNotifiedProposal(): DecisionView {
   const opened = LIVE_RUN_NOW_S - (2 * 86400 + 18 * 3600);
@@ -247,11 +247,11 @@ export function slackNotifiedProposal(): DecisionView {
     created_at: opened,
     updated_at: opened,
     notified: [
-      { user_id: "luka@caffeine.ai", at: opened + 31, stage: "new", ok: true },
-      { user_id: "luka@caffeine.ai", at: opened + 4 * 3600, stage: "r4h", ok: true },
-      { user_id: "luka@caffeine.ai", at: opened + 24 * 3600, stage: "r24h", ok: true },
+      { user_id: "lena@example.com", at: opened + 31, stage: "new", ok: true },
+      { user_id: "lena@example.com", at: opened + 4 * 3600, stage: "r4h", ok: true },
+      { user_id: "lena@example.com", at: opened + 24 * 3600, stage: "r24h", ok: true },
       {
-        user_id: "mia@caffeine.ai",
+        user_id: "mia@example.com",
         at: opened + 24 * 3600,
         stage: "owners",
         ok: false,
@@ -295,7 +295,7 @@ export function stallKeepWaitingDecision(): DecisionView {
     source: "loop",
     blocking: true,
     question:
-      "T-5 validate-p9774: implement 1/3 stalled - what next? The IC worked 3 minutes ago; it is running pnpm -F caffeine-app build.",
+      "T-5 validate-p9774: implement 1/3 stalled - what next? The IC worked 3 minutes ago; it is running pnpm -F sample-app build.",
     context: "Why: running 16 h (wall budget 16 h)\nLast verdict: DISPATCHED",
     options: [
       stallOption(

@@ -145,7 +145,7 @@ async def test_every_action_notifies_the_root_unless_it_got_the_control(cockpit:
 async def test_preview_up_and_down(cockpit: Cockpit) -> None:
     pl = cockpit.world.id("pl")
     pr, _ = cockpit.store.upsert_pr(
-        cockpit.fid, "caffeinelabs/app", 9653, project_slug="api-version", head_sha=HEAD
+        cockpit.fid, "sample-org/sample-app", 9653, project_slug="api-version", head_sha=HEAD
     )
 
     up = await _control(cockpit, "preview", options={"pr": 9653})
@@ -168,13 +168,13 @@ async def test_preview_up_and_down(cockpit: Cockpit) -> None:
         "via cockpit]",
     ]
     [event, _] = cockpit.events("control.preview")
-    assert event.subject == "pr:caffeinelabs/app#9653"
+    assert event.subject == "pr:sample-org/sample-app#9653"
     assert event.data["options"] == {"mode": "up", "pr_id": pr.id, "pr": 9653}
 
 
 async def test_preview_refusals(cockpit: Cockpit) -> None:
     cockpit.store.upsert_pr(
-        cockpit.fid, "caffeinelabs/app", 9001, project_slug="api-version", state="merged"
+        cockpit.fid, "sample-org/sample-app", 9001, project_slug="api-version", state="merged"
     )
 
     no_pr = await _control(cockpit, "preview")
@@ -521,7 +521,7 @@ async def test_one_audit_event_per_action(
     options: dict[str, Any] | None,
 ) -> None:
     cockpit.store.upsert_pr(
-        cockpit.fid, "caffeinelabs/app", 9653, project_slug="api-version", head_sha=HEAD
+        cockpit.fid, "sample-org/sample-app", 9653, project_slug="api-version", head_sha=HEAD
     )
     if action == "relaunch":
         cockpit.permissions.grant("alice", _bypass_pl(cockpit.world, tmp_path), 4)

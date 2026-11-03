@@ -179,7 +179,7 @@ def test_parity_with_the_merge_gate(
     monkeypatch: pytest.MonkeyPatch, name: str, make_fake: Callable[[], M._FakeGh]
 ) -> None:
     """Every merge-gate fixture: same pass/fail per gate and the same reasons."""
-    monkeypatch.setenv(factory_merge.REPOS_ENV, "caffeinelabs/app,caffeinelabs/infra")
+    monkeypatch.setenv(factory_merge.REPOS_ENV, "sample-org/sample-app,sample-org/sample-infra")
     fake = make_fake()
     monkeypatch.setattr(factory_merge.subprocess, "run", fake)
     verdict, _pr = factory_merge.evaluate(M._URL)
@@ -328,9 +328,9 @@ def test_ready_needs_an_open_pr_with_every_gate_passing() -> None:
     assert evaluate_snapshot(labelled, _GREEN, set()).ready is True
 
 
-@pytest.mark.parametrize(("base", "expected"), [("temp-main", "temp-main"), (None, "main")])
+@pytest.mark.parametrize(("base", "expected"), [("develop", "develop"), (None, "main")])
 def test_a_conflict_names_the_prs_own_base(base: str | None, expected: str) -> None:
-    """The fix-it hint merges the PR's base branch, so a temp-main PR is not told to merge main."""
+    """The fix-it hint merges the PR's base branch, so a develop PR is not told to merge main."""
     report = evaluate_snapshot(_snap(mergeable="CONFLICTING", baseRefName=base), _GREEN, set())
     assert report.gate_reasons["mergeable"] == (
         f"mergeable=CONFLICTING (merge origin/{expected} into the branch and resolve conflicts)"
@@ -338,40 +338,39 @@ def test_a_conflict_names_the_prs_own_base(base: str | None, expected: str) -> N
 
 
 def test_the_base_gate_passes_on_the_project_base() -> None:
-    """A temp-main project's PR against temp-main passes ``base``, with the evidence."""
+    """A develop project's PR against develop passes ``base``, with the evidence."""
     report = evaluate_snapshot(
-        _snap(baseRefName="temp-main"), _GREEN, set(), expected_base="temp-main"
+        _snap(baseRefName="develop"), _GREEN, set(), expected_base="develop"
     )
     assert report.gates["base"] == "pass"
     assert report.ready is True
-    assert report.evidence["base"] == {"actual": "temp-main", "expected": "temp-main"}
+    assert report.evidence["base"] == {"actual": "develop", "expected": "develop"}
     # Without a project any base passes, so the merge gate reads it green too.
     assert evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set()).gates["base"] == "pass"
 
 
 def test_the_base_gate_fails_on_another_branch_with_the_retarget_fix() -> None:
-    """A temp-main project's PR opened against main fails ``base`` (and only it)."""
-    wrong = evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set(), expected_base="temp-main")
+    """A develop project's PR opened against main fails ``base`` (and only it)."""
+    wrong = evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set(), expected_base="develop")
     assert wrong.ready is False
     assert wrong.gates["base"] == "fail"
     assert all(s == "pass" for g, s in wrong.gates.items() if g != "base"), wrong.gates
     assert wrong.gate_reasons["base"] == (
-        f"PR targets main; project base is temp-main (retarget: gh pr edit {M._URL} "
-        "--base temp-main)"
+        f"PR targets main; project base is develop (retarget: gh pr edit {M._URL} --base develop)"
     )
-    assert wrong.evidence["base"] == {"actual": "main", "expected": "temp-main"}
+    assert wrong.evidence["base"] == {"actual": "main", "expected": "develop"}
     assert GatesView.model_validate(wrong.to_json()).evidence.base is not None
 
 
 def test_the_base_gate_waits_while_the_base_is_unknown() -> None:
     """GitHub not reporting the PR's base yet keeps ``base`` pending, never ready."""
-    unknown = evaluate_snapshot(_snap(baseRefName=None), _GREEN, set(), expected_base="temp-main")
+    unknown = evaluate_snapshot(_snap(baseRefName=None), _GREEN, set(), expected_base="develop")
     assert unknown.gates["base"] == "pending"
     assert unknown.ready is False
     assert unknown.gate_reasons["base"] == (
-        "the PR's base branch is not known yet; it must target temp-main"
+        "the PR's base branch is not known yet; it must target develop"
     )
-    assert unknown.evidence["base"] == {"actual": None, "expected": "temp-main"}
+    assert unknown.evidence["base"] == {"actual": None, "expected": "develop"}
 
 
 def test_the_base_gate_is_a_ready_gate() -> None:
@@ -388,12 +387,12 @@ def test_report_json_is_the_cockpit_gates_view() -> None:
         {"name": "docs", "state": "SKIPPED", "required": True},
     ]
     review = M._review()
-    review["url"] = "https://github.com/caffeinelabs/app/pull/7#pullrequestreview-1"
+    review["url"] = "https://github.com/sample-org/sample-app/pull/7#pullrequestreview-1"
     report = evaluate_snapshot(
         _snap(reviews=[review]),
         checks,
         set(),
-        checks_url="https://github.com/caffeinelabs/app/pull/7/checks",
+        checks_url="https://github.com/sample-org/sample-app/pull/7/checks",
     )
     view = GatesView.model_validate(report.to_json())
     assert view.checks == "fail"
@@ -403,7 +402,7 @@ def test_report_json_is_the_cockpit_gates_view() -> None:
         "failing": 1,
         "pending": 1,
         "total": 4,
-        "url": "https://github.com/caffeinelabs/app/pull/7/checks",
+        "url": "https://github.com/sample-org/sample-app/pull/7/checks",
         "failing_names": ["lint"],
     }
     assert view.evidence.review is not None

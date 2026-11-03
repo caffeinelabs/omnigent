@@ -59,7 +59,7 @@
           "key": "decision:7d39c2ab229d5ebcb20c89e31d3a751e",
           "ref": "D-33",
           "text": "approve Atlas's proposal",
-          "detail": "C-4 · plan by Atlas for Luka: split billing v2 into 3 projects",
+          "detail": "C-4 · plan by Atlas for Lena: split billing v2 into 3 projects",
           "who": "operators",
           "for_you": true,
           "urgent": true,
@@ -131,7 +131,7 @@
           "key": "decision:7839f420d1b6578291fc39d54782176c",
           "ref": "D-34",
           "text": "approve or refuse an access request",
-          "detail": "ops@caffeine.ai asks for operator access",
+          "detail": "ops@example.com asks for operator access",
           "who": "owners",
           "for_you": true,
           "urgent": true,
@@ -148,7 +148,7 @@
           "kind": "incident",
           "key": "incident:f3e3cdbee4435450b613ba1916828cde",
           "ref": "INC-13",
-          "text": "same failing command 7× in 25 min · pnpm -F caffeine-api test",
+          "text": "same failing command 7× in 25 min · pnpm -F sample-api test",
           "detail": null,
           "who": "operators",
           "for_you": true,
@@ -367,7 +367,7 @@
           "key": "decision:7d39c2ab229d5ebcb20c89e31d3a751e",
           "ref": "D-33",
           "text": "approve Atlas's proposal",
-          "detail": "C-4 · plan by Atlas for Luka: split billing v2 into 3 projects",
+          "detail": "C-4 · plan by Atlas for Lena: split billing v2 into 3 projects",
           "who": "operators",
           "for_you": true,
           "urgent": true,
@@ -438,7 +438,7 @@
           "kind": "incident",
           "key": "incident:f3e3cdbee4435450b613ba1916828cde",
           "ref": "INC-13",
-          "text": "same failing command 7× in 25 min · pnpm -F caffeine-api test",
+          "text": "same failing command 7× in 25 min · pnpm -F sample-api test",
           "detail": null,
           "who": "operators",
           "for_you": true,
@@ -511,7 +511,7 @@
           "key": "decision:7839f420d1b6578291fc39d54782176c",
           "ref": "D-34",
           "text": "approve or refuse an access request",
-          "detail": "ops@caffeine.ai asks for operator access",
+          "detail": "ops@example.com asks for operator access",
           "who": "owners",
           "for_you": false,
           "urgent": true,
@@ -696,7 +696,7 @@
           "key": "decision:7d39c2ab229d5ebcb20c89e31d3a751e",
           "ref": "D-33",
           "text": "approve Atlas's proposal",
-          "detail": "C-4 · plan by Atlas for Luka: split billing v2 into 3 projects",
+          "detail": "C-4 · plan by Atlas for Lena: split billing v2 into 3 projects",
           "who": "operators",
           "for_you": false,
           "urgent": true,
@@ -786,7 +786,7 @@
           "key": "decision:7839f420d1b6578291fc39d54782176c",
           "ref": "D-34",
           "text": "approve or refuse an access request",
-          "detail": "ops@caffeine.ai asks for operator access",
+          "detail": "ops@example.com asks for operator access",
           "who": "owners",
           "for_you": false,
           "urgent": true,
@@ -803,7 +803,7 @@
           "kind": "incident",
           "key": "incident:f3e3cdbee4435450b613ba1916828cde",
           "ref": "INC-13",
-          "text": "same failing command 7× in 25 min · pnpm -F caffeine-api test",
+          "text": "same failing command 7× in 25 min · pnpm -F sample-api test",
           "detail": null,
           "who": "operators",
           "for_you": false,
@@ -1227,7 +1227,7 @@
           "state": "open",
           "ready": true,
           "ready_since": 1793566800,
-          "repo": "caffeinelabs/app"
+          "repo": "sample-org/sample-app"
         },
         {
           "id": "p9827",
@@ -1237,7 +1237,7 @@
           "state": "open",
           "ready": true,
           "ready_since": 1793570400,
-          "repo": "caffeinelabs/app"
+          "repo": "sample-org/sample-app"
         },
         {
           "id": "p9828",
@@ -1247,7 +1247,7 @@
           "state": "open",
           "ready": true,
           "ready_since": 1793574000,
-          "repo": "caffeinelabs/app"
+          "repo": "sample-org/sample-app"
         },
         {
           "id": "p9829",
@@ -1257,7 +1257,7 @@
           "state": "open",
           "ready": true,
           "ready_since": 1793577600,
-          "repo": "caffeinelabs/app"
+          "repo": "sample-org/sample-app"
         },
         {
           "id": "p9774",
@@ -1267,7 +1267,7 @@
           "state": "merged",
           "ready": false,
           "ready_since": null,
-          "repo": "caffeinelabs/app"
+          "repo": "sample-org/sample-app"
         },
         {
           "id": "p9900",
@@ -1277,7 +1277,7 @@
           "state": "open",
           "ready": true,
           "ready_since": 1793595600,
-          "repo": "caffeinelabs/app"
+          "repo": "sample-org/sample-app"
         }
       ],
       "decisions": [
@@ -1299,13 +1299,13 @@
           "deadline_effect": "expires and nothing is started",
           "notified": [
             {
-              "user_id": "luka@caffeine.ai",
+              "user_id": "lena@example.com",
               "at": 1793588400,
               "stage": "new",
               "ok": true
             },
             {
-              "user_id": "luka@caffeine.ai",
+              "user_id": "lena@example.com",
               "at": 1793595600,
               "stage": "r4h",
               "ok": false
@@ -1335,20 +1335,20 @@
       },
       "server_time": 1793599200,
       "viewer": {
-        "user_id": "luka@caffeine.ai",
+        "user_id": "lena@example.com",
         "level": 4
       }
     },
     "notified": {
-      "pr:caffeinelabs/app#9826": [
+      "pr:sample-org/sample-app#9826": [
         {
-          "user_id": "luka@caffeine.ai",
+          "user_id": "lena@example.com",
           "at": 1793574000,
           "stage": "ready",
           "ok": true
         },
         {
-          "user_id": "mia@caffeine.ai",
+          "user_id": "mia@example.com",
           "at": 1793574000,
           "stage": "ready",
           "ok": true
@@ -1356,7 +1356,7 @@
       ]
     },
     "owners": {
-      "owned": "mia@caffeine.ai"
+      "owned": "mia@example.com"
     },
     "summary": {
       "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",

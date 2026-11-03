@@ -96,7 +96,7 @@ def test_now_state_from_claude_native_items(world: FactoryWorld) -> None:
     assert state["status"] == "running"
     assert state["tool"] == "Bash"
     # The secret in the command is redacted and the argument fits 80 chars.
-    assert state["tool_arg"].startswith("NPM_TOKEN=[REDACTED] pnpm -F caffeine-api db:seed")
+    assert state["tool_arg"].startswith("NPM_TOKEN=[REDACTED] pnpm -F sample-api db:seed")
     assert "notarealtoken" not in state["tool_arg"]
     assert len(state["tool_arg"]) <= 80
     assert state["tool_since"] == BASE + 563
@@ -186,7 +186,7 @@ def test_repeat_detector_counts_identical_failures_in_the_window() -> None:
     tracker.observe(calls)  # the same calls seen again do not count twice
 
     key, count, arg = tracker.worst(BASE + 600) or ("", 0, None)
-    assert count == 5 and arg == "pnpm -F caffeine-api test" and key.startswith("Bash:")
+    assert count == 5 and arg == "pnpm -F sample-api test" and key.startswith("Bash:")
     # Failures older than the window drop out.
     assert tracker.worst(BASE + 129 + 1800 + 1) == (key, 4, arg)
     assert tracker.worst(BASE + 533 + 1800) is None
@@ -208,7 +208,7 @@ def test_a_success_of_the_same_call_clears_its_repeats() -> None:
                 {
                     "agent": "ic",
                     "name": "Bash",
-                    "arguments": '{"command":"pnpm -F caffeine-api test"}',
+                    "arguments": '{"command":"pnpm -F sample-api test"}',
                     "call_id": "toolu_ok",
                 },
             ),
@@ -350,7 +350,7 @@ async def test_a_repeating_agent_raises_agent_repeat_once_and_clears(
                     {
                         "agent": "ic",
                         "name": "Bash",
-                        "arguments": '{"command":"pnpm -F caffeine-api test"}',
+                        "arguments": '{"command":"pnpm -F sample-api test"}',
                         "call_id": "toolu_pass",
                     },
                 ),

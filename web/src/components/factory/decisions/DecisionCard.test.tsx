@@ -343,7 +343,7 @@ describe("DecisionCard", () => {
           ...relaunchFailedDecision(),
           status: "answered",
           answer_option_id: "relaunch",
-          answered_by: "Luka",
+          answered_by: "Lena",
           answered_at: LIVE_RUN_NOW_S,
           delivered_mail_id: "mail_1",
           delivered_to_title: "Lead B · Sentinel",
@@ -412,11 +412,11 @@ describe("DecisionCard", () => {
 describe("who may answer (decision_routing.may_answer)", () => {
   const operator = viewerOf("operator");
   const owner = viewerOf("owner");
-  const forLuka = (): DecisionView => ({ ...agentDecision(), assignee: "luka@caffeine.ai" });
+  const forLena = (): DecisionView => ({ ...agentDecision(), assignee: "lena@example.com" });
 
   it("blocks an operator from a decision assigned to someone else", () => {
-    expect(answerBlockedReason(forLuka(), operator.can, operator.user_id)).toBe(
-      "Assigned to luka@caffeine.ai; owners can reassign",
+    expect(answerBlockedReason(forLena(), operator.can, operator.user_id)).toBe(
+      "Assigned to lena@example.com; owners can reassign",
     );
     expect(
       answerBlockedReason(
@@ -431,11 +431,11 @@ describe("who may answer (decision_routing.may_answer)", () => {
     const mine = { ...agentDecision(), assignee: operator.user_id };
     expect(answerBlockedReason(mine, operator.can, operator.user_id)).toBeNull();
     expect(answerBlockedReason(agentDecision(), operator.can, operator.user_id)).toBeNull();
-    const claimed = { ...forLuka(), claimed_by: operator.user_id };
+    const claimed = { ...forLena(), claimed_by: operator.user_id };
     expect(answerBlockedReason(claimed, operator.can, operator.user_id)).toBeNull();
-    expect(answerBlockedReason(forLuka(), owner.can, owner.user_id)).toBeNull();
+    expect(answerBlockedReason(forLena(), owner.can, owner.user_id)).toBeNull();
     // A server without user ids lets everyone with the answer lever through.
-    expect(answerBlockedReason(forLuka(), operator.can, null)).toBeNull();
+    expect(answerBlockedReason(forLena(), operator.can, null)).toBeNull();
   });
 
   it("renders the card's options disabled with the reason for that operator", () => {
@@ -443,7 +443,7 @@ describe("who may answer (decision_routing.may_answer)", () => {
     render(
       <Frame client={client}>
         <FactoryViewerProvider viewer={operator}>
-          <DecisionCard decision={forLuka()} />
+          <DecisionCard decision={forLena()} />
         </FactoryViewerProvider>
       </Frame>,
     );
@@ -453,6 +453,6 @@ describe("who may answer (decision_routing.may_answer)", () => {
       .filter((b) => b.closest("[data-lever-disabled]"));
     expect(options.length).toBeGreaterThan(0);
     expect(options.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
-    expect(card).toHaveTextContent("for luka");
+    expect(card).toHaveTextContent("for lena");
   });
 });

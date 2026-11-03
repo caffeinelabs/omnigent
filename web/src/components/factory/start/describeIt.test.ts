@@ -13,7 +13,7 @@ const BRIEF = "Show the deployed versions in Settings: API and DB version endpoi
 
 function draft(overrides: Partial<ReturnType<typeof emptyDescribeDraft>> = {}) {
   return {
-    ...emptyDescribeDraft(emptyDefaults("caffeinelabs/app", "temp-main")),
+    ...emptyDescribeDraft(emptyDefaults("sample-org/sample-app", "develop")),
     brief: BRIEF,
     ...overrides,
   };
@@ -34,7 +34,7 @@ describe("Describe it validation", () => {
     [{ defaults: emptyDefaults("", "") }, { defaults: "Pick the repo the factory works on" }],
     [{ defaults: emptyDefaults("not a repo", "main") }, { defaults: "Use owner/name" }],
     [
-      { defaults: emptyDefaults("caffeinelabs/app", "bad..branch") },
+      { defaults: emptyDefaults("sample-org/sample-app", "bad..branch") },
       { defaults: "Not a valid branch name" },
     ],
   ])("flags %j", (overrides, errors) => {
@@ -62,7 +62,7 @@ describe("Describe it request", () => {
     expect(form).toEqual({
       name: "Atlas factory",
       cadence: "demo",
-      defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+      defaults: { repo: "sample-org/sample-app", base_branch: "develop", integration_env: true },
       projects: [],
       brief: BRIEF,
       autonomy: "grace",
@@ -71,13 +71,13 @@ describe("Describe it request", () => {
   });
 
   it("follows the base with the live env until it is set by hand", () => {
-    const main = withDescribeDefaults(draft(), "caffeinelabs/app", "main");
+    const main = withDescribeDefaults(draft(), "sample-org/sample-app", "main");
     expect(main.defaults.liveEnv).toBe(false);
     const touched = {
       ...draft(),
       defaults: { ...draft().defaults, liveEnv: false, liveEnvTouched: true },
     };
-    expect(withDescribeDefaults(touched, "caffeinelabs/app", "temp-main").defaults.liveEnv).toBe(
+    expect(withDescribeDefaults(touched, "sample-org/sample-app", "develop").defaults.liveEnv).toBe(
       false,
     );
   });

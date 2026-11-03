@@ -67,7 +67,7 @@ describe("peopleModel", () => {
     const roster = round3People().data;
     expect(inviteError("", roster)).toBe("Enter an email");
     expect(inviteError("mia", roster)).toMatch(/sign-in email/);
-    expect(inviteError("MIA@caffeine.ai", roster)).toBe("Mia is already operator");
+    expect(inviteError("MIA@example.com", roster)).toBe("Mia is already operator");
     expect(inviteError("joe@partner.io", roster)).toBeNull();
   });
 
@@ -137,13 +137,13 @@ describe("ShareDialog", () => {
     renderShare(round3People());
     const roster = await screen.findByTestId("people-roster");
     const rows = within(roster).getAllByRole("listitem");
-    expect(rows[0]).toHaveTextContent("Luka (you)");
+    expect(rows[0]).toHaveTextContent("Lena (you)");
     expect(rows[0]).toHaveTextContent("creator · owner");
-    expect(within(roster).getByTestId("people-row-mia@caffeine.ai")).toHaveTextContent(
+    expect(within(roster).getByTestId("people-row-mia@example.com")).toHaveTextContent(
       "db-version page",
     );
     expect(screen.getByTestId("share-credential-line")).toHaveTextContent(
-      "Agents act as luka@caffeine.ai’s GitHub & Databricks · operators direct them · spend is billed to luka@caffeine.ai",
+      "Agents act as lena@example.com’s GitHub & Databricks · operators direct them · spend is billed to lena@example.com",
     );
     expect(screen.getByTestId("people-roles-legend")).toHaveTextContent("Viewer: watch everything");
   });
@@ -158,18 +158,18 @@ describe("ShareDialog", () => {
     );
     expect(puts).toEqual([{ user: "joe@partner.io", role: "operator" }]);
     fireEvent.change(screen.getByTestId("people-invite-email"), {
-      target: { value: "ana@caffeine.ai" },
+      target: { value: "ana@example.com" },
     });
     fireEvent.click(screen.getByTestId("people-invite-submit"));
     expect(await screen.findByTestId("people-invite-done")).toHaveTextContent(
-      "Invited ana@caffeine.ai to operator · access on 6 agents",
+      "Invited ana@example.com to operator · access on 6 agents",
     );
   });
 
   it("refuses a malformed email or someone already on the roster, without a request", async () => {
     const { puts } = renderShare(round3People());
     fireEvent.change(await screen.findByTestId("people-invite-email"), {
-      target: { value: "mia@caffeine.ai" },
+      target: { value: "mia@example.com" },
     });
     fireEvent.click(screen.getByTestId("people-invite-submit"));
     expect(screen.getByTestId("people-invite-error")).toHaveTextContent("already operator");
@@ -178,15 +178,15 @@ describe("ShareDialog", () => {
 
   it("removes someone (owners)", async () => {
     const { deletes } = renderShare(round3People());
-    fireEvent.click(await screen.findByTestId("people-remove-ops@caffeine.ai"));
-    await waitFor(() => expect(deletes).toEqual(["ops@caffeine.ai"]));
+    fireEvent.click(await screen.findByTestId("people-remove-ops@example.com"));
+    await waitFor(() => expect(deletes).toEqual(["ops@example.com"]));
   });
 
   it("disables inviting for anyone but owners, who can still see the roster and leave", async () => {
     renderShare({ ...round3People(), viewer: viewerOf("operator") });
     expect(await screen.findByTestId("people-invite-submit")).toBeDisabled();
     expect(screen.getByTestId("people-invite-email")).toBeDisabled();
-    expect(screen.queryByTestId("people-remove-ops@caffeine.ai")).toBeNull();
+    expect(screen.queryByTestId("people-remove-ops@example.com")).toBeNull();
     expect(screen.getByTestId("people-leave")).toBeInTheDocument();
   });
 });

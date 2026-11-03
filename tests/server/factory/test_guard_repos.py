@@ -1,8 +1,8 @@
 """A factory member's guards write the repos of its factory projects, as the server reads them.
 
-Round-3 E2E (decision D-4): a docs project on ``caffeinelabs/omnigent#staging``
+Round-3 E2E (decision D-4): a docs project on ``sample-org/sample-tool#staging``
 pushed its branch but ``gh pr create`` was denied, because every factory
-bundle passed ``write_repos: [caffeinelabs/app]`` to ``factory_role_guard``.
+bundle passed ``write_repos: [sample-org/sample-app]`` to ``factory_role_guard``.
 The server now resolves the repos when it builds a member's policy engine
 (:mod:`omnigent.server.factory.guard_repos`), so these tests drive a real
 engine over the seeded factory, with the same guards the bundles declare.
@@ -39,8 +39,8 @@ from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.projects_helpers import header_cockpit, project, propose
 
 _GUARD = "omnigent.policies.builtins.factory.factory_role_guard"
-_APP = "caffeinelabs/app"
-_OMNI = "caffeinelabs/omnigent"
+_APP = "sample-org/sample-app"
+_OMNI = "sample-org/sample-tool"
 _HELLO = "octo/hello"
 _EVIL = "evilorg/exfil"
 
@@ -127,9 +127,9 @@ def factory(world: FactoryWorld) -> Iterator[FactoryWorld]:
     """
     The seeded factory with two projects and the server resolver installed.
 
-    ``api-version`` (PL ``pl`` and its sub-agents) is on caffeinelabs/app;
+    ``api-version`` (PL ``pl`` and its sub-agents) is on sample-org/sample-app;
     ``docs-guide`` (PL ``pl_docs`` and its IC ``ic_docs``) is on
-    caffeinelabs/omnigent, like the round-3 docs project.
+    sample-org/sample-tool, like the round-3 docs project.
     """
     _add_project(world, "api-version", _APP)
     _add_project(world, "docs-guide", _OMNI)
@@ -153,22 +153,22 @@ async def test_an_omnigent_project_opens_its_pr_there_and_nowhere_else(
     factory: FactoryWorld, key: str
 ) -> None:
     allowed = [
-        "gh pr create --draft --repo caffeinelabs/omnigent --base staging "
+        "gh pr create --draft --repo sample-org/sample-tool --base staging "
         "--head factory/docs-guide/guide --title x --body-file b.md",
-        "gh pr comment https://github.com/caffeinelabs/omnigent/pull/160 --body hi",
+        "gh pr comment https://github.com/sample-org/sample-tool/pull/160 --body hi",
         "git push -u origin factory/docs-guide/guide",
-        "git push https://github.com/caffeinelabs/omnigent.git factory/docs-guide/guide",
+        "git push https://github.com/sample-org/sample-tool.git factory/docs-guide/guide",
     ]
     for command in allowed:
         verdict, reason = await _decide(factory, key, command)
         assert verdict == "ALLOW", (command, reason)
     # Another project's repo is not this project's, and octo/hello is no project's.
-    for repo in (_APP, _HELLO, "caffeinelabs/infra"):
+    for repo in (_APP, _HELLO, "sample-org/sample-infra"):
         verdict, reason = await _decide(factory, key, f"gh pr create -R {repo} --fill")
         assert verdict == "DENY", repo
         assert repo in reason
     verdict, _ = await _decide(
-        factory, key, "git push https://github.com/caffeinelabs/app.git factory/docs-guide/x"
+        factory, key, "git push https://github.com/sample-org/sample-app.git factory/docs-guide/x"
     )
     assert verdict == "DENY"
 
@@ -178,7 +178,7 @@ async def test_an_app_project_keeps_writing_app_only(factory: FactoryWorld) -> N
         assert (await _decide(factory, key, f"gh pr create -R {_APP} --fill"))[0] == "ALLOW"
         verdict, reason = await _decide(factory, key, f"gh pr create -R {_OMNI} --fill")
         assert verdict == "DENY"
-        assert "writable: caffeinelabs/app" in reason
+        assert "writable: sample-org/sample-app" in reason
 
 
 @pytest.mark.parametrize("key", ["lead_a", "lead_b"])
@@ -212,7 +212,7 @@ async def test_merges_and_protected_branches_stay_denied_on_every_repo(
             f"python -m omnigent.factory_merge {url}",
             f"OMNIGENT_FACTORY_MERGE_REPOS={repo} python -m omnigent.factory_merge {url}",
             f"git push https://github.com/{repo}.git HEAD:staging",
-            "git push origin temp-main",
+            "git push origin develop",
         ):
             verdict, _ = await _decide(factory, key, command, spec, defaults)
             assert verdict == "DENY", (key, command)
@@ -233,7 +233,7 @@ async def test_the_invariant_policy_lifts_the_same_repos(factory: FactoryWorld) 
     assert verdict == "DENY"
     assert reason.startswith("Factory invariant: ")
     infra = await _decide(
-        factory, "pl_docs", "gh pr create -R caffeinelabs/infra --fill", bare, defaults
+        factory, "pl_docs", "gh pr create -R sample-org/sample-infra --fill", bare, defaults
     )
     assert infra[0] == "DENY"
 
@@ -319,7 +319,7 @@ async def test_cancelled_and_merged_projects_drop_out(factory: FactoryWorld) -> 
 def test_a_sub_agent_without_its_root_writes_no_repo(factory: FactoryWorld) -> None:
     """
     A sub-agent has no factory labels of its own; when its root cannot be
-    loaded it writes nothing, not the bundle default (caffeinelabs/app).
+    loaded it writes nothing, not the bundle default (sample-org/sample-app).
     """
     ic_docs = factory.get("ic_docs")
     assert guard_repos.member_repos(ic_docs, ic_docs, factory.deps.factory_store) == frozenset()
@@ -337,7 +337,7 @@ def test_a_sub_agent_without_its_root_writes_no_repo(factory: FactoryWorld) -> N
 async def cockpit(
     world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Cockpit]:
-    """The seeded cockpit (default caffeinelabs/app) with the server resolver installed."""
+    """The seeded cockpit (default sample-org/sample-app) with the server resolver installed."""
     async for value in header_cockpit(world, db_uri, monkeypatch):
         uninstall = guard_repos.install(world.app_state)
         try:

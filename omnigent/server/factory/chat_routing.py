@@ -138,8 +138,8 @@ class Route:
 
 def normalize_mention(value: object) -> str | None:
     """
-    :param value: e.g. ``"@PL:db-version"``, ``"sentinel"`` or ``"@mia@caffeine.ai"``.
-    :returns: ``"@pl:db-version"`` / ``"@sentinel"`` / ``"@mia@caffeine.ai"``, or ``None``.
+    :param value: e.g. ``"@PL:db-version"``, ``"sentinel"`` or ``"@mia@example.com"``.
+    :returns: ``"@pl:db-version"`` / ``"@sentinel"`` / ``"@mia@example.com"``, or ``None``.
     """
     if not isinstance(value, str):
         return None

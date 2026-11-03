@@ -1056,12 +1056,12 @@ describe("Sidebar session list", () => {
       conv("conv_mine", "Claude Code"),
       conv("conv_shared", "Claude Code", { owner: "other@example.com" }),
       conv("conv_atlas", "factory-lead", {
-        owner: "luka@caffeine.ai",
+        owner: "lena@example.com",
         labels: { "omnigent.factory.id": "f3", "omnigent.factory.role": "lead" },
       }),
       // Shared on its own: its factory isn't readable, so it stays in Shared.
       conv("conv_lone_pl", "factory-pl", {
-        owner: "luka@caffeine.ai",
+        owner: "lena@example.com",
         labels: { "omnigent.factory.id": "f9", "omnigent.factory.role": "pl" },
       }),
     ]);
@@ -1070,7 +1070,7 @@ describe("Sidebar session list", () => {
         {
           id: "f3",
           name: "Atlas factory",
-          shared_by: "luka@caffeine.ai",
+          shared_by: "lena@example.com",
           viewer_role: "operator",
           mine: 2,
           decisions_open: 3,
@@ -1085,7 +1085,7 @@ describe("Sidebar session list", () => {
     expect(shared).toHaveTextContent("Atlas factory");
     expect(shared).toHaveTextContent("2");
     expect(shared).toHaveAttribute("href", "/factory/f3");
-    expect(shared).toHaveAttribute("title", "Shared with you by luka@caffeine.ai · operator");
+    expect(shared).toHaveAttribute("title", "Shared with you by lena@example.com · operator");
     showSharedTab();
     expect(screen.getByText("conv_shared")).toBeInTheDocument();
     expect(screen.queryByText("conv_atlas")).toBeNull();

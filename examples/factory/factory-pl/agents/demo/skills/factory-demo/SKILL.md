@@ -77,7 +77,7 @@ demo('Settings shows the API version', async ({ ui, api, login }) => {
   await step.check('Sign in with a synthetic session', login);
   await step('Open the landing page', async () => {
     await ui.goto('/');
-    await ui.see(ui.page.getByRole('heading', { name: /caffeine/i }));
+    await ui.see(ui.page.getByRole('heading', { level: 1 }));
   });
   await step.api('GET /version returns the deployed sha', async () => {
     const res = await api.get('/version');
@@ -151,7 +151,7 @@ path. Use the longest Bash timeout; a run takes 1-3 minutes.
 | Exit | Status | Meaning |
 |---|---|---|
 | 0 | PASS | Every step ran and passed. |
-| 0 | PARTIAL | Every step that ran passed; some were skipped for env reasons (build tier, AI tier, Internet Identity, a header the envs gateway rewrites). |
+| 0 | PARTIAL | Every step that ran passed; some were skipped for env reasons (build tier, AI tier, an external sign-in provider, a header the envs gateway rewrites). |
 | 1 | FAIL | A product assertion failed: the failed step has a screenshot and the error. |
 | 2 | ERROR | The harness, browser or spec broke (also bad arguments). Read `run.log`. |
 | 3 | stale | The preview serves another commit. Nothing is recorded: report `DEMO BLOCKED stale-preview`. |

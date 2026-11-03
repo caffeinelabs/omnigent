@@ -290,7 +290,7 @@ def _view_pr(url: str) -> _Json:
     """
     Fetch the PR fields the gates need.
 
-    :param url: PR URL, e.g. ``"https://github.com/caffeinelabs/app/pull/7"``.
+    :param url: PR URL, e.g. ``"https://github.com/sample-org/sample-app/pull/7"``.
     :returns: The ``gh pr view --json`` object.
     :raises GateError: If ``gh`` fails or prints something other than an object.
     """
@@ -328,8 +328,8 @@ def _branch_rules(owner: str, repo: str, base: str, verdict: Verdict) -> BranchR
     """
     Read what the base branch requires: rulesets, plus classic protection when readable.
 
-    :param owner: e.g. ``"caffeinelabs"``.
-    :param repo: e.g. ``"app"``.
+    :param owner: e.g. ``"sample-org"``.
+    :param repo: e.g. ``"sample-app"``.
     :param base: Base branch, e.g. ``"main"``.
     :param verdict: Gets a note when classic protection cannot be read.
     :returns: Required status contexts, ruleset rule types and whether review
@@ -470,7 +470,7 @@ def evaluate(url: str) -> tuple[Verdict, PullRequest]:
     """
     Run every gate against a PR without merging it.
 
-    :param url: PR URL, e.g. ``"https://github.com/caffeinelabs/app/pull/7"``.
+    :param url: PR URL, e.g. ``"https://github.com/sample-org/sample-app/pull/7"``.
     :returns: The verdict and the evaluated PR.
     :raises GateError: If a ``gh`` call fails or the PR URL is not a GitHub PR.
     """

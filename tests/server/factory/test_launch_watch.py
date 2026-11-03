@@ -182,7 +182,7 @@ def _managed_pl(s: Supervision, **labels: str) -> Conversation:
             F.LABEL_PROJECT: "build-tier-drafts",
             F.LABEL_PARENT: w.id("lead_a"),
             F.LABEL_STATE: "active",
-            f"{MANAGED_REPO_LABEL_KEY}.0": "https://github.com/caffeinelabs/app#main",
+            f"{MANAGED_REPO_LABEL_KEY}.0": "https://github.com/sample-org/sample-app#main",
             **labels,
         },
     )
@@ -511,7 +511,7 @@ async def test_a_pl_keeping_a_preview_up_for_review_keeps_its_sandbox(
     _close_project(s)
     w.deps.factory_store.upsert_pr(
         w.id("lead_a"),
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9631,
         project_slug="api-version",
         preview={"state": "ready", "url": "https://p9631.example"},

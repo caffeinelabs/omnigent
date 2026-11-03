@@ -1,8 +1,8 @@
 FACTORY BRIEF · Atlas factory
-Started by luka from the cockpit. Cadence: demo (heartbeats: leads 300 s, PLs 600 s).
+Started by lena from the cockpit. Cadence: demo (heartbeats: leads 300 s, PLs 600 s).
 Cockpit: /factory/ffffffffffffffffffffffffffffffff
 
-Brief from luka:
+Brief from lena:
 Show the deployed versions in Settings: an API version endpoint and a DB one.
 
 First turn:

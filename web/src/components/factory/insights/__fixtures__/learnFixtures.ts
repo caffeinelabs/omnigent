@@ -1,6 +1,6 @@
 // Fixtures for the learning pages (Insights, Improvements, Settings and the
 // feedback widgets), built on the round-3 factory (`snapshot.round3.json`:
-// Atlas factory, 7 projects, 41 agents, Luka, Mia and Ops, C-14 on trial,
+// Atlas factory, 7 projects, 41 agents, Lena, Mia and Ops, C-14 on trial,
 // C-15 pending, F-7/F-9 findings). The definition's bounds, classes and
 // defaults come from the server (`definitionMeta.json`, generated from
 // `omnigent/server/factory/definition.py`). Every export is a fresh copy.
@@ -453,21 +453,21 @@ export function insightsResponse(
     body.people = empty
       ? {}
       : {
-          "luka@caffeine.ai": {
+          "lena@example.com": {
             decisions_answered: 11,
             decision_p50_s: 1_980,
             chat_posts: 24,
             interventions: 9,
             escalated_away: 0,
           },
-          "mia@caffeine.ai": {
+          "mia@example.com": {
             decisions_answered: 6,
             decision_p50_s: 2_700,
             chat_posts: 17,
             interventions: 5,
             escalated_away: 1,
           },
-          "ops@caffeine.ai": {
+          "ops@example.com": {
             decisions_answered: 0,
             decision_p50_s: null,
             chat_posts: 2,
@@ -507,7 +507,7 @@ export function versionsResponse(): VersionsResponse {
         version: 2,
         created_at: NOW - 8 * D,
         created_via: "human",
-        created_by: "luka@caffeine.ai",
+        created_by: "lena@example.com",
         proposal_ref: "C-1",
         pinned: false,
       },
@@ -539,7 +539,7 @@ export function versionsResponse(): VersionsResponse {
         version: 6,
         created_at: NOW - 3 * D,
         created_via: "proposal",
-        created_by: "luka@caffeine.ai",
+        created_by: "lena@example.com",
         proposal_ref: "C-11",
         pinned: false,
       },
@@ -757,7 +757,7 @@ export function learnProposals(
       expected_effect: { metric: "first_pass_yield", direction: "up", delta: null },
       decision_id: null,
       decision_ref: "D-14",
-      decided_by: "luka@caffeine.ai",
+      decided_by: "lena@example.com",
       decided_at: NOW - 6 * D,
       applied_at: NOW - 6 * D,
       def_version_from: 2,
@@ -823,7 +823,7 @@ export function learnProposals(
         class: "human",
         approval: "owner",
         author_kind: "human",
-        author: "luka@caffeine.ai",
+        author: "lena@example.com",
         author_title: null,
         author_role: "owner",
         cosigned_by: null,
@@ -834,7 +834,7 @@ export function learnProposals(
         rationale: "Billing tasks need a fourth try.",
         evidence: [],
         expected_effect: null,
-        decided_by: "luka@caffeine.ai",
+        decided_by: "lena@example.com",
         decided_at: NOW - 60,
         applied_at: NOW - 60,
         trial_until: null,
@@ -1057,7 +1057,7 @@ export function definitionResponse(
     version.version = 8;
     version.parent_version = 7;
     version.created_via = "human";
-    version.created_by = "luka@caffeine.ai";
+    version.created_by = "lena@example.com";
     version.proposal_ref = "C-17";
   }
   return {
@@ -1097,7 +1097,7 @@ export function definitionVersions(afterSave = false): DefinitionVersionsRespons
       version: 8,
       parent_version: 7,
       created_via: "human",
-      created_by: "luka@caffeine.ai",
+      created_by: "lena@example.com",
       proposal_ref: "C-17",
       created_at: NOW - 60,
       pinned: true,

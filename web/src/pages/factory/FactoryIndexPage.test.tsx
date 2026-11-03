@@ -143,7 +143,7 @@ describe("FactoryIndexPage", () => {
       expect(screen.getByTestId("factory-preflight-github")).toHaveAttribute("data-state", "ok"),
     );
     expect(screen.getByTestId("factory-preflight-github")).toHaveTextContent(
-      "GitHub connected (luka)",
+      "GitHub connected (lena)",
     );
     expect(screen.queryByRole("button", { name: "Connect GitHub" })).toBeNull();
     expect(screen.getByTestId("factory-empty-new-button")).toHaveAttribute("href", "/factory/new");

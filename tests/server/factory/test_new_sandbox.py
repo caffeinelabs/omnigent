@@ -38,7 +38,7 @@ from tests.server.factory.sandbox_helpers import (
     install_sandbox_rig,
 )
 
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 @pytest_asyncio.fixture()

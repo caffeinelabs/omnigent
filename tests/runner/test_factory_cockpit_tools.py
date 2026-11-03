@@ -35,7 +35,7 @@ from omnigent.tools.builtins.factory import (
 from tests.runner.factory_fakes import LEAD, FakeServer, factory_spec, member, membership, roster
 
 PL = "conv_pl"
-PR_URL = "https://github.com/caffeinelabs/app/pull/9630"
+PR_URL = "https://github.com/sample-org/sample-app/pull/9630"
 SHA = "7767f0d1" + "a" * 32
 
 
@@ -185,12 +185,12 @@ async def test_ask_routes_to_a_person_and_names_its_subject() -> None:
     out = await _call(
         server,
         "sys_factory_ask",
-        {"question": "Ship it?", "for": " mia@caffeine.ai ", "subject": "pr:9f2c"},
+        {"question": "Ship it?", "for": " mia@example.com ", "subject": "pr:9f2c"},
     )
     bad = await _call(FakeServer(), "sys_factory_ask", {"question": "q", "for": 7})
 
     assert out == reply
-    assert server.requests[0].body["for"] == "mia@caffeine.ai"
+    assert server.requests[0].body["for"] == "mia@example.com"
     assert server.requests[0].body["subject"] == "pr:9f2c"
     assert "'for' must be a string" in json.dumps(bad)
     params = _params(SysFactoryAskTool)
@@ -255,8 +255,8 @@ async def test_pr_registers_with_claim_and_verdict() -> None:
 @pytest.mark.parametrize(
     ("args", "code"),
     [
-        ({"url": "https://github.com/caffeinelabs/app/issues/1"}, "not_a_pr_url"),
-        ({"url": "caffeinelabs/app#1"}, "not_a_pr_url"),
+        ({"url": "https://github.com/sample-org/sample-app/issues/1"}, "not_a_pr_url"),
+        ({"url": "sample-org/sample-app#1"}, "not_a_pr_url"),
         ({"url": PR_URL, "claim": "merged"}, "'claim' must be one of"),
         ({"url": PR_URL, "sentinel_verdict": "ok"}, "'sentinel_verdict' must be one of"),
         ({"url": PR_URL, "head_sha": "zzz"}, "commit sha"),
@@ -278,8 +278,8 @@ async def test_pr_validates_locally(args: dict[str, Any], code: str) -> None:
 
 
 _URLS = {
-    "app": "https://app-1a2b-p9630.envs.sandbox.caffeinelabs.io",
-    "api": "https://api-1a2b-p9630.envs.sandbox.caffeinelabs.io",
+    "app": "https://app-1a2b-p9630.envs.sandbox.example.com",
+    "api": "https://api-1a2b-p9630.envs.sandbox.example.com",
 }
 
 
@@ -296,7 +296,7 @@ async def test_env_reports_a_preview_and_maps_starting_to_deploying() -> None:
             "pr": 9630,
             "slot": 1,
             "namespace": "env-1a2b-p9630",
-            "resources": [{"name": "caffeine-api", "ready": True, "restarts": 0}],
+            "resources": [{"name": "sample-api", "ready": True, "restarts": 0}],
             "note": "tilt ci ok",
         },
         role="env_keeper",
@@ -311,7 +311,7 @@ async def test_env_reports_a_preview_and_maps_starting_to_deploying() -> None:
         "slot": 1,
         "namespace": "env-1a2b-p9630",
         "note": "tilt ci ok",
-        "resources": [{"name": "caffeine-api", "ready": True, "restarts": 0}],
+        "resources": [{"name": "sample-api", "ready": True, "restarts": 0}],
     }
 
 
@@ -745,7 +745,7 @@ async def test_demo_refuses_too_many_files(home: Path) -> None:
     ("args", "needle"),
     [
         ({"head_sha": "7767f0d"}, "40-character"),
-        ({"pr_url": "https://github.com/caffeinelabs/app"}, "not_a_pr_url"),
+        ({"pr_url": "https://github.com/sample-org/sample-app"}, "not_a_pr_url"),
         ({"status": "MAYBE"}, "invalid_status"),
         ({"status": None}, "invalid_status"),
         ({"summary": " "}, "requires a 'summary'"),
@@ -796,7 +796,7 @@ async def test_demo_records_the_manifest_status(home: Path) -> None:
         ({"status": "BLOCKED"}, {"status": None}, "invalid_status"),
         ({"sha": "0" * 40}, {"status": None}, "sha_mismatch"),
         ({"sha": "zz"}, {"status": None}, "sha_mismatch"),
-        ({"pr_url": "https://github.com/caffeinelabs/app/pull/1"}, {}, "pr_mismatch"),
+        ({"pr_url": "https://github.com/sample-org/sample-app/pull/1"}, {}, "pr_mismatch"),
     ],
 )
 async def test_demo_refuses_a_contradicting_manifest(

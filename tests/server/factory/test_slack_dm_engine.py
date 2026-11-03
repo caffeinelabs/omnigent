@@ -655,13 +655,18 @@ async def test_a_restart_never_sends_twice(
     link(cockpit, "carol")
     _decision(cockpit)
     pr, _ = cockpit.store.upsert_pr(
-        cockpit.fid, "caffeinelabs/app", 9774, title="Build tier", ready=True, head_sha="a" * 40
+        cockpit.fid,
+        "sample-org/sample-app",
+        9774,
+        title="Build tier",
+        ready=True,
+        head_sha="a" * 40,
     )
     await events.emit(
         cockpit.app.state,
         cockpit.fid,
         "pr.ready",
-        subject="pr:caffeinelabs/app#9774",
+        subject="pr:sample-org/sample-app#9774",
         summary="PR #9774 ready for human merge",
         data={"pr_id": pr.id},
     )
@@ -819,7 +824,7 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
     )
     pr, _ = cockpit.store.upsert_pr(
         cockpit.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9781,
         title="ENV badge click-to-copy",
         project_slug="api-version",
@@ -829,7 +834,7 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
         preview={"state": "ready", "urls": {"app": "https://p9781.env.omnigent.test"}},
     )
     stale, _ = cockpit.store.upsert_pr(
-        cockpit.fid, "caffeinelabs/app", 9782, project_slug="api-version", ready=True
+        cockpit.fid, "sample-org/sample-app", 9782, project_slug="api-version", ready=True
     )
     for row in (pr, stale):
         await events.emit(
@@ -837,7 +842,7 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
             cockpit.fid,
             "pr.ready",
             project="api-version",
-            subject=f"pr:caffeinelabs/app#{row.number}",
+            subject=f"pr:sample-org/sample-app#{row.number}",
             summary="ready",
             data={"pr_id": row.id},
         )
@@ -1079,7 +1084,7 @@ async def test_the_digest_lists_what_waits_and_hides_unreadable_projects(
         cockpit.fid,
         "pr.merged",
         project="api-version",
-        subject="pr:caffeinelabs/app#1",
+        subject="pr:sample-org/sample-app#1",
         summary="merged",
     )
 

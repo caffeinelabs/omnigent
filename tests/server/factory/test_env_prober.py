@@ -22,8 +22,8 @@ from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
 from tests.server.factory.conftest import FactoryWorld, FakeClock, FakeDeliver
 from tests.server.factory.github_fakes import sha
 
-REPO = "caffeinelabs/app"
-DOMAIN = "envs.sandbox.caffeinelabs.io"
+REPO = "sample-org/sample-app"
+DOMAIN = "envs.sandbox.example.com"
 APP = f"https://app-b693ef0a-2c6683-a38d.{DOMAIN}"
 API = f"https://api-b693ef0a-2c6683-a38d.{DOMAIN}"
 P_APP = f"https://app-b693ef0a-2c6683-a38d-p9630.{DOMAIN}"
@@ -315,8 +315,8 @@ async def test_preview_gone_after_three_failures_notifies_hourly_at_most(probing
     assert preview["probe"]["health"] == "down"
     notices = p.deliver.texts_to(p.pl)
     assert notices == [
-        "[Factory notice · preview p9630 unreachable · redeploy] PR caffeinelabs/app#9630: its "
-        "factory preview failed 3 probes in a row (app no answer, api no answer). Send "
+        "[Factory notice · preview p9630 unreachable · redeploy] PR sample-org/sample-app#9630: "
+        "its factory preview failed 3 probes in a row (app no answer, api no answer). Send "
         f"env_keeper PREVIEW pr=9630 head={HEAD[:7]}."
     ]
     gone = [e for e in p.events("preview.health") if e.data["state"] == "gone"]

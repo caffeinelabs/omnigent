@@ -76,9 +76,9 @@ async def test_an_operator_posts_and_atlas_gets_it(env: RoomEnv) -> None:
 async def test_a_project_thread_reaches_its_pl_and_a_pr_thread_its_owner(env: RoomEnv) -> None:
     pr, _ = env.cockpit.store.upsert_pr(
         env.cockpit.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9630,
-        url="https://github.com/caffeinelabs/app/pull/9630",
+        url="https://github.com/sample-org/sample-app/pull/9630",
         project_slug="api-version",
         head_sha="7767f0d" + "a" * 33,
         gates={"checks": "pass", "review": "pending"},
@@ -96,7 +96,7 @@ async def test_a_project_thread_reaches_its_pl_and_a_pr_thread_its_owner(env: Ro
     pr_text = env.deliveries.to(env.world.id("pl"))[-1]
     assert pr_text.split("\n")[:2] == [
         pr_text.split("\n")[0],
-        "PR !9630 caffeinelabs/app · head 7767f0d · open · checks pass · review pending",
+        "PR !9630 sample-org/sample-app · head 7767f0d · open · checks pass · review pending",
     ]
     assert pr_text.startswith("[Factory chat · !9630 · from alice (creator)")
 
@@ -361,7 +361,7 @@ def test_the_digest_names_prs_and_open_decisions() -> None:
                 "project_slug": "db-version",
                 "gates": {"checks": "pass", "review": "pass", "verify": "unknown"},
                 "demo": {"status": "PASS"},
-                "url": "https://github.com/caffeinelabs/app/pull/9631",
+                "url": "https://github.com/sample-org/sample-app/pull/9631",
             }
         ],
         "decisions": [
@@ -394,19 +394,19 @@ def test_the_digest_names_prs_and_open_decisions() -> None:
 
 async def test_sys_factory_chat_scopes_a_project_lead_to_its_threads(env: RoomEnv) -> None:
     store = env.cockpit.store
-    store.upsert_project(env.cockpit.fid, "docs", title="Docs", repo="caffeinelabs/app")
+    store.upsert_project(env.cockpit.fid, "docs", title="Docs", repo="sample-org/sample-app")
     other_pr, _ = store.upsert_pr(
         env.cockpit.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9700,
-        url="https://github.com/caffeinelabs/app/pull/9700",
+        url="https://github.com/sample-org/sample-app/pull/9700",
         project_slug="docs",
     )
     own_pr, _ = store.upsert_pr(
         env.cockpit.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9630,
-        url="https://github.com/caffeinelabs/app/pull/9630",
+        url="https://github.com/sample-org/sample-app/pull/9630",
         project_slug="api-version",
     )
 

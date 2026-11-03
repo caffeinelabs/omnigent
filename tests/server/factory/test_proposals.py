@@ -225,7 +225,7 @@ async def test_a_requested_create_applies_at_once_with_undo(cockpit: Cockpit) ->
     assert body["undo_until"] >= now_s() + 590
     row = cockpit.store.get_project(cockpit.fid, "db-version")
     assert row is not None
-    assert row.repo == REPO and row.base_branch == "temp-main"
+    assert row.repo == REPO and row.base_branch == "develop"
     assert _proposal(cockpit).on_behalf_of == "alice"
     # Header auth mints no runner token: Atlas is asked to spawn it.
     [mail] = cockpit.mailer.to(cockpit.fid)
@@ -313,7 +313,7 @@ async def test_reject_mails_the_note_to_the_proposer(cockpit: Cockpit) -> None:
 async def test_an_owner_class_proposal_needs_an_owner(cockpit: Cockpit) -> None:
     resp = await propose(
         cockpit,
-        {"op": "create", "project": project("infra", repo="caffeinelabs/infra")},
+        {"op": "create", "project": project("infra", repo="sample-org/sample-infra")},
         reply_to=_human_chat(cockpit),
     )
     assert resp.json()["approval"] == "owner"
@@ -493,7 +493,7 @@ async def test_undo_refuses_when_an_updated_project_closed(cockpit: Cockpit) -> 
 async def test_owner_class_reject_and_undo_need_an_owner(cockpit: Cockpit) -> None:
     await propose(
         cockpit,
-        {"op": "create", "project": project("infra", repo="caffeinelabs/infra")},
+        {"op": "create", "project": project("infra", repo="sample-org/sample-infra")},
     )
     reject_url = f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/reject"
 

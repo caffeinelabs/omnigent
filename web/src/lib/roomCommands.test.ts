@@ -122,10 +122,10 @@ describe("parseRoomCommand", () => {
     ["/ack INC-13", { kind: "ack", ref: "INC-13" }],
     ["/ack inc-4", { kind: "ack", ref: "INC-4" }],
     [
-      "/invite joe@caffeine.ai viewer",
-      { kind: "invite", email: "joe@caffeine.ai", role: "viewer" },
+      "/invite joe@example.com viewer",
+      { kind: "invite", email: "joe@example.com", role: "viewer" },
     ],
-    ["/invite joe@caffeine.ai", { kind: "invite", email: "joe@caffeine.ai", role: "operator" }],
+    ["/invite joe@example.com", { kind: "invite", email: "joe@example.com", role: "operator" }],
     ["/status", { kind: "status", slug: null }],
     ["/status #db-version", { kind: "status", slug: "db-version" }],
   ])("parses %j", (input, expected) => {
@@ -136,10 +136,10 @@ describe("parseRoomCommand", () => {
 
   it("assigns a decision to a person by short name, email or role", () => {
     const mia = parse("/assign D-2 @mia");
-    const email = parse("/assign D-2 mia@caffeine.ai");
+    const email = parse("/assign D-2 mia@example.com");
     const owners = parse("/assign D-31 owners");
-    expect(mia.ok && mia.command).toMatchObject({ kind: "assign", to: "mia@caffeine.ai" });
-    expect(email.ok && email.command).toMatchObject({ kind: "assign", to: "mia@caffeine.ai" });
+    expect(mia.ok && mia.command).toMatchObject({ kind: "assign", to: "mia@example.com" });
+    expect(email.ok && email.command).toMatchObject({ kind: "assign", to: "mia@example.com" });
     expect(owners.ok && owners.command).toMatchObject({ kind: "assign", to: "owners" });
   });
 
@@ -159,7 +159,7 @@ describe("parseRoomCommand", () => {
     ["/assign D-2 @nobody", "No one called @nobody on the roster"],
     ["/ack 13", "Name an incident: /ack INC-4"],
     ["/invite not-an-email", "Invite by email"],
-    ["/invite joe@caffeine.ai admin", "Role is viewer, operator or owner"],
+    ["/invite joe@example.com admin", "Role is viewer, operator or owner"],
     ["/project", "Try /project new [title]"],
     ["/frobnicate", "Unknown command /frobnicate"],
   ])("refuses %j", (input, error) => {

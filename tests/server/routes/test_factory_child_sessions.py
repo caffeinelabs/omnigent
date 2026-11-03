@@ -53,7 +53,7 @@ ALICE = "alice"
 _SECRET = secrets.token_bytes(32)
 _LEAD_TOKEN = "rt_lead.secret"
 _PL_TOKEN = "rt_pl.secret"
-_PR_URL = "https://github.com/caffeinelabs/app/pull/9630"
+_PR_URL = "https://github.com/sample-org/sample-app/pull/9630"
 _HEAD_SHA = "7767f0d1" + "b" * 32
 
 
@@ -297,7 +297,7 @@ def test_a_lead_spec_child_cannot_record_a_sentinel_verdict(world: World) -> Non
         world.ids["atlas"],
         "api",
         title="api",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         base_branch="main",
         pl_session_id=world.ids["pl"],
     )

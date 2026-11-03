@@ -393,7 +393,7 @@ def test_cards_and_briefs_carry_the_rules(world: FactoryWorld) -> None:
     card = tasks.card_text(task, None, pl_id="pl", attempt=1, rules=rules)
     assert "Rules (from the factory definition):" in card and "R-1: Run the package" in card
     project = FactoryProject(
-        id="p" * 32, factory_id=fid, slug="api-version", title="API", repo="caffeinelabs/app"
+        id="p" * 32, factory_id=fid, slug="api-version", title="API", repo="sample-org/sample-app"
     )
     pl_rules = definition.rule_texts(world.deps, fid, F.ROLE_PROJECT_LEAD, "api-version")
     brief = brief_text(project, by="bob", via="C-1", mail_id="mail_x", rules=pl_rules)

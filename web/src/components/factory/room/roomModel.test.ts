@@ -135,7 +135,7 @@ describe("who answers", () => {
     expect(
       peopleHere(snapshot.presence, snapshot, "project:db-version").map((p) => p.name),
     ).toEqual(["Mia"]);
-    expect(peopleHere(snapshot.presence, snapshot, "factory").map((p) => p.name)).toEqual(["Luka"]);
+    expect(peopleHere(snapshot.presence, snapshot, "factory").map((p) => p.name)).toEqual(["Lena"]);
   });
 });
 

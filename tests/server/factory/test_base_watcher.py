@@ -1,7 +1,7 @@
 """The base watcher: the PR poller reads base heads and acts once per move.
 
 GitHub is the read-only fake behind the real client (``github_fakes``); a
-move of ``temp-main`` must emit one ``base.moved``, mail the integration PL to
+move of ``develop`` must emit one ``base.moved``, mail the integration PL to
 redeploy and every work PL with an open PR on that base to sync, survive a
 server restart (the head is recorded on the root) and run the hooks.
 """
@@ -32,8 +32,8 @@ from tests.server.factory.github_fakes import (
     sha,
 )
 
-REPO = "caffeinelabs/app"
-BASE = "temp-main"
+REPO = "sample-org/sample-app"
+BASE = "develop"
 POLL_S = 60.0
 
 
@@ -123,7 +123,7 @@ async def watching(
         fid,
         "infra-docs",
         title="Infra docs",
-        repo="caffeinelabs/infra",
+        repo="sample-org/sample-infra",
         base_branch="main",
         pl_session_id=_pl(world, "pl_infra", "infra-docs"),
     )
@@ -138,7 +138,7 @@ async def watching(
     )
     gh = FakeGitHub()
     gh.branches[(REPO, BASE)] = sha("a")
-    gh.branches[("caffeinelabs/infra", "main")] = sha("i")
+    gh.branches[("sample-org/sample-infra", "main")] = sha("i")
     clock = FakeClock()
     state = world.app_state
     state.github_client = gh.client()
@@ -158,11 +158,11 @@ def _open_pr(w: Watching, number: int = 9640) -> FakePr:
 
 
 def test_the_refresh_query_reads_base_heads_after_the_prs() -> None:
-    query = refresh_query([9630], ["temp-main", "release/v1"])
-    assert 'base0: ref(qualifiedName: "refs/heads/temp-main") { target { oid } }' in query
+    query = refresh_query([9630], ["develop", "release/v1"])
+    assert 'base0: ref(qualifiedName: "refs/heads/develop") { target { oid } }' in query
     assert 'base1: ref(qualifiedName: "refs/heads/release/v1") { target { oid } }' in query
     assert query.index("pr9630:") < query.index("base0:")
-    assert "pullRequest(" not in refresh_query([], ["temp-main"])
+    assert "pullRequest(" not in refresh_query([], ["develop"])
 
 
 async def test_a_move_is_announced_once_to_the_right_pls(watching: Watching) -> None:
@@ -239,7 +239,7 @@ async def test_moves_share_one_room_line_and_every_pl_still_hears(watching: Watc
     [line] = [m for m in lines if chat_cards.card_meta(m).get("kind") == "base.moved"]
     assert len(lines) == 1
     # The factory watches app and infra: the line says which repo moved.
-    assert line.body.startswith(f"base {BASE} (app) moved 3 times since ")
+    assert line.body.startswith(f"base {BASE} (sample-app) moved 3 times since ")
     assert {m.data["repos_watched"] for m in w.moves()} == {2}
     assert line.body.endswith(f" UTC → {sha('d')[:7]}")
     meta = chat_cards.card_meta(line)
@@ -350,8 +350,8 @@ async def test_the_heads_are_read_with_the_last_batch(
         await w.poll()
         assert w.moves()[-1].data["pr"] == merging.number
         queries = [r.content.decode() for r in w.gh.pr_queries]
-        assert len(queries) == 2 and "refs/heads/temp-main" in queries[-1]
-        assert "refs/heads/temp-main" not in queries[0]
+        assert len(queries) == 2 and "refs/heads/develop" in queries[-1]
+        assert "refs/heads/develop" not in queries[0]
 
 
 async def test_a_failed_read_leaves_the_move_for_the_next_poll(
@@ -488,4 +488,4 @@ async def test_a_pr_batch_reads_the_watched_bases_not_the_prs_bases(watching: Wa
     [move] = w.moves()
     assert move.data["to"] == sha("b")
     queries = [r.content.decode() for r in w.gh.pr_queries]
-    assert all("refs/heads/temp-main" in q and 'refs/heads/main"' not in q for q in queries)
+    assert all("refs/heads/develop" in q and 'refs/heads/main"' not in q for q in queries)

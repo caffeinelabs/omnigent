@@ -311,7 +311,7 @@ async def test_charter_additions_round_trip_and_render(cockpit: Cockpit) -> None
         {
             "depends_on": ["db-version"],
             "depends_mode": "ready",
-            "human_owner": "mia@caffeine.ai",
+            "human_owner": "mia@example.com",
             "budgets": {"task_usd": 5, "project_usd": 40},
         },
     )
@@ -326,7 +326,7 @@ async def test_charter_additions_round_trip_and_render(cockpit: Cockpit) -> None
     assert (
         "Depends on: db-version (the server starts you once each is ready for human merge)" in text
     )
-    assert "Human owner: mia@caffeine.ai" in text
+    assert "Human owner: mia@example.com" in text
     assert "Budgets: per task $5 · project $40" in text
 
     cleared = await cockpit.patch(
@@ -415,7 +415,7 @@ def test_the_empty_kickoff_golden() -> None:
     text = render_kickoff_brief(
         "Atlas factory",
         "demo",
-        "luka",
+        "lena",
         [],
         factory_id="f" * 32,
         brief="Show the deployed versions in Settings: an API version endpoint and a DB one.",
@@ -430,11 +430,11 @@ def test_an_integration_only_start_still_plans_from_the_brief() -> None:
         id="c" * 32,
         factory_id="f" * 32,
         slug="base-env",
-        title="Base env · temp-main",
+        title="Base env · develop",
         repo=REPO,
         base_branch=BASE,
         charter=normalize_charter({"kind": "integration"}),
     )
-    text = render_kickoff_brief("A", "demo", "luka", [env], brief="b", reply_to="mail_00000000")
+    text = render_kickoff_brief("A", "demo", "lena", [env], brief="b", reply_to="mail_00000000")
     assert "No projects yet: plan them from the brief" in text
     assert "Spawn base-env yourself:" in text and "heartbeat_s=0" in text

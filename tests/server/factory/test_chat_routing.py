@@ -123,7 +123,7 @@ def _names(route: object) -> list[str]:
         ),
         pytest.param(
             "factory",
-            ["@mia@caffeine.ai"],
+            ["@mia@example.com"],
             _members(),
             ["Atlas"],
             [],
@@ -163,9 +163,9 @@ def test_human_routing_table(
 
 def test_unroutable_members_are_named_and_people_are_kept() -> None:
     paused = _members(pls={"db-version": Agent(DB.session_id, DB.name, STATE_PAUSED)})
-    route = routes("project:db-version", ["@mia@caffeine.ai"], paused)
+    route = routes("project:db-version", ["@mia@example.com"], paused)
     assert route.unroutable == ("PL · db-version",)
-    assert route.people == ("@mia@caffeine.ai",)
+    assert route.people == ("@mia@example.com",)
     assert [t.via for t in route.targets] == ["fallback"]
 
 
@@ -208,13 +208,13 @@ def test_an_unknown_thread_routes_nowhere() -> None:
 
 
 def test_mentions_are_parsed_normalized_and_deduped() -> None:
-    text = "@PL:db-version please sync with @sentinel and @Mia@Caffeine.ai; mail x@y.io @atlas"
+    text = "@PL:db-version please sync with @sentinel and @Mia@Example.com; mail x@y.io @atlas"
     found = parse_mentions(text, ["@sentinel", "pl:api-version", "D-7", "not a mention"])
     assert found == [
         "@sentinel",
         "@pl:api-version",
         "@pl:db-version",
-        "@Mia@Caffeine.ai",
+        "@Mia@Example.com",
         "@atlas",
     ]
 

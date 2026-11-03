@@ -117,7 +117,7 @@ function Chip({
   );
 }
 
-/** `Shared with you by luka@… · operator`, or null for the viewer's own factory. */
+/** `Shared with you by lena@… · operator`, or null for the viewer's own factory. */
 export function sharedLine(factory: FactorySummary): string | null {
   if (!factory.shared_by) return null;
   return `Shared with you by ${factory.shared_by}${factory.viewer_role ? ` · ${factory.viewer_role}` : ""}`;

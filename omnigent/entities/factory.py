@@ -26,7 +26,7 @@ class FactoryProject:
     :param factory_id: Root lead session id.
     :param slug: Unique within the factory, e.g. ``"api-version"``.
     :param title: Display title, e.g. ``"API version endpoint"``.
-    :param repo: ``owner/name``, e.g. ``"caffeinelabs/app"``.
+    :param repo: ``owner/name``, e.g. ``"sample-org/sample-app"``.
     :param base_branch: Branch PRs target, e.g. ``"main"``.
     :param charter: The charter JSON (goal, dod, scope_paths, preview, ...).
     :param priority: 0 (highest) to 3.
@@ -263,7 +263,7 @@ class EventDraft:
     :param project_slug: Project it concerns.
     :param from_id: Acting session id.
     :param to_id: Target session id.
-    :param subject: e.g. ``"pr:caffeinelabs/app#9630"`` or ``"decision:D-3"``.
+    :param subject: e.g. ``"pr:sample-org/sample-app#9630"`` or ``"decision:D-3"``.
     :param data: JSON payload.
     :param ts: Epoch milliseconds, or ``None`` for now.
     :param id: A uuid7 hex the caller handed out already (records written
@@ -393,7 +393,7 @@ class FactoryPerson:
     One human on a factory's roster (``factory_people``).
 
     :param factory_id: Root lead session id.
-    :param user_id: The person's user id, e.g. ``"mia@caffeine.ai"``.
+    :param user_id: The person's user id, e.g. ``"mia@example.com"``.
     :param role: ``viewer`` / ``operator`` / ``owner``.
     :param is_creator: The human who started the factory (always an owner).
     :param invited_by: Who added them.

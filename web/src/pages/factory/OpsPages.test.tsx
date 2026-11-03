@@ -184,7 +184,7 @@ describe("AgentPage", () => {
     serve();
     renderAt(`/agents/${IC_ROUTE_R2}`);
     const now = await screen.findByTestId("agent-now");
-    expect(now).toHaveTextContent("Bash pnpm -F caffeine-api test");
+    expect(now).toHaveTextContent("Bash pnpm -F sample-api test");
     expect(screen.getByTestId("agent-meta")).toHaveTextContent("attempt 3/3 ⛔");
     expect(screen.getByTestId("agent-issue-INC-13")).toBeInTheDocument();
     expect(screen.getByTestId("agent-panel-live")).toHaveTextContent(
@@ -251,7 +251,7 @@ describe("Alerts and the incident page", () => {
     const inc13 = round3IssueList()[0]!;
     serve("creator", {
       [`POST ${SNAPSHOT}/issues/INC-13/ack`]: () =>
-        json({ issue: { ...inc13, status: "acked", acked_by: "luka@caffeine.ai" } }),
+        json({ issue: { ...inc13, status: "acked", acked_by: "lena@example.com" } }),
     });
     renderAt("/alerts");
     const card = await screen.findByTestId("issue-card-INC-13");

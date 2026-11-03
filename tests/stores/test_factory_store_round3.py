@@ -37,8 +37,8 @@ FID = uuid.uuid4().hex
 OTHER_FID = uuid.uuid4().hex
 PL = uuid.uuid4().hex
 IC = uuid.uuid4().hex
-LUKA = "luka@caffeine.ai"
-MIA = "mia@caffeine.ai"
+LENA = "lena@example.com"
+MIA = "mia@example.com"
 
 
 @pytest.fixture(params=["sql", "memory"])
@@ -104,7 +104,7 @@ def test_project_lifecycle_columns_round_trip(store: FactoryStore) -> None:
 def test_pr_round3_columns_round_trip(store: FactoryStore) -> None:
     task = uuid.uuid4()
     pr, _ = store.upsert_pr(
-        FID, "caffeinelabs/app", 9631, opened_at=100, task_id=str(task), version_id=task.hex
+        FID, "sample-org/sample-app", 9631, opened_at=100, task_id=str(task), version_id=task.hex
     )
     assert (pr.opened_at, pr.first_ready_at, pr.task_id) == (100, None, task.hex)
     updated = store.update_pr(pr.id, first_ready_at=200)
@@ -140,9 +140,9 @@ def test_route_decision_is_a_compare_and_set(store: FactoryStore) -> None:
     claimed = store.route_decision(row.id, claimable_by=MIA, claimed_by=MIA, claimed_at=5)
     again = store.route_decision(row.id, claimable_by=MIA, claimed_at=6)
     with pytest.raises(DecisionNotOpen) as lost:
-        store.route_decision(row.id, claimable_by=LUKA, claimed_by=LUKA)
+        store.route_decision(row.id, claimable_by=LENA, claimed_by=LENA)
     with pytest.raises(DecisionNotOpen):
-        store.route_decision(row.id, assignee_was="owners", assignee=LUKA)
+        store.route_decision(row.id, assignee_was="owners", assignee=LENA)
     moved = store.route_decision(row.id, assignee_was="operators", assignee="owners")
     store.answer_decision(row.id, option_id=None, text="done", by=MIA)
     with pytest.raises(DecisionNotOpen) as closed:
@@ -164,19 +164,19 @@ def test_route_decision_is_a_compare_and_set(store: FactoryStore) -> None:
 
 def test_people_roster(store: FactoryStore) -> None:
     creator, created = store.upsert_person(
-        FID, LUKA, role="owner", invited_by=LUKA, is_creator=True, invited_at=10
+        FID, LENA, role="owner", invited_by=LENA, is_creator=True, invited_at=10
     )
     assert created and creator.is_creator and creator.role == "owner"
-    mia, _ = store.upsert_person(FID, MIA, role="viewer", invited_by=LUKA, invited_at=20)
+    mia, _ = store.upsert_person(FID, MIA, role="viewer", invited_by=LENA, invited_at=20)
     again, created = store.upsert_person(
         FID, MIA, role="operator", invited_by="someone-else", notify={"mine": True}
     )
     assert not created
-    assert (again.role, again.invited_by, again.invited_at) == ("operator", LUKA, 20)
+    assert (again.role, again.invited_by, again.invited_at) == ("operator", LENA, 20)
     assert again.notify == {"mine": True} and not again.is_creator
-    store.upsert_person(OTHER_FID, MIA, role="viewer", invited_by=LUKA, invited_at=5)
+    store.upsert_person(OTHER_FID, MIA, role="viewer", invited_by=LENA, invited_at=5)
 
-    assert [p.user_id for p in store.list_people(FID)] == [LUKA, MIA]
+    assert [p.user_id for p in store.list_people(FID)] == [LENA, MIA]
     assert [p.factory_id for p in store.list_person_factories(MIA)] == [OTHER_FID, FID]
     seen = store.update_person(FID, MIA, last_seen_at=99)
     assert seen is not None and seen.last_seen_at == 99 and seen.role == "operator"
@@ -191,8 +191,8 @@ def test_people_roster(store: FactoryStore) -> None:
 
 def test_people_reject_unknown_roles(store: FactoryStore) -> None:
     with pytest.raises(ValueError, match=r"factory_people\.role"):
-        store.upsert_person(FID, MIA, role="admin", invited_by=LUKA)
-    store.upsert_person(FID, MIA, role="viewer", invited_by=LUKA)
+        store.upsert_person(FID, MIA, role="admin", invited_by=LENA)
+    store.upsert_person(FID, MIA, role="viewer", invited_by=LENA)
     with pytest.raises(ValueError):
         store.update_person(FID, MIA, role="creator")
     with pytest.raises(TypeError):
@@ -205,7 +205,7 @@ def test_people_reject_unknown_roles(store: FactoryStore) -> None:
 def test_chat_sequence_is_per_factory_across_threads(store: FactoryStore) -> None:
     assert store.next_chat_seq(FID) == 1
     brief = store.append_chat(
-        FID, thread="factory", author_kind="human", author=LUKA, body="Ship versions", created_at=1
+        FID, thread="factory", author_kind="human", author=LENA, body="Ship versions", created_at=1
     )
     reply = store.append_chat(
         FID,
@@ -215,7 +215,7 @@ def test_chat_sequence_is_per_factory_across_threads(store: FactoryStore) -> Non
         author_role="lead",
         body="Proposed 3 projects → C-4",
         reply_to=str(uuid.UUID(brief.id)),
-        mentions=["@luka"],
+        mentions=["@lena"],
         refs=["C-4"],
         created_at=2,
     )
@@ -232,7 +232,7 @@ def test_chat_sequence_is_per_factory_across_threads(store: FactoryStore) -> Non
         OTHER_FID, thread="factory", author_kind="human", author=MIA, body="hi"
     )
     assert [brief.seq, reply.seq, card.seq, other.seq] == [1, 2, 3, 1]
-    assert reply.reply_to == brief.id and reply.refs == ["C-4"] and reply.mentions == ["@luka"]
+    assert reply.reply_to == brief.id and reply.refs == ["C-4"] and reply.mentions == ["@lena"]
     assert card.card == {"type": "decision", "ref": "D-7"} and card.routed == []
     assert not brief.auto_reply
     assert store.next_chat_seq(FID) == 4
@@ -251,7 +251,7 @@ def test_chat_pages(store: FactoryStore) -> None:
     for i in range(7):
         thread = "factory" if i % 2 == 0 else "improvements"
         store.append_chat(
-            FID, thread=thread, author_kind="human", author=LUKA, body=f"m{i}", created_at=i
+            FID, thread=thread, author_kind="human", author=LENA, body=f"m{i}", created_at=i
         )
     latest = store.list_chat(FID, "factory", limit=2)
     assert [m.body for m in latest] == ["m4", "m6"]
@@ -266,17 +266,17 @@ def test_chat_pages(store: FactoryStore) -> None:
 def test_chat_append_replay_returns_the_stored_message(store: FactoryStore) -> None:
     message_id = uuid.uuid4().hex
     first = store.append_chat(
-        FID, thread="factory", author_kind="human", author=LUKA, body="hi", message_id=message_id
+        FID, thread="factory", author_kind="human", author=LENA, body="hi", message_id=message_id
     )
     again = store.append_chat(
-        FID, thread="factory", author_kind="human", author=LUKA, body="edit", message_id=message_id
+        FID, thread="factory", author_kind="human", author=LENA, body="edit", message_id=message_id
     )
     assert again == first and again.body == "hi"
     assert store.next_chat_seq(FID) == 2
 
 
 def test_chat_routing_updates_and_read_marks(store: FactoryStore) -> None:
-    msg = store.append_chat(FID, thread="factory", author_kind="human", author=LUKA, body="hi")
+    msg = store.append_chat(FID, thread="factory", author_kind="human", author=LENA, body="hi")
     routed = [{"session_id": PL, "mail_id": "m1", "delivered_at": 5, "replied_at": None}]
     updated = store.update_chat_message(msg.id, routed=routed)
     assert updated is not None and updated.routed == routed and updated.body == "hi"
@@ -305,7 +305,7 @@ def test_chat_routing_updates_and_read_marks(store: FactoryStore) -> None:
     assert store.upsert_chat_read(FID, MIA, "factory", 3).last_seq == 5
     assert store.upsert_chat_read(FID, MIA, "factory", 9).last_seq == 9
     store.upsert_chat_read(FID, MIA, "improvements", 2)
-    store.upsert_chat_read(FID, LUKA, "factory", 1)
+    store.upsert_chat_read(FID, LENA, "factory", 1)
     reads = store.list_chat_reads(FID, MIA)
     assert [(r.thread, r.last_seq) for r in reads] == [("factory", 9), ("improvements", 2)]
 
@@ -329,7 +329,7 @@ def _propose(store: FactoryStore, **kw: Any) -> Any:
 def test_proposal_create_number_and_fields(store: FactoryStore) -> None:
     first, deduped = _propose(
         store,
-        on_behalf_of=LUKA,
+        on_behalf_of=LENA,
         thread="factory",
         warnings=["scope_overlap: src/api/**"],
         analysis={"hub_files": ["src/api/index.ts"]},
@@ -408,8 +408,8 @@ def test_task_upsert_numbers_and_updates(store: FactoryStore) -> None:
         "schema",
         title="Migration table lookup",
         state="done",
-        card={"text": "read knex_migrations", "acceptance": ["pnpm -F caffeine-api test"]},
-        scope=["services/caffeine-api/src/db/**"],
+        card={"text": "read knex_migrations", "acceptance": ["pnpm -F sample-api test"]},
+        scope=["services/sample-api/src/db/**"],
         created_by=PL,
         created_via="agent",
     )
@@ -880,9 +880,9 @@ def test_definitions_are_versioned_and_immutable(store: FactoryStore) -> None:
     )
     assert (v2.version, v2.parent_version, v2.proposal_id) == (2, 1, proposal)
     with pytest.raises(DefinitionVersionExists) as excinfo:
-        store.put_definition(FID, doc={}, created_by=LUKA, created_via="human", version=2)
+        store.put_definition(FID, doc={}, created_by=LENA, created_via="human", version=2)
     assert excinfo.value.definition == v2
-    v7 = store.put_definition(FID, doc={}, created_by=LUKA, created_via="revert", version=7)
+    v7 = store.put_definition(FID, doc={}, created_by=LENA, created_via="revert", version=7)
     assert v7.version == 7
     assert store.latest_definition(FID) == v7
     assert [d.version for d in store.list_definitions(FID)] == [7, 2, 1]
@@ -890,7 +890,7 @@ def test_definitions_are_versioned_and_immutable(store: FactoryStore) -> None:
     assert store.get_definition(FID, 3) is None
     assert store.latest_definition(OTHER_FID) is None
     with pytest.raises(ValueError):
-        store.put_definition(FID, doc={}, created_by=LUKA, created_via="magic")
+        store.put_definition(FID, doc={}, created_by=LENA, created_via="magic")
 
 
 def test_feedback_insert_and_list(store: FactoryStore) -> None:
@@ -912,7 +912,7 @@ def test_feedback_insert_and_list(store: FactoryStore) -> None:
         target_kind="decision",
         target_id="D-7",
         author_kind="human",
-        author=LUKA,
+        author=LENA,
         kind="unneeded",
     )
     store.add_feedback(
@@ -936,7 +936,7 @@ def test_numbering_is_unique_under_concurrency(store: FactoryStore) -> None:
         8,
         lambda i: (
             store.append_chat(
-                FID, thread=f"project:p{i % 2}", author_kind="human", author=LUKA, body=str(i)
+                FID, thread=f"project:p{i % 2}", author_kind="human", author=LENA, body=str(i)
             ).seq
         ),
     )
@@ -1095,7 +1095,7 @@ def test_free_text_is_clipped_to_column_bounds(store: FactoryStore) -> None:
 
 def test_round3_rows_are_workspace_scoped(store: FactoryStore) -> None:
     with workspace_scope(7):
-        store.upsert_person(FID, MIA, role="owner", invited_by=LUKA)
+        store.upsert_person(FID, MIA, role="owner", invited_by=LENA)
         store.append_chat(FID, thread="factory", author_kind="human", author=MIA, body="hi")
         _propose(store)
         store.upsert_task(FID, "p", "k")
@@ -1126,7 +1126,7 @@ def test_rows_do_not_alias_caller_values(store: FactoryStore) -> None:
 def test_sql_unique_constraints(db_uri: str) -> None:
     store = SqlAlchemyFactoryStore(db_uri)
     store.upsert_task(FID, "db-version", "route")
-    store.append_chat(FID, thread="factory", author_kind="human", author=LUKA, body="x")
+    store.append_chat(FID, thread="factory", author_kind="human", author=LENA, body="x")
     _propose(store, dedupe_key="k")
     engine = get_or_create_engine(db_uri)
     meta = sa.MetaData()

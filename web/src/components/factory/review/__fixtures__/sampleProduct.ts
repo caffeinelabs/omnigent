@@ -4,7 +4,7 @@
 import type { DeliveryDef, ProductDef } from "@/lib/factoryApi";
 
 /** (sample) The UI paths of the live-run fixture's repo, as "paths that need a demo". */
-export const SAMPLE_DEMO_PATHS = ["services/caffeine-ux/**"];
+export const SAMPLE_DEMO_PATHS = ["services/sample-ux/**"];
 
 /** (sample) A product profile whose delivery block takes *delivery* over empty defaults. */
 export function sampleProduct(delivery: Partial<DeliveryDef> = {}): ProductDef {

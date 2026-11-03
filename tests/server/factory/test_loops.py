@@ -34,7 +34,7 @@ from tests.server.factory.conftest import FakeClock
 from tests.server.factory.github_fakes import FakeCheck, FakePr
 
 SLUG = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 H1, H2, H3, H4 = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
 
 
@@ -55,7 +55,7 @@ async def cockpit(
                 SLUG,
                 title="API version",
                 repo=REPO,
-                base_branch="temp-main",
+                base_branch="develop",
                 charter={"goal": "GET /version", "budget_ics": 3},
                 pl_session_id=world.id("pl"),
             )
@@ -113,7 +113,7 @@ def make_pr(cockpit: Cockpit, key: str, head: str = H1, number: int = 9631) -> F
         project_slug=SLUG,
         head_sha=head,
         head_ref=f"factory/{SLUG}/{key}",
-        base_ref="temp-main",
+        base_ref="develop",
         task_id=row.id,
         title=f"PR for {key}",
     )
@@ -645,7 +645,7 @@ async def test_verify_code_failures_charge_implement_env_failures_retry(cockpit:
     assert mail.startswith(
         f"[Factory loop · EXHAUSTED · PR #9631 @{H2[:7]} · verify 2/2] Restart env_keeper"
     )
-    assert f"PREVIEW pr=9631 head={H2} base=temp-main" in mail
+    assert f"PREVIEW pr=9631 head={H2} base=develop" in mail
 
 
 async def test_a_stale_preview_counts_as_an_env_failure(cockpit: Cockpit) -> None:
@@ -779,7 +779,7 @@ async def test_two_refuted_claims_in_a_row_exhaust_the_claim_loop(cockpit: Cockp
     assert decision.options[0]["action"] == "fresh_restart"
 
 
-_CHANGES_H1 = {"verdict": "changes_requested", "head_sha": H1, "by": "luka", "at": 1}
+_CHANGES_H1 = {"verdict": "changes_requested", "head_sha": H1, "by": "lena", "at": 1}
 
 
 def _claim_pr(**fields: Any) -> FactoryPr:
@@ -922,7 +922,7 @@ def _github_pr(*checks: FakeCheck) -> FakePr:
         f"factory/{SLUG}/route",
         H1,
         now - 900,
-        base_ref="temp-main",
+        base_ref="develop",
         labels=["factory:no-env"],
         checks=list(checks),
     )

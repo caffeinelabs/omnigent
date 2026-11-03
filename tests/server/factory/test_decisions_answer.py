@@ -440,7 +440,7 @@ async def test_server_decisions_need_edit_on_the_root(cockpit: Cockpit) -> None:
 async def test_redeploy_preview_sends_the_pl_a_preview_control(cockpit: Cockpit) -> None:
     pr, _ = cockpit.store.upsert_pr(
         cockpit.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9630,
         project_slug="api-version",
         head_sha="7767f0d1" + "0" * 32,
@@ -471,7 +471,7 @@ async def test_redeploy_preview_sends_the_pl_a_preview_control(cockpit: Cockpit)
     )
     assert f"PREVIEW pr=9630 head={pr.head_sha}" in text
     [control] = cockpit.events("control.preview")
-    assert control.subject == "pr:caffeinelabs/app#9630"
+    assert control.subject == "pr:sample-org/sample-app#9630"
 
 
 async def test_abandon_and_rework_message_the_pl(cockpit: Cockpit) -> None:

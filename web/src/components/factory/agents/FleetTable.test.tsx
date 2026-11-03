@@ -122,7 +122,7 @@ describe("FleetTable", () => {
     expect(row).toHaveAttribute("data-state", "running");
     expect(row).toHaveTextContent("T-4");
     expect(row).toHaveTextContent("impl 3/3 ⛔");
-    expect(row).toHaveTextContent("Bash pnpm -F caffeine-api test");
+    expect(row).toHaveTextContent("Bash pnpm -F sample-api test");
     expect(within(row).getByTestId("fleet-flag-repeat")).toBeInTheDocument();
     expect(within(row).getByText("INC-13")).toHaveAttribute(
       "href",

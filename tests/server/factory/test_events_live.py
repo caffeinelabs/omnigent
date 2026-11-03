@@ -68,7 +68,7 @@ async def test_emit_stores_the_event_and_announces(
         project="api-version",
         from_id=PL,
         to_id="server",
-        subject="pr:caffeinelabs/app#9630",
+        subject="pr:sample-org/sample-app#9630",
         summary="PR #9630 ready " + "x" * 400,
         data={"gates": 6},
     )

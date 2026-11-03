@@ -158,7 +158,7 @@ async def stall(world: Any, db_uri: str, monkeypatch: pytest.MonkeyPatch) -> Asy
                 SLUG,
                 title="API version",
                 repo=REPO,
-                base_branch="temp-main",
+                base_branch="develop",
                 charter={"goal": "GET /version", "budget_ics": 3},
                 pl_session_id=world.id("pl"),
             )
@@ -366,7 +366,7 @@ async def test_the_pls_turns_about_the_task_count_its_other_turns_do_not(stall: 
         {
             "agent": "pl",
             "name": "sys_session_send",
-            "arguments": json.dumps({"title": KEY, "message": "rebase on temp-main"}),
+            "arguments": json.dumps({"title": KEY, "message": "rebase on develop"}),
             "call_id": "pl-1",
         },
     )

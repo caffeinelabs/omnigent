@@ -87,7 +87,7 @@ async def test_the_bot_token_is_owner_set_human_only_and_never_read_back(
     assert ok.status_code == 200, ok.text
     assert ok.json()["slack_dm"] == {
         "configured": True,
-        "team": "Caffeine Labs",
+        "team": "Sample Org",
         "bot": "omnigent-factory",
         "status": "ok",
         "error": None,
@@ -117,7 +117,7 @@ async def test_the_bot_token_is_owner_set_human_only_and_never_read_back(
     assert routing.json()["slack_dm"]["configured"] is True
     assert all("xoxb" not in str(e.data) + e.summary for e in cockpit.events())
     [event] = cockpit.events("alerts.routing")
-    assert event.summary == "alice (creator) set the Slack app (Caffeine Labs, @omnigent-factory)"
+    assert event.summary == "alice (creator) set the Slack app (Sample Org, @omnigent-factory)"
 
     removed = await _put(cockpit, route, {"token": None})
     assert removed.json()["slack_dm"]["configured"] is False
@@ -216,7 +216,7 @@ async def test_the_owner_test_checks_the_token_and_dms_a_linked_owner(
     assert unlinked.json()["dm"] == "not_linked" and unlinked.json()["ok"] is True
     assert linked.json() == {
         "ok": True,
-        "team": "Caffeine Labs",
+        "team": "Sample Org",
         "bot": "omnigent-factory",
         "missing_scopes": [],
         "dm": "sent",
@@ -243,7 +243,7 @@ async def test_link_find_send_code_verify_and_welcome(
     assert found.json() == {
         "account": {
             "user_id": "U0CAROL",
-            "team_id": "T0CAFE",
+            "team_id": "T0SAMPLE",
             "name": "carol",
             "handle": "carol",
             "email": None,
@@ -514,6 +514,6 @@ async def test_a_dead_token_found_by_a_route_raises_the_incident(
     incident = issues.open_issue_for(cockpit.deps, cockpit.fid, "slack.bot", "factory")
     assert incident is not None and incident.assignee == "owners"
 
-    fake_slack.tokens[TOKEN] = "T0CAFE"
+    fake_slack.tokens[TOKEN] = "T0SAMPLE"
     await install_bot(cockpit)
     assert issues.open_issue_for(cockpit.deps, cockpit.fid, "slack.bot", "factory") is None

@@ -344,7 +344,7 @@ export interface FactoryView {
   elapsed_s: number | null;
   cost_usd: number | null;
   next_beats: NextBeatView[];
-  /** Absent from servers before the temp-main lane. */
+  /** Absent from servers before the base-branch lane. */
   base?: FactoryBaseView | null;
   url: string;
   /** The product profile of the definition in force; absent from servers before it. */

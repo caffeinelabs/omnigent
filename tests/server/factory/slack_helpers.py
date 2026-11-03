@@ -91,7 +91,7 @@ def link(
             "enabled": True,
             "status": "verified",
             "user_id": slack_id,
-            "team_id": "T0CAFE",
+            "team_id": "T0SAMPLE",
             "name": user.title(),
             "handle": user,
             "linked_at": int(linked_at if linked_at is not None else time.time() - 86400),

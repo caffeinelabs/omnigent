@@ -111,7 +111,7 @@ prompt: |
      workspaces=["https://github.com/<repo>#<branch>"],
      heartbeat_s=<the brief's PL value, 7200 or 600 in demo>,
      message="Start. Your charter follows.")`. `<branch>` is the project's
-     base branch (the brief's `<repo>#<branch>`, e.g. `temp-main`; `main` by
+     base branch (the brief's `<repo>#<branch>`, e.g. `develop`; `main` by
      default): its PRs target it. A project from a cockpit brief
      has a stored charter that attaches automatically: the result then says
      `charter_attached: true`; without that, ask the human with

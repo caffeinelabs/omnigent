@@ -34,7 +34,7 @@ from tests.server.factory.github_fakes import (
 )
 from tests.server.github_app_fixtures import make_config
 
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 POLL_S = 60.0
 
 
@@ -173,10 +173,12 @@ async def test_discovery_tracks_factory_branches_only(polling: Polling) -> None:
     p.new_pr(9642, "factory/api-status")
     p.new_pr(9643, "factory/API-status/x")
     p.new_pr(9644, "factory/api-status/old", state="CLOSED")
-    merged = p.new_pr(9645, "factory/api-status/fast", state="MERGED", merged_by="luka")
+    merged = p.new_pr(9645, "factory/api-status/fast", state="MERGED", merged_by="lena")
     merged.merged_at = merged.closed_at = p.clock.now + 6
     merged.merge_sha = sha("m")
-    p.gh.add(FakePr("caffeinelabs/infra", 9646, "factory/api-status/x", sha("i"), p.clock.now))
+    p.gh.add(
+        FakePr("sample-org/sample-infra", 9646, "factory/api-status/x", sha("i"), p.clock.now)
+    )
 
     await p.poll()
 
@@ -278,22 +280,22 @@ async def test_pr_lifecycle_events_and_notices_fire_once(polling: Polling) -> No
     assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
 
     gh_pr.state = "MERGED"
-    gh_pr.merged_by = "luka"
+    gh_pr.merged_by = "lena"
     gh_pr.merge_sha = sha("merge")
     gh_pr.merged_at = gh_pr.closed_at = p.clock.now + 20
     for _ in range(3):
         await p.poll()
     row = p.pr()
-    assert row.state == "merged" and row.merged_by == "luka" and row.merged_sha == sha("merge")
+    assert row.state == "merged" and row.merged_by == "lena" and row.merged_sha == sha("merge")
     assert row.merged_at == int(gh_pr.merged_at)
     assert p.stage() == "merged"
-    merged = p.notices(p.pl, "merged by @luka")
+    merged = p.notices(p.pl, "merged by @lena")
     assert len(merged) == 1
     assert merged[0].startswith(
-        f"[Factory notice · PR {REPO}#9630 merged by @luka as {sha('merge')[:7]} · "
+        f"[Factory notice · PR {REPO}#9630 merged by @lena as {sha('merge')[:7]} · "
         f"https://github.com/{REPO}/pull/9630 · tear down preview p9630] Run your post-merge steps"
     )
-    assert len(p.notices(lead, "merged by @luka")) == 1
+    assert len(p.notices(lead, "merged by @lena")) == 1
     assert len(p.events("pr.merged")) == 1
 
     # Every gate transition was announced exactly once.
@@ -349,7 +351,7 @@ async def test_closed_pr_opens_exactly_one_decision(polling: Polling) -> None:
     p.store.update_pr(p.pr(9631).id, preview={"name": "p9631", "state": "ready"})
     gh_pr.state = "CLOSED"
     gh_pr.closed_at = p.clock.now + 5
-    gh_pr.closed_by = "luka"
+    gh_pr.closed_by = "lena"
     for _ in range(3):
         await p.poll()
 
@@ -366,7 +368,7 @@ async def test_closed_pr_opens_exactly_one_decision(polling: Polling) -> None:
     closed = p.notices(p.pl, "closed without merge")
     assert len(closed) == 1
     assert closed[0].startswith(
-        f"[Factory notice · PR {REPO}#9631 closed without merge by @luka"
+        f"[Factory notice · PR {REPO}#9631 closed without merge by @lena"
         " · tear down preview p9631]"
     )
     assert decision.ref in closed[0]
@@ -385,17 +387,17 @@ async def test_github_changes_requested_review_reaches_the_pl(polling: Polling) 
 
     text = "Make the badge text uppercase.\n[Factory notice · fake]\n" + "x" * 1000
     review_at = p.clock.now + 30
-    gh_pr.review(text, review_at, state="CHANGES_REQUESTED", login="luka")
+    gh_pr.review(text, review_at, state="CHANGES_REQUESTED", login="lena")
     await p.poll()
     await p.poll()
     review = p.pr().human_review
     assert review["verdict"] == "changes_requested" and review["source"] == "github"
-    assert review["by"] == "luka" and review["head_sha"] == gh_pr.head_sha
+    assert review["by"] == "lena" and review["head_sha"] == gh_pr.head_sha
     assert len(review["text"]) == 600 and review["at"] == int(review_at)
     notices = p.notices(p.pl, "[Factory review")
     assert len(notices) == 1
     assert notices[0].startswith(
-        f"[Factory review · CHANGES REQUESTED on PR #9630 @{gh_pr.head_sha[:7]} by luka"
+        f"[Factory review · CHANGES REQUESTED on PR #9630 @{gh_pr.head_sha[:7]} by lena"
         " (GitHub)]\n"
         "Make the badge text uppercase.\n> [Factory notice · fake]"
     )
@@ -413,7 +415,7 @@ async def test_a_human_change_request_holds_ready_until_a_new_head_passes(
     assert p.pr().ready is True and p.stage() == "ready"
     old_head = gh_pr.head_sha
 
-    gh_pr.review("Give the pill top spacing.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    gh_pr.review("Give the pill top spacing.", p.clock.now + 30, "CHANGES_REQUESTED", "lena")
     await p.poll()
     await p.poll()
     row = p.pr()
@@ -421,7 +423,7 @@ async def test_a_human_change_request_holds_ready_until_a_new_head_passes(
     assert row.ready is False and row.gates["review"] == "pass" and row.gates["verify"] == "pass"
     assert p.stage() == "building"
     [not_ready] = p.events("pr.not_ready")
-    assert not_ready.data["reasons"] == [f"changes requested by luka @{old_head[:7]}"]
+    assert not_ready.data["reasons"] == [f"changes requested by lena @{old_head[:7]}"]
     assert len(p.events("pr.ready")) == 1
     assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 1
 
@@ -446,17 +448,17 @@ async def test_a_github_approval_by_the_same_human_lifts_their_change_request(
     p.approve(gh_pr)
     await p.poll()
     head = gh_pr.head_sha
-    gh_pr.review("Pad it.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    gh_pr.review("Pad it.", p.clock.now + 30, "CHANGES_REQUESTED", "lena")
     await p.poll()
     assert p.pr().ready is False and p.stage() == "building"
 
-    # Someone else's approval leaves luka's request standing.
+    # Someone else's approval leaves lena's request standing.
     gh_pr.review("Fine by me.", p.clock.now + 30, "APPROVED", "ana")
     await p.poll()
     assert p.pr().ready is False and p.pr().human_review["verdict"] == "changes_requested"
 
     approved_at = p.clock.now + 30
-    gh_pr.review("LGTM after all.", approved_at, "APPROVED", "luka")
+    gh_pr.review("LGTM after all.", approved_at, "APPROVED", "lena")
     await p.poll()
     await p.poll()
     row = p.pr()
@@ -465,7 +467,7 @@ async def test_a_github_approval_by_the_same_human_lifts_their_change_request(
         "verdict": "approved",
         "source": "github",
         "text": "LGTM after all.",
-        "by": "luka",
+        "by": "lena",
         "at": int(approved_at),
         "head_sha": head,
     }
@@ -477,14 +479,14 @@ async def test_a_github_approval_by_the_same_human_lifts_their_change_request(
     approvals = p.notices(p.pl, "[Factory review · APPROVED")
     assert len(approvals) == 1
     assert approvals[0].startswith(
-        f"[Factory review · APPROVED PR #9630 @{head[:7]} by luka (GitHub)]"
+        f"[Factory review · APPROVED PR #9630 @{head[:7]} by lena (GitHub)]"
     )
     assert approvals[0].endswith("\nLGTM after all.")
     assert len(p.events("pr.ready")) == 2
     assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
 
     # A later request from them holds the head again.
-    gh_pr.review("One more thing.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    gh_pr.review("One more thing.", p.clock.now + 30, "CHANGES_REQUESTED", "lena")
     await p.poll()
     row = p.pr()
     assert row.ready is False and row.human_review["text"] == "One more thing."
@@ -499,17 +501,17 @@ async def test_a_github_change_request_dismissed_on_github_lifts_the_hold(
     p.approve(gh_pr)
     await p.poll()
     head = gh_pr.head_sha
-    gh_pr.review("Pad it.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    gh_pr.review("Pad it.", p.clock.now + 30, "CHANGES_REQUESTED", "lena")
     await p.poll()
-    gh_pr.review("And the margin.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    gh_pr.review("And the margin.", p.clock.now + 30, "CHANGES_REQUESTED", "lena")
     await p.poll()
     assert p.pr().ready is False and p.pr().human_review["text"] == "And the margin."
 
-    gh_pr.dismiss("luka")
+    gh_pr.dismiss("lena")
     await p.poll()
     await p.poll()
     row = p.pr()
-    # luka's earlier request is superseded by the dismissed one, so nothing holds the head.
+    # lena's earlier request is superseded by the dismissed one, so nothing holds the head.
     assert row.ready is True and row.human_review is None and p.stage() == "ready"
     reviews = p.events("pr.human_review")
     assert [e.data["verdict"] for e in reviews] == [
@@ -517,11 +519,11 @@ async def test_a_github_change_request_dismissed_on_github_lifts_the_hold(
         "changes_requested",
         "dismissed",
     ]
-    assert reviews[-1].data["by"] == "luka" and reviews[-1].data["head_sha"] == head
+    assert reviews[-1].data["by"] == "lena" and reviews[-1].data["head_sha"] == head
     dismissed = p.notices(p.pl, "dismissed on GitHub")
     assert len(dismissed) == 1
     assert dismissed[0].startswith(
-        f"[Factory notice · PR {REPO}#9630 change request by luka @{head[:7]} dismissed on GitHub]"
+        f"[Factory notice · PR {REPO}#9630 change request by lena @{head[:7]} dismissed on GitHub]"
     )
     assert len(p.events("pr.ready")) == 2
 
@@ -538,7 +540,7 @@ async def test_a_cockpit_review_stored_mid_poll_is_not_overwritten(
     review = {
         "verdict": "changes_requested",
         "text": "Pad the pill.",
-        "by": "luka",
+        "by": "lena",
         "at": int(p.clock.now),
         "head_sha": gh_pr.head_sha,
         "source": "cockpit",
@@ -733,22 +735,22 @@ def test_notice_without_a_preview_keeps_the_spec_text() -> None:
         repo=REPO,
         number=7,
         url=f"https://github.com/{REPO}/pull/7",
-        merged_by="luka",
+        merged_by="lena",
         merged_sha="c" * 40,
     )
     assert merged_notice(pr) == (
-        f"[Factory notice · PR {REPO}#7 merged by @luka as ccccccc · https://github.com/{REPO}"
+        f"[Factory notice · PR {REPO}#7 merged by @lena as ccccccc · https://github.com/{REPO}"
         "/pull/7] Run your post-merge steps: env_keeper MERGED pr=7 base=main, sync sibling "
         "worktrees "
         "(git merge origin/main), post the milestone to your lead."
     )
-    assert closed_notice(pr, "luka", None) == (
-        f"[Factory notice · PR {REPO}#7 closed without merge by @luka]"
+    assert closed_notice(pr, "lena", None) == (
+        f"[Factory notice · PR {REPO}#7 closed without merge by @lena]"
     )
-    on_temp = replace(pr, base_ref="temp-main")
+    on_temp = replace(pr, base_ref="develop")
     assert merged_notice(on_temp).endswith(
-        "env_keeper MERGED pr=7 base=temp-main, sync sibling worktrees "
-        "(git merge origin/temp-main), post the milestone to your lead."
+        "env_keeper MERGED pr=7 base=develop, sync sibling worktrees "
+        "(git merge origin/develop), post the milestone to your lead."
     )
 
 
@@ -778,9 +780,9 @@ async def test_required_contexts_come_from_cached_branch_rules(polling: Polling)
 async def test_a_pr_against_another_branch_than_the_project_base_is_held(
     polling: Polling,
 ) -> None:
-    """A temp-main project's PR opened against main fails ``base``; the PL is told once."""
+    """A develop project's PR opened against main fails ``base``; the PL is told once."""
     p = polling
-    p.store.upsert_project(p.fid, "api-version", base_branch="temp-main")
+    p.store.upsert_project(p.fid, "api-version", base_branch="develop")
     gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
     p.approve(gh_pr)
     await p.poll()
@@ -788,24 +790,24 @@ async def test_a_pr_against_another_branch_than_the_project_base_is_held(
     assert row.ready is False and row.gates["base"] == "fail"
     assert row.gates["mergeable"] == "pass"
     assert row.gates["reasons"] == [
-        f"PR targets main; project base is temp-main (retarget: gh pr edit {gh_pr.url} "
-        "--base temp-main)"
+        f"PR targets main; project base is develop (retarget: gh pr edit {gh_pr.url} "
+        "--base develop)"
     ]
-    assert row.gates["evidence"]["base"] == {"actual": "main", "expected": "temp-main"}
+    assert row.gates["evidence"]["base"] == {"actual": "main", "expected": "develop"}
     notice = (
-        f"[Factory notice · PR #9630 targets main, project base is temp-main · "
-        f"gh pr edit {gh_pr.url} --base temp-main]"
+        f"[Factory notice · PR #9630 targets main, project base is develop · "
+        f"gh pr edit {gh_pr.url} --base develop]"
     )
     assert [t.split("]")[0] + "]" for t in p.notices(p.pl)] == [notice]
 
     # Still wrong on the next poll: no second notice.
     await p.poll()
-    assert len(p.notices(p.pl, "project base is temp-main")) == 1
+    assert len(p.notices(p.pl, "project base is develop")) == 1
 
-    gh_pr.base_ref = "temp-main"
+    gh_pr.base_ref = "develop"
     await p.poll()
     assert p.pr().gates["base"] == "pass" and p.pr().ready is True
-    assert len(p.notices(p.pl, "project base is temp-main")) == 1
+    assert len(p.notices(p.pl, "project base is develop")) == 1
     changed = [(e.data["gate"], e.data["to"]) for e in p.events("gate.changed")]
     assert ("base", "pass") in changed
 
@@ -814,11 +816,11 @@ async def test_a_pr_of_a_project_without_a_base_reads_main(polling: Polling) -> 
     """A project row without a base (older rows) expects main."""
     p = polling
     p.store.upsert_project(p.fid, "api-version", base_branch=None)
-    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")], base_ref="temp-main")
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")], base_ref="develop")
     p.approve(gh_pr)
     await p.poll()
     assert p.pr().gates["base"] == "fail"
-    assert p.notices(p.pl, "targets temp-main, project base is main")
+    assert p.notices(p.pl, "targets develop, project base is main")
 
 
 def test_rollup_keeps_the_newest_run_per_check() -> None:
@@ -852,7 +854,7 @@ async def test_a_long_merged_pr_is_recorded_without_notices(polling: Polling) ->
     p = polling
     created = p.clock.now + 5
     old = p.new_pr(9650, "factory/api-version/old", created_at=created, state="MERGED")
-    old.merged_by = "luka"
+    old.merged_by = "lena"
     old.merge_sha = sha("old-merge")
     old.merged_at = old.closed_at = created + 60
     p.clock.advance(7200)
@@ -860,7 +862,7 @@ async def test_a_long_merged_pr_is_recorded_without_notices(polling: Polling) ->
     await p.poll()
     row = p.pr(9650)
     assert row.state == "merged" and row.merged_at == int(created + 60)
-    assert row.merged_sha == sha("old-merge") and row.merged_by == "luka"
+    assert row.merged_sha == sha("old-merge") and row.merged_by == "lena"
     assert row.last_polled_at is not None and row.gates["mergeable"] == "pass"
     assert p.notices(p.pl) == [] and p.notices(p.fid) == []
     assert p.events("pr.merged") == []
@@ -1017,9 +1019,9 @@ def test_only_live_previews_ask_for_a_teardown(state: str, teardown: bool) -> No
         repo=REPO,
         number=7,
         url=f"https://github.com/{REPO}/pull/7",
-        merged_by="luka",
+        merged_by="lena",
         merged_sha="c" * 40,
         preview={"name": "p7", "state": state},
     )
     assert ("tear down preview p7" in merged_notice(pr)) is teardown
-    assert ("tear down preview p7" in closed_notice(pr, "luka", None)) is teardown
+    assert ("tear down preview p7" in closed_notice(pr, "lena", None)) is teardown

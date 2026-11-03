@@ -425,7 +425,7 @@ def render_demo_comment(
     Render the PR comment for a demo, with the ``factory:demo`` marker.
 
     :param demo: The stored demo (files carry ``file_id``; steps are linked).
-    :param base_url: Public origin, e.g. ``"https://omnigent.caffeinelabs.io"``.
+    :param base_url: Public origin, e.g. ``"https://omnigent.example.com"``.
     :param preview_urls: The preview's ``app`` / ``api`` URLs, if known.
     :param embeds: The GIF and poster mirrored to GitHub; without them the
         comment carries only the cockpit links.

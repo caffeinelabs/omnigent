@@ -1,7 +1,7 @@
 """Replay the live-run fixture event log through the real factory code paths.
 
 Not a test module. ``fixtures/live_run_2026_10_26.json`` holds the
-2026-10-26 run of caffeinelabs/app#9630 and #9631 as steps: factory events
+2026-10-26 run of sample-org/sample-app#9630 and #9631 as steps: factory events
 (``emit``), GitHub changes (``pr``, applied to :class:`FakeGitHub`), PR
 poller passes (``poll``) and a decision answer (``answer``). The poller runs
 the real ``prs.apply_refresh`` (and its span hook), events go through the

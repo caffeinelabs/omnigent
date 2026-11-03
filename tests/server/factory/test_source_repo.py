@@ -227,7 +227,7 @@ async def test_without_listed_repos_the_factorys_own_are_read(
 
     assert none.status_code == 409 and error_code(none) == "source_invalid"
     assert own.status_code == 200
-    assert [c[1]["name"] for c in fake.calls] == ["sample-app"]
+    assert [c[1]["name"] for c in fake.calls] == ["sample-upstream"]
 
 
 async def test_a_repo_github_cannot_read_fails_the_query(cockpit: Cockpit) -> None:

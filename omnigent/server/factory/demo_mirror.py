@@ -1,6 +1,6 @@
 """The demo GitHub mirror: a demo's poster, GIF and steps in a private repo.
 
-With ``OMNIGENT_FACTORY_DEMO_MIRROR_REPO`` set (e.g. ``caffeinelabs/factory-demos``),
+With ``OMNIGENT_FACTORY_DEMO_MIRROR_REPO`` set (e.g. ``sample-org/factory-demos``),
 ``POST /v1/factory/agent/demos`` copies each published demo's poster (≤ 2 MB),
 GIF (≤ 5 MB) and ``steps.md`` to that repo through the Git Data API, as the
 factory creator (the GitHub connection the PR poller reads with). Each demo
