@@ -35,8 +35,8 @@ describe("improvements model", () => {
     expect(tier2Plain("no factory GitHub identity configured (OMNIGENT_FACTORY_SMITH_LOGIN)")).toBe(
       "no factory GitHub identity configured",
     );
-    expect(tier2Plain("caffeinelabs/omnigent#staging is not protected")).toBe(
-      "caffeinelabs/omnigent#staging is not protected",
+    expect(tier2Plain("sample-org/sample-tool#staging is not protected")).toBe(
+      "sample-org/sample-tool#staging is not protected",
     );
     expect(tier2Plain(null)).toBeNull();
   });

@@ -346,7 +346,7 @@ class Line:
     """
     One message as an envelope shows it.
 
-    :param author: e.g. ``"alice@caffeine.ai (operator)"``, ``"PL · db-version (project_lead)"``
+    :param author: e.g. ``"alice@example.com (operator)"``, ``"PL · db-version (project_lead)"``
         or ``"system"``.
     """
 

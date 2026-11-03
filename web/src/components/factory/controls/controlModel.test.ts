@@ -30,7 +30,7 @@ function control(over: Partial<EventView> = {}, data: Record<string, unknown> = 
     from_title: null,
     to_title: null,
     subject: "project:api-version",
-    summary: "luka paused project api-version",
+    summary: "lena paused project api-version",
     data: { action: "pause", target: "project:api-version", recipients: [PL], ...data },
     ...over,
   };

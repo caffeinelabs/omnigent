@@ -56,7 +56,7 @@ _LAUNCH_BUDGET = 15000
 
 # Production-shaped launch values: only their lengths matter.
 _PYTHON = "/opt/omnigent/.venv/bin/python3"
-_SERVER = "https://omnigent.caffeinelabs.io"
+_SERVER = "https://omnigent.example.com"
 _SESSION_ID = "987213ac226e4369a5f2e7814702cf30"
 _RESUME_ID = "02857840-6362-408f-b41f-309e396ed7c6"
 _BRIDGE_DIR = Path("/tmp/omnigent-1000/claude-native") / ("0" * 32)

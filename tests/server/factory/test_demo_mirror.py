@@ -32,7 +32,7 @@ from tests.server.factory.github_fakes import (
 from tests.server.factory.test_agent_state_routes import PROJECT, REPO, SHA
 from tests.server.factory.test_demos import MANIFEST, PNG, VIDEO, DemoEnv, _env
 
-MIRROR = "caffeinelabs/factory-demos"
+MIRROR = "sample-org/factory-demos"
 GIF = b"GIF89a" + b"g" * 200
 BASE = "https://omnigent.example.com"
 
@@ -347,7 +347,7 @@ async def test_a_mirror_timeout_leaves_the_cockpit_links(
 
     assert resp.status_code == 200, resp.text
     comment = resp.json()["comment_markdown"]
-    assert "github.com/caffeinelabs/factory-demos" not in comment
+    assert "github.com/sample-org/factory-demos" not in comment
     assert "![" not in comment and "**Review in Omnigent**" in comment
     [event] = _mirror_events(demo_env)
     assert event.kind == "demo.mirror_failed"

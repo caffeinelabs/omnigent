@@ -25,7 +25,7 @@ from omnigent.server.factory.telemetry.spans import write_span
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 
 SLUG = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 @pytest_asyncio.fixture()
@@ -41,7 +41,7 @@ async def cockpit(
             SLUG,
             title="API version",
             repo=REPO,
-            base_branch="temp-main",
+            base_branch="develop",
             charter={"goal": "GET /version", "budget_ics": 3, "depends_on": ["db-schema"]},
             pl_session_id=world.id("pl"),
         )

@@ -37,7 +37,7 @@ const PAGE = `<!doctype html>
  */
 export function startFixtureServer({ sha, pr = 1, secret }) {
   const stamp = {
-    repo: 'caffeinelabs/app',
+    repo: 'sample-org/sample-app',
     pr,
     sha,
     short: sha.slice(0, 7),
@@ -178,7 +178,7 @@ export async function selftest({ harnessDir, keep = false }) {
   const secretFile = join(root, 'synthetic-secret');
   writeFileSync(secretFile, `${secret}\n`, { mode: 0o600 });
   const server = await startFixtureServer({ sha, secret });
-  const base = ['--app', server.url, '--api', server.url, '--pr', 'https://github.com/caffeinelabs/app/pull/1'];
+  const base = ['--app', server.url, '--api', server.url, '--pr', 'https://github.com/sample-org/sample-app/pull/1'];
   const results = [];
   try {
     const pass = join(root, 'pass');

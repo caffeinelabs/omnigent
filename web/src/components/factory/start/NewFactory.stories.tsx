@@ -153,23 +153,23 @@ export const RegisterFailedRetry: Story = {
   },
 };
 
-/** The server's test base (`OMNIGENT_FACTORY_DEFAULT_BASE=caffeinelabs/app#temp-main`). */
+/** The server's test base (`OMNIGENT_FACTORY_DEFAULT_BASE=sample-org/sample-app#develop`). */
 const TEMP_MAIN_ROUTES: StoryRoutes = {
   "/v1/factory/preflight": {
     body: {
       ...preflightOk(),
-      default_repo: "caffeinelabs/app",
-      default_base: "temp-main",
+      default_repo: "sample-org/sample-app",
+      default_base: "develop",
       max_projects: 10,
     },
   },
 };
 
 /** (sample) The sample projects on the server's test base. */
-const TEMP_MAIN_SEED = seedSample(emptyDefaults("caffeinelabs/app", "temp-main"));
+const TEMP_MAIN_SEED = seedSample(emptyDefaults("sample-org/sample-app", "develop"));
 
 /**
- * The default repo & base row prefilled from the server (temp-main), the
+ * The default repo & base row prefilled from the server (develop), the
  * "Keep a live env" switch on, and the sample projects on that base.
  */
 export const TempMainDefaults: Story = {
@@ -189,7 +189,7 @@ export const TempMainDefaultsDark: Story = {
   play: TempMainDefaults.play,
 };
 
-/** The live env turned off by hand: the projects keep temp-main, base-env is not started. */
+/** The live env turned off by hand: the projects keep develop, base-env is not started. */
 export const TempMainWithoutLiveEnv: Story = {
   render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} seed={TEMP_MAIN_SEED} />,
   play: async (context) => {

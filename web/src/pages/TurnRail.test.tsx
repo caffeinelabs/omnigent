@@ -246,11 +246,11 @@ describe("railTurns (ticks the transcript feeds the rail)", () => {
   it("ticks factory cards with their label and skips beats and notices", () => {
     const turns = railTurns(bubblesFor(factoryFixture.transcripts.atlas as unknown as Items));
     expect(turns.map((t) => t.userText)).toEqual([
-      "Brief from Luka",
+      "Brief from Lena",
       "Factory message from Sentinel (reply)",
       "Factory message from PL · api-version (info)",
-      "Factory control PAUSE by Luka",
-      'D-3 answered by Luka: "Short sha"',
+      "Factory control PAUSE by Lena",
+      'D-3 answered by Lena: "Short sha"',
     ]);
     renderRail(turns);
     expect(screen.getAllByRole("button")).toHaveLength(5);

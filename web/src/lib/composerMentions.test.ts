@@ -15,7 +15,7 @@ describe("findRoomTokens", () => {
     ["@atlas please split it", [["agent", "@atlas", "atlas"]]],
     ["@Sentinel look", [["agent", "@sentinel", "sentinel"]]],
     ["@PL:db-version use knex", [["agent", "@pl:db-version", "pl:db-version"]]],
-    ["ping @mia@caffeine.ai", [["person", "@mia@caffeine.ai", "mia@caffeine.ai"]]],
+    ["ping @mia@example.com", [["person", "@mia@example.com", "mia@example.com"]]],
     ["see #db-version", [["project", "#db-version", "db-version"]]],
     [
       "post in #factory or #improvements",
@@ -54,7 +54,7 @@ describe("findRoomTokens", () => {
   });
 
   it.each([
-    "mail mia@caffeine.ai directly",
+    "mail mia@example.com directly",
     "a t-shirt and d-7 in lower case",
     "url https://x.dev/#anchor and path a/#b",
     "D-0 and !0 are not refs",
@@ -74,8 +74,8 @@ describe("findRoomTokens", () => {
 describe("roomMentions", () => {
   it("sends agents and people once, normalized", () => {
     expect(
-      roomMentions("@Atlas and @atlas, @PL:db-version, @mia@caffeine.ai #db-version D-7"),
-    ).toEqual(["@atlas", "@pl:db-version", "@mia@caffeine.ai"]);
+      roomMentions("@Atlas and @atlas, @PL:db-version, @mia@example.com #db-version D-7"),
+    ).toEqual(["@atlas", "@pl:db-version", "@mia@example.com"]);
   });
 });
 
@@ -107,7 +107,7 @@ describe("roomCandidates and applyRoomCandidate", () => {
   const all: RoomCandidate[] = [
     { kind: "agent", insert: "@atlas", label: "Atlas" },
     { kind: "agent", insert: "@pl:db-version", label: "PL · db-version", keywords: ["db-version"] },
-    { kind: "person", insert: "@mia@caffeine.ai", label: "Mia" },
+    { kind: "person", insert: "@mia@example.com", label: "Mia" },
     { kind: "project", insert: "#db-version", label: "DB version endpoint" },
     { kind: "decision", insert: "D-7", label: "Which table?" },
     { kind: "pr", insert: "!9630", label: "API version" },
@@ -117,7 +117,7 @@ describe("roomCandidates and applyRoomCandidate", () => {
     const active = detectRoomTokenAt("@db", 3)!;
     expect(roomCandidates(active, all).map((c) => c.insert)).toEqual(["@pl:db-version"]);
     const people = detectRoomTokenAt("@mi", 3)!;
-    expect(roomCandidates(people, all).map((c) => c.insert)).toEqual(["@mia@caffeine.ai"]);
+    expect(roomCandidates(people, all).map((c) => c.insert)).toEqual(["@mia@example.com"]);
     const any = detectRoomTokenAt("@", 1)!;
     expect(roomCandidates(any, all)).toHaveLength(3);
     expect(roomCandidates(detectRoomTokenAt("D-", 2)!, all).map((c) => c.insert)).toEqual(["D-7"]);

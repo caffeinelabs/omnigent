@@ -22,7 +22,8 @@ from omnigent.server.factory.discovery.kinds.base import Backends, SourceFailed
 from omnigent.server.factory.discovery.web_io import Hit, WebFetcher
 from tests.server.factory.cockpit_helpers import Cockpit
 
-SAMPLE_REPO = "sample-org/sample-app"
+# Outside the projects of the factory fixtures (their repo is sample-org/sample-app).
+SAMPLE_REPO = "sample-org/sample-upstream"
 OTHER_REPO = "sample-org/sample-docs"
 REPO_SOURCE: dict[str, Any] = {
     "id": "repo-issues",

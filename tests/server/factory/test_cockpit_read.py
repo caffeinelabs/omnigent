@@ -20,7 +20,7 @@ from omnigent.stores.factory_store import sqlalchemy_store
 from tests.server.factory.conftest import FactoryApi, FactoryWorld
 
 HEAD = "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16"
-APP = "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io"
+APP = "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com"
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def _seed(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
         fid,
         "api-version",
         title="API version endpoint",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         base_branch="main",
         priority=1,
         pl_session_id=pl,
@@ -60,7 +60,7 @@ def _seed(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
             "reported": {
                 "state": "ready",
                 "env_id": "b693ef0a-2c6683-a38d",
-                "urls": {"app": "https://app-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io"},
+                "urls": {"app": "https://app-b693ef0a-2c6683-a38d.envs.sandbox.example.com"},
                 "deployed": {"sha": HEAD, "ref": "main"},
                 "at": 1793014800,
             },
@@ -69,7 +69,7 @@ def _seed(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
     )
     pr, _ = store.upsert_pr(
         fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9630,
         project_slug="api-version",
         title="feat(api): GET /version",
@@ -98,7 +98,7 @@ def _seed(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
             "env_id": "b693ef0a-2c6683-a38d-p9630",
             "urls": {"app": APP},
             "deployed": {"sha": HEAD, "at": 1793016660},
-            "resources": [{"name": "caffeine-api", "ready": True, "restarts": 0}],
+            "resources": [{"name": "sample-api", "ready": True, "restarts": 0}],
             "unknown_agent_field": "dropped",
         },
     )
@@ -106,7 +106,7 @@ def _seed(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
         demo = store.create_demo(
             factory_id=fid,
             project_slug="api-version",
-            repo="caffeinelabs/app",
+            repo="sample-org/sample-app",
             pr_number=9630,
             head_sha=sha,
             session_id=pl,
@@ -470,7 +470,7 @@ def _seed_demos(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
     store = _deps(api).factory_store
     db_pr, _ = store.upsert_pr(
         seeded.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9631,
         project_slug="db-version",
         title="feat(api): GET /db/version",
@@ -481,7 +481,7 @@ def _seed_demos(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
     db_demo = store.create_demo(
         factory_id=seeded.fid,
         project_slug="db-version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         pr_number=9631,
         head_sha=DB_HEAD,
         session_id=world.id("pl"),
@@ -494,7 +494,7 @@ def _seed_demos(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
     store.create_demo(
         factory_id=other,
         project_slug="api-version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         pr_number=9630,
         head_sha=HEAD,
         session_id=other,
@@ -523,7 +523,9 @@ async def test_demos_list_newest_first_with_the_pr_each_records(
     assert db.is_current_head
     assert current.id == seeded.demo.id and current.is_current_head
     assert not older.is_current_head
-    assert current.repo == "caffeinelabs/app" and current.summary.startswith("Landing renders")
+    assert current.repo == "sample-org/sample-app" and current.summary.startswith(
+        "Landing renders"
+    )
     assert current.video_file_id == "f-video" and current.poster_file_id == "f-poster"
     assert current.files[0].url == f"/v1/factory/demos/{seeded.demo.id}/files/f-video"
     assert [(s.n, s.status) for s in current.steps] == [(1, "pass"), (2, "pass"), (3, "skipped")]
@@ -595,7 +597,7 @@ async def test_project_demos_group_every_run_by_pr_newest_first(
     unlabelled = store.create_demo(
         factory_id=seeded.fid,
         project_slug="",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         pr_number=9630,
         head_sha="9f8e7d6",
         session_id=world.id("pl"),
@@ -609,7 +611,7 @@ async def test_project_demos_group_every_run_by_pr_newest_first(
     body = schemas.ProjectDemosResponse.model_validate(resp.json())
     assert body.count == 3
     assert [(g.repo, g.pr_number, g.pr_id, g.head_sha) for g in body.data] == [
-        ("caffeinelabs/app", 9630, seeded.pr.id, HEAD)
+        ("sample-org/sample-app", 9630, seeded.pr.id, HEAD)
     ]
     runs = body.data[0].runs
     assert [r.id for r in runs] == [unlabelled.id, seeded.demo.id, runs[2].id]
@@ -652,7 +654,7 @@ async def test_a_project_without_demos_lists_no_groups(
 ) -> None:
     seeded = _seed(world, authed_api)
     _deps(authed_api).factory_store.upsert_project(
-        seeded.fid, "docs", title="Docs", repo="caffeinelabs/app", base_branch="main"
+        seeded.fid, "docs", title="Docs", repo="sample-org/sample-app", base_branch="main"
     )
 
     resp = await _get(authed_api, _project_demos_path(seeded.fid, "docs"))
@@ -739,10 +741,10 @@ async def test_preflight_shape(
 ) -> None:
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
     monkeypatch.delenv(F.COCKPIT_V2_ENV, raising=False)
-    monkeypatch.setenv("OMNIGENT_FACTORY_DEFAULT_BASE", "caffeinelabs/app#temp-main")
+    monkeypatch.setenv("OMNIGENT_FACTORY_DEFAULT_BASE", "sample-org/sample-app#develop")
     state = authed_api.app.state
     state.github_store = SimpleNamespace(
-        get=lambda user: SimpleNamespace(github_login="luka") if user == "alice" else None
+        get=lambda user: SimpleNamespace(github_login="lena") if user == "alice" else None
     )
     state.sandbox_config = object()
 
@@ -750,12 +752,12 @@ async def test_preflight_shape(
     bob = (await _get(authed_api, "/v1/factory/preflight", "bob")).json()
 
     assert alice == {
-        "github": {"connected": True, "login": "luka"},
+        "github": {"connected": True, "login": "lena"},
         "agents": {"factory_lead": True, "factory_pl": True},
         "sandbox_host": True,
         "factory_enabled": True,
-        "default_repo": "caffeinelabs/app",
-        "default_base": "temp-main",
+        "default_repo": "sample-org/sample-app",
+        "default_base": "develop",
         "max_projects": 10,
         "tier2": {"enabled": False, "reason": "OMNIGENT_FACTORY_SMITH is not 1", "checks": None},
         "cockpit_v2": False,
@@ -766,7 +768,11 @@ async def test_preflight_shape(
 
 @pytest.mark.parametrize(
     ("knob", "repo", "base"),
-    [(None, None, None), ("caffeinelabs/app", "caffeinelabs/app", "main"), ("bad", None, None)],
+    [
+        (None, None, None),
+        ("sample-org/sample-app", "sample-org/sample-app", "main"),
+        ("bad", None, None),
+    ],
 )
 async def test_preflight_defaults_follow_the_knob(
     world: FactoryWorld,

@@ -66,7 +66,7 @@ describe("base moves", () => {
     expect(from).toMatch(/^[0-9a-f]{7}$/);
     const batched = manyBaseMovesThread().find((m) => m.seq === 3103)!;
     expect(baseMovesOf(batched)?.moves).toHaveLength(7);
-    expect(baseMovesOf(batched)?.repo).toBe("caffeinelabs/app");
+    expect(baseMovesOf(batched)?.repo).toBe("sample-org/sample-app");
   });
 
   it("leaves people, agents, cards and other lines alone", () => {
@@ -81,7 +81,7 @@ describe("base moves", () => {
     expect(bases).toEqual([
       ["main", 12],
       ["main", 7],
-      ["temp-main", 3],
+      ["develop", 3],
       ["main", 1],
     ]);
     // The twelve old lines are one item; nothing else is dropped.
@@ -123,15 +123,15 @@ describe("base moves", () => {
   it("keeps each repo's main its own line", () => {
     const at = manyBaseMovesThread()[0]!.created_at;
     const items = fold([
-      baseLine(1, at, "caffeinelabs/app", "5555555"),
-      baseLine(2, at + 60, "caffeinelabs/app", "6666666"),
-      baseLine(3, at + 120, "caffeinelabs/infra", "4444444"),
-      baseLine(4, at + 180, "CaffeineLabs/App", "7777777"),
+      baseLine(1, at, "sample-org/sample-app", "5555555"),
+      baseLine(2, at + 60, "sample-org/sample-app", "6666666"),
+      baseLine(3, at + 120, "sample-org/sample-infra", "4444444"),
+      baseLine(4, at + 180, "Sample-Org/Sample-App", "7777777"),
       baseLine(5, at + 240, null, "8888888"),
     ]);
     expect(shape(items)).toEqual([
-      "base main@caffeinelabs/app ×3",
-      "base main@caffeinelabs/infra ×1",
+      "base main@sample-org/sample-app ×3",
+      "base main@sample-org/sample-infra ×1",
       "base main@- ×1",
     ]);
     const app = items[0]!;
@@ -153,7 +153,7 @@ describe("base moves", () => {
     const snapshot = round3Snapshot();
     expect(namesRepos(snapshot, fold(manyBaseMovesThread()))).toBe(false);
     expect(namesRepos(snapshot, fold(afterDeployThread()))).toBe(true);
-    const infra = { ...snapshot.projects[0]!, repo: "caffeinelabs/infra" };
+    const infra = { ...snapshot.projects[0]!, repo: "sample-org/sample-infra" };
     expect(namesRepos({ ...snapshot, projects: [...snapshot.projects, infra] }, [])).toBe(true);
   });
 });
@@ -183,8 +183,8 @@ describe("an incident's cards", () => {
       "repeats 4001,4003,4005,4007,4009,4011",
       "msg 4013",
       "msg 4014",
-      "base main@caffeinelabs/infra ×2",
-      "base main@caffeinelabs/app ×2",
+      "base main@sample-org/sample-infra ×2",
+      "base main@sample-org/sample-app ×2",
     ]);
   });
 

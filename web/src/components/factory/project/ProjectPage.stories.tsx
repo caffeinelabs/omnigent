@@ -19,7 +19,7 @@ function phone(story: Story): Story {
   return { ...story, globals: { viewport: { value: "mobile2" } } };
 }
 
-/** api-version a minute after Luka asked for changes on #9630: held at its head. */
+/** api-version a minute after Lena asked for changes on #9630: held at its head. */
 function changesRequested(): FactorySnapshot {
   return requestChanges(projectScenario().snapshot, 9630);
 }
@@ -220,7 +220,7 @@ export const LongText = page({
     api.charter!.goal = `${api.charter!.goal} `.repeat(4).trim();
     api.charter!.scope_paths = [
       ...api.charter!.scope_paths,
-      "services/caffeine-ux/src/settings/components/about/very/deep/nested/path/**",
+      "services/sample-ux/src/settings/components/about/very/deep/nested/path/**",
     ];
     return snapshot;
   })(),

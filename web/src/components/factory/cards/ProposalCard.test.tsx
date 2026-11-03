@@ -90,7 +90,7 @@ describe("ProposalCard states", () => {
     expect(screen.getByTestId("proposal-analysis")).toHaveTextContent(
       "planner: 2 hub files · est 5 PRs",
     );
-    expect(screen.getByTestId("proposal-proposer")).toHaveTextContent("by Atlas for luka");
+    expect(screen.getByTestId("proposal-proposer")).toHaveTextContent("by Atlas for lena");
     expect(screen.getByTestId("proposal-apply-C-4")).toBeEnabled();
     expect(screen.getByTestId("proposal-edit-C-4")).toBeEnabled();
     expect(screen.getByTestId("proposal-reject-C-4")).toBeEnabled();
@@ -100,7 +100,7 @@ describe("ProposalCard states", () => {
     ["applied", "Applied by mia · spawning billing-schema"],
     ["auto_applied", "Applied on its own (autonomy) · spawning billing-schema"],
     ["refused", "Refused: the factory is at its project or pod limit"],
-    ["rejected", "Rejected by luka: “billing waits for Q1; keep the API contract stable”"],
+    ["rejected", "Rejected by lena: “billing waits for Q1; keep the API contract stable”"],
     ["expired", "Expired after 72 h without a decision"],
     ["withdrawn", "Withdrawn by its proposer"],
     ["undone", "Undone by mia"],
@@ -131,7 +131,7 @@ describe("ProposalCard states", () => {
         {
           error: { code: "proposal_not_pending", message: "C-4 is already applied" },
           status: "applied",
-          decided_by: "mia@caffeine.ai",
+          decided_by: "mia@example.com",
         },
         409,
       );

@@ -9,8 +9,8 @@ import pytest
 from omnigent.server.factory.api.pr_preview import preview_redirect_target, preview_stable_path
 from tests.server.factory.conftest import FactoryApi, FactoryWorld
 
-REPO = "caffeinelabs/app"
-APP = "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io"
+REPO = "sample-org/sample-app"
+APP = "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com"
 
 
 def _pr(world: FactoryWorld, preview: dict[str, Any] | None) -> Any:
@@ -50,7 +50,7 @@ async def test_live_preview_redirects_to_its_app(
         {
             "name": "p9630",
             "state": "ready",
-            "urls": {"app": "http://app-x.envs.sandbox.caffeinelabs.io"},
+            "urls": {"app": "http://app-x.envs.sandbox.example.com"},
         },
         {"name": "p9630", "state": "ready", "urls": {}},
     ],

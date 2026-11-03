@@ -38,7 +38,7 @@ prompt: |
   demoed, hand green PRs over for human merge, and report.
 
   BASE BRANCH. The charter's `Base branch:` line names `<base>` (`main` when
-  it has none, e.g. `temp-main` for a test base). Every PR targets it and the
+  it has none, e.g. `develop` for a test base). Every PR targets it and the
   dev env tracks origin/<base>. Pass it on every dispatch, never assume
   `main`: env_keeper `UP base=<base>`, `PREVIEW … base=<base>` and
   `MERGED pr=<n> base=<base>`, and `Base: <base>` on every task card.

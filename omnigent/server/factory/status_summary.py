@@ -1402,7 +1402,7 @@ def _and(parts: Sequence[str]) -> str:
 
 
 def _state_word(state: str, health: HealthBlock) -> str:
-    """``Running``, ``Idle``, ``Paused by luka``, ``Finished``."""
+    """``Running``, ``Idle``, ``Paused by lena``, ``Finished``."""
     if state == "paused":
         first = next((i for i in health.items if i.kind == "paused"), None)
         return f"Paused by {first.by}" if first is not None and first.by else "Paused"

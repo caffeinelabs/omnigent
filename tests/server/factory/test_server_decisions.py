@@ -241,7 +241,7 @@ async def test_the_same_prompt_after_a_dismissed_episode_escalates_again(
         _store(s).set_decision_status(first.id, "withdrawn")
     elif ending == "answered":
         [first] = _decisions(s, "blocked_approval")
-        _store(s).answer_decision(first.id, option_id="dismiss", text=None, by="user:luka")
+        _store(s).answer_decision(first.id, option_id="dismiss", text=None, by="user:lena")
 
     await _edge(s, "pl", "idle", output="ok")
     [cleared] = _store(s).find_events(lead_a, "needs_human.cleared", 0)

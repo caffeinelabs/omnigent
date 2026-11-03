@@ -74,7 +74,7 @@ child inherits its parent's, with ``split_from``)."""
 REQUESTED_BY_KINDS: Final = ("human", "agent")
 """``charter.requested_by.kind``: who asked for the project (server-written at create)."""
 DEFAULT_BASE_ENV: Final = "OMNIGENT_FACTORY_DEFAULT_BASE"
-"""``owner/repo#branch`` new factories default to, e.g. ``caffeinelabs/app#temp-main``."""
+"""``owner/repo#branch`` new factories default to, e.g. ``sample-org/sample-app#develop``."""
 
 REPO_RE: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A branch git accepts: no leading "-", "." or "/", no "..", "//" or "/.", no ".lock"
@@ -88,7 +88,7 @@ def server_default_base() -> tuple[str | None, str | None]:
     """
     The server's default repo and base for new factories (``OMNIGENT_FACTORY_DEFAULT_BASE``).
 
-    :returns: e.g. ``("caffeinelabs/app", "temp-main")``; ``(None, None)`` when
+    :returns: e.g. ``("sample-org/sample-app", "develop")``; ``(None, None)`` when
         unset or malformed; ``(repo, None)`` for a bare ``owner/repo``.
     """
     raw = os.environ.get(DEFAULT_BASE_ENV, "").strip()
@@ -110,7 +110,7 @@ def resolve_base_branch(
     The project's own value wins, then the factory's default base (only for
     the factory's default repo, when one is set), then ``main``.
 
-    :returns: e.g. ``"temp-main"``.
+    :returns: e.g. ``"develop"``.
     """
     own = _text(value)
     if own:
@@ -274,7 +274,7 @@ def normalize_charter(
 
 
 def project_base_branch(project: FactoryProject) -> str:
-    """:returns: The branch the project's PRs target, e.g. ``"temp-main"`` (default ``main``)."""
+    """:returns: The branch the project's PRs target, e.g. ``"develop"`` (default ``main``)."""
     return _text(project.base_branch) or DEFAULT_BASE_BRANCH
 
 

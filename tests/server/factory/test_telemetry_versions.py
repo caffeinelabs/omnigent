@@ -163,7 +163,7 @@ async def test_starting_a_factory_stamps_the_root_lead(
         "name": "Atlas factory",
         "cadence": "demo",
         "projects": [
-            {"slug": "docs", "title": "Docs", "repo": "caffeinelabs/app", "goal": "Add docs."}
+            {"slug": "docs", "title": "Docs", "repo": "sample-org/sample-app", "goal": "Add docs."}
         ],
     }
     resp = await cockpit.post("/v1/factory/factories", body, user="alice")
@@ -237,12 +237,12 @@ async def test_starting_a_factory_stamps_its_projects_with_the_versions(
         "name": "Atlas factory",
         "cadence": "demo",
         "defaults": {
-            "repo": "caffeinelabs/app",
-            "base_branch": "temp-main",
+            "repo": "sample-org/sample-app",
+            "base_branch": "develop",
             "integration_env": True,
         },
         "projects": [
-            {"slug": "docs", "title": "Docs", "repo": "caffeinelabs/app", "goal": "Add docs."}
+            {"slug": "docs", "title": "Docs", "repo": "sample-org/sample-app", "goal": "Add docs."}
         ],
     }
     resp = await cockpit.post("/v1/factory/factories", body, user="alice")

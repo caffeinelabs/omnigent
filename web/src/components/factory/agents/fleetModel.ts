@@ -324,7 +324,7 @@ export function fleetCounts(agents: FleetAgent[]): FleetCounts {
   };
 }
 
-/** What the agent runs now, in a line: `Bash pnpm -F caffeine-api test`. */
+/** What the agent runs now, in a line: `Bash pnpm -F sample-api test`. */
 export function nowText(now: NowState | null | undefined): string | null {
   if (!now?.tool) return null;
   return now.tool_arg ? `${now.tool} ${now.tool_arg}` : now.tool;

@@ -1398,8 +1398,9 @@ class Preflight(_View):
     """
     ``GET /v1/factory/preflight``: can this user start a factory here?
 
-    :param default_repo: The server's default repo for new factories, e.g. ``"caffeinelabs/app"``.
-    :param default_base: Its default base branch, e.g. ``"temp-main"``.
+    :param default_repo: The server's default repo for new factories, e.g.
+        ``"sample-org/sample-app"``.
+    :param default_base: Its default base branch, e.g. ``"develop"``.
     :param max_projects: Projects one factory can run (one PL pod each).
     :param tier2: Whether agents may open code PRs to omnigent (off by default).
     :param cockpit_v2: Whether people may switch to the new cockpit

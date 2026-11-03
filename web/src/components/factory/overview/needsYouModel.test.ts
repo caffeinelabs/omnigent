@@ -22,18 +22,18 @@ function decision(patch: Partial<DecisionView>): DecisionView {
 
 describe("decisionScope", () => {
   const mia = viewerOf("operator");
-  const luka = viewerOf("creator");
+  const lena = viewerOf("creator");
   const ops = viewerOf("viewer");
 
   it("is mine when assigned to me or claimed by me", () => {
-    expect(decisionScope(decision({ assignee: "mia@caffeine.ai" }), mia)).toBe("mine");
-    expect(decisionScope(decision({ claimed_by: "mia@caffeine.ai" }), mia)).toBe("mine");
+    expect(decisionScope(decision({ assignee: "mia@example.com" }), mia)).toBe("mine");
+    expect(decisionScope(decision({ claimed_by: "mia@example.com" }), mia)).toBe("mine");
   });
 
   it("is someone else's when assigned to or claimed by another person", () => {
-    expect(decisionScope(decision({ assignee: "mia@caffeine.ai" }), luka)).toBe("other");
+    expect(decisionScope(decision({ assignee: "mia@example.com" }), lena)).toBe("other");
     expect(
-      decisionScope(decision({ assignee: "operators", claimed_by: "luka@caffeine.ai" }), mia),
+      decisionScope(decision({ assignee: "operators", claimed_by: "lena@example.com" }), mia),
     ).toBe("other");
   });
 
@@ -44,7 +44,7 @@ describe("decisionScope", () => {
   });
 
   it("is my role's when for owners only if I own the factory", () => {
-    expect(decisionScope(decision({ assignee: "owners" }), luka)).toBe("role");
+    expect(decisionScope(decision({ assignee: "owners" }), lena)).toBe("role");
     expect(decisionScope(decision({ assignee: "owners" }), mia)).toBe("other");
   });
 
@@ -135,7 +135,7 @@ describe("incidents in Needs you", () => {
   it("follows the server's mine: assigned to me is mine, my role's is role, a viewer's is other", () => {
     const mia = viewerOf("operator");
     const inc13 = issues().data.find((i) => i.ref === "INC-13")!;
-    expect(issueScope({ ...inc13, assignee: "mia@caffeine.ai" }, mia, new Set())).toBe("mine");
+    expect(issueScope({ ...inc13, assignee: "mia@example.com" }, mia, new Set())).toBe("mine");
     expect(issueScope(inc13, mia, new Set([inc13.id]))).toBe("role");
     expect(issueScope(inc13, viewerOf("viewer"), new Set())).toBe("other");
   });

@@ -329,7 +329,12 @@ async def test_an_early_rate_is_back_five_minutes_after_a_restart(
 
 def _pr(world: FactoryWorld, **fields: Any) -> Any:
     row, _ = world.deps.factory_store.upsert_pr(
-        _fid(world), "caffeinelabs/app", 9630, project_slug="api-version", head_sha=HEAD, **fields
+        _fid(world),
+        "sample-org/sample-app",
+        9630,
+        project_slug="api-version",
+        head_sha=HEAD,
+        **fields,
     )
     return row
 
@@ -558,7 +563,7 @@ async def test_a_late_refutation_is_a_mismatch_until_the_pr_turns_ready(
 async def test_ci_flaky_is_a_fact(world: FactoryWorld) -> None:
     pr = _pr(world)
     other = "b" * 40
-    subject = "pr:caffeinelabs/app#9630"
+    subject = "pr:sample-org/sample-app#9630"
     gate = {"pr_id": pr.id, "gate": "checks"}
     await _emit(
         world, "gate.changed", subject=subject, data={**gate, "to": "fail", "head_sha": other}

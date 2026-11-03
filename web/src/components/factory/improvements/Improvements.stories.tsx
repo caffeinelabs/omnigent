@@ -65,7 +65,7 @@ function rejectedRoutes(): CockpitStoryOptions["routes"] {
         proposal: {
           ...c15,
           status: "rejected",
-          decided_by: "luka@caffeine.ai",
+          decided_by: "lena@example.com",
           decided_at: c15.created_at + 600,
           result: { note: LONG_REASON },
         },
@@ -290,7 +290,7 @@ export const History = page("/improvements", { search: "?tab=history" });
 
 export const HistoryMobile = phone(page("/improvements", { search: "?tab=history" }));
 
-/** Luka's Settings edit (loops.implement.attempts 3 → 4) as C-17 on top of History. */
+/** Lena's Settings edit (loops.implement.attempts 3 → 4) as C-17 on top of History. */
 export const HistoryAfterSave = page("/improvements", {
   search: "?tab=history",
   learn: { afterSave: true },
@@ -376,7 +376,7 @@ export const ProposalReverted = page("/improvements/C-12");
 /** C-16: a code change recorded while Tier 2 is off; Copy as issue. */
 export const ProposalCode = page("/improvements/C-16");
 
-/** C-17: Luka's applied Settings edit (a human change), with Revert. */
+/** C-17: Lena's applied Settings edit (a human change), with Revert. */
 export const ProposalHumanApplied = page("/improvements/C-17", { learn: { afterSave: true } });
 
 /** C-4: a projects proposal shows the Room's card (Apply, Edit & apply, Reject). */

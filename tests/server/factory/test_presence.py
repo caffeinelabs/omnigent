@@ -17,7 +17,7 @@ from omnigent.server.factory.presence import PresenceRegistry, presence_count
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld, FakeClock
 
-MIA = "mia@caffeine.ai"
+MIA = "mia@example.com"
 FID = "a" * 32
 
 
@@ -96,15 +96,15 @@ def test_cockpit_viewers_merge_with_member_session_viewers() -> None:
     pl, ic = "c" * 32, "d" * 32
     factory_presence.registry.heartbeat(FID, MIA, "overview", False)
     session_presence.connect(pl, ic, MIA, False)
-    session_presence.connect(pl, pl, "ops@caffeine.ai", True)
+    session_presence.connect(pl, pl, "ops@example.com", True)
 
     rows = {r["user_id"]: r for r in factory_presence.merged_entries(FID, [pl])}
 
     assert rows[MIA]["location"] == "overview"
     assert rows[MIA]["sessions"] == [pl]
-    assert rows["ops@caffeine.ai"]["location"] == f"agent:{pl}"
-    assert rows["ops@caffeine.ai"]["idle"] is True
-    assert rows["ops@caffeine.ai"]["sessions"] == [pl]
+    assert rows["ops@example.com"]["location"] == f"agent:{pl}"
+    assert rows["ops@example.com"]["idle"] is True
+    assert rows["ops@example.com"]["sessions"] == [pl]
     assert presence_count(FID) == 1
 
 

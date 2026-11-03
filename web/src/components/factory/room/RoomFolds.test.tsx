@@ -106,8 +106,11 @@ describe("a base's moves", () => {
       month: "short",
       day: "numeric",
     });
-    expect(line).toHaveTextContent(`base main (app) moved 7 times since ${day}, `);
-    expect(screen.getByTestId("room-base-moves-repo")).toHaveAttribute("title", "caffeinelabs/app");
+    expect(line).toHaveTextContent(`base main (sample-app) moved 7 times since ${day}, `);
+    expect(screen.getByTestId("room-base-moves-repo")).toHaveAttribute(
+      "title",
+      "sample-org/sample-app",
+    );
     fireEvent.click(screen.getByTestId("room-base-moves-toggle-main"));
     const list = screen.getByTestId("room-base-moves-list-main");
     expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent(`${day}, `);

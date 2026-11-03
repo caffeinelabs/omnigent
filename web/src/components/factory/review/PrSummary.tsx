@@ -17,7 +17,7 @@ import { changesRequestedOnHead, plural, readyForHuman, sameSha, shortSha } from
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { DotParts, ReviewNotice } from "./reviewParts";
 
-/** `factory/db-version/route · 5e1c2d4 · base temp-main ✓ · +88 −3 · 4 files · T-4`. */
+/** `factory/db-version/route · 5e1c2d4 · base develop ✓ · +88 −3 · 4 files · T-4`. */
 export function PrMeta({ pr, expectedBase }: { pr: PrView; expectedBase?: string | null }) {
   const baseOk = pr.base_ref != null && expectedBase != null ? pr.base_ref === expectedBase : null;
   return (

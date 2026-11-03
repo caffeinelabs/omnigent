@@ -9,7 +9,7 @@ description: IC reference for the Omnigent software factory - worktree setup and
 
 The repo is the checkout you start in (`git rev-parse --show-toplevel`, e.g.
 `/home/omnigent/workspace/app`). `<base>` is the card's `Base:` branch, the
-project's base branch (`main` when the card names none, e.g. `temp-main`):
+project's base branch (`main` when the card names none, e.g. `develop`):
 you branch from it, sync with it and open the PR against it.
 
 ```

@@ -65,8 +65,8 @@ function serve() {
             to_id: null,
             from_title: "demo",
             to_title: null,
-            subject: "pr:caffeinelabs/app#9630",
-            summary: "demo PASS of caffeinelabs/app#9630 at bfbef12: GET /version",
+            subject: "pr:sample-org/sample-app#9630",
+            summary: "demo PASS of sample-org/sample-app#9630 at bfbef12: GET /version",
             data: { demo_id: "d-old", pr_id: "f74d5967c53455139e85ba1b402a5bd4", status: "PASS" },
           },
         ],
@@ -188,7 +188,7 @@ describe("PR page · demo", () => {
     expect(row).toHaveTextContent("38ms");
     expect(row).not.toHaveTextContent('builtAt":');
     fireEvent.click(within(row).getByRole("button"));
-    expect(row).toHaveTextContent('"service": "caffeine-api"');
+    expect(row).toHaveTextContent('"service": "sample-api"');
     expect(row).toHaveTextContent("x-factory-commit");
     expect(calls.some((c) => c.path.endsWith("/files/af14797752795dd38747210b6da3b001"))).toBe(
       true,
@@ -268,7 +268,7 @@ describe("PR page · demo", () => {
       `Demo is for an older head (7767f0d). The new head ${NEW_HEAD_9630.slice(0, 7)} is not demoed yet.`,
     );
     expect(within(drawer).getByTestId("review-changes-requested")).toHaveTextContent(
-      "Changes requested by Luka",
+      "Changes requested by Lena",
     );
   });
 
@@ -343,7 +343,7 @@ describe("PR page · header", () => {
     expect(within(drawer).queryByTestId("review-ready-banner")).toBeNull();
     const chip = within(drawer).getByTestId("review-changes-requested");
     expect(chip).toHaveAttribute("data-head", "current");
-    expect(chip).toHaveTextContent("Changes requested by Luka on 7767f0d · the PL is on it");
+    expect(chip).toHaveTextContent("Changes requested by Lena on 7767f0d · the PL is on it");
     expect(within(drawer).getByTestId("review-not-ready")).toHaveTextContent(
       "Not ready yet · waits on a new head",
     );
@@ -361,7 +361,7 @@ describe("PR page · header", () => {
     const { drawer } = renderDrawer("demo-old-head");
     const chip = within(drawer).getByTestId("review-changes-requested");
     expect(chip).toHaveAttribute("data-head", "old");
-    expect(chip).toHaveTextContent("Changes requested by Luka on 7767f0d (old head)");
+    expect(chip).toHaveTextContent("Changes requested by Lena on 7767f0d (old head)");
   });
 
   it("is a page, not a drawer: no dialog, the PR's breadcrumb and its project", () => {
@@ -403,7 +403,7 @@ describe("PR page · preview", () => {
     expect(within(drawer).getByTestId("review-preview-health")).toHaveTextContent("healthy");
     expect(within(drawer).getByTestId("review-preview-app-link")).toHaveAttribute(
       "href",
-      "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+      "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com",
     );
     expect(within(drawer).getByTestId("review-preview-app-link")).toHaveAttribute(
       "target",
@@ -413,7 +413,7 @@ describe("PR page · preview", () => {
       "href",
       "/v1/factory/prs/f74d5967c53455139e85ba1b402a5bd4/preview",
     );
-    expect(within(drawer).getByTestId("review-preview-resources")).toHaveTextContent("caffeine-ux");
+    expect(within(drawer).getByTestId("review-preview-resources")).toHaveTextContent("sample-ux");
     expect(within(drawer).getByTestId("review-preview-slot")).toHaveTextContent(
       "Kept up until merge or close",
     );
@@ -483,10 +483,10 @@ describe("PR page · preview", () => {
   it("keeps the PR number visible in a long preview host", () => {
     const { drawer } = renderDrawer("backend-api-demo");
     const app = within(drawer).getByTestId("review-preview-app-link");
-    expect(app).toHaveTextContent("app-…-p9631.envs.sandbox.caffeinelabs.io");
+    expect(app).toHaveTextContent("app-…-p9631.envs.sandbox.example.com");
     expect(app).toHaveAttribute(
       "title",
-      "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+      "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.example.com",
     );
   });
 
@@ -591,12 +591,12 @@ describe("PR page · evidence", () => {
 
   it("highlights protected files", () => {
     const { snapshot, pr } = reviewScenario("ready-with-video");
-    pr.gates.evidence.protected = ["services/caffeine-api/src/app.ts"];
+    pr.gates.evidence.protected = ["services/sample-api/src/app.ts"];
     const { drawer } = renderDrawer({ snapshot, pr });
     const paths = within(drawer).getByTestId("review-evidence-protected_paths");
     fireEvent.click(within(paths).getByRole("button"));
     const files = within(paths).getByTestId("review-evidence-files");
-    expect(within(files).getByText("services/caffeine-api/src/app.ts")).toHaveAttribute(
+    expect(within(files).getByText("services/sample-api/src/app.ts")).toHaveAttribute(
       "data-protected",
       "true",
     );
@@ -619,7 +619,7 @@ describe("PR page · actions", () => {
     expect(tab.opener).toBeNull();
     await waitFor(() =>
       expect(tab.location.href).toBe(
-        "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
+        "https://github.com/sample-org/sample-app/pull/9630#partial-pull-merging",
       ),
     );
     expect(posts("/feedback")).toEqual([
@@ -655,7 +655,7 @@ describe("PR page · actions", () => {
     const link = await within(drawer).findByRole("link", { name: "open GitHub’s merge box" });
     expect(link).toHaveAttribute(
       "href",
-      "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
+      "https://github.com/sample-org/sample-app/pull/9630#partial-pull-merging",
     );
   });
 
@@ -706,7 +706,7 @@ describe("PR page · actions", () => {
     const merge = within(drawer).getByTestId("review-merge-github");
     expect(merge).toHaveAttribute(
       "href",
-      "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
+      "https://github.com/sample-org/sample-app/pull/9630#partial-pull-merging",
     );
     expect(merge).toHaveAttribute("target", "_blank");
     // The description is in the DOM whether or not the tooltip is open.
@@ -806,7 +806,7 @@ describe("PR page · actions", () => {
     fireEvent.click(within(drawer).getByTestId("review-copy-summary"));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const text = writeText.mock.calls[0]![0] as string;
-    expect(text).toContain("caffeinelabs/app#9630");
+    expect(text).toContain("sample-org/sample-app#9630");
     expect(text).toContain("Goal: Expose the deployed commit");
     expect(text).toContain("- CI: pass 14/14");
     expect(text).toContain("- Review: pass APPROVE @7767f0d");
@@ -827,7 +827,7 @@ describe("PR page · actions", () => {
     const { drawer } = renderDrawer("merged");
     expect(within(drawer).getByTestId("review-state-chip")).toHaveTextContent("Merged");
     expect(within(drawer).getByTestId("review-merged-banner")).toHaveTextContent(
-      "Merged by @luka · 4f3e2d1 · 1m ago · PL notified · preview torn down",
+      "Merged by @lena · 4f3e2d1 · 1m ago · PL notified · preview torn down",
     );
     expect(within(drawer).queryByTestId("review-approve")).toBeNull();
     expect(within(drawer).queryByTestId("review-i-merged-it")).toBeNull();
@@ -859,7 +859,7 @@ describe("PR page · viewer", () => {
   it("disables every review lever for a viewer, with who can", () => {
     const { snapshot, pr } = reviewScenario("ready-with-video");
     snapshot.viewer = {
-      user_id: "ops@caffeine.ai",
+      user_id: "ops@example.com",
       role: "viewer",
       level: 1,
       is_creator: false,

@@ -493,7 +493,7 @@ def gate_base(pr: _Json, expected_base: str | None = None) -> GateResult:
     The PR targets its project's base branch.
 
     :param pr: The PR snapshot (``baseRefName``, ``url`` or ``number``).
-    :param expected_base: The project's base branch, e.g. ``"temp-main"``;
+    :param expected_base: The project's base branch, e.g. ``"develop"``;
         ``None`` (no project) accepts any base.
     :returns: Pass on a match; fail with the ``gh pr edit … --base`` fix when
         the PR would merge into another branch; pending while GitHub has not

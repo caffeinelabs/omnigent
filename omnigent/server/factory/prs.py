@@ -125,7 +125,7 @@ def parse_factory_branch(
 
 
 def pr_subject(repo: str, number: int) -> str:
-    """:returns: The event subject of a PR, e.g. ``"pr:caffeinelabs/app#9630"``."""
+    """:returns: The event subject of a PR, e.g. ``"pr:sample-org/sample-app#9630"``."""
     return f"pr:{repo}#{number}"
 
 
@@ -149,7 +149,7 @@ def refresh_query(numbers: Iterable[int], bases: Sequence[str] = ()) -> str:
     Build the read-only query that refreshes several PRs of one repo.
 
     :param numbers: PR numbers, e.g. ``[9630, 9631]``.
-    :param bases: Branches whose head to read too, e.g. ``["temp-main"]``
+    :param bases: Branches whose head to read too, e.g. ``["develop"]``
         (aliased :func:`base_alias` in this order); validated branch names.
     :returns: A query taking ``$owner`` and ``$name``, one alias per PR and
         per base plus ``rateLimit``.
@@ -326,7 +326,7 @@ def checks_failed_notice(pr: FactoryPr, names: Sequence[str]) -> str:
 
 
 def base_notice(pr: FactoryPr, actual: str | None, expected: str | None) -> str:
-    """``[Factory notice · PR #<n> targets main, project base is temp-main · gh pr edit …]``."""
+    """``[Factory notice · PR #<n> targets main, project base is develop · gh pr edit …]``."""
     return (
         f"[Factory notice · PR #{pr.number} targets {actual or '?'}, project base is "
         f"{expected or '?'} · gh pr edit {pr.url} --base {expected or '?'}] Retarget it with "
@@ -383,7 +383,7 @@ def human_hold_reason(review: Mapping[str, Any]) -> str:
     """
     Why a human change request holds a PR not ready.
 
-    :returns: e.g. ``"changes requested by luka @b271905"``.
+    :returns: e.g. ``"changes requested by lena @b271905"``.
     """
     sha = review.get("head_sha")
     at = f" @{sha[:7]}" if isinstance(sha, str) and sha else ""

@@ -66,9 +66,9 @@ def _pr(
     return FactoryPr(
         id=f"{next(_n):032x}",
         factory_id=FID,
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         number=next(_n),
-        url="https://github.com/caffeinelabs/app/pull/1",
+        url="https://github.com/sample-org/sample-app/pull/1",
         head_sha=HEAD,
         state=state,
         is_draft=is_draft,
@@ -98,8 +98,8 @@ def _decision(
     )
 
 
-_CHANGES_ON_HEAD = {"verdict": "changes_requested", "head_sha": HEAD, "by": "luka", "at": 1}
-_CHANGES_ON_OLD = {"verdict": "changes_requested", "head_sha": OLD, "by": "luka", "at": 1}
+_CHANGES_ON_HEAD = {"verdict": "changes_requested", "head_sha": HEAD, "by": "lena", "at": 1}
+_CHANGES_ON_OLD = {"verdict": "changes_requested", "head_sha": OLD, "by": "lena", "at": 1}
 
 # (id, prs, pl, decisions, kwargs, agent_stage, expected)
 CASES: list[
@@ -494,9 +494,9 @@ T0 = 1_793_000_000  # the project's own PR merges here
 MERGED_9774 = FactoryPr(
     id="9" * 32,
     factory_id=FID,
-    repo="caffeinelabs/app",
+    repo="sample-org/sample-app",
     number=9774,
-    url="https://github.com/caffeinelabs/app/pull/9774",
+    url="https://github.com/sample-org/sample-app/pull/9774",
     state="merged",
     merged_at=T0,
     closed_at=T0,
@@ -629,7 +629,7 @@ AFTER_MERGE: list[tuple[str, FactoryProject, list[FactoryTask], StageResult]] = 
         [_task("follow-up", "running")],
         StageResult("building", note="PR merged · 1 task still open", claim_mismatch=True),
     ),
-    # validate-build-tier: made to validate app#9774 after Luka merged it.
+    # validate-build-tier: made to validate app#9774 after Lena merged it.
     (
         "made to validate an already-merged PR",
         _later_project(created_at=T0 + 600),

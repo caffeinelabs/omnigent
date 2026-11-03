@@ -32,11 +32,11 @@ PROJECTS: list[dict[str, Any]] = [
     {
         "slug": "api-status",
         "title": "API status endpoint",
-        "repo": "caffeinelabs/app",
+        "repo": "sample-org/sample-app",
         "base_branch": "main",
-        "goal": 'Add GET /status to caffeine-api returning {service, uptimeS, db:"ok"|"down"}.',
+        "goal": 'Add GET /status to sample-api returning {service, uptimeS, db:"ok"|"down"}.',
         "dod": ['curl -fsS {api}/status returns 200 with "db":"ok"', "unit test passes"],
-        "scope_paths": ["services/caffeine-api/**"],
+        "scope_paths": ["services/sample-api/**"],
         "env_needed": True,
         "preview": {"enabled": True, "slots": 2},
         "demo_focus": "API capture of GET /status",
@@ -46,7 +46,7 @@ PROJECTS: list[dict[str, Any]] = [
     {
         "slug": "docs-factory-envs",
         "title": "Factory envs docs",
-        "repo": "caffeinelabs/app",
+        "repo": "sample-org/sample-app",
         "goal": "Add docs/factory-envs.md.",
         "env_needed": False,
         "priority": 2,
@@ -119,13 +119,13 @@ async def test_start_writes_labels_rows_and_the_folder(cockpit: Cockpit) -> None
     api = rows["api-status"]
     assert api.stage == "queued"
     assert api.priority == 1
-    assert api.repo == "caffeinelabs/app"
+    assert api.repo == "sample-org/sample-app"
     assert api.base_branch == "main"
     assert api.created_by == "alice"
     assert api.charter is not None
     assert api.charter["preview"] == {"enabled": True, "slots": 2}
     assert api.charter["demo_focus"] == "API capture of GET /status"
-    assert api.charter["scope_paths"] == ["services/caffeine-api/**"]
+    assert api.charter["scope_paths"] == ["services/sample-api/**"]
     docs = rows["docs-factory-envs"]
     assert docs.charter is not None
     assert docs.charter["env_needed"] is False
@@ -157,28 +157,28 @@ async def test_the_brief_is_queued_once_with_the_golden_text(cockpit: Cockpit) -
 
 
 async def test_a_test_base_branch_reaches_the_charter_brief_and_spawn(cockpit: Cockpit) -> None:
-    """A project started on a test base such as temp-main targets it everywhere."""
+    """A project started on a test base such as develop targets it everywhere."""
     from omnigent.server.factory.charter import render_pl_charter
 
     root = _new_lead(cockpit)
     projects = copy.deepcopy(PROJECTS)
-    projects[0]["base_branch"] = "temp-main"
+    projects[0]["base_branch"] = "develop"
 
     resp = await _start(cockpit, _body(root, projects=projects))
 
     assert resp.status_code == 201, resp.text
     api = cockpit.store.get_project(root, "api-status")
-    assert api is not None and api.base_branch == "temp-main"
+    assert api is not None and api.base_branch == "develop"
     charter = render_pl_charter(api).splitlines()
-    assert "Repo#branch: caffeinelabs/app#temp-main · branches factory/api-status/<task>" in (
+    assert "Repo#branch: sample-org/sample-app#develop · branches factory/api-status/<task>" in (
         charter
     )
     assert (
-        "Base branch: temp-main (open every PR against it; the dev env tracks origin/temp-main)"
+        "Base branch: develop (open every PR against it; the dev env tracks origin/develop)"
         in charter
     )
     [brief] = cockpit.mailer.items
-    assert "api-status · API status endpoint · P1 · caffeinelabs/app#temp-main" in brief.text
+    assert "api-status · API status endpoint · P1 · sample-org/sample-app#develop" in brief.text
     docs = cockpit.store.get_project(root, "docs-factory-envs")
     assert docs is not None
     assert "Base branch: main (open every PR against it)" in render_pl_charter(docs).splitlines()
@@ -186,14 +186,14 @@ async def test_a_test_base_branch_reaches_the_charter_brief_and_spawn(cockpit: C
     cockpit.mailer.items.clear()
     added = {
         "slug": "ux-env-badge",
-        "repo": "caffeinelabs/app",
-        "base_branch": "temp-main",
+        "repo": "sample-org/sample-app",
+        "base_branch": "develop",
         "goal": "Show an ENV badge in the UX header on factory envs.",
     }
     resp = await cockpit.post(f"/v1/factory/factories/{root}/projects", added, user="alice")
     assert resp.status_code == 201, resp.text
     [spawn] = cockpit.mailer.items
-    assert "workspaces=['https://github.com/caffeinelabs/app#temp-main']" in spawn.text
+    assert "workspaces=['https://github.com/sample-org/sample-app#develop']" in spawn.text
 
 
 async def test_start_is_idempotent_for_the_same_slugs(cockpit: Cockpit) -> None:
@@ -340,14 +340,14 @@ def test_base_branch_refuses_names_git_refuses(branch: str) -> None:
 
 @pytest.mark.parametrize(
     ("branch", "sent"),
-    [("", None), ("  ", None), ("temp-main", "temp-main"), ("release/v1.2", "release/v1.2")],
+    [("", None), ("  ", None), ("develop", "develop"), ("release/v1.2", "release/v1.2")],
 )
 def test_an_empty_base_branch_is_the_factory_default(branch: str, sent: str | None) -> None:
     project = ProjectIn(slug="s", repo="o/r", goal="g", base_branch=branch)
     assert project.base_branch == sent
     assert FactoryDefaults().base_for(project) == (sent or "main")
-    assert FactoryDefaults("o/r", "temp-main").base_for(project) == (sent or "temp-main")
-    assert FactoryDefaults("o/other", "temp-main").base_for(project) == (sent or "main")
+    assert FactoryDefaults("o/r", "develop").base_for(project) == (sent or "develop")
+    assert FactoryDefaults("o/other", "develop").base_for(project) == (sent or "main")
 
 
 # ── Factory defaults ───────────────────────────────────────────
@@ -358,25 +358,28 @@ def test_an_empty_base_branch_is_the_factory_default(branch: str, sent: str | No
     [
         pytest.param(None, None, FactoryDefaults(), id="nothing"),
         pytest.param(
-            "caffeinelabs/app#temp-main",
+            "sample-org/sample-app#develop",
             None,
-            FactoryDefaults("caffeinelabs/app", "temp-main"),
+            FactoryDefaults("sample-org/sample-app", "develop"),
             id="knob",
         ),
         pytest.param(
-            "caffeinelabs/app", None, FactoryDefaults("caffeinelabs/app", "main"), id="bare"
+            "sample-org/sample-app",
+            None,
+            FactoryDefaults("sample-org/sample-app", "main"),
+            id="bare",
         ),
         pytest.param("not a repo#x", None, FactoryDefaults(), id="malformed-knob"),
         pytest.param(
-            "caffeinelabs/app#temp-main",
+            "sample-org/sample-app#develop",
             {"base_branch": "release"},
-            FactoryDefaults("caffeinelabs/app", "release"),
+            FactoryDefaults("sample-org/sample-app", "release"),
             id="form-base-wins",
         ),
         pytest.param(
-            "caffeinelabs/app#temp-main",
-            {"repo": "caffeinelabs/infra"},
-            FactoryDefaults("caffeinelabs/infra", "main"),
+            "sample-org/sample-app#develop",
+            {"repo": "sample-org/sample-infra"},
+            FactoryDefaults("sample-org/sample-infra", "main"),
             id="knob-base-only-for-its-repo",
         ),
         pytest.param(
@@ -386,13 +389,13 @@ def test_an_empty_base_branch_is_the_factory_default(branch: str, sent: str | No
             id="form",
         ),
         pytest.param(
-            "caffeinelabs/app#temp-main",
+            "sample-org/sample-app#develop",
             {"repo": None, "base_branch": None},
             FactoryDefaults(),
             id="cleared-row-means-none",
         ),
         pytest.param(
-            "caffeinelabs/app#temp-main",
+            "sample-org/sample-app#develop",
             {"repo": "", "base_branch": "dev", "integration_env": True},
             FactoryDefaults(integration_env=True),
             id="cleared-repo-drops-the-base",
@@ -419,32 +422,32 @@ async def test_projects_inherit_the_factory_base(cockpit: Cockpit) -> None:
     projects = copy.deepcopy(PROJECTS)
     projects[0].pop("base_branch")
     projects.append(
-        {"slug": "pinned", "repo": "caffeinelabs/app", "base_branch": "release", "goal": "g"}
+        {"slug": "pinned", "repo": "sample-org/sample-app", "base_branch": "release", "goal": "g"}
     )
-    projects.append({"slug": "infra-docs", "repo": "caffeinelabs/infra", "goal": "g"})
-    defaults = {"repo": "caffeinelabs/app", "base_branch": "temp-main"}
+    projects.append({"slug": "infra-docs", "repo": "sample-org/sample-infra", "goal": "g"})
+    defaults = {"repo": "sample-org/sample-app", "base_branch": "develop"}
 
     resp = await _start(cockpit, _body(root, projects=projects, defaults=defaults))
 
     assert resp.status_code == 201, resp.text
     bases = {p.slug: p.base_branch for p in cockpit.store.list_projects(root)}
     assert bases == {
-        "api-status": "temp-main",
-        "docs-factory-envs": "temp-main",
+        "api-status": "develop",
+        "docs-factory-envs": "develop",
         "pinned": "release",
         "infra-docs": "main",
     }
     labels = cockpit.world.get("atlas").labels
-    assert labels[F.LABEL_DEFAULT_REPO] == "caffeinelabs/app"
-    assert labels[F.LABEL_DEFAULT_BASE] == "temp-main"
+    assert labels[F.LABEL_DEFAULT_REPO] == "sample-org/sample-app"
+    assert labels[F.LABEL_DEFAULT_BASE] == "develop"
     [started] = [e for e in cockpit.store.list_events(root) if e.kind == "factory.started"]
     assert started.data["defaults"] == {
-        "repo": "caffeinelabs/app",
-        "base_branch": "temp-main",
+        "repo": "sample-org/sample-app",
+        "base_branch": "develop",
         "integration_env": False,
     }
     api = cockpit.store.get_project(root, "api-status")
-    assert "Base branch: temp-main (open every PR against it; the dev env tracks " in (
+    assert "Base branch: develop (open every PR against it; the dev env tracks " in (
         render_pl_charter(api)
     )
 
@@ -452,7 +455,7 @@ async def test_projects_inherit_the_factory_base(cockpit: Cockpit) -> None:
 async def test_the_server_knob_is_the_default_when_the_form_sends_none(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(DEFAULT_BASE_ENV, "caffeinelabs/app#temp-main")
+    monkeypatch.setenv(DEFAULT_BASE_ENV, "sample-org/sample-app#develop")
     root = _new_lead(cockpit)
     projects = copy.deepcopy(PROJECTS)
     projects[0].pop("base_branch")
@@ -460,24 +463,24 @@ async def test_the_server_knob_is_the_default_when_the_form_sends_none(
     resp = await _start(cockpit, _body(root, projects=projects))
 
     assert resp.status_code == 201, resp.text
-    assert cockpit.store.get_project(root, "api-status").base_branch == "temp-main"
-    assert cockpit.world.get("atlas").labels[F.LABEL_DEFAULT_BASE] == "temp-main"
+    assert cockpit.store.get_project(root, "api-status").base_branch == "develop"
+    assert cockpit.world.get("atlas").labels[F.LABEL_DEFAULT_BASE] == "develop"
 
 
 async def test_add_project_inherits_the_factory_base(cockpit: Cockpit) -> None:
     root = _new_lead(cockpit)
-    defaults = {"repo": "caffeinelabs/app", "base_branch": "temp-main"}
+    defaults = {"repo": "sample-org/sample-app", "base_branch": "develop"}
     assert (await _start(cockpit, _body(root, defaults=defaults))).status_code == 201
     cockpit.mailer.items.clear()
-    added = {"slug": "ux-env-badge", "repo": "caffeinelabs/app", "goal": "Show an ENV badge."}
+    added = {"slug": "ux-env-badge", "repo": "sample-org/sample-app", "goal": "Show an ENV badge."}
 
     resp = await cockpit.post(f"/v1/factory/factories/{root}/projects", added, user="alice")
 
     assert resp.status_code == 201, resp.text
-    assert resp.json()["project"]["base_branch"] == "temp-main"
+    assert resp.json()["project"]["base_branch"] == "develop"
     [spawn] = cockpit.mailer.items
-    assert "workspaces=['https://github.com/caffeinelabs/app#temp-main']" in spawn.text
-    other = {"slug": "infra", "repo": "caffeinelabs/infra", "goal": "g"}
+    assert "workspaces=['https://github.com/sample-org/sample-app#develop']" in spawn.text
+    other = {"slug": "infra", "repo": "sample-org/sample-infra", "goal": "g"}
     resp = await cockpit.post(f"/v1/factory/factories/{root}/projects", other, user="alice")
     assert resp.json()["project"]["base_branch"] == "main"
 
@@ -485,7 +488,7 @@ async def test_add_project_inherits_the_factory_base(cockpit: Cockpit) -> None:
 async def test_without_defaults_the_golden_texts_are_unchanged(cockpit: Cockpit) -> None:
     """A main factory with defaults sent renders the same brief and charters as before."""
     root = _new_lead(cockpit)
-    defaults = {"repo": "caffeinelabs/app", "base_branch": "main", "integration_env": False}
+    defaults = {"repo": "sample-org/sample-app", "base_branch": "main", "integration_env": False}
 
     resp = await _start(cockpit, _body(root, defaults=defaults))
 
@@ -508,7 +511,7 @@ async def test_without_defaults_the_golden_texts_are_unchanged(cockpit: Cockpit)
 
 async def test_start_with_a_live_env_creates_base_env(cockpit: Cockpit) -> None:
     root = _new_lead(cockpit)
-    defaults = {"repo": "caffeinelabs/app", "base_branch": "temp-main", "integration_env": True}
+    defaults = {"repo": "sample-org/sample-app", "base_branch": "develop", "integration_env": True}
 
     resp = await _start(cockpit, _body(root, defaults=defaults))
 
@@ -516,23 +519,23 @@ async def test_start_with_a_live_env_creates_base_env(cockpit: Cockpit) -> None:
     rows = {p.slug: p for p in cockpit.store.list_projects(root)}
     assert set(rows) == {"api-status", "docs-factory-envs", "base-env"}
     env = rows["base-env"]
-    assert (env.repo, env.base_branch, env.priority) == ("caffeinelabs/app", "temp-main", 3)
-    assert env.title == "Base env · temp-main"
+    assert (env.repo, env.base_branch, env.priority) == ("sample-org/sample-app", "develop", 3)
+    assert env.title == "Base env · develop"
     assert env.charter["kind"] == "integration"
     assert env.charter["env_needed"] is True and env.charter["preview"]["enabled"] is False
     charter = render_pl_charter(env).splitlines()
     assert charter[:2] == [
         "CHARTER · base-env",
-        "KIND: integration · keep a live env at the head of caffeinelabs/app#temp-main; "
+        "KIND: integration · keep a live env at the head of sample-org/sample-app#develop; "
         "no tasks, ICs or PRs",
     ]
     assert (
-        "Base branch: temp-main (the env tracks origin/temp-main; redeploy it when the base moves)"
+        "Base branch: develop (the env tracks origin/develop; redeploy it when the base moves)"
         in charter
     )
     [brief] = cockpit.mailer.items
     assert (
-        "3. base-env · Base env · temp-main · P3 · caffeinelabs/app#temp-main · "
+        "3. base-env · Base env · develop · P3 · sample-org/sample-app#develop · "
         "integration env (heartbeat 0)" in brief.text
     )
     assert "Spawn base-env the same way but with heartbeat_s=0" in brief.text
@@ -546,8 +549,8 @@ async def test_start_with_a_live_env_creates_base_env(cockpit: Cockpit) -> None:
     assert snapshot.status_code == 200, snapshot.text
     body = snapshot.json()
     assert body["factory"]["base"] == {
-        "repo": "caffeinelabs/app",
-        "branch": "temp-main",
+        "repo": "sample-org/sample-app",
+        "branch": "develop",
         "head_sha": None,
         "moved_at": None,
         "env": None,
@@ -583,7 +586,11 @@ async def test_a_live_env_needs_a_base_a_free_slug_and_a_slot(
 ) -> None:
     body = _body(
         _new_lead(cockpit),
-        defaults={"repo": "caffeinelabs/app", "base_branch": "temp-main", "integration_env": True},
+        defaults={
+            "repo": "sample-org/sample-app",
+            "base_branch": "develop",
+            "integration_env": True,
+        },
     )
     mutate(body)
 
@@ -597,7 +604,11 @@ async def test_a_live_env_needs_a_base_a_free_slug_and_a_slot(
 async def test_a_live_env_fits_next_to_the_last_free_slots(cockpit: Cockpit) -> None:
     body = _body(
         _new_lead(cockpit),
-        defaults={"repo": "caffeinelabs/app", "base_branch": "temp-main", "integration_env": True},
+        defaults={
+            "repo": "sample-org/sample-app",
+            "base_branch": "develop",
+            "integration_env": True,
+        },
     )
     body["projects"] = [PROJECTS[1] | {"slug": f"p-{i}"} for i in range(max_projects() - 1)]
 
@@ -617,7 +628,7 @@ async def test_add_project_asks_the_root_to_spawn_its_pl(cockpit: Cockpit) -> No
     project = {
         "slug": "ux-env-badge",
         "title": "ENV badge",
-        "repo": "caffeinelabs/app",
+        "repo": "sample-org/sample-app",
         "base_branch": "main",
         "goal": "Show an ENV badge in the UX header on factory envs.",
         "demo_focus": "video of the header badge",
@@ -637,7 +648,7 @@ async def test_add_project_asks_the_root_to_spawn_its_pl(cockpit: Cockpit) -> No
         f"[Factory brief · from alice via cockpit · id={item.mail_id}] Human added project "
         "ux-env-badge. Spawn its PL now: sys_factory_spawn(agent='factory-pl', "
         "role='project_lead', title='PL · ux-env-badge', project='ux-env-badge', "
-        "workspaces=['https://github.com/caffeinelabs/app#main'], heartbeat_s=7200, "
+        "workspaces=['https://github.com/sample-org/sample-app#main'], heartbeat_s=7200, "
         "message='Start. Your charter follows.')"
     )
     row = cockpit.store.get_project(root, "ux-env-badge")
@@ -646,7 +657,7 @@ async def test_add_project_asks_the_root_to_spawn_its_pl(cockpit: Cockpit) -> No
 
 
 async def test_add_project_access_and_factory_checks(cockpit: Cockpit) -> None:
-    project = {"slug": "x", "repo": "caffeinelabs/app", "goal": "g"}
+    project = {"slug": "x", "repo": "sample-org/sample-app", "goal": "g"}
 
     outsider = await cockpit.post(
         f"/v1/factory/factories/{cockpit.fid}/projects", project, user="bob"
@@ -671,7 +682,7 @@ def _seed_project(cockpit: Cockpit) -> None:
         cockpit.fid,
         "api-version",
         title="API version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         base_branch="main",
         charter={"goal": "Add GET /version.", "dod": ["curl /version returns 200"]},
         priority=1,

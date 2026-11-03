@@ -75,7 +75,7 @@ async def test_the_create_matches_sys_factory_spawn(
         supervisor=cockpit.world.id("lead_b"),
         project="db-version",
         heartbeat_s=600,
-        workspace="https://github.com/caffeinelabs/app#temp-main",
+        workspace="https://github.com/sample-org/sample-app#develop",
         # The same version and bundle labels sys_factory_spawn reads from /agent/version.
         version_labels=versions.labels_for_agent(cockpit.deps.agent_store, agent_id),
     )
@@ -239,7 +239,7 @@ async def test_a_lead_recovery_spawn_takes_the_project_over(
         cockpit.fid,
         "db-version",
         title="db-version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         charter={"goal": "Show the DB version.", "spawn_owner": "server"},
     )
 
@@ -278,7 +278,7 @@ async def test_a_restart_mid_spawn_is_finished_once(
         cockpit.fid,
         "db-version",
         title="db-version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         charter={"goal": "Show the DB version.", "spawn_owner": "server"},
     )
     pl = cockpit.world.make_session(
@@ -315,7 +315,7 @@ async def test_a_spawn_cut_off_before_the_create_runs_once(
         cockpit.fid,
         "db-version",
         title="db-version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         charter={"goal": "Show the DB version.", "spawn_owner": "server"},
     )
 
@@ -464,7 +464,7 @@ async def test_spike_s1_an_in_process_create_matches_a_runner_create(
         F.LABEL_PARENT: root.id,
         F.LABEL_PROJECT: "db-version",
     }
-    workspace = "https://github.com/caffeinelabs/app#temp-main"
+    workspace = "https://github.com/sample-org/sample-app#develop"
     body = member_create_body(
         agent_id=agent_id, title="PL · db-version", labels=labels, workspaces=[workspace]
     )
@@ -485,7 +485,7 @@ async def test_spike_s1_an_in_process_create_matches_a_runner_create(
     [launch] = launches
     assert launch["agent_id"] == agent_id and launch["owner"] == "alice"
     [repo] = launch["repos"]
-    assert (repo.url, repo.branch) == ("https://github.com/caffeinelabs/app", "temp-main")
+    assert (repo.url, repo.branch) == ("https://github.com/sample-org/sample-app", "develop")
 
 
 # ── Start PL (cockpit) ─────────────────────────────────────────
@@ -497,8 +497,8 @@ def _unstaffed(cockpit: Cockpit, slug: str = "db-version", **charter: Any) -> st
         cockpit.fid,
         slug,
         title=slug,
-        repo="caffeinelabs/app",
-        base_branch="temp-main",
+        repo="sample-org/sample-app",
+        base_branch="develop",
         charter={"goal": f"Build {slug}.", **charter},
     )
     return f"/v1/factory/factories/{cockpit.fid}/projects/{slug}/start"

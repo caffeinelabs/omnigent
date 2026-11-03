@@ -23,7 +23,7 @@ function iconFor(message: ChatMessageView) {
   if (/\bresum/.test(body)) return PlayIcon;
   if (/spawn|started/.test(body)) return RocketIcon;
   if (/joined|invited|role|access/.test(body)) return UserPlusIcon;
-  if (/base|temp-main|moved/.test(body)) return GitBranchIcon;
+  if (/base|moved/.test(body)) return GitBranchIcon;
   return CircleDotIcon;
 }
 

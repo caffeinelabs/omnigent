@@ -1,6 +1,6 @@
 {
-  "about": "The 2026-10-26 live run (caffeinelabs/app#9630 api-version, #9631 db-version) as a replayable log. Times are seconds from the factory start. 'emit' steps are factory events (session keys name seeded sessions); 'pr' steps change the fake GitHub; 'poll' steps run the PR poller. #9630 went through three heads (CI failed on the first, review asked for changes on the second) and was merged; #9631 was ready on its first head, lost READY to a base merge and was ready again.",
-  "repo": "caffeinelabs/app",
+  "about": "The 2026-10-26 live run (sample-org/sample-app#9630 api-version, #9631 db-version) as a replayable log. Times are seconds from the factory start. 'emit' steps are factory events (session keys name seeded sessions); 'pr' steps change the fake GitHub; 'poll' steps run the PR poller. #9630 went through three heads (CI failed on the first, review asked for changes on the second) and was merged; #9631 was ready on its first head, lost READY to a base merge and was ready again.",
+  "repo": "sample-org/sample-app",
   "projects": [
     {"slug": "api-version", "title": "API version endpoint", "pl": "pl", "charter": {"env_needed": true, "preview": {"enabled": true, "slots": 2}}},
     {"slug": "db-version", "title": "DB version", "pl": null, "charter": null}
@@ -13,7 +13,7 @@
     "e": "c0ffee11d2a94b8e3f50d6a71b2c9e84f03d5a17"
   },
   "steps": [
-    {"at": 0, "emit": {"kind": "factory.started", "to": "lead_a", "summary": "luka started Atlas with 2 project(s)", "data": {"projects": ["api-version", "db-version"]}}},
+    {"at": 0, "emit": {"kind": "factory.started", "to": "lead_a", "summary": "lena started Atlas with 2 project(s)", "data": {"projects": ["api-version", "db-version"]}}},
     {"at": 60, "emit": {"kind": "stage.changed", "project": "api-version", "summary": "api-version: queued → planning", "data": {"from": "queued", "to": "planning"}}},
     {"at": 65, "emit": {"kind": "stage.changed", "project": "db-version", "summary": "db-version: queued → planning", "data": {"from": "queued", "to": "planning"}}},
     {"at": 300, "emit": {"kind": "dispatch", "project": "api-version", "from": "pl", "to": "ic", "summary": "ic_codex:version-endpoint · add GET /version", "data": {"agent": "ic"}}},
@@ -46,9 +46,9 @@
     {"at": 3300, "pr": {"number": 9631, "op": "verify", "head": "d", "result": "PASS"}},
     {"at": 3300, "poll": true},
     {"at": 3400, "emit": {"kind": "decision.opened", "project": "db-version", "from": "lead_b", "summary": "D-1: merge #9631 before #9630?", "decision": {"question": "Merge #9631 before #9630?"}}},
-    {"at": 3500, "emit": {"kind": "control.pause", "project": "db-version", "to": "lead_a", "summary": "luka paused project db-version", "data": {"by": "luka", "action": "pause", "target": "project:db-version", "note": "hold until the base settles"}}},
-    {"at": 3600, "answer": {"ref": "D-1", "by": "luka", "label": "yes"}},
-    {"at": 4000, "pr": {"number": 9630, "op": "merge", "by": "luka"}},
+    {"at": 3500, "emit": {"kind": "control.pause", "project": "db-version", "to": "lead_a", "summary": "lena paused project db-version", "data": {"by": "lena", "action": "pause", "target": "project:db-version", "note": "hold until the base settles"}}},
+    {"at": 3600, "answer": {"ref": "D-1", "by": "lena", "label": "yes"}},
+    {"at": 4000, "pr": {"number": 9630, "op": "merge", "by": "lena"}},
     {"at": 4000, "poll": true},
     {"at": 4300, "pr": {"number": 9631, "op": "push", "head": "e", "commit_at": 4290, "checks": [["ci / test", "SUCCESS"]]}},
     {"at": 4300, "poll": true},

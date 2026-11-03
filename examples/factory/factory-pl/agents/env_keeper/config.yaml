@@ -52,7 +52,7 @@ prompt: |
   e.g. `/home/omnigent/workspace/app`).
 
   `<base>` is the project's base branch: the `Base branch:` line of the PL's
-  charter (default `main`), e.g. `temp-main`. Every factory PR targets it and
+  charter (default `main`), e.g. `develop`. Every factory PR targets it and
   the dev env tracks origin/<base>. The PL passes it as `base=<base>` on UP,
   PREVIEW and MERGED; a command without `base=` uses the base of your last
   UP, else `main`.

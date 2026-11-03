@@ -69,7 +69,7 @@ def _seed(cockpit: Cockpit, *, owner: str | None = None) -> None:
     store.upsert_project(cockpit.fid, "billing", title="Billing")
     store.upsert_pr(
         cockpit.fid,
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9826,
         title="GET /version",
         project_slug="api-version",
@@ -291,7 +291,7 @@ def _working(cockpit: Cockpit, slug: str, pr: int, task: str) -> None:
     cockpit.permissions.grant("alice", pl.id, LEVEL_OWNER)
     store = cockpit.store
     store.upsert_project(cockpit.fid, slug, title=slug, pl_session_id=pl.id)
-    store.upsert_pr(cockpit.fid, "caffeinelabs/app", pr, title="Build it", project_slug=slug)
+    store.upsert_pr(cockpit.fid, "sample-org/sample-app", pr, title="Build it", project_slug=slug)
     store.upsert_task(cockpit.fid, slug, task, title=task, state="running")
 
 
@@ -324,7 +324,7 @@ async def test_atlas_is_quoted_word_for_word_with_the_prs_it_names_linked(
     _seed(cockpit)
     store = cockpit.store
     for number in (9827, 9828):
-        store.upsert_pr(cockpit.fid, "caffeinelabs/app", number, title=f"PR {number}")
+        store.upsert_pr(cockpit.fid, "sample-org/sample-app", number, title=f"PR {number}")
     note = "3 PRs ready · #9826 #9827 #9828 verified, waiting for <@here> & a merge"
     cockpit.world.store.set_labels(cockpit.fid, {F.LABEL_SUMMARY: note})
     link(cockpit, "alice")
@@ -354,7 +354,7 @@ async def test_a_busy_factorys_digest_keeps_every_heading_and_link_whole(
         store.upsert_project(cockpit.fid, slug, title=slug)
         store.upsert_pr(
             cockpit.fid,
-            "caffeinelabs/app",
+            "sample-org/sample-app",
             9800 + i,
             title=f"Validate the build tier on a preview environment, part {i} " + "x" * 60,
             project_slug=slug,

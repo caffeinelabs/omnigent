@@ -1,5 +1,5 @@
 /**
- * The factory's base in one line: `base app#temp-main @57ab671 ● env ready`.
+ * The factory's base in one line: `base sample-app#develop @57ab671 ● env ready`.
  * Hover shows the live env at the base head (URLs, resources, both truths)
  * and when the head last moved.
  */
@@ -12,7 +12,7 @@ import { ageText } from "../board/boardModel";
 import { DevEnvDetails, devEnvStatus } from "../board/DevEnvPill";
 import { TONE_DOT, sameSha, shortSha } from "../factoryFormat";
 
-/** `caffeinelabs/app` → `app`. */
+/** `sample-org/sample-app` → `sample-app`. */
 export function repoShort(repo: string): string {
   return repo.split("/").pop() || repo;
 }

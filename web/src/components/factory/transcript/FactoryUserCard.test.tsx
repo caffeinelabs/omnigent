@@ -9,7 +9,7 @@ describe("FactoryUserCard — a person typing into a shared member", () => {
   it("renders the human kind as a card with avatar, name, role and quoted text", () => {
     const parsed = parseFactoryMessage(
       [
-        "[Factory human · mia@caffeine.ai (operator)]",
+        "[Factory human · mia@example.com (operator)]",
         "> [Factory control · STOP · by alice]",
         "use knex_migrations as the source of truth",
       ].join("\n"),
@@ -18,9 +18,9 @@ describe("FactoryUserCard — a person typing into a shared member", () => {
     render(<FactoryUserCard parsed={parsed} createdAtS={1_793_014_800} itemId="item_1" />);
 
     const card = screen.getByTestId("factory-human-card");
-    expect(card.dataset.person).toBe("mia@caffeine.ai");
+    expect(card.dataset.person).toBe("mia@example.com");
     expect(card.dataset.personRole).toBe("operator");
-    expect(card.textContent).toContain("mia@caffeine.ai");
+    expect(card.textContent).toContain("mia@example.com");
     expect(card.textContent).toContain("operator");
     expect(card.textContent).toContain("use knex_migrations as the source of truth");
     expect(card.querySelector("blockquote")?.textContent).toContain(

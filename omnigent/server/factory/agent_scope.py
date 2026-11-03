@@ -83,8 +83,8 @@ def repo_from_workspace(workspace: str) -> str | None:
     """
     The GitHub ``owner/repo`` a managed workspace clones.
 
-    :param workspace: e.g. ``"https://github.com/caffeinelabs/app#main"``.
-    :returns: ``"caffeinelabs/app"`` (lowercase), or ``None`` for other hosts.
+    :param workspace: e.g. ``"https://github.com/sample-org/sample-app#main"``.
+    :returns: ``"sample-org/sample-app"`` (lowercase), or ``None`` for other hosts.
     """
     match = _WORKSPACE_REPO_RE.fullmatch(workspace.partition("#")[0].strip())
     if match is None:
@@ -99,7 +99,7 @@ def factory_repos(caller: AgentCaller) -> dict[str, set[str]]:
     Project rows are the source; until a project row exists, the repos the
     caller's root PL and the factory root were launched with also count.
 
-    :returns: e.g. ``{"caffeinelabs/app": {"api-version", "db-version"}}``.
+    :returns: e.g. ``{"sample-org/sample-app": {"api-version", "db-version"}}``.
     """
     from omnigent.factory import LABEL_PROJECT
     from omnigent.server.managed_hosts import read_managed_repo_workspaces

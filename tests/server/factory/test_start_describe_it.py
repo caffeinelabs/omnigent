@@ -37,8 +37,8 @@ def _describe(root_id: str, **extra: Any) -> dict[str, Any]:
         "projects": [],
         "brief": "Show the deployed versions in Settings.",
         "defaults": {
-            "repo": "caffeinelabs/app",
-            "base_branch": "temp-main",
+            "repo": "sample-org/sample-app",
+            "base_branch": "develop",
             "integration_env": True,
         },
         **extra,

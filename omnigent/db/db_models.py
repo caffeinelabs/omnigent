@@ -1900,7 +1900,7 @@ class SqlFactoryEvent(OmnigentBase):
     :param ts: Epoch milliseconds.
     :param kind: Stable kind string, e.g. ``"message.queued"``.
     :param severity: Code of ``info``/``notice``/``warning``/``critical``.
-    :param subject: What the event is about, e.g. ``"pr:caffeinelabs/app#9630"``.
+    :param subject: What the event is about, e.g. ``"pr:sample-org/sample-app#9630"``.
     :param data: JSON payload, or ``None``.
     """
 

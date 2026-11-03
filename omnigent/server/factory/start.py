@@ -649,8 +649,8 @@ class FactoryDefaults:
     """
     A factory's default repo and base (root labels ``default_repo`` / ``default_base``).
 
-    :param repo: e.g. ``"caffeinelabs/app"``, or ``None``.
-    :param base: e.g. ``"temp-main"``, or ``None``.
+    :param repo: e.g. ``"sample-org/sample-app"``, or ``None``.
+    :param base: e.g. ``"develop"``, or ``None``.
     :param integration_env: Start the ``base-env`` integration project.
     """
 

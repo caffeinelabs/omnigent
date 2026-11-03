@@ -55,9 +55,9 @@ function controlEvent(
     from_title: null,
     to_title: `PL · ${slug}`,
     subject: `project:${slug}`,
-    summary: `Luka ${action}d project ${slug}`,
+    summary: `Lena ${action}d project ${slug}`,
     data: {
-      by: "Luka",
+      by: "Lena",
       action,
       target: `project:${slug}`,
       options: action === "pause" ? { keep_previews: true } : {},
@@ -378,7 +378,7 @@ export const EditCharterReview = cockpit({}, async ({ canvasElement }) => {
   const screen = await openCharter(canvasElement);
   const goal = await screen.findByTestId("charter-goal-0");
   await userEvent.clear(goal);
-  await userEvent.type(goal, "Expose GET /version on caffeine-api with the short git sha.");
+  await userEvent.type(goal, "Expose GET /version on sample-api with the short git sha.");
   await userEvent.click(screen.getByTestId("charter-slots-0-3"));
   await userEvent.click(screen.getByTestId("charter-review"));
   await screen.findByTestId("charter-diff");
@@ -388,7 +388,7 @@ export const EditCharterReviewDark = cockpit({ theme: "dark" }, async ({ canvasE
   const screen = await openCharter(canvasElement);
   const goal = await screen.findByTestId("charter-goal-0");
   await userEvent.clear(goal);
-  await userEvent.type(goal, "Expose GET /version on caffeine-api with the short git sha.");
+  await userEvent.type(goal, "Expose GET /version on sample-api with the short git sha.");
   await userEvent.click(screen.getByTestId("charter-review"));
   await screen.findByTestId("charter-diff");
 });

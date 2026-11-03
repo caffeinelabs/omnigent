@@ -130,7 +130,7 @@ describe("FactoryPage · shell", () => {
     await screen.findByTestId("factory-header");
     expect(screen.getByTestId("factory-engine-mode")).toHaveTextContent("assist");
     expect(screen.getByTestId("factory-def-version")).toHaveTextContent("def v7");
-    expect(screen.getByTestId("factory-base-line")).toHaveTextContent("app#temp-main@57ab671");
+    expect(screen.getByTestId("factory-base-line")).toHaveTextContent("app#develop@57ab671");
     expect(screen.getByTestId("factory-base-line")).toHaveAttribute("data-env", "ready");
     expect(screen.getByTestId("factory-presence")).toHaveAttribute("data-count", "2");
   });
@@ -366,9 +366,9 @@ describe("FactoryPage · presence, ⌘K and sharing", () => {
     renderAt("");
     fireEvent.click(await screen.findByTestId("factory-share"));
     const dialog = await screen.findByTestId("share-dialog");
-    expect(await within(dialog).findByTestId("people-row-mia@caffeine.ai")).toBeInTheDocument();
+    expect(await within(dialog).findByTestId("people-row-mia@example.com")).toBeInTheDocument();
     expect(within(dialog).getByTestId("share-credential-line")).toHaveTextContent(
-      "Agents act as luka@caffeine.ai’s GitHub & Databricks",
+      "Agents act as lena@example.com’s GitHub & Databricks",
     );
   });
 
@@ -453,7 +453,7 @@ describe("FactoryPage · the Room dock", () => {
     const dock = await screen.findByTestId("room-dock");
     const input = await within(dock).findByTestId("room-composer-input");
     expect(within(dock).getByTestId("room-composer-identity")).toHaveTextContent(
-      "Posting as Luka · owner",
+      "Posting as Lena · owner",
     );
     fireEvent.change(input, {
       target: { value: "@atlas add a project for a /health badge on settings" },

@@ -147,7 +147,7 @@ export function resolveAgent(
   return { error: `No agent ${raw} in this factory` };
 }
 
-/** `@mia`, `@mia@caffeine.ai`, `owners` or `operators` → whom a decision is assigned to. */
+/** `@mia`, `@mia@example.com`, `owners` or `operators` → whom a decision is assigned to. */
 export function resolveAssignee(
   raw: string,
   people: readonly PersonView[] | null | undefined,

@@ -1,7 +1,7 @@
 """Shared setup for the project-core, proposal, spawn and gating tests.
 
 The seeded factory (Atlas + Sentinel + ``PL · api-version``) gets a default
-``caffeinelabs/app#temp-main`` and a project row for ``api-version``. Agent
+``sample-org/sample-app#develop`` and a project row for ``api-version``. Agent
 calls go through ``/v1/factory/agent/*`` as the session owner (alice);
 :class:`FakeCreates` stands in for the in-process ``POST /v1/sessions`` of a
 server spawn and creates the PL session row with the labels it was sent.
@@ -23,8 +23,8 @@ from omnigent.server.factory.charter import DEFAULT_BASE_ENV
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit
 from tests.server.factory.conftest import FactoryWorld, HeaderAuth
 
-REPO = "caffeinelabs/app"
-BASE = "temp-main"
+REPO = "sample-org/sample-app"
+BASE = "develop"
 
 
 class MintingAuth(HeaderAuth):

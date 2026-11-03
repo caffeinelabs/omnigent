@@ -71,7 +71,7 @@ export function whenText(epochS: number, nowS: number): string {
   return `${formatElapsed(nowS - epochS)} ago`;
 }
 
-/** `carol` from `carol@caffeine.ai`. */
+/** `carol` from `carol@example.com`. */
 export function shortName(userId: string): string {
   return userId.split("@")[0] || userId;
 }

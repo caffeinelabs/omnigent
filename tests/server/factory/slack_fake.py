@@ -21,7 +21,7 @@ from omnigent.server.factory.slackdm import client as slack_client
 # Built at runtime so secret scanners do not mistake the fakes for real tokens.
 TOKEN = "-".join(["xoxb", "1111111111", "2222222222222", "FakeTokenForTestsOnlyAAAA"])
 OTHER_TEAM_TOKEN = "-".join(["xoxb", "9999999999", "8888888888888", "FakeTokenForTestsOnlyBBBB"])
-TEAM = "T0CAFE"
+TEAM = "T0SAMPLE"
 SCOPES = "chat:write,im:write,users:read,users:read.email"
 
 
@@ -40,7 +40,7 @@ class FakeSlack:
     """The workspace: people by member id, scripted failures and recorded calls."""
 
     team_id: str = TEAM
-    team: str = "Caffeine Labs"
+    team: str = "Sample Org"
     scopes: str = SCOPES
     tokens: dict[str, str] = field(
         default_factory=lambda: {TOKEN: TEAM, OTHER_TEAM_TOKEN: "T0OTHER"}

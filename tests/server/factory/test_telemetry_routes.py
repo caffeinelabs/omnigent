@@ -278,7 +278,7 @@ async def test_the_export_streams_every_table_without_transcript_content(
     answered = next(
         row for row in rows if row["table"] == "events" and row["kind"] == "decision.answered"
     )
-    assert answered["data"] == {"by": "luka", "label": "yes"}
+    assert answered["data"] == {"by": "lena", "label": "yes"}
     decisions = [row for row in rows if row["table"] == "decisions"]
     assert {d["ref"] for d in decisions} == {"D-1", "D-2"}
     assert all("context" not in d and "answer_text" not in d for d in decisions)

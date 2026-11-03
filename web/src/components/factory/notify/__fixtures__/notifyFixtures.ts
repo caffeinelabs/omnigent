@@ -1,4 +1,4 @@
-// Slack DM fixtures for stories and tests: Luka's own settings in each link
+// Slack DM fixtures for stories and tests: Lena's own settings in each link
 // state, the Slack app in each health, and the owners' team view. Times hang
 // off the round-3 snapshot's clock.
 
@@ -30,12 +30,12 @@ export function slackApp(state: SlackAppState = "ok"): SlackAppView {
   }
   return {
     configured: true,
-    team: "Caffeine Labs",
+    team: "Sample Org",
     bot: "omnigent-factory",
     status: state === "invalid" ? "invalid" : "ok",
     error: state === "invalid" ? "token_revoked" : null,
     missing_scopes: state === "missing_scopes" ? ["users:read.email"] : [],
-    set_by: "luka@caffeine.ai",
+    set_by: "lena@example.com",
     set_at: ROUND3_NOW_S - 2 * 86400,
   };
 }
@@ -76,11 +76,11 @@ export type LinkState = "unlinked" | "pending" | "verified" | "error";
 
 function link(state: LinkState): SlackLinkView {
   const account = {
-    user_id: "U04LUKA9Z",
-    team_id: "T0CAFE",
-    name: "Luka Rumora",
-    handle: "luka",
-    email: "luka@caffeine.ai",
+    user_id: "U04LENA9Z",
+    team_id: "T0SAMPLE",
+    name: "Lena Roth",
+    handle: "lena",
+    email: "lena@example.com",
   };
   switch (state) {
     case "unlinked":
@@ -141,7 +141,7 @@ export function notifyMe(
   const settings = settingsFor(role);
   const { enabled: _enabled, ...defaults } = settings;
   return {
-    user_id: role === "viewer" ? "ops@caffeine.ai" : "luka@caffeine.ai",
+    user_id: role === "viewer" ? "ops@example.com" : "lena@example.com",
     role,
     settings,
     defaults,
@@ -150,7 +150,7 @@ export function notifyMe(
     last_dm: lastDm
       ? {
           at: ROUND3_NOW_S - 47 * 60,
-          summary: "Slack DM to luka@caffeine.ai: D-19 needs you",
+          summary: "Slack DM to lena@example.com: D-19 needs you",
           subject: "decision:D-19",
           status: "sent",
           error: null,
@@ -164,7 +164,7 @@ export function notifyTeam(): NotifyTeamResponse {
   return {
     data: [
       {
-        user_id: "luka@caffeine.ai",
+        user_id: "lena@example.com",
         role: "owner",
         slack_status: "verified",
         error: null,
@@ -177,7 +177,7 @@ export function notifyTeam(): NotifyTeamResponse {
         last_error: null,
       },
       {
-        user_id: "mia@caffeine.ai",
+        user_id: "mia@example.com",
         role: "operator",
         slack_status: "error",
         error: "messages_tab_disabled",
@@ -190,7 +190,7 @@ export function notifyTeam(): NotifyTeamResponse {
         last_error: "messages_tab_disabled",
       },
       {
-        user_id: "ops@caffeine.ai",
+        user_id: "ops@example.com",
         role: "viewer",
         slack_status: "unlinked",
         error: null,

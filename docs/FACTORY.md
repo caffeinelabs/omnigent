@@ -512,7 +512,7 @@ per item and person (`{to_user, key, stage, status}`): the dedupe ledger
 (rebuilt from every row of the last 30 days, read in pages, and checked in the
 store again right before each post, so a server roll or two processes during a
 rollout never send twice; rows are pruned after 35 days), the cockpit's
-"Slack · Luka 10:04" chips on decisions and incidents (`DecisionView.notified`,
+"Slack · Lena 10:04" chips on decisions and incidents (`DecisionView.notified`,
 `IssueView.notified`) and the Activity "Notifications" filter. An item whose
 mark falls before the person linked is not sent (the welcome DM listed it).
 `DecisionView` also gains `deadline_at` and `deadline_effect`.
@@ -533,7 +533,7 @@ the new one. Assumes one server replica: the ledger is not an atomic claim.
 Each project has a **base branch**: the branch every PR of the project
 targets. The New factory form has a factory-level **Default repo & base** row
 (prefilled from `OMNIGENT_FACTORY_DEFAULT_BASE`, e.g.
-`caffeinelabs/app#temp-main`, which `GET /v1/factory/preflight` returns as
+`sample-org/sample-app#develop`, which `GET /v1/factory/preflight` returns as
 `default_repo` / `default_base`); the root records it in the
 `omnigent.factory.default_repo` / `default_base` labels (a cleared row means
 no default, knob or not). A project's base
@@ -549,10 +549,10 @@ then `main`; Add project resolves the same way. It is stored as
   origin/<branch>` and open PRs with `--base <branch>`.
 - **Base gate.** Every PR has a `base` gate: pass when `baseRefName` is the
   project's base, fail otherwise (evidence `PR targets main; project base is
-  temp-main` with the `gh pr edit <url> --base <branch>` fix), pending while
+  develop` with the `gh pr edit <url> --base <branch>` fix), pending while
   GitHub has not reported it. The first failure sends the PL one
-  `[Factory notice · PR #<n> targets main, project base is temp-main · gh pr
-  edit <url> --base temp-main]`. A PR off its base never reads READY FOR HUMAN
+  `[Factory notice · PR #<n> targets main, project base is develop · gh pr
+  edit <url> --base develop]`. A PR off its base never reads READY FOR HUMAN
   MERGE; `sys_factory_pr` returns its `base_ref` next to `project_base`.
 - **Base watcher** (`server/factory/base.py`). The PR poller's GraphQL query
   also reads the head of every `(repo, base)` the active factories watch (a
@@ -562,8 +562,8 @@ then `main`; Add project resolves the same way. It is stored as
   merge and the move it caused in one poll carry the merged PR. When the head
   moves it emits `base.moved {repo, base, from, to, pr}`, mails the integration PL to
   redeploy and every work PL with an open PR on that base `[Factory notice ·
-  base temp-main moved to <sha7> · sync open branches: git merge
-  origin/temp-main]` (at most every 30 min per PL), and runs the
+  base develop moved to <sha7> · sync open branches: git merge
+  origin/develop]` (at most every 30 min per PL), and runs the
   `on_base_moved` hooks. Merges nobody registered are caught the same way.
 - **Integration env.** With "Keep a live env at `<base>`" on (the default
   when the base is not `main`), the start also creates project `base-env`
@@ -575,9 +575,9 @@ then `main`; Add project resolves the same way. It is stored as
   `<api>/version`) and reports with `sys_factory_env`. The snapshot shows it
   as `factory.base = {repo, branch, head_sha, moved_at, env, env_project}`;
   it is left out of the stage strip.
-- **temp-main.** To trial the factory without touching `main`, cut a test
-  branch such as `temp-main` from main and start the factory on
-  `caffeinelabs/app#temp-main`; every factory PR lands there and humans merge
+- **A test base.** To trial the factory without touching `main`, cut a test
+  branch such as `develop` from main and start the factory on
+  `<owner>/<repo>#develop`; every factory PR lands there and humans merge
   them. The preview tooling ref (`OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`,
   default `main`) is separate: it only names where heads that predate the
   tooling get it from.
@@ -594,11 +594,11 @@ preview envs are a different thing.)
   long-running `tilt up` at origin/<base> (the project's base branch) for the
   ICs; previews never touch it.
 - **Entry point.** `scripts/factory.ts preview up|status|down|list` in
-  caffeinelabs/app (`pnpm factory:preview`), with a Tiltfile preview mode that
+  the product repo (`pnpm factory:preview`), with a Tiltfile preview mode that
   stamps `GET /__factory/preview` (`{repo, pr, sha, short, deployed_at, env_id}`,
   an Envoy direct response) and an `x-factory-commit` header on the app and API
   hosts, and creates the `factory-env-secrets` synthetic-session secret. It
-  is on caffeinelabs/app main since caffeinelabs/app#9640, so a PR head that
+  is on the product repo's main, so a PR head that
   includes it (current main, or a base branch cut from it) runs it natively
   (`pnpm -s factory:preview up …`). A head that predates it has no `preview`
   subcommand: env_keeper fetches the tooling ref (`main`) and overlays the
@@ -661,7 +661,7 @@ preview envs are a different thing.)
 
 GitHub reviewers see the demo in the PR itself through a reviewer-facing copy
 in a private repo (`OMNIGENT_FACTORY_DEMO_MIRROR_REPO`, e.g.
-`caffeinelabs/factory-demos`; unset, nothing is mirrored).
+`sample-org/factory-demos`; unset, nothing is mirrored).
 
 - **Writer.** The server, inside `POST /v1/factory/agent/demos` after the
   files are stored, with a 10 s timeout, through the Git Data API as the
@@ -732,12 +732,12 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_DOMAINS` | the env domain | Tier 0: comma-separated domains a product profile may name as its `product.delivery.preview_domain` (the env domain is always one). A definition change to any other domain is refused (422 `tier0`); a stored one the deployment no longer lists is ignored with a warning, and the env domain applies. |
 | `OMNIGENT_FACTORY_DELIVERY_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<product.delivery fields>}}` (`merge_policy`, `protected_repos`, `demo_paths`, `preview_domain`, `release`, `flags`): the profile a factory on that repo starts from. A new factory whose default repo is listed gets it in v1; a factory from before the product profile whose default or project repo is listed gets it once as a seed version at boot. A factory on another repo starts with an empty profile. Owners edit it afterwards. |
 | `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` | unset | Tier 0: comma-separated `owner/repo` values no factory agent ever writes, whatever a spec, a project or a profile says. Read once at boot. Unset, the server logs an error at start and the cockpit health strip shows "Config: no always-deny repos configured". |
-| `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.caffeinelabs.io`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
+| `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.example.com`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
 | `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
 | `OMNIGENT_FACTORY_DEFAULT_BASE` | unset | `owner/repo#branch` new factories default to (the start form's Default repo & base); a bare `owner/repo` means its `main`. |
 | `OMNIGENT_FACTORY_DEMO_MIRROR_REPO` | unset | Private `owner/repo` demo posters and GIFs are mirrored to for the PR comment; unset, nothing is mirrored. |
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
-| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
+| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | Product-repo ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
 | `OMNIGENT_FACTORY_IDLE_BACKSTOP_MAX_S` | `86400` | With quiet beats, the backstop beat of a member nothing touched waits 3 intervals, doubled after each one that found nothing, up to this; any relevant event resets it. Mail never waits. |
 | `OMNIGENT_FACTORY_INVARIANTS` | on | `0` leaves the `factory_invariants` admin default policy unseeded (see Invariants). |
@@ -745,7 +745,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_RETRO_HOUR` | `6` | UTC hour after which Sentinel gets its daily retro beat. |
 | `OMNIGENT_FACTORY_SLACK_DM` | on | `0` turns Slack DMs off (the engine is inert anyway until an owner saves a Slack app token). |
 | `OMNIGENT_FACTORY_SLACK_TICK_S`, `OMNIGENT_FACTORY_SLACK_API` | `30`, `https://slack.com/api/` | Slack DM tick (at least 5 s) and the Slack Web API base (tests). DM links use `OMNIGENT_DOMAIN`. |
-| `OMNIGENT_FACTORY_SMITH`, `…_SMITH_GITHUB_LOGIN`, `…_SMITH_GITHUB_TOKEN`, `…_SMITH_REPO` | off | Tier 2 prerequisites (see Self-modification); the repo defaults to `caffeinelabs/omnigent#staging`. |
+| `OMNIGENT_FACTORY_SMITH`, `…_SMITH_GITHUB_LOGIN`, `…_SMITH_GITHUB_TOKEN`, `…_SMITH_REPO` | off | Tier 2 prerequisites (see Self-modification); the repo defaults to the deployment's omnigent fork at `staging` (`tier2.DEFAULT_REPO`). |
 
 ### Rollback
 
@@ -759,8 +759,8 @@ transcript folds.
   their pods.
 - **Data.** The cockpit tables come from one additive, forward-only migration;
   an older image ignores them. Demo files stay in the artifact store.
-- **App tooling.** The preview tooling is part of caffeinelabs/app main
-  (caffeinelabs/app#9640). PR heads that include it use their own copy; only
+- **App tooling.** The preview tooling is part of the product repo's main.
+  PR heads that include it use their own copy; only
   older heads read it from the overlay ref (`main`).
 
 ## Telemetry
@@ -1008,8 +1008,9 @@ without) and one expected metric effect; at most 2 per agent per day.
 
 **Tier 2: the Factory Smith lane** (code and bundle PRs to omnigent) ships
 off. It turns on only when `OMNIGENT_FACTORY_SMITH=1`, rulesets requiring
-review, CODEOWNERS review and status checks protect
-`caffeinelabs/omnigent#staging` (read through the GitHub API at server start)
+review, CODEOWNERS review and status checks protect the Smith repo's branch
+(`OMNIGENT_FACTORY_SMITH_REPO`, by default the deployment's omnigent fork at
+`staging`; read through the GitHub API at server start)
 and a dedicated factory identity
 (`OMNIGENT_FACTORY_SMITH_GITHUB_LOGIN` and `…_TOKEN`) has neither admin nor
 maintain rights. `GET /v1/factory/preflight` returns `tier2 {enabled,
@@ -1178,7 +1179,7 @@ rest of discovery. A source is an owner-approved `discovery.sources[]` entry
   owner may approve stay open: access requests, tuning, rules and code
   proposals, owner-approval projects proposals and budget raises past the
   operator cap. The benchmark charters
-  are in `examples/factory/benchmarks/temp-main/`.
+  are in `examples/factory/benchmarks/`.
 
 ### Insights, Improvements and Settings (cockpit)
 
@@ -1385,12 +1386,13 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   writes through `gh api`, `gh repo delete|archive|edit`, `gh release`,
   `gh secret`, `gh ruleset` and workflow toggles; every push but an explicit
   branch under `push_ref_prefixes` (`factory/`), so bare pushes,
-  `git push origin HEAD`, deletes, tags and `main`/`master`/`staging`/`temp-main`
-  are denied, and so is git config that could redirect an explicit push (see
-  Invariants); any push or PR creation by a lead, reviewer, planner or the demo
-  agent; writes to repos outside the member's project repos, to the protected
-  repos of the factory's product profile (`product.delivery.protected_repos`)
-  unless a human made one a project's repo, and to the always-deny repos of
+  `git push origin HEAD`, deletes, tags and `main`/`master`/`staging` (and the
+  rest of `DEFAULT_PROTECTED_BRANCHES`) are denied, and so is git config that
+  could redirect an explicit push (see Invariants); any push or PR creation by
+  a lead, reviewer, planner or the demo agent; writes to repos outside the
+  member's project repos, to the protected repos of the factory's product
+  profile (`product.delivery.protected_repos`) unless a human made one a
+  project's repo, and to the always-deny repos of
   `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS`;
   the `factory:allow-protected` label; every PR write but `gh pr comment` by
   the demo agent and every PR or issue write by the planner; and env lifecycle
@@ -1433,9 +1435,9 @@ enforced in code.
 
 | Invariant | Enforced by |
 |---|---|
-| The factory never merges (any repo, `temp-main` included). | The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
-| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. `temp-main` is in the default `protected_branches`. |
-| No writes to the always-deny repos; none to a protected repo of the product profile unless a human made it a project's repo (or under the `smith` profile). | The server passes the profile's `product.delivery.protected_repos` as `factory_protected_repos`; `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` (read at boot) is denied whatever a spec passes; an explicit spec `deny_repos` binds too. A project's repo is lifted from the protected repos and the default `deny_repos` (empty) for the members that write it (next row). The `smith` profile (`write_repos: [caffeinelabs/omnigent]`, `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
+| The factory never merges (any repo, a test base included). | The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
+| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. `DEFAULT_PROTECTED_BRANCHES` also lists the live deployment's test base. |
+| No writes to the always-deny repos; none to a protected repo of the product profile unless a human made it a project's repo (or under the `smith` profile). | The server passes the profile's `product.delivery.protected_repos` as `factory_protected_repos`; `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` (read at boot) is denied whatever a spec passes; an explicit spec `deny_repos` binds too. A project's repo is lifted from the protected repos and the default `deny_repos` (empty) for the members that write it (next row). The `smith` profile (`write_repos`: the deployment's omnigent fork, `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
 | A member writes only the repos of its factory projects: a PL and its sub-agents their own project's repo, a lead (and the planner) every project's. Pushes, `gh pr create/edit/comment/review/…`, `gh issue` writes, `gh api` writes and `GH_REPO` all check the same set. | The server resolves the set whenever it builds a member's policy engine (`server/factory/guard_repos.py`, registered in `runtime/policies/builder.SERVER_POLICY_ARGUMENTS`) and passes it as `factory_repos` to `factory_role_guard` and `factory_invariants`. It replaces the bundle's `write_repos` (bundles pass none; outside a factory the guard writes only the repos a spec names). It reads only the server-stamped membership labels (`id`, `role`, `project`) and the factory's project rows, never tool input, `session_state`, charters or other labels; a row reconcile backfilled from a PL's sandbox (its repo came from a lead's spawn) does not count, nor do cancelled or merged-away projects. An agent's project proposal on a repo outside the same set (plus the default repo) needs the owner, so no agent can grow it. Rows are read on every build, so a project added later extends the set at once. A store error, or a sub-agent whose root cannot be loaded, leaves the member no writable repo. The runner-side gate keeps the bundle defaults; no factory bundle declares an MCP server, so every GitHub write is a shell command the server decides. |
 | A write target the guard cannot read is denied, never assumed to be the project's. | `-R`/`--repo`, `GH_REPO`, PR and issue URL arguments and `git push` URLs are read the way gh and git read them (host in any case, `www.` or another github.com subdomain, a root dot, a port, a token in the URL, `-R=x`). A value that names no GitHub `owner/repo` (a shell expansion such as `-R $R` or `git push $URL`, another host, `.`/`..` segments, percent-escaped separators) is denied, as is a push refspec the shell fills in (`factory/$X`), a `gh api` write whose repo is not spelled out, `gh api -X=PUT` (read as PUT), and `gh repo create`, `fork` and `sync <repo>`. Still open, as on staging: `gh api graphql` mutations by node id, a fresh `git clone` followed by `git push origin`, and calls through `curl` or a script. |
 | Factory agents always run fenced, and never run a bundle of their own making. | `server/bundles.validate_agent_bundle` rejects any (sub-)agent spec with `executor.config.factory_role` that lacks an unconditional `factory_role_guard` with the same role plus `blast_radius`. `sys_session_create(config_path=…)` from a session whose root carries `omnigent.factory.id` gets 403 `factory_custom_bundle_denied` (`server/factory/custom_bundle.py`). |
@@ -1519,12 +1521,12 @@ checkout with `sys_session_create(config_path=…)` from a Claude Code session.
 
 Each wave: merge the listed packages into the fork's `staging`, bump `newTag`
 to `staging-<sha7>` in an infra PR, then run the live check on
-https://omnigent.caffeinelabs.io.
+the deployment's server.
 
 | Wave | Packages | Engine mode | Live check |
 |---|---|---|---|
-| 0 | base-branch and S3 PRs; infra knobs `OMNIGENT_FACTORY_ARTIFACT_LOCATION`, `OMNIGENT_FACTORY_DEFAULT_BASE`, `OMNIGENT_FACTORY_DEMO_MIRROR_REPO`; the `factory-demos` repo | — | `GET /v1/factory/preflight` shows `default_base=caffeinelabs/app#temp-main`; the server log names the S3 demo location |
-| 1 | temp-main lane, schema, Tier 0, telemetry core | observe | PRs open against `temp-main` with the Base gate green; base-env shows `temp-main@<sha>`; red-team pushes are denied; spans and the cost ledger fill |
+| 0 | base-branch and S3 PRs; infra knobs `OMNIGENT_FACTORY_ARTIFACT_LOCATION`, `OMNIGENT_FACTORY_DEFAULT_BASE`, `OMNIGENT_FACTORY_DEMO_MIRROR_REPO`; the `factory-demos` repo | — | `GET /v1/factory/preflight` shows `default_base=sample-org/sample-app#develop`; the server log names the S3 demo location |
+| 1 | base-branch lane, schema, Tier 0, telemetry core | observe | PRs open against `develop` with the Base gate green; base-env shows `develop@<sha>`; red-team pushes are denied; spans and the cost ledger fill |
 | 2 | people, projects through chat, the Room, UI shell | observe | invites work; chat creates projects; the server spawns PLs; the project page shows demos |
 | 3 | work graph, loop engine, ops, Room and graph UI, ops UI | **assist** | the work graph, NEXT hints, loop cards, fleet "now" and interventions work |
 | 4 | learning and Tier 1, learning UI and the multi-user E2E | assist → **enforce** after one clean run | a Tier-1 trial is kept or reverted; Insights is complete; the multi-user E2E is green |
@@ -1546,25 +1548,25 @@ https://omnigent.caffeinelabs.io.
 
 ### Live acceptance run
 
-Three browser profiles on https://omnigent.caffeinelabs.io: **Luka** (creator),
+Three browser profiles on the deployment's server: **Lena** (creator),
 **Mia** (operator, a second GitHub account admitted by OIDC; check
 `GET /v1/info` and the allowed domains first) and **Ops** (viewer). Record
 the results in `notes/ROUND3-LIVE-RUN.md`.
 
-1. **Describe it (Luka).** New factory ▸ Describe it: name "Atlas factory",
-   `caffeinelabs/app` # `temp-main`, live env on, autonomy *requested*, engine
+1. **Describe it (Lena).** New factory ▸ Describe it: name "Atlas factory",
+   `sample-org/sample-app` # `develop`, live env on, autonomy *requested*, engine
    *observe*, brief "Show the deployed versions in Settings: an API version
    endpoint, a DB version endpoint, and a Settings row showing both." Expect
    the Room on `#factory` with the brief as message #1 and base-env reaching
-   `● temp-main@<sha> = head` in about 15 min.
+   `● develop@<sha> = head` in about 15 min.
 2. **Agents split the work.** Atlas posts `C-1` (db-version, api-version,
    settings-versions depending on both); the creates auto-apply with Undo and
    two PLs spawn without an Atlas turn; settings-versions waits.
-3. **A project by chat (Luka).** "also add a small project: a docs note in
+3. **A project by chat (Lena).** "also add a small project: a docs note in
    docs/ about the version endpoints" gives an auto-applied `C-2` and a
    `#docs-version` thread. `/project new` opens Add project prefilled with
-   `app#temp-main`; cancel it.
-4. **Invite (Luka).** Share: Mia as Operator, Ops as Viewer; both admitted.
+   `sample-app#develop`; cancel it.
+4. **Invite (Lena).** Share: Mia as Operator, Ops as Viewer; both admitted.
 5. **Join (Mia).** Every project visible, presence shows both, the composer
    says "posting as Mia · operator".
 6. **Mini chat (Mia).** In `#db-version`: "@pl:db-version use knex_migrations
@@ -1572,28 +1574,28 @@ the results in `notes/ROUND3-LIVE-RUN.md`.
    question it asks is assigned to Mia.
 7. **Viewer (Ops).** Read-only banner; composer, Apply, Answer, Pause, Share
    and every Settings and Improvements lever disabled with tooltips; Request
-   access opens a decision Luka declines.
+   access opens a decision Lena declines.
 8. **Work graph and loops.** Settings ▸ Autonomy ▸ Engine mode = assist.
    Tasks, waves and the critical path on the project page; NEXT wakes in
-   Insights; PRs on `temp-main` with Base ✓; previews and demos on the PR and
+   Insights; PRs on `develop` with Base ✓; previews and demos on the PR and
    project pages; the GitHub demo comment shows the mirrored GIF.
 9. **Something goes wrong (Mia).** An impossible acceptance exhausts
    `implement 3/3`: incident, loop decision; Agent page ▸ Interrupt, then
    Switch to `ic_codex`; attempt 4 runs on codex; the Timeline shows r0–r3.
-10. **Merge into temp-main (the user, on GitHub).** `base.moved` within
+10. **Merge into develop (the user, on GitHub).** `base.moved` within
     5 min; base-env redeploys; settings-versions is released once both
     dependencies merged.
 11. **Improve.** Settings ▸ Definition ▸ **Run retro now**: a digest in
     `#improvements` with at least 2 findings; a class-A tuning change goes on
     trial after Atlas co-signs (Improvements shows its scorecard); a class-B
-    rule waits for Luka, who approves it (PLs get RULES UPDATE; the next card
+    rule waits for Lena, who approves it (PLs get RULES UPDATE; the next card
     carries the rule) and reverts the class-A trial in one click.
-12. **Settings (Luka).** Budgets & loops ▸ implement attempts 3 → 4 ▸ Save:
+12. **Settings (Lena).** Budgets & loops ▸ implement attempts 3 → 4 ▸ Save:
     an applied human `C-n` in Improvements ▸ History; revert it from its page.
 13. **Insights (Ops).** Every tile shows n; version markers appear;
     per-person numbers are hidden from the viewer.
 14. **Safety checks** (orchestrator, on an IC pod; each denied and logged):
-    `git push origin HEAD:temp-main`, a bare `git push`, the merge gate with
+    `git push origin HEAD:develop`, a bare `git push`, the merge gate with
     and without `OMNIGENT_FACTORY_MERGE_REPOS`, the runner bearer on
     `POST /v1/factory/factories/{fid}/proposals/<n>/apply` (403
     `human_only`), and `sys_session_create(config_path=…)` from an IC (403).

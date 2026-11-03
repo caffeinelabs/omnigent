@@ -58,7 +58,7 @@ _PL_ARGS: dict[str, Any] = {
     "title": "PL · api-version",
     "message": "Charter: add GET /version",
     "project": "api-version",
-    "workspaces": ["https://github.com/caffeinelabs/app#main"],
+    "workspaces": ["https://github.com/sample-org/sample-app#main"],
 }
 
 
@@ -140,7 +140,7 @@ async def test_creates_a_top_level_managed_session_with_factory_labels() -> None
             LABEL_STATE: "active",
             LABEL_HEARTBEAT_S: "600",
         },
-        "workspaces": ["https://github.com/caffeinelabs/app#main"],
+        "workspaces": ["https://github.com/sample-org/sample-app#main"],
     }
     # The server's own PL spawn sends this same body (tests/server/factory/test_server_spawn.py).
     assert body == pl_create_body(
@@ -150,7 +150,7 @@ async def test_creates_a_top_level_managed_session_with_factory_labels() -> None
         supervisor=PEER,
         project="api-version",
         heartbeat_s=600,
-        workspace="https://github.com/caffeinelabs/app#main",
+        workspace="https://github.com/sample-org/sample-app#main",
     )
     assert "parent_session_id" not in body
     assert "initial_items" not in body

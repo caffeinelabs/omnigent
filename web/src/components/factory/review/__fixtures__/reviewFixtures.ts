@@ -28,8 +28,8 @@ export const REVIEW_STATES = [
 ] as const;
 export type ReviewState = (typeof REVIEW_STATES)[number];
 
-const API_9630 = "https://api-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io";
-const API_9631 = "https://api-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io";
+const API_9630 = "https://api-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com";
+const API_9631 = "https://api-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.example.com";
 const HEAD_9630 = "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16";
 const HEAD_9631 = "5e1c2d4a9b8f7e6d5c4b3a2918f7e6d5c4b3a291";
 /** A new head pushed to #9630 after its demo was recorded. */
@@ -52,7 +52,7 @@ export function apiCalls9630(): unknown[] {
         headers: { ...JSON_HEADERS, "x-factory-commit": HEAD_9630, "x-factory-pr": "9630" },
         content_type: "application/json; charset=utf-8",
         body: JSON.stringify({
-          service: "caffeine-api",
+          service: "sample-api",
           gitSha: HEAD_9630,
           builtAt: "2026-10-26T13:58:02Z",
         }),
@@ -246,7 +246,7 @@ function backendDemo(): DemoView {
     ],
     video_file_id: null,
     poster_file_id: null,
-    preview_url: "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+    preview_url: "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.example.com",
     created_at: NOW - 420,
     by: "demo-db-version-route",
   };
@@ -263,7 +263,7 @@ function markers9631(target: PrView) {
   target.gates.evidence.review = {
     verdict: "APPROVE",
     sha: HEAD_9631,
-    url: "https://github.com/caffeinelabs/app/pull/9631#issuecomment-3448901122",
+    url: "https://github.com/sample-org/sample-app/pull/9631#issuecomment-3448901122",
     at: NOW - 900,
     by: "reviewer (claude)",
   };
@@ -271,7 +271,7 @@ function markers9631(target: PrView) {
     result: "PASS",
     sha: HEAD_9631,
     env: "c41e9b07-7d0f12-5b3e-p9631",
-    url: "https://github.com/caffeinelabs/app/pull/9631#issuecomment-3448933370",
+    url: "https://github.com/sample-org/sample-app/pull/9631#issuecomment-3448933370",
     at: NOW - 600,
   };
 }
@@ -304,7 +304,7 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       p9630.human_review = {
         verdict: "changes_requested",
         text: "Give the version row top spacing; it sits flush against the section header.",
-        by: "Luka",
+        by: "Lena",
         at: NOW - 45,
         head_sha: HEAD_9630,
         source: "cockpit",
@@ -365,7 +365,7 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       Object.assign(d2, {
         status: "answered",
         answer_option_id: d2.options[0]?.id ?? null,
-        answered_by: "Luka",
+        answered_by: "Lena",
         answered_at: NOW - 660,
         delivered_mail_id: "mail_5d6e7f80a1b2c3d4",
         delivered_at: NOW - 655,
@@ -391,7 +391,7 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       p9630.human_review = {
         verdict: "changes_requested",
         text: "Show the short sha next to the version, not the full one.",
-        by: "Luka",
+        by: "Lena",
         at: NOW - 1500,
         head_sha: HEAD_9630,
         source: "cockpit",
@@ -455,7 +455,7 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       Object.assign(p9630, {
         state: "merged",
         ready: false,
-        merged: { by: "luka", sha: "4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e", at: NOW - 70 },
+        merged: { by: "lena", sha: "4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e", at: NOW - 70 },
         closed_at: NOW - 70,
       });
       p9630.preview = { ...p9630.preview!, state: "down" };

@@ -29,14 +29,14 @@ BOB = "bob@ui.test"
 CAROL = "carol@ui.test"
 
 # What GET /v1/factory/preflight says in the browser: GitHub connected, a
-# sandbox host and the factory agents, on caffeinelabs/app#temp-main.
+# sandbox host and the factory agents, on sample-org/sample-app#develop.
 STUB_PREFLIGHT: dict[str, Any] = {
     "github": {"connected": True, "login": "alice-ui"},
     "agents": {"factory_lead": True, "factory_pl": True},
     "sandbox_host": True,
     "factory_enabled": True,
-    "default_repo": "caffeinelabs/app",
-    "default_base": "temp-main",
+    "default_repo": "sample-org/sample-app",
+    "default_base": "develop",
     "max_projects": 10,
     "tier2": {"enabled": False, "reason": "OMNIGENT_FACTORY_SMITH is not 1", "checks": None},
 }

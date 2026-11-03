@@ -109,7 +109,7 @@ describe("work graph layout (40 tasks)", () => {
     const data = (ref: string) =>
       tasks.find((n) => (n.data as TaskNodeData).task.ref === ref)!.data as TaskNodeData;
     expect(data("T-5").ready).toBe(true);
-    expect(data("T-8").waitsOn).toEqual([{ ref: "D-2", assignee: "mia@caffeine.ai" }]);
+    expect(data("T-8").waitsOn).toEqual([{ ref: "D-2", assignee: "mia@example.com" }]);
     // Warnings name tasks as the canvas does.
     expect(data("T-6").warnings[0]).toMatch(/^T-6 and T-7 both touch/);
     expect(workWarnings(graph)[0]!.message).toMatch(/^T-6 and T-7 both touch/);
@@ -168,7 +168,7 @@ describe("bus graph layout (12 nodes)", () => {
     expect(layout.nodes).toHaveLength(12);
     const column = (title: string) =>
       layout.nodes.find((n) => (n.data as BusNodeData).node.title === title)!.position.x;
-    expect(column("luka@caffeine.ai")).toBe(0);
+    expect(column("lena@example.com")).toBe(0);
     expect(column("server")).toBe(0);
     expect(column("Atlas")).toBeLessThan(column("PL · db-version"));
     expect(column("PL · db-version")).toBeLessThan(column("ic:route-r2"));

@@ -101,7 +101,7 @@ export function allDoneSnapshot(): FactorySnapshot {
     ...pr,
     state: "merged",
     ready: false,
-    merged: pr.merged ?? { by: "luka", sha: pr.head_sha, at: doneAt },
+    merged: pr.merged ?? { by: "lena", sha: pr.head_sha, at: doneAt },
   }));
   snapshot.decisions = snapshot.decisions.filter((d) => d.status !== "open");
   snapshot.members = snapshot.members.map((m) => ({
@@ -165,7 +165,7 @@ export function tenProjectsSnapshot(): FactorySnapshot {
       stage,
       stage_since: LIVE_RUN_NOW_S - (i + 1) * 600,
       overlay: i === 3 ? "paused" : null,
-      overlay_reason: i === 3 ? "Paused by luka" : null,
+      overlay_reason: i === 3 ? "Paused by lena" : null,
       agent_stage: null,
       claim_mismatch: false,
       pl: null,
@@ -176,7 +176,7 @@ export function tenProjectsSnapshot(): FactorySnapshot {
       cost_usd: 0.4 * (i + 1),
       elapsed_s: (i + 1) * 900,
       provisioning: stage === "queued" ? { stage: "cloning", label: "Cloning repository" } : null,
-      paused_by: i === 3 ? "luka" : null,
+      paused_by: i === 3 ? "lena" : null,
     });
   }
   return snapshot;
@@ -204,7 +204,7 @@ export function tenProjectsFactoryList(): FactoryListResponse {
 /** Everything a factory needs is in place. */
 export function preflightOk(): Preflight {
   return {
-    github: { connected: true, login: "luka" },
+    github: { connected: true, login: "lena" },
     agents: { factory_lead: true, factory_pl: true },
     sandbox_host: true,
     factory_enabled: true,
@@ -281,7 +281,7 @@ export function liveRunEvents(): EventPage {
         to_id: LIVE_RUN_PL_API_ID,
         from_title: "GitHub",
         to_title: "PL · api-version",
-        subject: "pr:caffeinelabs/app#9630",
+        subject: "pr:sample-org/sample-app#9630",
         summary: "#9630 ready for human merge · 6/6 gates",
       },
       {
@@ -295,9 +295,9 @@ export function liveRunEvents(): EventPage {
         to_id: null,
         from_title: "demo-version-endpoint",
         to_title: null,
-        subject: "pr:caffeinelabs/app#9630",
+        subject: "pr:sample-org/sample-app#9630",
         summary:
-          "demo PASS of caffeinelabs/app#9630 at 7767f0d: GET /version and the Settings API version row",
+          "demo PASS of sample-org/sample-app#9630 at 7767f0d: GET /version and the Settings API version row",
         data: {
           demo_id: "df2503ab72c051c6bdfa1e15f1570e31",
           pr_id: "f74d5967c53455139e85ba1b402a5bd4",
@@ -340,8 +340,9 @@ export function liveRunEvents(): EventPage {
         to_id: null,
         from_title: "demo-version-endpoint",
         to_title: null,
-        subject: "pr:caffeinelabs/app#9630",
-        summary: "demo PASS of caffeinelabs/app#9630 at bfbef12: GET /version returns the commit",
+        subject: "pr:sample-org/sample-app#9630",
+        summary:
+          "demo PASS of sample-org/sample-app#9630 at bfbef12: GET /version returns the commit",
         data: {
           demo_id: "8b0e4f6a2c9d41e7b3a5c6d7e8f90a1b",
           pr_id: "f74d5967c53455139e85ba1b402a5bd4",

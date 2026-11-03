@@ -68,7 +68,9 @@ describe("ProjectPage", () => {
     const crumbs = screen.getByTestId("project-breadcrumb");
     expect(crumbs).toHaveTextContent("ProjectsAPI version endpoint");
     expect(header).toHaveTextContent("P1");
-    expect(within(header).getByTestId("project-repo")).toHaveTextContent("caffeinelabs/app#main");
+    expect(within(header).getByTestId("project-repo")).toHaveTextContent(
+      "sample-org/sample-app#main",
+    );
     expect(within(header).getByTestId("project-open-pl")).toHaveAttribute("href", `/c/${PL_API}`);
     for (const section of PROJECT_SECTIONS) {
       expect(screen.getByTestId(`project-section-${section}`)).toHaveAttribute("id", section);
@@ -88,7 +90,7 @@ describe("ProjectPage", () => {
     serve();
     renderPage();
     const charter = await screen.findByTestId("project-charter");
-    expect(charter).toHaveTextContent("Expose the deployed commit: GET /version on caffeine-api");
+    expect(charter).toHaveTextContent("Expose the deployed commit: GET /version on sample-api");
     expect(within(charter).getByTestId("project-charter-settings")).toHaveTextContent(
       "Previews on · 2 slots",
     );
@@ -196,7 +198,7 @@ describe("ProjectPage", () => {
     serve(() => {
       const { snapshot } = projectScenario();
       snapshot.viewer = {
-        user_id: "ops@caffeine.ai",
+        user_id: "ops@example.com",
         role: "viewer",
         level: 1,
         is_creator: false,

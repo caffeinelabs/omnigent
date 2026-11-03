@@ -338,11 +338,11 @@ async def test_upload_refuses_an_oversized_body_up_front(
         ("reviewer", {}, 403, "not_allowed"),
         (
             "demo",
-            {"pr_url": "https://github.com/caffeinelabs/infra/pull/3"},
+            {"pr_url": "https://github.com/sample-org/sample-infra/pull/3"},
             403,
             "pr_out_of_factory",
         ),
-        ("demo", {"pr_url": "https://github.com/caffeinelabs/app"}, 400, "not_a_pr_url"),
+        ("demo", {"pr_url": "https://github.com/sample-org/sample-app"}, 400, "not_a_pr_url"),
         ("demo", {"head_sha": "7767f0d"}, 400, "invalid_sha"),
         ("demo", {"status": "MAYBE"}, 400, "invalid_status"),
         ("plain", {}, 403, "session_out_of_factory"),
@@ -415,7 +415,7 @@ async def test_a_body_without_a_length_is_refused(demo_env: DemoEnv) -> None:
         ({**MANIFEST, "status": "BLOCKED"}, None, "invalid_status"),
         ({**MANIFEST, "sha": "0" * 40}, None, "sha_mismatch"),
         (
-            {**MANIFEST, "pr_url": "https://github.com/caffeinelabs/app/pull/1"},
+            {**MANIFEST, "pr_url": "https://github.com/sample-org/sample-app/pull/1"},
             None,
             "pr_mismatch",
         ),
@@ -462,7 +462,7 @@ async def test_har_uploads_lose_their_credentials(demo_env: DemoEnv) -> None:
             "entries": [
                 {
                     "request": {
-                        "url": "https://api-1a2b-p9630.envs.sandbox.caffeinelabs.io/auth",
+                        "url": "https://api-1a2b-p9630.envs.sandbox.example.com/auth",
                         "headers": [
                             {"name": "Authorization", "value": "Bearer synthetic-secret"},
                             {"name": "Accept", "value": "application/json"},

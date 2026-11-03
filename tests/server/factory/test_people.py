@@ -22,9 +22,9 @@ from omnigent.server.factory import presence as factory_presence
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 
-MIA = "mia@caffeine.ai"
-OPS = "ops@caffeine.ai"
-DAVE = "dave@caffeine.ai"
+MIA = "mia@example.com"
+OPS = "ops@example.com"
+DAVE = "dave@example.com"
 
 
 @pytest.fixture(autouse=True)
@@ -508,7 +508,7 @@ async def test_admission_reports_blocked_for_a_domain_the_server_refuses(
 ) -> None:
     oidc_access.register_admission_policy(
         oidc_access.OidcAdmissionPolicy(
-            env_allowed_domains=frozenset({"caffeine.ai"}),
+            env_allowed_domains=frozenset({"example.com"}),
             domains_file_path=tmp_path / "allowed_domains",
             admin_list=AdminList(tmp_path / "admins"),
         )
@@ -543,12 +543,12 @@ async def test_the_roster_names_who_agents_run_as(cockpit: Cockpit) -> None:
 
 async def test_search_needs_three_characters_and_manage(cockpit: Cockpit) -> None:
     for n in range(12):
-        cockpit.permissions.ensure_user(f"user{n:02d}@caffeine.ai")
+        cockpit.permissions.ensure_user(f"user{n:02d}@example.com")
     url = f"/v1/factory/factories/{cockpit.fid}/people/search"
 
     short = await _get(cockpit, f"{url}?q=us")
     found = await _get(cockpit, f"{url}?q=user")
-    exact = await _get(cockpit, f"{url}?q=new.person@caffeine.ai")
+    exact = await _get(cockpit, f"{url}?q=new.person@example.com")
     operator = await _get(cockpit, f"{url}?q=user", user="carol")
 
     assert (short.status_code, error_code(short)) == (400, "query_too_short")
@@ -557,8 +557,8 @@ async def test_search_needs_three_characters_and_manage(cockpit: Cockpit) -> Non
     assert all(r["user_id"].startswith("user") for r in found.json()["data"])
     assert exact.json()["data"] == [
         {
-            "user_id": "new.person@caffeine.ai",
-            "name": "new.person@caffeine.ai",
+            "user_id": "new.person@example.com",
+            "name": "new.person@example.com",
             "known": False,
             "role": None,
             "admission": "ok",

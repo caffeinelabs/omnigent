@@ -67,17 +67,17 @@ describe("task edit checks", () => {
     const docs = task("T-2");
     const check = checkTaskEdit(
       db,
-      { ...docs, state: "planned", scope: ["services/caffeine-api/src/modules/db/**"] },
+      { ...docs, state: "planned", scope: ["services/sample-api/src/modules/db/**"] },
       known,
     );
     expect(check.errors).toEqual([]);
     expect(check.warnings).toEqual([
-      "route and docs both touch services/caffeine-api/src/modules/db/**; they run one after the other",
-      "tests and docs both touch services/caffeine-api/src/modules/db/**; they run one after the other",
+      "route and docs both touch services/sample-api/src/modules/db/**; they run one after the other",
+      "tests and docs both touch services/sample-api/src/modules/db/**; they run one after the other",
     ]);
     // route and tests already overlap: the edit doesn't repeat what was there.
     expect(overlapWarnings(db)).toEqual([
-      "route and tests both touch services/caffeine-api/src/modules/db/**; they run one after the other",
+      "route and tests both touch services/sample-api/src/modules/db/**; they run one after the other",
     ]);
   });
 
@@ -121,10 +121,7 @@ describe("keysToRefs", () => {
       "That makes a cycle: T-1 → T-6 → T-4 → T-1",
     );
     expect(
-      keysToRefs(
-        db,
-        "tests and route both touch services/caffeine-api/src/modules/db/**; they run",
-      ),
-    ).toBe("T-5 and T-4 both touch services/caffeine-api/src/modules/db/**; they run");
+      keysToRefs(db, "tests and route both touch services/sample-api/src/modules/db/**; they run"),
+    ).toBe("T-5 and T-4 both touch services/sample-api/src/modules/db/**; they run");
   });
 });

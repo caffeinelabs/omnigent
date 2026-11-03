@@ -168,18 +168,18 @@ def test_taxonomies_and_threads() -> None:
 
 
 def test_actor_constructors_and_attribution() -> None:
-    mia = Actor.human("mia@caffeine.ai", "operator", name="Mia")
-    assert (mia.kind, mia.id, mia.title) == ("human", "mia@caffeine.ai", "Mia (operator)")
+    mia = Actor.human("mia@example.com", "operator", name="Mia")
+    assert (mia.kind, mia.id, mia.title) == ("human", "mia@example.com", "Mia (operator)")
     assert mia.event_data() == {
-        "by": "mia@caffeine.ai",
+        "by": "mia@example.com",
         "by_kind": "human",
         "by_role": "operator",
         "on_behalf_of": None,
     }
-    assert Actor.human("ops@caffeine.ai").title == "ops@caffeine.ai"
-    atlas = Actor.agent("f4f4", "lead", title="Atlas", on_behalf_of="luka@caffeine.ai")
+    assert Actor.human("ops@example.com").title == "ops@example.com"
+    atlas = Actor.agent("f4f4", "lead", title="Atlas", on_behalf_of="lena@example.com")
     assert (atlas.id, atlas.title, atlas.user_id) == ("f4f4", "Atlas", None)
-    assert atlas.event_data()["on_behalf_of"] == "luka@caffeine.ai"
+    assert atlas.event_data()["on_behalf_of"] == "lena@example.com"
     server = Actor.server()
     assert (server.kind, server.id, server.title, server.role) == (
         "server",

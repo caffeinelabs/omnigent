@@ -166,7 +166,7 @@ describe("ProjectCard", () => {
     const { card } = renderCard("planning");
     expect(card).toHaveTextContent("Planning · the first PR usually lands in 15–30 min");
     expect(within(card).getByTestId("pl-beacon-db-version")).toHaveTextContent(
-      "Reading caffeine-db migrations",
+      "Reading sample-db migrations",
     );
   });
 
@@ -187,7 +187,7 @@ describe("ProjectCard", () => {
     expect(within(card).getByTestId("demo-thumb-9630")).toHaveAttribute("data-kind", "video");
     expect(within(card).getByTestId("merge-link-9630")).toHaveAttribute(
       "href",
-      "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
+      "https://github.com/sample-org/sample-app/pull/9630#partial-pull-merging",
     );
     fireEvent.click(within(card).getByTestId("review-open-9630"));
     expect(onReview).toHaveBeenCalledWith(9630);
@@ -212,7 +212,7 @@ describe("ProjectCard", () => {
     expect(row).toHaveAttribute("data-ready", "false");
     expect(within(row).queryByTestId("merge-link-9630")).toBeNull();
     expect(within(row).getByTestId("changes-requested-9630")).toHaveTextContent(
-      /^Changes requested by luka@caffeine\.ai$/,
+      /^Changes requested by lena@example\.com$/,
     );
     expect(within(row).getByTestId("pr-not-ready-9630")).toHaveTextContent("waits on a new head");
     cleanup();
@@ -229,7 +229,7 @@ describe("ProjectCard", () => {
       />,
     );
     expect(screen.getByTestId("changes-requested-9630")).toHaveTextContent(
-      "Changes requested by luka@caffeine.ai (old head)",
+      "Changes requested by lena@example.com (old head)",
     );
     expect(screen.queryByTestId("pr-not-ready-9630")).toBeNull();
   });
@@ -247,7 +247,7 @@ describe("ProjectCard", () => {
   it("paused says who paused it and what stays up", () => {
     const { card } = renderCard("paused");
     expect(within(card).getByTestId("paused-note")).toHaveTextContent(
-      "Paused by luka · 1 preview kept up · dev env down",
+      "Paused by lena · 1 preview kept up · dev env down",
     );
     expect(card).not.toHaveTextContent("Ready for your review");
     expect(within(card).queryByTestId("project-edge-api-version")).toBeNull();
@@ -270,7 +270,7 @@ describe("ProjectCard", () => {
     expect(card).toHaveTextContent("Merged");
     const row = within(card).getByTestId("pr-row-9630");
     expect(row).toHaveAttribute("data-state", "merged");
-    expect(row).toHaveTextContent("merged by @luka · 5m ago");
+    expect(row).toHaveTextContent("merged by @lena · 5m ago");
     expect(within(card).queryByTestId("review-open-9630")).toBeNull();
   });
 
@@ -323,7 +323,7 @@ describe("ProjectCard", () => {
     const { snapshot, project } = cardScenario("done");
     renderBoard(<DoneProjectRow snapshot={snapshot} project={project} nowS={LIVE_RUN_NOW_S} />);
     const row = screen.getByTestId("project-card-docs-factory-envs");
-    expect(row).toHaveTextContent("merged #9632 by @luka");
+    expect(row).toHaveTextContent("merged #9632 by @lena");
     expect(row).toHaveAttribute(
       "href",
       `/factory/${snapshot.factory.id}/projects/docs-factory-envs`,

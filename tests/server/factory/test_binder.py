@@ -25,7 +25,7 @@ from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit
 from tests.server.factory.github_fakes import FakePr
 
 SLUG = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 KEYS = {"route", "tests", "docs"}
 
 
@@ -41,7 +41,7 @@ async def cockpit(
             SLUG,
             title="API version",
             repo=REPO,
-            base_branch="temp-main",
+            base_branch="develop",
             charter={"goal": "GET /version", "budget_ics": 3},
             pl_session_id=world.id("pl"),
         )
@@ -247,7 +247,7 @@ async def test_pr_branch_links_the_task_and_a_human_merge_closes_it(cockpit: Coc
     route = _child(cockpit, "route")
     await binder.bind_session(cockpit.app.state, route)
     now = time.time()
-    fake = FakePr(REPO, 9630, f"factory/{SLUG}/route", "a" * 40, now - 60, base_ref="temp-main")
+    fake = FakePr(REPO, 9630, f"factory/{SLUG}/route", "a" * 40, now - 60, base_ref="develop")
 
     pr = await _refresh(cockpit, fake)
     row = _task(cockpit, "route")
@@ -255,12 +255,12 @@ async def test_pr_branch_links_the_task_and_a_human_merge_closes_it(cockpit: Coc
     assert row.state == "review"
     assert _task(cockpit, "tests").state == "planned"
 
-    fake.state, fake.merged_at, fake.merged_by, fake.merge_sha = "MERGED", now, "luka", "b" * 40
+    fake.state, fake.merged_at, fake.merged_by, fake.merge_sha = "MERGED", now, "lena", "b" * 40
     await _refresh(cockpit, fake)
     row = _task(cockpit, "route")
     assert row.state == "done" and row.closed_at is not None
     done = [e for e in cockpit.events("task.state") if e.data["to"] == "done"]
-    assert done[-1].data["merged_by"] == "luka" and done[-1].data["by_kind"] == "server"
+    assert done[-1].data["merged_by"] == "lena" and done[-1].data["by_kind"] == "server"
     # Its dependent became ready without any PL action.
     assert _task(cockpit, "tests").state == "ready"
 

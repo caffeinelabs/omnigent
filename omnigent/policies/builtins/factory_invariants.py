@@ -69,7 +69,8 @@ def factory_invariants(
     Factory: the role-independent Tier-0 rules for sessions labelled as factory members.
 
     :param push_ref_prefixes: Branch prefixes pushes may target (default ``["factory/"]``).
-    :param protected_branches: Branches never pushed (default includes ``temp-main``).
+    :param protected_branches: Branches never pushed (default
+        :data:`~omnigent.policies.builtins.factory.DEFAULT_PROTECTED_BRANCHES`).
     :param deny_repos: Repos never written (the boot-time always-deny repos are always added).
     :param factory_repos: Set by the server per member, never by an admin: the
         repos of its factory projects, lifted from the default *deny_repos* and

@@ -1,6 +1,6 @@
 """Factory spans: the writer, the event recorder and the PR refresh hook.
 
-The headline test replays the 2026-10-26 live run (caffeinelabs/app#9630 and
+The headline test replays the 2026-10-26 live run (sample-org/sample-app#9630 and
 #9631) through the real poller and event log and checks the spans it leaves:
 one ``pr`` per PR, one ``pr_round`` per head, ``gate`` spans per head with
 ``first_pass``, and the ``ready_wait`` episodes.
@@ -23,7 +23,7 @@ from tests.server.factory.conftest import FactoryWorld, FakeDeliver
 from tests.server.factory.github_fakes import iso
 from tests.server.factory.telemetry_replay import Replay, make_replay, strict_widths
 
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 @pytest.fixture()
@@ -153,14 +153,14 @@ async def test_the_live_run_records_project_stage_task_env_decision_and_control_
     ]
 
     (decision,) = r.spans("decision")
-    assert (decision.name, decision.outcome, decision.actor) == ("D-1", "ok", "luka")
+    assert (decision.name, decision.outcome, decision.actor) == ("D-1", "ok", "lena")
     assert (decision.started_at, decision.ended_at) == (r.ms(3400), r.ms(3600))
     assert decision.project_slug == "db-version"
 
     (control,) = r.spans("intervention")
     assert (control.name, control.actor, control.started_at, control.ended_at) == (
         "pause",
-        "luka",
+        "lena",
         r.ms(3500),
         r.ms(3500),
     )

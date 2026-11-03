@@ -28,7 +28,7 @@ from omnigent.factory_merge import (
     protected_files,
 )
 
-_URL = "https://github.com/caffeinelabs/app/pull/7"
+_URL = "https://github.com/sample-org/sample-app/pull/7"
 _HEAD = "a1" * 20
 _OLD = "b2" * 20
 _COMMITTED = "2026-10-23T10:00:00Z"
@@ -40,13 +40,13 @@ _MERGED = (0, "", "merged")
 _AUTO_MERGE = (
     0,
     "! The merge strategy for main is set by the merge queue\n"
-    "✓ Pull request caffeinelabs/app#7 will be added to the merge queue for main when ready",
+    "✓ Pull request sample-org/sample-app#7 will be added to the merge queue for main when ready",
     "auto",
 )
 _ENQUEUED = (0, "! The merge strategy for main is set by the merge queue", "queue")
 _BLOCKED = (
     1,
-    "X Pull request caffeinelabs/app#7 is not mergeable: the base branch policy prohibits "
+    "X Pull request sample-org/sample-app#7 is not mergeable: the base branch policy prohibits "
     "the merge.\nTo have the pull request merged after all the requirements have been met, "
     "add the `--auto` flag.\nTo use administrator privileges to immediately merge the pull "
     "request, add the `--admin` flag.",
@@ -54,7 +54,7 @@ _BLOCKED = (
 )
 _BEHIND = (
     1,
-    "X Pull request caffeinelabs/app#7 is not mergeable: the head branch is not up to date "
+    "X Pull request sample-org/sample-app#7 is not mergeable: the head branch is not up to date "
     "with the base branch.\nTo use administrator privileges to immediately merge the pull "
     "request, add the `--admin` flag.",
     None,
@@ -66,7 +66,7 @@ def _rule(kind: str, **parameters: Any) -> dict[str, Any]:
     return {"type": kind, "ruleset_id": 1, "parameters": parameters or None}
 
 
-# The shape of caffeinelabs/app's main rules: a merge queue, one code-owner
+# The shape of sample-org/sample-app's main rules: a merge queue, one code-owner
 # approval with thread resolution, and strict required checks.
 _APP_RULES = [
     _rule("deletion"),
@@ -237,7 +237,7 @@ class _FakeGh:
 
     def _graphql(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         """Serve the merge-state query."""
-        assert {"owner=caffeinelabs", "repo=app", "number=7"} <= set(args), args
+        assert {"owner=sample-org", "repo=sample-app", "number=7"} <= set(args), args
         node = dict(self.live)
         if self.merge_on_read:
             self.live["state"] = "MERGED"
@@ -282,7 +282,7 @@ def _run(
 @pytest.fixture(autouse=True)
 def _default_repos(monkeypatch: pytest.MonkeyPatch) -> None:
     """Opt the fixtures' repo in, regardless of the caller's environment."""
-    monkeypatch.setenv(REPOS_ENV, "caffeinelabs/app")
+    monkeypatch.setenv(REPOS_ENV, "sample-org/sample-app")
 
 
 @pytest.fixture(autouse=True)
@@ -343,11 +343,11 @@ def test_view_requests_the_documented_fields(
         "gh",
         "api",
         "--paginate",
-        "repos/caffeinelabs/app/rules/branches/main",
+        "repos/sample-org/sample-app/rules/branches/main",
         "--jq",
         ".[]",
     ]
-    assert fake.calls[2] == ["gh", "api", "repos/caffeinelabs/app/branches/main/protection"]
+    assert fake.calls[2] == ["gh", "api", "repos/sample-org/sample-app/branches/main/protection"]
     assert fake.calls[3] == [
         "gh",
         "pr",
@@ -361,7 +361,7 @@ def test_view_requests_the_documented_fields(
 
 # ── Each gate failing ───────────────────────────────────────────────────────
 
-_INFRA_URL = "https://github.com/caffeinelabs/infra/pull/9"
+_INFRA_URL = "https://github.com/sample-org/sample-infra/pull/9"
 
 
 @pytest.mark.parametrize(
@@ -370,7 +370,7 @@ _INFRA_URL = "https://github.com/caffeinelabs/infra/pull/9"
         pytest.param(
             "repo",
             lambda: _FakeGh(_pr(url=_INFRA_URL)),
-            "repo caffeinelabs/infra is not in OMNIGENT_FACTORY_MERGE_REPOS",
+            "repo sample-org/sample-infra is not in OMNIGENT_FACTORY_MERGE_REPOS",
             id="repo-not-allowlisted",
         ),
         pytest.param("draft", lambda: _FakeGh(_pr(isDraft=True)), "PR is a draft", id="draft"),
@@ -628,13 +628,15 @@ def test_large_prs_list_files_through_the_api(
     code, verdict = _run(monkeypatch, capsys, fake)
     assert code == EXIT_GATE_FAILED
     assert verdict["gates"]["protected_paths"] == "fail"
-    listing = [c for c in fake.calls if "repos/caffeinelabs/app/pulls/7/files?per_page=100" in c]
+    listing = [
+        c for c in fake.calls if "repos/sample-org/sample-app/pulls/7/files?per_page=100" in c
+    ]
     assert listing == [
         [
             "gh",
             "api",
             "--paginate",
-            "repos/caffeinelabs/app/pulls/7/files?per_page=100",
+            "repos/sample-org/sample-app/pulls/7/files?per_page=100",
             "--jq",
             ".[] | .filename, (.previous_filename // empty)",
         ]
@@ -671,8 +673,8 @@ def test_repo_allowlist_comes_from_the_environment(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """``OMNIGENT_FACTORY_MERGE_REPOS`` replaces the default allowlist."""
-    monkeypatch.setenv(REPOS_ENV, "octo/hello, Caffeinelabs/Infra")
-    assert allowed_repos() == {"octo/hello", "caffeinelabs/infra"}
+    monkeypatch.setenv(REPOS_ENV, "octo/hello, Sample-Org/Sample-Infra")
+    assert allowed_repos() == {"octo/hello", "sample-org/sample-infra"}
     code, verdict = _run(monkeypatch, capsys, _FakeGh())
     assert code == EXIT_GATE_FAILED
     assert verdict["gates"]["repo"] == "fail"
@@ -770,7 +772,7 @@ def test_admin_fallback_bypasses_only_the_review_on_a_merge_queue_branch(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """
-    caffeinelabs/app: queued auto-merge → turned off → ``--admin`` retry merges.
+    sample-org/sample-app: queued auto-merge → turned off → ``--admin`` retry merges.
 
     The PR is BLOCKED with REVIEW_REQUIRED, every required check passed and
     no review thread is open, so the missing approval is the only block.

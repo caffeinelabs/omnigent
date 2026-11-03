@@ -67,12 +67,12 @@ describe('deriveStatus', () => {
 
 describe('buildManifest', () => {
   const base = {
-    prUrl: 'https://github.com/caffeinelabs/app/pull/9630',
+    prUrl: 'https://github.com/sample-org/sample-app/pull/9630',
     pr: 9630,
     sha: SHA,
     summary: 'Landing renders',
-    app: 'https://app-x-p9630.envs.sandbox.caffeinelabs.io',
-    api: 'https://api-x-p9630.envs.sandbox.caffeinelabs.io',
+    app: 'https://app-x-p9630.envs.sandbox.example.com',
+    api: 'https://api-x-p9630.envs.sandbox.example.com',
     observedSha: SHA,
     startedAt: Date.parse('2026-10-26T10:00:00Z'),
     finishedAt: Date.parse('2026-10-26T10:00:41.25Z'),
@@ -329,7 +329,7 @@ describe('helpers', () => {
   test('names, numbers and notes', () => {
     assert.equal(lib.screenshotName(3, 'Settings → About shows the API version!'), 'shots/03-settings-about-shows-the-api-version.png');
     assert.equal(lib.screenshotName(12, '', 'failed'), 'shots/12-step-failed.png');
-    assert.equal(lib.prNumber('https://github.com/caffeinelabs/app/pull/9630'), 9630);
+    assert.equal(lib.prNumber('https://github.com/sample-org/sample-app/pull/9630'), 9630);
     assert.equal(lib.prNumber('#42'), 42);
     assert.equal(lib.prNumber('nope'), null);
     assert.equal(lib.watermark(9630, SHA), 'PR #9630 · aaaaaaa · preview');
@@ -398,7 +398,7 @@ describe('run.mjs before the browser starts', () => {
       const out = join(root, 'stale');
       const { code, output } = await runCli([
         '--spec', spec, '--out', out, '--app', server.url, '--api', server.url,
-        '--pr', 'https://github.com/caffeinelabs/app/pull/9630', '--sha', SHA,
+        '--pr', 'https://github.com/sample-org/sample-app/pull/9630', '--sha', SHA,
       ]);
       assert.equal(code, 3, output);
       assert.match(output, /DEMO BLOCKED stale-preview pr=9630 sha=aaaaaaa · the preview serves bbbbbbb/);

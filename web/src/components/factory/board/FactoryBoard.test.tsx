@@ -183,7 +183,7 @@ describe("FactoryBoard", () => {
       {
         state: "merged",
         ready: false,
-        merged: { by: "luka", sha: "abc", at: LIVE_RUN_NOW_S },
+        merged: { by: "lena", sha: "abc", at: LIVE_RUN_NOW_S },
       },
     );
     const props = {

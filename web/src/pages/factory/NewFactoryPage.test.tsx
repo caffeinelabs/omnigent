@@ -50,7 +50,7 @@ function serve(options: { preflight?: unknown; register?: Reply[]; session?: Rep
         connected: true,
         repos: [
           {
-            full_name: "caffeinelabs/app",
+            full_name: "sample-org/sample-app",
             clone_url: null,
             default_branch: "main",
             private: true,
@@ -146,7 +146,7 @@ describe("NewFactoryPage", () => {
 
     renderPage({ ...FALLBACK_SERVER_INFO, enabled_connections: ["github"] });
     fireEvent.click(screen.getByTestId("factory-new-repo-0"));
-    expect(await screen.findByText("caffeinelabs/app")).toBeInTheDocument();
+    expect(await screen.findByText("sample-org/sample-app")).toBeInTheDocument();
     expect(calls.filter((c) => c.path === "/v1/connections/github/repos")).toHaveLength(1);
   });
 
@@ -294,7 +294,7 @@ describe("NewFactoryPage", () => {
     expect(sent[0]!.body).toMatchObject({
       agent_id: "ag_lead",
       host_type: "managed",
-      workspaces: ["https://github.com/caffeinelabs/app#main"],
+      workspaces: ["https://github.com/sample-org/sample-app#main"],
       title: "Atlas",
     });
     const register = sent[1]!.body as {
@@ -366,7 +366,7 @@ describe("NewFactoryPage", () => {
     const sessions = writes(calls).filter((c) => c.path === "/v1/sessions");
     expect(sessions).toHaveLength(2);
     expect(sessions[1]!.body).toMatchObject({
-      workspaces: ["https://github.com/caffeinelabs/app#release"],
+      workspaces: ["https://github.com/sample-org/sample-app#release"],
     });
   });
 
@@ -477,18 +477,20 @@ describe("NewFactoryPage", () => {
     const calls = serve({
       preflight: {
         ...preflightOk(),
-        default_repo: "caffeinelabs/app",
-        default_base: "temp-main",
+        default_repo: "sample-org/sample-app",
+        default_base: "develop",
         max_projects: 10,
       },
     });
     renderPage();
     await waitFor(() =>
-      expect(screen.getByTestId("factory-new-default-branch")).toHaveTextContent("temp-main"),
+      expect(screen.getByTestId("factory-new-default-branch")).toHaveTextContent("develop"),
     );
-    expect(screen.getByTestId("factory-new-default-repo")).toHaveTextContent("caffeinelabs/app");
-    expect(screen.getByTestId("factory-new-repo-0")).toHaveTextContent("caffeinelabs/app");
-    expect(screen.getByTestId("factory-new-branch-0")).toHaveTextContent("temp-main");
+    expect(screen.getByTestId("factory-new-default-repo")).toHaveTextContent(
+      "sample-org/sample-app",
+    );
+    expect(screen.getByTestId("factory-new-repo-0")).toHaveTextContent("sample-org/sample-app");
+    expect(screen.getByTestId("factory-new-branch-0")).toHaveTextContent("develop");
     expect(screen.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "checked");
     expect(screen.getByTestId("factory-new-project-count")).toHaveTextContent("1/9");
     // Nothing was typed: the prefill is not a draft worth keeping.
@@ -497,7 +499,7 @@ describe("NewFactoryPage", () => {
     fillProject(0, "Status endpoint");
     fireEvent.click(screen.getByTestId("factory-new-add-project"));
     fillProject(1, "Docs page");
-    expect(screen.getByTestId("factory-new-branch-1")).toHaveTextContent("temp-main");
+    expect(screen.getByTestId("factory-new-branch-1")).toHaveTextContent("develop");
     // Two PLs, Atlas, Sentinel and the live env.
     expect(screen.getByTestId("factory-new-preview-sandboxes")).toHaveTextContent("5 sandboxes");
     fireEvent.click(screen.getByTestId("factory-new-submit"));
@@ -505,23 +507,23 @@ describe("NewFactoryPage", () => {
 
     const sent = writes(calls);
     expect(sent[0]!.body).toMatchObject({
-      workspaces: ["https://github.com/caffeinelabs/app#temp-main"],
+      workspaces: ["https://github.com/sample-org/sample-app#develop"],
     });
     const register = sent[1]!.body as { defaults: unknown; projects: { base_branch: string }[] };
     expect(register.defaults).toEqual({
-      repo: "caffeinelabs/app",
-      base_branch: "temp-main",
+      repo: "sample-org/sample-app",
+      base_branch: "develop",
       integration_env: true,
     });
-    expect(register.projects.map((p) => p.base_branch)).toEqual(["temp-main", "temp-main"]);
+    expect(register.projects.map((p) => p.base_branch)).toEqual(["develop", "develop"]);
   });
 
   it("turns the live env off by hand and keeps it off", async () => {
     const calls = serve({
       preflight: {
         ...preflightOk(),
-        default_repo: "caffeinelabs/app",
-        default_base: "temp-main",
+        default_repo: "sample-org/sample-app",
+        default_base: "develop",
         max_projects: 10,
       },
     });
@@ -564,8 +566,8 @@ describe("NewFactoryPage · Describe it", () => {
   const BRIEF = "Show the deployed versions in Settings: an API and a DB version endpoint.";
   const preflight = () => ({
     ...preflightOk(),
-    default_repo: "caffeinelabs/app",
-    default_base: "temp-main",
+    default_repo: "sample-org/sample-app",
+    default_base: "develop",
   });
 
   it("switches modes from the header and keeps the form's draft", async () => {
@@ -603,7 +605,7 @@ describe("NewFactoryPage · Describe it", () => {
     renderPage("loading", "/factory/new?mode=describe");
     await waitFor(() =>
       expect(screen.getByTestId("factory-describe-default-repo")).toHaveTextContent(
-        "caffeinelabs/app",
+        "sample-org/sample-app",
       ),
     );
     type("factory-describe-brief", BRIEF);
@@ -613,7 +615,7 @@ describe("NewFactoryPage · Describe it", () => {
     expect(await screen.findByTestId("room-stub")).toHaveTextContent("room conv_atlas factory");
     const session = writes(calls).find((c) => c.path === "/v1/sessions")!;
     expect((session.body as { workspaces: string[] }).workspaces).toEqual([
-      "https://github.com/caffeinelabs/app#temp-main",
+      "https://github.com/sample-org/sample-app#develop",
     ]);
     const register = writes(calls).find((c) => c.path === "/v1/factory/factories")!;
     expect(register.body).toMatchObject({
@@ -622,7 +624,7 @@ describe("NewFactoryPage · Describe it", () => {
       brief: BRIEF,
       autonomy: "grace",
       engine_mode: "assist",
-      defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+      defaults: { repo: "sample-org/sample-app", base_branch: "develop", integration_env: true },
     });
   });
 
@@ -640,7 +642,7 @@ describe("NewFactoryPage · Describe it", () => {
     renderPage("loading", "/factory/new?mode=describe");
     await waitFor(() =>
       expect(screen.getByTestId("factory-describe-default-repo")).toHaveTextContent(
-        "caffeinelabs/app",
+        "sample-org/sample-app",
       ),
     );
     type("factory-describe-brief", BRIEF);

@@ -34,9 +34,8 @@ _BIFROST_OPENAI = "http://bifrost.bifrost.svc.cluster.local:4000/v1"
 _TOKEN = "dummy-bifrost-token"
 _BROKER_URL = "https://ws.example/ai-gateway/anthropic"
 
-# The `providers:` block of the caffeine-sandbox host_config (infra repo,
-# clusters/caffeine-sandbox/omnigent/sandbox-config.yaml), trimmed to the keys
-# the resolvers read.
+# (sample) The `providers:` block of a sandbox cluster's host_config (the
+# deployment's infra repo), trimmed to the keys the resolvers read.
 _SANDBOX_PROVIDERS = {
     "bifrost": {
         "kind": "gateway",

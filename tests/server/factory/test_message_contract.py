@@ -51,9 +51,9 @@ def _pr(**fields: Any) -> FactoryPr:
     base: dict[str, Any] = {
         "id": "f74d5967c53455139e85ba1b402a5bd4",
         "factory_id": ATLAS,
-        "repo": "caffeinelabs/app",
+        "repo": "sample-org/sample-app",
         "number": 9630,
-        "url": "https://github.com/caffeinelabs/app/pull/9630",
+        "url": "https://github.com/sample-org/sample-app/pull/9630",
         "head_ref": "factory/api-version/version-endpoint",
         "head_sha": HEAD,
         "project_slug": "api-version",
@@ -77,7 +77,7 @@ def _project() -> FactoryProject:
         factory_id=ATLAS,
         slug="api-version",
         title="API version",
-        base_branch="temp-main",
+        base_branch="develop",
     )
 
 
@@ -87,7 +87,7 @@ def render_texts() -> list[dict[str, Any]]:
     pr = _pr()
     project = _project()
     idle = idle_env.DevEnvNeed(idle_env.NEED_IDLE, "", since=int(NOW), prs=(9630, 9631))
-    work = idle_env.DevEnvNeed(idle_env.NEED_WORK, "luka asked for changes on PR #9630")
+    work = idle_env.DevEnvNeed(idle_env.NEED_WORK, "lena asked for changes on PR #9630")
     decision = _decision()
     app_hit, api_hit = Hit(code=None, ms=3000, connect_error=True), Hit(code=502, ms=40)
     probe = Probe(app=app_hit, api=api_hit, sha=None, hits=(app_hit, api_hit))
@@ -107,8 +107,8 @@ def render_texts() -> list[dict[str, Any]]:
         ),
         (
             "brief",
-            start.brief_header("Luka", "mail_00000000000000aa") + "\nStart the factory.",
-            {"kind": "brief", "by": "Luka", "mailId": "mail_00000000000000aa"},
+            start.brief_header("Lena", "mail_00000000000000aa") + "\nStart the factory.",
+            {"kind": "brief", "by": "Lena", "mailId": "mail_00000000000000aa"},
         ),
         ("heartbeat", heartbeat_text(12, NOW), {"kind": "heartbeat", "seq": 12}),
         (
@@ -118,22 +118,22 @@ def render_texts() -> list[dict[str, Any]]:
         ),
         (
             "control_pause",
-            f"{control.control_header('PAUSE', 'Luka')} Pause the project.",
-            {"kind": "control", "action": "PAUSE", "by": "Luka"},
+            f"{control.control_header('PAUSE', 'Lena')} Pause the project.",
+            {"kind": "control", "action": "PAUSE", "by": "Lena"},
         ),
         (
             "control_preview",
-            f"{control.control_header('PREVIEW pr=#9630', 'Luka')} Deploy the preview.",
-            {"kind": "control", "action": "PREVIEW", "pr": 9630, "by": "Luka"},
+            f"{control.control_header('PREVIEW pr=#9630', 'Lena')} Deploy the preview.",
+            {"kind": "control", "action": "PREVIEW", "pr": 9630, "by": "Lena"},
         ),
         (
             "control_preview_down",
-            f"{control.control_header('PREVIEW_DOWN pr=#9630', 'Luka')} Take it down.",
+            f"{control.control_header('PREVIEW_DOWN pr=#9630', 'Lena')} Take it down.",
             {"kind": "control", "action": "PREVIEW_DOWN", "pr": 9630},
         ),
         (
             "control_env_status",
-            f"{control.control_header('ENV STATUS', 'Luka')} Report env status.",
+            f"{control.control_header('ENV STATUS', 'Lena')} Report env status.",
             {"kind": "control", "action": "ENV STATUS"},
         ),
         (
@@ -147,54 +147,54 @@ def render_texts() -> list[dict[str, Any]]:
                     root_conversation_id=None,
                     labels={LABEL_ROLE: ROLE_PROJECT_LEAD},
                 ),
-                "Luka",
+                "Lena",
                 "The node pool was full.",
             ),
-            {"kind": "control", "action": "NEW SANDBOX", "by": "Luka"},
+            {"kind": "control", "action": "NEW SANDBOX", "by": "Lena"},
         ),
         (
             "control_charter_update",
-            start.charter_update_text("Luka", "-goal: a\n+goal: b"),
-            {"kind": "control", "action": "CHARTER UPDATE", "by": "Luka"},
+            start.charter_update_text("Lena", "-goal: a\n+goal: b"),
+            {"kind": "control", "action": "CHARTER UPDATE", "by": "Lena"},
         ),
         (
             "decision_answered",
-            decisions.answer_text(decision, "Luka", "Header, right", "Use the right side."),
-            {"kind": "decision", "seq": 3, "by": "Luka", "option": "Header, right"},
+            decisions.answer_text(decision, "Lena", "Header, right", "Use the right side."),
+            {"kind": "decision", "seq": 3, "by": "Lena", "option": "Header, right"},
         ),
         (
             "decision_withdrawn",
-            decisions.withdraw_text(decision, "Luka", "No longer needed."),
+            decisions.withdraw_text(decision, "Lena", "No longer needed."),
             {"kind": "decision", "seq": 3, "withdrawn": True},
         ),
         (
             "decision_info_copy",
-            decisions.info_copy_text(decision, "Luka", "Header, right", pl),
+            decisions.info_copy_text(decision, "Lena", "Header, right", pl),
             {"kind": "notice", "decisionId": "D-3"},
         ),
         (
             "review_changes_cockpit",
-            control.review_text(pr, "changes_requested", "Luka", "Make it uppercase."),
+            control.review_text(pr, "changes_requested", "Lena", "Make it uppercase."),
             {"kind": "review", "verdict": "changes_requested", "pr": 9630, "source": "cockpit"},
         ),
         (
             "review_approved",
-            control.review_text(pr, "approved", "Luka", None),
+            control.review_text(pr, "approved", "Lena", None),
             {"kind": "review", "verdict": "approved", "pr": 9630},
         ),
         (
             "review_changes_github",
-            prs.changes_requested_notice(9630, HEAD, "luka", "Please rename it."),
+            prs.changes_requested_notice(9630, HEAD, "lena", "Please rename it."),
             {"kind": "review", "verdict": "changes_requested", "pr": 9630, "source": "GitHub"},
         ),
         (
             "review_approved_github",
-            prs.approved_notice(9630, HEAD, "luka", "LGTM after all."),
+            prs.approved_notice(9630, HEAD, "lena", "LGTM after all."),
             {"kind": "review", "verdict": "approved", "pr": 9630, "source": "GitHub"},
         ),
         (
             "notice_change_request_dismissed",
-            prs.dismissed_notice(pr, HEAD, "luka"),
+            prs.dismissed_notice(pr, HEAD, "lena"),
             {"kind": "notice", "pr": 9630},
         ),
         ("notice_ready", prs.ready_notice(pr, 6), {"kind": "notice", "pr": 9630}),
@@ -205,12 +205,12 @@ def render_texts() -> list[dict[str, Any]]:
         ),
         (
             "notice_merged",
-            prs.merged_notice(_pr(merged_by="luka", merged_sha="9c8b7a6f5e4d3c2b1a0f")),
+            prs.merged_notice(_pr(merged_by="lena", merged_sha="9c8b7a6f5e4d3c2b1a0f")),
             {"kind": "notice", "pr": 9630},
         ),
         (
             "notice_closed",
-            prs.closed_notice(pr, "luka", "D-4"),
+            prs.closed_notice(pr, "lena", "D-4"),
             {"kind": "notice", "pr": 9630},
         ),
         ("notice_preview_ttl", ttl_notice_text(pr, 72), {"kind": "notice", "pr": 9630}),
@@ -231,7 +231,7 @@ def render_texts() -> list[dict[str, Any]]:
         ),
         (
             "notice_control",
-            control.notice_text("Luka paused project api-version", "back at 3"),
+            control.notice_text("Lena paused project api-version", "back at 3"),
             {"kind": "notice"},
         ),
         ("notice_reply", reply_notice_text(pl, "done: PR #9630 opened"), {"kind": "notice"}),

@@ -43,7 +43,7 @@ SYNC_NOTICE_MIN_GAP_S: Final = 1800
 """Seconds between two sync notices to one work PL for one base (busy bases move often)."""
 
 BaseKey = tuple[str, str]
-"""``(repo, base)``, e.g. ``("caffeinelabs/app", "temp-main")``."""
+"""``(repo, base)``, e.g. ``("sample-org/sample-app", "develop")``."""
 
 
 @dataclass(frozen=True)
@@ -189,7 +189,7 @@ def bases_by_repo(scopes: Iterable[FactoryScope]) -> dict[str, list[str]]:
 
 
 def sync_notice(base: str, sha: str) -> str:
-    """``[Factory notice · base temp-main moved to <sha7> · sync open branches: …]``."""
+    """``[Factory notice · base develop moved to <sha7> · sync open branches: …]``."""
     return (
         f"[Factory notice · base {base} moved to {sha[:7]} · sync open branches: "
         f"git merge origin/{base}] Have each open PR's author merge origin/{base} into its "
@@ -198,7 +198,7 @@ def sync_notice(base: str, sha: str) -> str:
 
 
 def redeploy_notice(repo: str, base: str, before: str, after: str) -> str:
-    """``[Factory notice · base temp-main moved <old7> → <new7>]`` for the integration PL."""
+    """``[Factory notice · base develop moved <old7> → <new7>]`` for the integration PL."""
     return (
         f"[Factory notice · base {base} moved {before[:7]} → {after[:7]}] Redeploy your "
         f"live env of {repo} at the new head (KIND: integration)."

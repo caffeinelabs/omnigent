@@ -43,15 +43,15 @@ describe("proposalState", () => {
     [
       "a human applying their own proposal",
       "human",
-      "alice@caffeine.ai",
-      "alice@caffeine.ai",
+      "alice@example.com",
+      "alice@example.com",
       "applied",
     ],
-    ["a human applying an agent's proposal", "agent", "pl-db", "alice@caffeine.ai", "applied"],
+    ["a human applying an agent's proposal", "agent", "pl-db", "alice@example.com", "applied"],
     [
       "the server applying a human's proposal",
       "human",
-      "alice@caffeine.ai",
+      "alice@example.com",
       "server",
       "auto_applied",
     ],
@@ -71,7 +71,7 @@ describe("changeRows", () => {
   it("renders creates as added projects with their charter", () => {
     const rows = changeRows(proposalInState("pending"), round3Snapshot());
     expect(rows.map((r) => r.title)).toEqual(["+ billing-schema", "+ billing-api", "+ billing-ui"]);
-    expect(rows[1]!.meta).toBe("P1 · app#temp-main · after billing-schema");
+    expect(rows[1]!.meta).toBe("P1 · sample-app#develop · after billing-schema");
     expect(rows[0]!.lines.map((l) => [l.sign, l.label])).toEqual([
       ["+", "Goal"],
       ["+", "DoD"],
@@ -120,7 +120,7 @@ describe("changeRows", () => {
 
 describe("lines and levers", () => {
   it("says who proposed it and for whom", () => {
-    expect(proposerLine(proposalInState("pending"))).toBe("by Atlas for luka");
+    expect(proposerLine(proposalInState("pending"))).toBe("by Atlas for lena");
   });
 
   it("names a co-signer by its member title, not its session id", () => {
@@ -160,7 +160,7 @@ describe("lines and levers", () => {
       "Applied by mia · spawning billing-schema",
     );
     expect(outcomeLine(proposalInState("rejected"), "rejected")).toBe(
-      "Rejected by luka: “billing waits for Q1; keep the API contract stable”",
+      "Rejected by lena: “billing waits for Q1; keep the API contract stable”",
     );
     expect(outcomeLine(proposalInState("refused"), "refused")).toBe(
       "Refused: the factory is at its project or pod limit",
@@ -212,8 +212,8 @@ describe("Edit & apply", () => {
       priority: 0,
       depends_on: ["billing-schema"],
       kind: "work",
-      repo: "caffeinelabs/app",
-      base_branch: "temp-main",
+      repo: "sample-org/sample-app",
+      base_branch: "develop",
     });
     expect(project).not.toHaveProperty("constraints");
     expect(project).not.toHaveProperty("version_path");

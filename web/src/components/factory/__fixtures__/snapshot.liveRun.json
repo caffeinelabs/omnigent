@@ -54,19 +54,19 @@
     {
       "slug": "api-version",
       "title": "API version endpoint",
-      "repo": "caffeinelabs/app",
+      "repo": "sample-org/sample-app",
       "base_branch": "main",
       "priority": 1,
       "charter": {
-        "goal": "Expose the deployed commit: GET /version on caffeine-api and an \"API version\" row in Settings.",
+        "goal": "Expose the deployed commit: GET /version on sample-api and an \"API version\" row in Settings.",
         "dod": [
           "curl -fsS {api}/version → 200 with gitSha = the deployed sha",
-          "pnpm -F caffeine-api test"
+          "pnpm -F sample-api test"
         ],
         "scope_paths": [
-          "services/caffeine-api/**",
-          "services/caffeine-ux/src/settings/**",
-          "services/caffeine-ux/src/api/**"
+          "services/sample-api/**",
+          "services/sample-ux/src/settings/**",
+          "services/sample-ux/src/api/**"
         ],
         "constraints": null,
         "env_needed": true,
@@ -151,10 +151,10 @@
           "state": "ready",
           "env_id": "b693ef0a-2c6683-a38d",
           "urls": {
-            "app": "https://app-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io",
-            "api": "https://api-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io",
-            "minio": "https://minio-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io",
-            "tilt_ui": "https://10350-omnigent-managed-b693ef0a-2c6683.sessions.sandbox.caffeinelabs.io"
+            "app": "https://app-b693ef0a-2c6683-a38d.envs.sandbox.example.com",
+            "api": "https://api-b693ef0a-2c6683-a38d.envs.sandbox.example.com",
+            "minio": "https://minio-b693ef0a-2c6683-a38d.envs.sandbox.example.com",
+            "tilt_ui": "https://10350-omnigent-managed-b693ef0a-2c6683.sessions.sandbox.example.com"
           },
           "deployed": {
             "sha": "8c1d2e0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d",
@@ -178,15 +178,15 @@
               "status": "ok"
             },
             {
-              "name": "caffeine-db",
+              "name": "sample-db",
               "status": "ok"
             },
             {
-              "name": "caffeine-api",
+              "name": "sample-api",
               "status": "ok"
             },
             {
-              "name": "caffeine-ux",
+              "name": "sample-ux",
               "status": "ok"
             }
           ],
@@ -219,16 +219,16 @@
     {
       "slug": "db-version",
       "title": "DB version endpoint",
-      "repo": "caffeinelabs/app",
+      "repo": "sample-org/sample-app",
       "base_branch": "main",
       "priority": 1,
       "charter": {
-        "goal": "GET /db/version on caffeine-api returns the latest applied migration (name, applied_at).",
+        "goal": "GET /db/version on sample-api returns the latest applied migration (name, applied_at).",
         "dod": [
           "curl -fsS {api}/db/version → 200 with a migration name",
-          "pnpm -F caffeine-api test"
+          "pnpm -F sample-api test"
         ],
-        "scope_paths": ["services/caffeine-api/**"],
+        "scope_paths": ["services/sample-api/**"],
         "constraints": null,
         "env_needed": true,
         "preview": {
@@ -298,10 +298,10 @@
           "state": "ready",
           "env_id": "c41e9b07-7d0f12-5b3e",
           "urls": {
-            "app": "https://app-c41e9b07-7d0f12-5b3e.envs.sandbox.caffeinelabs.io",
-            "api": "https://api-c41e9b07-7d0f12-5b3e.envs.sandbox.caffeinelabs.io",
-            "minio": "https://minio-c41e9b07-7d0f12-5b3e.envs.sandbox.caffeinelabs.io",
-            "tilt_ui": "https://10350-omnigent-managed-c41e9b07-7d0f12.sessions.sandbox.caffeinelabs.io"
+            "app": "https://app-c41e9b07-7d0f12-5b3e.envs.sandbox.example.com",
+            "api": "https://api-c41e9b07-7d0f12-5b3e.envs.sandbox.example.com",
+            "minio": "https://minio-c41e9b07-7d0f12-5b3e.envs.sandbox.example.com",
+            "tilt_ui": "https://10350-omnigent-managed-c41e9b07-7d0f12.sessions.sandbox.example.com"
           },
           "deployed": {
             "sha": "8c1d2e0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d",
@@ -325,15 +325,15 @@
               "status": "ok"
             },
             {
-              "name": "caffeine-db",
+              "name": "sample-db",
               "status": "ok"
             },
             {
-              "name": "caffeine-api",
+              "name": "sample-api",
               "status": "ok"
             },
             {
-              "name": "caffeine-ux",
+              "name": "sample-ux",
               "status": "ok"
             }
           ],
@@ -366,7 +366,7 @@
     {
       "slug": "docs-factory-envs",
       "title": "Factory envs docs",
-      "repo": "caffeinelabs/app",
+      "repo": "sample-org/sample-app",
       "base_branch": "main",
       "priority": 2,
       "charter": {
@@ -419,9 +419,9 @@
     {
       "id": "f74d5967c53455139e85ba1b402a5bd4",
       "project_slug": "api-version",
-      "repo": "caffeinelabs/app",
+      "repo": "sample-org/sample-app",
       "number": 9630,
-      "url": "https://github.com/caffeinelabs/app/pull/9630",
+      "url": "https://github.com/sample-org/sample-app/pull/9630",
       "title": "feat(api): GET /version and a Settings \"API version\" row",
       "task": "version-endpoint",
       "head_sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
@@ -448,13 +448,13 @@
             "failing": 0,
             "pending": 0,
             "total": 14,
-            "url": "https://github.com/caffeinelabs/app/pull/9630/checks",
+            "url": "https://github.com/sample-org/sample-app/pull/9630/checks",
             "failing_names": []
           },
           "review": {
             "verdict": "APPROVE",
             "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
-            "url": "https://github.com/caffeinelabs/app/pull/9630#issuecomment-3448812201",
+            "url": "https://github.com/sample-org/sample-app/pull/9630#issuecomment-3448812201",
             "at": 1793016120,
             "by": "reviewer (codex)"
           },
@@ -462,7 +462,7 @@
             "result": "PASS",
             "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
             "env": "b693ef0a-2c6683-a38d-p9630",
-            "url": "https://github.com/caffeinelabs/app/pull/9630#issuecomment-3448840117",
+            "url": "https://github.com/sample-org/sample-app/pull/9630#issuecomment-3448840117",
             "at": 1793016780
           },
           "demo": {
@@ -474,12 +474,12 @@
           },
           "mergeable": "MERGEABLE",
           "files": [
-            "services/caffeine-api/src/modules/version/version.route.ts",
-            "services/caffeine-api/src/modules/version/version.route.test.ts",
-            "services/caffeine-api/src/app.ts",
-            "services/caffeine-ux/src/settings/AboutSection.tsx",
-            "services/caffeine-ux/src/settings/AboutSection.test.tsx",
-            "services/caffeine-ux/src/api/version.ts"
+            "services/sample-api/src/modules/version/version.route.ts",
+            "services/sample-api/src/modules/version/version.route.test.ts",
+            "services/sample-api/src/app.ts",
+            "services/sample-ux/src/settings/AboutSection.tsx",
+            "services/sample-ux/src/settings/AboutSection.test.tsx",
+            "services/sample-ux/src/api/version.ts"
           ],
           "protected": []
         }
@@ -499,9 +499,9 @@
         "env_id": "b693ef0a-2c6683-a38d-p9630",
         "namespace": "env-b693ef0a-2c6683-a38d-p9630",
         "urls": {
-          "app": "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
-          "api": "https://api-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
-          "minio": "https://minio-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+          "app": "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com",
+          "api": "https://api-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com",
+          "minio": "https://minio-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com",
           "tilt_ui": null
         },
         "state": "ready",
@@ -539,17 +539,17 @@
             "restarts": 0
           },
           {
-            "name": "caffeine-db",
+            "name": "sample-db",
             "ready": true,
             "restarts": 0
           },
           {
-            "name": "caffeine-api",
+            "name": "sample-api",
             "ready": true,
             "restarts": 0
           },
           {
-            "name": "caffeine-ux",
+            "name": "sample-ux",
             "ready": true,
             "restarts": 0
           }
@@ -566,7 +566,7 @@
         "head_sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
         "is_current_head": true,
         "title": "GET /version and the Settings API version row",
-        "summary": "Landing renders; GET /version returns caffeine-api at 7767f0d; Settings → About shows API version 7767f0d. Draft build skipped: needs the build tier.",
+        "summary": "Landing renders; GET /version returns sample-api at 7767f0d; Settings → About shows API version 7767f0d. Draft build skipped: needs the build tier.",
         "plan_source": "pr-body",
         "duration_s": 41.2,
         "console_errors": 0,
@@ -704,7 +704,7 @@
         ],
         "video_file_id": "582739a11eb35310bcef05b4070a30a4",
         "poster_file_id": "83c66f0cd43855869ed9aaf5cb7a0893",
-        "preview_url": "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+        "preview_url": "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.example.com",
         "created_at": 1793016960,
         "by": "demo-version-endpoint"
       },
@@ -718,9 +718,9 @@
     {
       "id": "8f15c0f9a98e5831a39615fb58f35036",
       "project_slug": "db-version",
-      "repo": "caffeinelabs/app",
+      "repo": "sample-org/sample-app",
       "number": 9631,
-      "url": "https://github.com/caffeinelabs/app/pull/9631",
+      "url": "https://github.com/sample-org/sample-app/pull/9631",
       "title": "feat(api): GET /db/version returns the latest applied migration",
       "task": "db-version-route",
       "head_sha": "5e1c2d4a9b8f7e6d5c4b3a2918f7e6d5c4b3a291",
@@ -753,7 +753,7 @@
             "failing": 0,
             "pending": 5,
             "total": 14,
-            "url": "https://github.com/caffeinelabs/app/pull/9631/checks",
+            "url": "https://github.com/sample-org/sample-app/pull/9631/checks",
             "failing_names": []
           },
           "review": null,
@@ -761,10 +761,10 @@
           "demo": null,
           "mergeable": "MERGEABLE",
           "files": [
-            "services/caffeine-api/src/modules/db/db-version.route.ts",
-            "services/caffeine-api/src/modules/db/db-version.route.test.ts",
-            "services/caffeine-api/src/modules/db/index.ts",
-            "services/caffeine-api/src/app.ts"
+            "services/sample-api/src/modules/db/db-version.route.ts",
+            "services/sample-api/src/modules/db/db-version.route.test.ts",
+            "services/sample-api/src/modules/db/index.ts",
+            "services/sample-api/src/app.ts"
           ],
           "protected": []
         }
@@ -778,9 +778,9 @@
         "env_id": "c41e9b07-7d0f12-5b3e-p9631",
         "namespace": "env-c41e9b07-7d0f12-5b3e-p9631",
         "urls": {
-          "app": "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
-          "api": "https://api-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
-          "minio": "https://minio-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+          "app": "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.example.com",
+          "api": "https://api-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.example.com",
+          "minio": "https://minio-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.example.com",
           "tilt_ui": null
         },
         "state": "stale",
@@ -818,17 +818,17 @@
             "restarts": 0
           },
           {
-            "name": "caffeine-db",
+            "name": "sample-db",
             "ready": true,
             "restarts": 0
           },
           {
-            "name": "caffeine-api",
+            "name": "sample-api",
             "ready": true,
             "restarts": 0
           },
           {
-            "name": "caffeine-ux",
+            "name": "sample-ux",
             "ready": true,
             "restarts": 0
           }
@@ -850,9 +850,9 @@
     {
       "id": "4536eb8341255afcb53b1bbe6f3f4578",
       "project_slug": "docs-factory-envs",
-      "repo": "caffeinelabs/app",
+      "repo": "sample-org/sample-app",
       "number": 9632,
-      "url": "https://github.com/caffeinelabs/app/pull/9632",
+      "url": "https://github.com/sample-org/sample-app/pull/9632",
       "title": "docs: factory envs and previews",
       "task": "factory-envs-doc",
       "head_sha": "f01e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6",
@@ -879,13 +879,13 @@
             "failing": 0,
             "pending": 0,
             "total": 6,
-            "url": "https://github.com/caffeinelabs/app/pull/9632/checks",
+            "url": "https://github.com/sample-org/sample-app/pull/9632/checks",
             "failing_names": []
           },
           "review": {
             "verdict": "APPROVE",
             "sha": "f01e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6",
-            "url": "https://github.com/caffeinelabs/app/pull/9632#issuecomment-3448701945",
+            "url": "https://github.com/sample-org/sample-app/pull/9632#issuecomment-3448701945",
             "at": 1793010900,
             "by": "reviewer (claude)"
           },
@@ -904,7 +904,7 @@
       "demo": null,
       "older_demos": 0,
       "merged": {
-        "by": "luka",
+        "by": "lena",
         "sha": "9be04c1f2e3d4c5b6a7980f1e2d3c4b5a6978f01",
         "at": 1793013500
       },
@@ -927,7 +927,7 @@
       "source": "agent",
       "blocking": true,
       "question": "Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
-      "context": "Both exist in caffeine-db.\n- `knex_migrations`: 212 rows, latest 2026-10-20.\n- `schema_migrations`: 3 legacy rows from 2024.",
+      "context": "Both exist in sample-db.\n- `knex_migrations`: 212 rows, latest 2026-10-20.\n- `schema_migrations`: 3 legacy rows from 2024.",
       "options": [
         {
           "id": "a",
@@ -1060,7 +1060,7 @@
       "status": "answered",
       "answer_option_id": "a",
       "answer_text": "Settings, next to the build number.",
-      "answered_by": "Luka",
+      "answered_by": "Lena",
       "answered_at": 1793010000,
       "delivered_mail_id": "mail_3f9a1c2b7d4e5f60",
       "delivered_at": 1793010005,

@@ -55,7 +55,7 @@ async def cockpit(
 def _pr(cockpit: Cockpit, number: int = 9631, **fields: Any) -> FactoryPr:
     fields.setdefault("project_slug", "api-version")
     fields.setdefault("head_sha", HEAD)
-    pr, _ = cockpit.store.upsert_pr(cockpit.fid, "caffeinelabs/app", number, **fields)
+    pr, _ = cockpit.store.upsert_pr(cockpit.fid, "sample-org/sample-app", number, **fields)
     return pr
 
 
@@ -94,7 +94,7 @@ async def test_changes_requested_writes_the_review_and_tells_the_pl(cockpit: Coc
     )
     assert resp.json()["mail_id"] == item.mail_id
     [event] = cockpit.events("pr.human_review")
-    assert event.subject == "pr:caffeinelabs/app#9631"
+    assert event.subject == "pr:sample-org/sample-app#9631"
     assert event.data["verdict"] == "changes_requested"
     assert event.to_id == cockpit.world.id("pl")
     assert cockpit.announces
@@ -129,7 +129,7 @@ def _ready_pr(cockpit: Cockpit) -> FactoryPr:
         cockpit.fid,
         "api-version",
         title="API version",
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         pl_session_id=cockpit.world.id("pl"),
     )
     pr = _pr(cockpit, gates=_ALL_PASS, ready=True, ready_at=1_700_000_000)

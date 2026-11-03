@@ -21,6 +21,7 @@ from omnigent.server.factory.api import discovery_sources as routes
 from omnigent.server.factory.definition_blocks import DISCOVERY_ENV
 from omnigent.server.factory.discovery import gateway, sources
 from omnigent.server.factory.origin import require_human_origin
+from tests.examples.factory_sample_tokens import FORBIDDEN_SAMPLE_PATTERN
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.discovery_helpers import base, discovery_cockpit
@@ -354,5 +355,5 @@ def test_the_gateway_code_names_no_product() -> None:
         root / "background" / "discovery_sync.py",
     ]
     for path in files:
-        text = path.read_text(encoding="utf-8").lower()
-        assert "caffeine" not in text, path
+        text = path.read_text(encoding="utf-8")
+        assert not FORBIDDEN_SAMPLE_PATTERN.search(text), path

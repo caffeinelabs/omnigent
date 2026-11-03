@@ -62,7 +62,7 @@ function busEvents() {
         "!9631 verify FAIL (code: migrations)",
       ),
       mail("bus-3", 50, "PL · db-version", "ic:route-r2", "request", "re-run with knex seed"),
-      mail("bus-4", 45, "Atlas", "PL · ux-badge", "info", "rebase on temp-main", true),
+      mail("bus-4", 45, "Atlas", "PL · ux-badge", "info", "rebase on develop", true),
       ...page.data,
     ],
   };
@@ -240,7 +240,7 @@ const basesRoom = { room: { messages: manyBaseMovesThread() } };
 
 /**
  * A busy main: twelve one-move lines an older server wrote, a batched line of
- * 7 moves, a temp-main line and a lone move, each run one line.
+ * 7 moves, a develop line and a lone move, each run one line.
  */
 export const ManyBaseMoves = room("/room", basesRoom);
 

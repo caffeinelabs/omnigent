@@ -9,15 +9,15 @@ export const GITHUB_STORY_ROUTES: StoryRoutes = {
       connected: true,
       repos: [
         {
-          full_name: "caffeinelabs/app",
-          clone_url: "https://github.com/caffeinelabs/app.git",
+          full_name: "sample-org/sample-app",
+          clone_url: "https://github.com/sample-org/sample-app.git",
           default_branch: "main",
           private: true,
           pushed_at: null,
         },
         {
-          full_name: "caffeinelabs/omnigent",
-          clone_url: "https://github.com/caffeinelabs/omnigent.git",
+          full_name: "sample-org/sample-tool",
+          clone_url: "https://github.com/sample-org/sample-tool.git",
           default_branch: "staging",
           private: false,
           pushed_at: null,

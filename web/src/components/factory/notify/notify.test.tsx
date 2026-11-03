@@ -128,13 +128,13 @@ describe("notifyModel", () => {
     const old = now - (2 * 86400 + 18 * 3600);
     const [opened, reminder] = notifiedChips(
       [
-        { user_id: "luka@x.io", at: old, stage: "new", ok: true },
-        { user_id: "luka@x.io", at: old + 86400, stage: "r24h", ok: true },
+        { user_id: "lena@x.io", at: old, stage: "new", ok: true },
+        { user_id: "lena@x.io", at: old + 86400, stage: "r24h", ok: true },
       ],
       now,
     );
-    expect(opened!.text).toBe("luka 2d 18h ago");
-    expect(reminder!.text).toBe("luka reminder 1d 18h ago");
+    expect(opened!.text).toBe("lena 2d 18h ago");
+    expect(reminder!.text).toBe("lena reminder 1d 18h ago");
     expect(whenText(now - 60, now)).toMatch(/^\d\d:\d\d$/);
   });
 
@@ -151,8 +151,8 @@ describe("notifyModel", () => {
     expect(slackErrorText(notFound)).toBe("Slack has no such account here");
     const other = new FactoryApiError("gone", 404, "not_found", null, null);
     expect(slackErrorText(other)).toBe("Not found on the server; reload the cockpit");
-    expect(refParts("luka: D-19 needs you, INC-7 too")).toEqual([
-      { text: "luka: ", ref: false, at: 0 },
+    expect(refParts("lena: D-19 needs you, INC-7 too")).toEqual([
+      { text: "lena: ", ref: false, at: 0 },
       { text: "D-19", ref: true, at: 6 },
       { text: " needs you, ", ref: false, at: 10 },
       { text: "INC-7", ref: true, at: 22 },
@@ -174,9 +174,9 @@ describe("notifyModel", () => {
   });
 
   it("reads a member ID or an email, and validates tokens and clocks", () => {
-    expect(parseSlackTarget(" u04luka9z ")).toEqual({ member_id: "U04LUKA9Z" });
-    expect(parseSlackTarget("luka@caffeine.ai")).toEqual({ email: "luka@caffeine.ai" });
-    expect(parseSlackTarget("luka")).toBeNull();
+    expect(parseSlackTarget(" u04lena9z ")).toEqual({ member_id: "U04LENA9Z" });
+    expect(parseSlackTarget("lena@example.com")).toEqual({ email: "lena@example.com" });
+    expect(parseSlackTarget("lena")).toBeNull();
     expect(validBotToken(fakeToken("xoxb", "AbCdEfGhIjKl"))).toBe(true);
     expect(validBotToken(fakeToken("xoxp", "AbCdEfGhIjKl"))).toBe(false);
     expect(validClock("22:00") && !validClock("24:00")).toBe(true);
@@ -200,7 +200,7 @@ describe("NotifiedLine", () => {
   it("shows the deadline and every DM; nothing without either", () => {
     const view = render(
       <NotifiedLine
-        notified={[{ user_id: "luka@x.io", at: 1_762_070_400, stage: "new", ok: true }]}
+        notified={[{ user_id: "lena@x.io", at: 1_762_070_400, stage: "new", ok: true }]}
         deadlineAt={1000 + 3 * 3600}
         deadlineEffect="expires and nothing is started"
         nowS={1000}
@@ -224,7 +224,7 @@ describe("NotifiedLine", () => {
     expect(within(line).getByTestId("decision-notified-D-19-deadline").textContent).toBe(
       "expires in 6h",
     );
-    expect(line.textContent).toContain("luka reminder 1d 18h ago");
+    expect(line.textContent).toContain("lena reminder 1d 18h ago");
     expect(line.textContent).toContain("mia ⚠ Messages tab off");
   });
 });
@@ -240,10 +240,10 @@ describe("NotificationsSettings", () => {
         if (body.send_code) me = notifyMe({ link: "pending", lastDm: false });
         return json({
           account: {
-            user_id: "U04LUKA9Z",
-            team_id: "T0CAFE",
-            name: "luka",
-            handle: "luka",
+            user_id: "U04LENA9Z",
+            team_id: "T0SAMPLE",
+            name: "lena",
+            handle: "lena",
             email: null,
             tz: null,
           },
@@ -262,17 +262,17 @@ describe("NotificationsSettings", () => {
     );
 
     fireEvent.change(await screen.findByTestId("notify-find-input"), {
-      target: { value: "luka@caffeine.ai" },
+      target: { value: "lena@example.com" },
     });
     fireEvent.click(screen.getByTestId("notify-find"));
     const found = await screen.findByTestId("notify-found");
-    expect(found.textContent).toContain("@luka · U04LUKA9Z");
-    expect(calls("POST", "/notify/me/slack")).toEqual([{ email: "luka@caffeine.ai" }]);
+    expect(found.textContent).toContain("@lena · U04LENA9Z");
+    expect(calls("POST", "/notify/me/slack")).toEqual([{ email: "lena@example.com" }]);
 
     fireEvent.click(screen.getByTestId("notify-send-code"));
     const code = await screen.findByTestId("notify-code");
     expect(calls("POST", "/notify/me/slack")[1]).toEqual({
-      member_id: "U04LUKA9Z",
+      member_id: "U04LENA9Z",
       send_code: true,
     });
     fireEvent.change(code, { target: { value: "48 29 13" } });
@@ -357,7 +357,7 @@ describe("NotificationsSettings", () => {
     expect(screen.getByTestId("notify-find-invalid")).toHaveTextContent("neither a member ID");
     expect(screen.getByTestId("notify-find")).toBeDisabled();
 
-    fireEvent.change(input, { target: { value: "luka@slack.example" } });
+    fireEvent.change(input, { target: { value: "lena@slack.example" } });
     expect(screen.queryByTestId("notify-find-invalid")).toBeNull();
     fireEvent.click(screen.getByTestId("notify-find"));
     expect(await screen.findByTestId("notify-link-error")).toHaveTextContent(
@@ -389,7 +389,7 @@ describe("SlackAppCard", () => {
         return json({ slack_dm: routing.slack_dm });
       },
       [`POST ${BASE}/alerts/slack-bot/test`]: () =>
-        json({ ok: true, team: "Caffeine Labs", bot: "omnigent-factory", dm: "not_linked" }),
+        json({ ok: true, team: "Sample Org", bot: "omnigent-factory", dm: "not_linked" }),
     });
     render(
       <Frame>
@@ -407,7 +407,7 @@ describe("SlackAppCard", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("settings-slack-app-state")).toHaveTextContent(
-        "connected · Caffeine Labs · @omnigent-factory",
+        "connected · Sample Org · @omnigent-factory",
       ),
     );
     expect(calls("PUT", "/alerts/slack-bot")).toEqual([{ token: fakeToken("xoxb", "AbCdEf") }]);

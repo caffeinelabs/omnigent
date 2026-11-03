@@ -16,7 +16,7 @@ import { presenceWhere } from "./shellRoutes";
 
 const MAX_FACES = 3;
 
-/** `"Agents act as luka@…'s GitHub & Databricks · operators direct them · spend billed to luka@…"`. */
+/** `"Agents act as lena@…'s GitHub & Databricks · operators direct them · spend billed to lena@…"`. */
 export function credentialLine(creator: string | null | undefined): string {
   const who = creator ?? "the factory’s creator";
   return `Agents act as ${who}’s GitHub & Databricks · operators direct them · spend is billed to ${who}`;

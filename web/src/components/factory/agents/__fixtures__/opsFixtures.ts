@@ -175,7 +175,7 @@ export function agentsResponse(snapshot: FactorySnapshot = round3Snapshot()): Ag
     data: agentRows(snapshot),
     lines: ic
       ? [
-          line(1.2, ic, "tool", "Bash pnpm -F caffeine-api test"),
+          line(1.2, ic, "tool", "Bash pnpm -F sample-api test"),
           line(0.6, ic, "result", 'Error: relation "knex_migrations" does not exist'),
         ]
       : [],
@@ -290,14 +290,14 @@ export function agentDetail(
     };
   }
   const tools: AgentToolCallView[] = [
-    tool(0.7, "Bash", "pnpm -F caffeine-api test", null, false, null),
+    tool(0.7, "Bash", "pnpm -F sample-api test", null, false, null),
   ];
   for (let i = 1; i <= 6; i += 1) {
     tools.push(
       tool(
         i * 3.5,
         "Bash",
-        "pnpm -F caffeine-api test",
+        "pnpm -F sample-api test",
         41,
         true,
         `FAIL src/modules/db/version.test.ts\n  ● GET /db/version › returns the latest migration\n    error: ${KNEX}\nexit 1`,
@@ -305,7 +305,7 @@ export function agentDetail(
     );
     tools.push(tool(i * 3.5 + 1.2, "Edit", "src/modules/db/version.ts", 1, false, "+12 −3"));
   }
-  tools.push(tool(25, "Read", "services/caffeine-api/src/modules/db/version.ts", 0.4, false, null));
+  tools.push(tool(25, "Read", "services/sample-api/src/modules/db/version.ts", 0.4, false, null));
   const lines: LiveLineView[] = [
     line(
       28,
@@ -321,7 +321,7 @@ export function agentDetail(
     ),
     ...[6, 5, 4, 3, 2, 1].flatMap((i) => [
       line(i * 3.5 + 1.2, member, "tool", "Edit src/modules/db/version.ts"),
-      line(i * 3.5, member, "tool", "Bash pnpm -F caffeine-api test"),
+      line(i * 3.5, member, "tool", "Bash pnpm -F sample-api test"),
       line(i * 3.5 - 0.6, member, "result", `Error: ${KNEX} (exit 1)`),
     ]),
     line(
@@ -330,7 +330,7 @@ export function agentDetail(
       "message",
       "Same failure again. The table is missing in the test database; asking the PL whether to seed it.",
     ),
-    line(0.7, member, "tool", "Bash pnpm -F caffeine-api test"),
+    line(0.7, member, "tool", "Bash pnpm -F sample-api test"),
   ].sort((a, b) => a.ts - b.ts);
   return {
     agent: row,
@@ -464,7 +464,7 @@ export function timelineSpans(): SpanView[] {
     extra("turn", "dispatch route-r2", 31, 29, { session_id: PL_DB, role: "project_lead" }),
     extra("intervention", "interrupt", 9, 9, {
       session_id: "9264e2b0d6105cd289754e95c8162752",
-      actor: "mia@caffeine.ai",
+      actor: "mia@example.com",
       project_slug: "cache-warm",
       attrs: { action: "interrupt" },
     }),
@@ -551,7 +551,7 @@ export function issuePage(ref = "INC-13"): IssuePageResponse | null {
       event(
         0.5,
         "agent.repeat",
-        "ic:route-r2 · same failing command 7× · pnpm -F caffeine-api test",
+        "ic:route-r2 · same failing command 7× · pnpm -F sample-api test",
         { severity: "warning", from_id: IC_ROUTE_R2, from_title: "ic:route-r2" },
       ),
       event(4, "message.delivered", "PL · db-version → ic:route-r2 · re-run with knex seed", {
@@ -562,7 +562,7 @@ export function issuePage(ref = "INC-13"): IssuePageResponse | null {
         from_id: PL_DB,
         to_id: IC_ROUTE_R2,
       }),
-      event(22, "gate.changed", "!9631 CI caffeine-api test FAIL (same check as r0, r1)", {
+      event(22, "gate.changed", "!9631 CI sample-api test FAIL (same check as r0, r1)", {
         severity: "warning",
         subject: `pr:${PR_9631}`,
       }),
@@ -580,7 +580,7 @@ export function issuePage(ref = "INC-13"): IssuePageResponse | null {
   };
 }
 
-/** ic:route-r2's own items: the PL's dispatch, the failing test twice, Luka's message. */
+/** ic:route-r2's own items: the PL's dispatch, the failing test twice, Lena's message. */
 function routeR2Items(): unknown[] {
   const t0 = ROUND3_NOW_S - 14 * 60;
   const base = { response_id: "resp_r2_01", status: "completed" };
@@ -595,7 +595,7 @@ function routeR2Items(): unknown[] {
       model: "codex",
       name: "Bash",
       call_id: `call_r2_${n}`,
-      arguments: JSON.stringify({ command: "pnpm -F caffeine-api test" }),
+      arguments: JSON.stringify({ command: "pnpm -F sample-api test" }),
     },
     {
       ...base,
@@ -631,12 +631,12 @@ function routeR2Items(): unknown[] {
             PL_DB,
             "project_lead",
             "dispatch",
-            "T-4 route the version read through knex · attempt 3/3 · budget $4.\nCI failed twice on caffeine-api test; fix the test database setup first.",
+            "T-4 route the version read through knex · attempt 3/3 · budget $4.\nCI failed twice on sample-api test; fix the test database setup first.",
           ),
         },
       ],
     },
-    say(1, t0 + 30, "Reading the test setup; the failing check is caffeine-api test."),
+    say(1, t0 + 30, "Reading the test setup; the failing check is sample-api test."),
     ...bash(2, t0 + 60),
     say(3, t0 + 120, "Same failure as r1: the test database has no knex_migrations table."),
     ...bash(4, t0 + 300),

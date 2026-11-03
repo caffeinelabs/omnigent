@@ -123,7 +123,7 @@ export const WorkEditCardWarning = graph("?task=T-6", {}, async ({ canvasElement
   fireEvent.click(await body(canvasElement).findByTestId("graph-task-card", {}, { timeout: 6000 }));
   const dialog = await body(canvasElement).findByTestId("task-edit-card", {}, { timeout: 6000 });
   fireEvent.change(within(dialog).getByTestId("task-edit-scope"), {
-    target: { value: "services/caffeine-api/src/modules/db/**" },
+    target: { value: "services/sample-api/src/modules/db/**" },
   });
 });
 

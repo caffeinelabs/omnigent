@@ -135,7 +135,7 @@ describe("needs you", () => {
     pr.human_review = {
       verdict: "changes_requested",
       text: "Pad the row.",
-      by: "Luka",
+      by: "Lena",
       at: NOW - 30,
       head_sha: pr.head_sha,
       source: "cockpit",
@@ -228,7 +228,7 @@ describe("changes requested on the head", () => {
   const review = (head_sha: string | null, verdict: "approved" | "changes_requested") => ({
     verdict,
     text: null,
-    by: "Luka",
+    by: "Lena",
     at: NOW,
     head_sha,
     source: "cockpit" as const,

@@ -24,7 +24,7 @@ import {
 import { useSlackBot, useTestSlackBot } from "../notify/notifyQueries";
 import { LEVER_REASON, ReasonGated, useViewerCan } from "../shell/viewerCan";
 
-/** `Caffeine Labs · @omnigent-factory`. */
+/** `Sample Org · @omnigent-factory`. */
 export function slackAppLabel(app: SlackAppView): string {
   const bot = app.bot ? `@${app.bot}` : "its bot";
   return `${app.team ?? "Slack"} · ${bot}`;

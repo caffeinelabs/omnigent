@@ -114,7 +114,7 @@ function CardList({ role = "creator" }: { role?: ViewerRole }) {
       id: "demo-card",
       seq: 90,
       thread: "pr:f74d5967c53455139e85ba1b402a5bd4",
-      body: "demo PASS of caffeinelabs/app#9630",
+      body: "demo PASS of sample-org/sample-app#9630",
       card: { type: "demo", ref: "!9630", id: null },
     },
     {
@@ -239,7 +239,7 @@ export const ProposalRaceLost = proposalStory(
         body: {
           error: { code: "proposal_not_pending", message: "C-4 is already applied" },
           status: "applied",
-          decided_by: "mia@caffeine.ai",
+          decided_by: "mia@example.com",
         },
         status: 409,
       },

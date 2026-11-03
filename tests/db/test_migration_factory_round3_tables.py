@@ -229,7 +229,7 @@ def _seed_previous(engine: sa.Engine) -> None:
                 slug="api-version",
                 title="API version",
                 stage_changed_at=1,
-                created_by="luka@caffeine.ai",
+                created_by="lena@example.com",
                 created_at=1,
                 updated_at=1,
             )
@@ -238,9 +238,9 @@ def _seed_previous(engine: sa.Engine) -> None:
             prs.insert().values(
                 id=os.urandom(16),
                 factory_id=fid,
-                repo="caffeinelabs/app",
+                repo="sample-org/sample-app",
                 number=9630,
-                url="https://github.com/caffeinelabs/app/pull/9630",
+                url="https://github.com/sample-org/sample-app/pull/9630",
                 title="Add GET /version",
                 head_ref="factory/api-version/version-endpoint",
                 base_ref="main",

@@ -18,7 +18,7 @@ from tests.server.factory.conftest import Supervision
 TTL_S = 72 * 3600
 NOTICE = (
     "[Factory notice · preview p9630 idle 72h · park it] No human has looked at the preview "
-    "of PR caffeinelabs/app#9630 for 72h. Send env_keeper PREVIEW_DOWN pr=9630 reason=ttl. "
+    "of PR sample-org/sample-app#9630 for 72h. Send env_keeper PREVIEW_DOWN pr=9630 reason=ttl. "
     "The demo stays reviewable; the cockpit can redeploy the preview later."
 )
 
@@ -36,7 +36,7 @@ def _store(s: Supervision) -> Any:
 def _ready_preview(s: Supervision, deployed_at: float, **fields: Any) -> Any:
     pr, _ = _store(s).upsert_pr(
         s.world.id("lead_a"),
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         9630,
         project_slug="api-version",
         preview={"name": "p9630", "state": "ready", "deployed": {"at": int(deployed_at)}},
@@ -74,7 +74,7 @@ async def test_an_idle_ready_preview_gets_one_notice_per_window(supervision: Sup
     assert s.deliver.texts_to(pl) == [NOTICE, NOTICE]
 
     [first, _] = _store(s).find_events(s.world.id("lead_a"), previews.TTL_EVENT_KIND, 0)
-    assert first.to_id == pl and first.subject == "pr:caffeinelabs/app#9630"
+    assert first.to_id == pl and first.subject == "pr:sample-org/sample-app#9630"
     assert first.severity == "notice" and first.project_slug == "api-version"
 
 
@@ -85,7 +85,7 @@ async def test_human_attention_restarts_the_window(supervision: Supervision) -> 
     _ready_preview(
         s,
         deployed,
-        human_review={"verdict": "approved", "by": "luka", "at": int(reviewed)},
+        human_review={"verdict": "approved", "by": "lena", "at": int(reviewed)},
     )
 
     clock.advance(TTL_S + PREVIEW_TTL_CHECK_S)
@@ -109,7 +109,7 @@ async def test_an_answered_project_decision_counts_as_attention(
         question="Header or footer?",
         project_slug="api-version",
     )
-    _store(s).answer_decision(decision.id, option_id=None, text="header", by="luka")
+    _store(s).answer_decision(decision.id, option_id=None, text="header", by="lena")
 
     clock.advance(PREVIEW_TTL_CHECK_S)
     await s.tick()

@@ -304,7 +304,7 @@ function FactorySwitcher({
   );
 }
 
-/** Two letters for a person: `luka.r@example.com` → `LR`, `ana` → `AN`. */
+/** Two letters for a person: `lena.r@example.com` → `LR`, `ana` → `AN`. */
 export function initialsOf(userId: string | null | undefined): string {
   const local = (userId ?? "").split("@")[0] ?? "";
   const parts = local.split(/[._\-\s]+/).filter(Boolean);

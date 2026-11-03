@@ -66,9 +66,9 @@ LABEL_SANDBOX_RELEASED_AT: Final = "omnigent.factory.sandbox_released_at"
 LABEL_KEEP_PREVIEWS: Final = "omnigent.factory.keep_previews"
 """``"0"`` lets a paused PL's pod idle out despite live previews (PL only)."""
 LABEL_DEFAULT_REPO: Final = "omnigent.factory.default_repo"
-"""Repo new projects default to (root only), e.g. ``"caffeinelabs/app"``."""
+"""Repo new projects default to (root only), e.g. ``"sample-org/sample-app"``."""
 LABEL_DEFAULT_BASE: Final = "omnigent.factory.default_base"
-"""Base branch new projects of the default repo target (root only), e.g. ``"temp-main"``."""
+"""Base branch new projects of the default repo target (root only), e.g. ``"develop"``."""
 LABEL_BASE_HEAD_PREFIX: Final = "omnigent.factory.base_head."
 """Root label prefix recording a watched base's head: ``<sha> <moved_at> <repo>#<base>``."""
 
@@ -297,9 +297,9 @@ def parse_pr_url(url: object) -> tuple[str, int] | None:
     """
     Parse a GitHub pull request URL.
 
-    :param url: e.g. ``"https://github.com/caffeinelabs/app/pull/9630"`` (a
+    :param url: e.g. ``"https://github.com/sample-org/sample-app/pull/9630"`` (a
         trailing slash, query or fragment is tolerated).
-    :returns: ``("caffeinelabs/app", 9630)`` with the repo lowercased, or ``None``.
+    :returns: ``("sample-org/sample-app", 9630)`` with the repo lowercased, or ``None``.
     """
     if not isinstance(url, str):
         return None

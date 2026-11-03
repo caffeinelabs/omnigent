@@ -128,7 +128,7 @@ async def test_project_rows_are_backfilled_from_pl_labels(
     world: FactoryWorld, projects: SqlAlchemyProjectStore
 ) -> None:
     world.store.set_labels(
-        world.id("pl"), {REPO_LABEL: "https://github.com/caffeinelabs/app#main"}
+        world.id("pl"), {REPO_LABEL: "https://github.com/sample-org/sample-app#main"}
     )
 
     report = await reconcile.reconcile_once(world.app_state)
@@ -138,7 +138,7 @@ async def test_project_rows_are_backfilled_from_pl_labels(
     assert (row.slug, row.title, row.repo, row.base_branch) == (
         "api-version",
         "api-version",
-        "caffeinelabs/app",
+        "sample-org/sample-app",
         "main",
     )
     assert row.pl_session_id == world.id("pl")
@@ -149,7 +149,7 @@ async def test_the_repo_falls_back_to_the_roots_and_a_missing_pl_is_linked(
     world: FactoryWorld, projects: SqlAlchemyProjectStore
 ) -> None:
     lead_a = world.id("lead_a")
-    world.store.set_labels(lead_a, {REPO_LABEL: "git@github.com:caffeinelabs/app.git"})
+    world.store.set_labels(lead_a, {REPO_LABEL: "git@github.com:sample-org/sample-app.git"})
     world.make_session(
         "pl2",
         agent="pl",
@@ -167,7 +167,7 @@ async def test_the_repo_falls_back_to_the_roots_and_a_missing_pl_is_linked(
     report = await reconcile.reconcile_once(world.app_state)
 
     rows = {p.slug: p for p in _fstore(world).list_projects(lead_a)}
-    assert rows["db-version"].repo == "caffeinelabs/app"
+    assert rows["db-version"].repo == "sample-org/sample-app"
     assert rows["db-version"].base_branch is None
     assert rows["api-version"].title == "API version endpoint"
     assert rows["api-version"].pl_session_id == world.id("pl")
@@ -190,7 +190,7 @@ async def test_stage_is_persisted_and_its_event_fires_once(
     assert event.data == {"from": "queued", "to": "planning", "overlay": None}
 
     _fstore(world).upsert_pr(
-        lead_a, "caffeinelabs/app", 9630, project_slug="api-version", ready=True
+        lead_a, "sample-org/sample-app", 9630, project_slug="api-version", ready=True
     )
     await reconcile.reconcile_once(world.app_state)
     assert _fstore(world).list_projects(lead_a)[0].stage == "ready"
@@ -343,8 +343,8 @@ async def test_a_failing_factory_does_not_stop_the_others(
     ("labels", "expected"),
     [
         (
-            {REPO_LABEL: "https://github.com/caffeinelabs/app#release-1"},
-            ("caffeinelabs/app", "release-1"),
+            {REPO_LABEL: "https://github.com/sample-org/sample-app#release-1"},
+            ("sample-org/sample-app", "release-1"),
         ),
         ({REPO_LABEL: "git@github.com:org/repo.git"}, ("org/repo", None)),
         ({"omnigent.sandbox.repo": "https://github.com/a/b"}, ("a/b", None)),

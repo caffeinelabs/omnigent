@@ -362,11 +362,11 @@ async def test_an_event_for_the_member_resets_the_backoff(quiet: Supervision) ->
     await _first_beat(s)
     w.store.set_labels(w.id("pl"), {F.LABEL_IDLE_BEATS: "4"})
     s.clock.advance(30)
-    _event(s, "PR #9630 merged by @luka", kind="pr.merged", project_slug="api-version")
+    _event(s, "PR #9630 merged by @lena", kind="pr.merged", project_slug="api-version")
 
     [beat] = await _idle_backstop(s, 1)
 
-    assert "1 change since #1: • PR #9630 merged by @luka" in beat
+    assert "1 change since #1: • PR #9630 merged by @lena" in beat
     assert F.LABEL_IDLE_BEATS not in w.get("pl").labels
     # Back to the three-interval backstop.
     assert len(await _idle_backstop(s, 3)) == 1
@@ -376,7 +376,7 @@ async def test_a_pr_notice_reaches_a_backed_off_pl_at_once(quiet: Supervision) -
     s, w = quiet, quiet.world
     await _first_beat(s)
     w.store.set_labels(w.id("pl"), {F.LABEL_IDLE_BEATS: "6"})
-    notice = "[Factory notice · PR caffeinelabs/app#9630 checks failed: ci / test]"
+    notice = "[Factory notice · PR sample-org/sample-app#9630 checks failed: ci / test]"
 
     get_mailer(w.app_state).notify(w.id("pl"), notice, factory_id=w.id("lead_a"))
     await s.settle()
@@ -449,7 +449,7 @@ def quiet_lead(supervision: Supervision) -> Supervision:
 
 def _room_message(s: Supervision, lead: str) -> str:
     """A human's Room message to Atlas, through the mailer like the Room sends it."""
-    text = "[Factory room · #factory] luka: start the next project"
+    text = "[Factory room · #factory] lena: start the next project"
     get_mailer(s.world.app_state).submit(
         MailItem(
             mail_id="mail_room1",
@@ -459,7 +459,7 @@ def _room_message(s: Supervision, lead: str) -> str:
             text=text,
             kind="chat",
             factory_id=lead,
-            created_by="luka@caffeine.ai",
+            created_by="lena@example.com",
             thread="factory",
         )
     )
@@ -467,7 +467,7 @@ def _room_message(s: Supervision, lead: str) -> str:
 
 
 def _answered(s: Supervision, lead: str) -> str:
-    _event(s, 'luka answered D-3 · "Ship it"', kind="decision.answered", severity="notice")
+    _event(s, 'lena answered D-3 · "Ship it"', kind="decision.answered", severity="notice")
     return "answered D-3"
 
 

@@ -72,7 +72,7 @@ describe("projectRowFacts", () => {
       label: "changes requested",
       tone: "warning",
       title:
-        "luka@caffeine.ai asked for changes on !9630 @7767f0d; " +
+        "lena@example.com asked for changes on !9630 @7767f0d; " +
         "ready again once a new head passes the gates",
     });
     expect(matchesFilter(snapshot, api, "ready")).toBe(false);

@@ -94,7 +94,7 @@ describe("factory notices", () => {
 function viewer(
   role: ViewerBlock["role"],
   level: number,
-  userId = "opal@caffeine.ai",
+  userId = "opal@example.com",
 ): ViewerBlock {
   const can = {
     post: level >= 2,
@@ -118,7 +118,7 @@ function sharedSnapshot(me: ViewerBlock): FactorySnapshot {
   const snapshot = liveRunSnapshot();
   const [first, second] = snapshot.decisions.filter((d) => d.status === "open" && d.blocking);
   first!.assignee = "owners";
-  second!.assignee = "mia@caffeine.ai";
+  second!.assignee = "mia@example.com";
   snapshot.viewer = me;
   return snapshot;
 }
@@ -128,7 +128,7 @@ describe("notices in a shared factory", () => {
     const snapshot = sharedSnapshot(viewer("operator", 2));
     const decisions = snapshotNotices(snapshot).filter((n) => n.key.startsWith("decision:"));
     expect(decisions).toEqual([]);
-    const mine = sharedSnapshot(viewer("operator", 2, "mia@caffeine.ai"));
+    const mine = sharedSnapshot(viewer("operator", 2, "mia@example.com"));
     expect(snapshotNotices(mine).filter((n) => n.key.startsWith("decision:"))).toHaveLength(1);
   });
 
@@ -180,14 +180,14 @@ describe("notices in a shared factory", () => {
       mention,
     });
     const notices = mentionNotices("fid", "Atlas factory", [
-      thread("project:db-version", { seq: 7, body: "@mia@caffeine.ai use knex_migrations" }),
+      thread("project:db-version", { seq: 7, body: "@mia@example.com use knex_migrations" }),
       thread("factory", null),
     ]);
     expect(notices).toEqual([
       {
         key: "mention:project:db-version:7",
         title: "Atlas factory · #db-version mentions you",
-        body: "@mia@caffeine.ai use knex_migrations",
+        body: "@mia@example.com use knex_migrations",
         path: "/factory/fid/room/project%3Adb-version",
       },
     ]);
@@ -196,9 +196,9 @@ describe("notices in a shared factory", () => {
 
   it("a claim makes a decision its claimer's", () => {
     const snapshot = liveRunSnapshot();
-    const decision = { ...snapshot.decisions[0]!, assignee: null, claimed_by: "mia@caffeine.ai" };
+    const decision = { ...snapshot.decisions[0]!, assignee: null, claimed_by: "mia@example.com" };
     expect(isForViewer(decision, viewer("operator", 2))).toBe(false);
-    expect(isForViewer(decision, viewer("operator", 2, "mia@caffeine.ai"))).toBe(true);
+    expect(isForViewer(decision, viewer("operator", 2, "mia@example.com"))).toBe(true);
     expect(isForViewer({ ...decision, claimed_by: null }, viewer("operator", 2))).toBe(true);
     expect(isForViewer({ ...decision, claimed_by: null }, null)).toBe(true);
   });

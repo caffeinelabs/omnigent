@@ -92,7 +92,7 @@ export const UX_API_FILE_ID = "a9b8c7d6e5f430112233445566778899";
 
 /** `api.json` of the #9634 demo: the synthetic sign-in and `GET /version`. */
 export function apiCalls9634(): unknown[] {
-  const api = "https://api-b693ef0a-2c6683-a38d-p9634.envs.sandbox.caffeinelabs.io";
+  const api = "https://api-b693ef0a-2c6683-a38d-p9634.envs.sandbox.example.com";
   const headers = { "content-type": "application/json; charset=utf-8" };
   return [
     {
@@ -122,7 +122,7 @@ export function apiCalls9634(): unknown[] {
       response: {
         headers: { ...headers, "x-factory-commit": UX_HEAD },
         content_type: headers["content-type"],
-        body: JSON.stringify({ service: "caffeine-api", gitSha: UX_HEAD }),
+        body: JSON.stringify({ service: "sample-api", gitSha: UX_HEAD }),
         bytes: 78,
         truncated: false,
       },
@@ -255,7 +255,7 @@ function uxDemo(): DemoView {
     ],
     video_file_id: "8a7b6c5d4e3f20112233445566778899",
     poster_file_id: "9b8c7d6e5f4a30112233445566778899",
-    preview_url: "https://app-b693ef0a-2c6683-a38d-p9634.envs.sandbox.caffeinelabs.io",
+    preview_url: "https://app-b693ef0a-2c6683-a38d-p9634.envs.sandbox.example.com",
     created_at: NOW - 600,
     by: "demo-settings-row",
   };
@@ -264,11 +264,11 @@ function uxDemo(): DemoView {
 /** #9634: the Settings row, its own preview in slot 2, waiting on review. */
 function uxPr(base: PrView): PrView {
   const pr = structuredClone(base);
-  const app = "https://app-b693ef0a-2c6683-a38d-p9634.envs.sandbox.caffeinelabs.io";
+  const app = "https://app-b693ef0a-2c6683-a38d-p9634.envs.sandbox.example.com";
   Object.assign(pr, {
     id: UX_PR_ID,
     number: UX_PR_NUMBER,
-    url: `https://github.com/caffeinelabs/app/pull/${UX_PR_NUMBER}`,
+    url: `https://github.com/sample-org/sample-app/pull/${UX_PR_NUMBER}`,
     title: "feat(ux): API version row in Settings → About",
     task: "settings-row",
     head_sha: UX_HEAD,
@@ -300,7 +300,7 @@ function uxPr(base: PrView): PrView {
     namespace: "env-b693ef0a-2c6683-a38d-p9634",
     urls: {
       app,
-      api: "https://api-b693ef0a-2c6683-a38d-p9634.envs.sandbox.caffeinelabs.io",
+      api: "https://api-b693ef0a-2c6683-a38d-p9634.envs.sandbox.example.com",
       minio: null,
       tilt_ui: null,
     },

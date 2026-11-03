@@ -29,11 +29,11 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 const PROJECT: FactoryProjectInput = {
   title: "API version endpoint",
   slug: "api-version",
-  repo: "caffeinelabs/app",
+  repo: "sample-org/sample-app",
   base_branch: "main",
-  goal: "GET /version on caffeine-api",
+  goal: "GET /version on sample-api",
   dod: ["curl -fsS {api}/version → 200"],
-  scope_paths: ["services/caffeine-api/**"],
+  scope_paths: ["services/sample-api/**"],
   env_needed: true,
   preview: { enabled: true, slots: 2 },
   demo_focus: "Call GET /version",
@@ -92,7 +92,7 @@ describe("startFactory", () => {
     expect(JSON.parse(String(createSession!.body))).toEqual({
       agent_id: "ag_lead",
       host_type: "managed",
-      workspaces: ["https://github.com/caffeinelabs/app#main"],
+      workspaces: ["https://github.com/sample-org/sample-app#main"],
       title: "Atlas",
     });
     // The same telemetry surface as any other session create.
@@ -178,7 +178,7 @@ describe("startFactory", () => {
 
     const [createSession] = callsTo("/v1/sessions");
     expect(JSON.parse(String(createSession!.body)).workspaces).toEqual([
-      "https://github.com/caffeinelabs/app#main",
+      "https://github.com/sample-org/sample-app#main",
     ]);
     const [register] = callsTo("/v1/factory/factories");
     expect(JSON.parse(String(register!.body)).projects[0].base_branch).toBe("main");
@@ -198,7 +198,7 @@ describe("startFactory", () => {
       {
         ...FORM,
         projects: [],
-        defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+        defaults: { repo: "sample-org/sample-app", base_branch: "develop", integration_env: true },
         brief: "  Show the deployed versions in Settings.  ",
         autonomy: "requested",
         engineMode: "observe",
@@ -208,7 +208,7 @@ describe("startFactory", () => {
 
     const [createSession] = callsTo("/v1/sessions");
     expect(JSON.parse(String(createSession!.body)).workspaces).toEqual([
-      "https://github.com/caffeinelabs/app#temp-main",
+      "https://github.com/sample-org/sample-app#develop",
     ]);
     const [register] = callsTo("/v1/factory/factories");
     expect(JSON.parse(String(register!.body))).toMatchObject({
@@ -216,7 +216,7 @@ describe("startFactory", () => {
       brief: "Show the deployed versions in Settings.",
       autonomy: "requested",
       engine_mode: "observe",
-      defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+      defaults: { repo: "sample-org/sample-app", base_branch: "develop", integration_env: true },
     });
   });
 });

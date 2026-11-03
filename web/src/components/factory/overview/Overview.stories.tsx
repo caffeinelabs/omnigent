@@ -40,7 +40,7 @@ type Story = StoryObj<typeof meta>;
 
 // ── Live ───────────────────────────────────────────────────────
 
-/** Atlas factory on temp-main as its creator: Needs you, 5 projects in flight, the hour, the feed. */
+/** Atlas factory on develop as its creator: Needs you, 5 projects in flight, the hour, the feed. */
 export const Live = overview();
 
 export const LiveDark = overview({ theme: "dark" });
@@ -59,14 +59,14 @@ export const ViewerDark = overview({ snapshot: round3Snapshot("viewer"), theme: 
 
 export const ViewerMobile = phone(overview({ snapshot: round3Snapshot("viewer") }));
 
-/** Three people here: Luka on the Overview, Mia on db-version, Ops idle. */
+/** Three people here: Lena on the Overview, Mia on db-version, Ops idle. */
 export const MultiUser = overview({
   snapshot: (() => {
     const snapshot = round3Snapshot();
     snapshot.presence = [
       ...(snapshot.presence ?? []),
       {
-        user_id: "ops@caffeine.ai",
+        user_id: "ops@example.com",
         name: "Ops",
         location: "pr:9653",
         idle: true,
@@ -74,7 +74,7 @@ export const MultiUser = overview({
         sessions: [],
       },
       {
-        user_id: "ana@caffeine.ai",
+        user_id: "ana@example.com",
         name: "Ana",
         location: null,
         idle: false,
@@ -115,7 +115,7 @@ function liveFactory(options: CockpitStoryOptions = {}): Story {
 }
 
 /**
- * Four PRs wait on Luka's merge and two incidents on his role: Now lists the
+ * Four PRs wait on Lena's merge and two incidents on his role: Now lists the
  * first five with their next step (Review →, Open) and Slack DMs; Needs you
  * below lists only the rest instead of all of them again.
  */
@@ -145,7 +145,7 @@ function changesRequested(options: CockpitStoryOptions = {}): Story {
 }
 
 /**
- * A minute after Luka asked for changes on #9630: api-version is back to
+ * A minute after Lena asked for changes on #9630: api-version is back to
  * Building with a "changes requested" flag, and Needs you no longer offers
  * its Review (it returns once a new head passes the gates).
  */

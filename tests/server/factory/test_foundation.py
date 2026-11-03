@@ -89,17 +89,17 @@ _API_PROJECT = FactoryProject(
     factory_id="f" * 32,
     slug="api-version",
     title="API version endpoint",
-    repo="caffeinelabs/app",
+    repo="sample-org/sample-app",
     base_branch="main",
     priority=1,
     charter={
-        "goal": "GET /version on caffeine-api returns the deployed commit.",
+        "goal": "GET /version on sample-api returns the deployed commit.",
         "dod": [
             "PR ready for human merge",
             "curl -fsS {api}/version → 200",
-            "pnpm -F caffeine-api test",
+            "pnpm -F sample-api test",
         ],
-        "scope_paths": ["services/caffeine-api/**"],
+        "scope_paths": ["services/sample-api/**"],
         "env_needed": True,
         "preview_slots": 3,
         "demo": "Call GET /version and show gitSha.",
@@ -112,7 +112,7 @@ _DOCS_PROJECT = FactoryProject(
     factory_id="f" * 32,
     slug="docs-factory-envs",
     title="Factory envs docs",
-    repo="caffeinelabs/app",
+    repo="sample-org/sample-app",
     priority=2,
     charter={
         "goal": "Add docs/factory-envs.md.",
@@ -145,10 +145,12 @@ def test_render_pl_charter_names_the_projects_base_branch() -> None:
     """The base branch is an explicit charter line; a missing one renders as main."""
     from dataclasses import replace
 
-    temp = render_pl_charter(replace(_API_PROJECT, base_branch="temp-main")).splitlines()
-    assert "Repo#branch: caffeinelabs/app#temp-main · branches factory/api-version/<task>" in temp
+    temp = render_pl_charter(replace(_API_PROJECT, base_branch="develop")).splitlines()
     assert (
-        "Base branch: temp-main (open every PR against it; the dev env tracks origin/temp-main)"
+        "Repo#branch: sample-org/sample-app#develop · branches factory/api-version/<task>" in temp
+    )
+    assert (
+        "Base branch: develop (open every PR against it; the dev env tracks origin/develop)"
         in temp
     )
     assert not any("origin/main" in line for line in temp)
@@ -161,10 +163,10 @@ def test_render_pl_charter_names_the_projects_base_branch() -> None:
 
 def test_render_kickoff_brief_golden() -> None:
     brief = render_kickoff_brief(
-        "Atlas factory", "demo", "Luka", [_API_PROJECT, _DOCS_PROJECT], factory_id="f" * 32
+        "Atlas factory", "demo", "Lena", [_API_PROJECT, _DOCS_PROJECT], factory_id="f" * 32
     )
     assert brief == _golden("kickoff_brief.txt")
-    normal = render_kickoff_brief("Atlas factory", "normal", "Luka", [])
+    normal = render_kickoff_brief("Atlas factory", "normal", "Lena", [])
     assert "heartbeats: leads 3600 s, PLs 7200 s" in normal and "Cockpit:" not in normal
 
 

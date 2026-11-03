@@ -21,7 +21,7 @@ prompt: |
 
   WORKTREE. The repo is the checkout you start in (`git rev-parse --show-toplevel`).
   `<base>` is the card's `Base:` branch, the project's base branch (`main`
-  when the card names none, e.g. `temp-main`): branch from it, sync with it
+  when the card names none, e.g. `develop`): branch from it, sync with it
   and open the PR against it. The branch name `factory/<slug>/<task>` is
   load-bearing: the server finds your PR by it. Never rename it.
     git -C <repo> fetch origin

@@ -32,7 +32,7 @@ FID = uuid.uuid4().hex
 OTHER_FID = uuid.uuid4().hex
 PL = uuid.uuid4().hex
 IC = uuid.uuid4().hex
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 
 
 @pytest.fixture(params=["sql", "memory"])
@@ -140,7 +140,7 @@ def test_pr_update_and_state_filter(store: FactoryStore) -> None:
     updated = store.update_pr(
         merged.id,
         state="merged",
-        merged_by="luka",
+        merged_by="lena",
         merged_at=1_000,
         ready=True,
         preview=preview,
@@ -224,7 +224,7 @@ def test_decision_dedupe_returns_open_row_then_new_number_after_answer(
     assert deduped is False and deduped_again is True
     assert again.id == first.id and again.number == 1
 
-    store.answer_decision(first.id, option_id="a", text=None, by="luka")
+    store.answer_decision(first.id, option_id="a", text=None, by="lena")
     fresh, deduped = _ask(store, "same")
     assert deduped is False
     assert fresh.number == 2 and fresh.id != first.id
@@ -232,20 +232,20 @@ def test_decision_dedupe_returns_open_row_then_new_number_after_answer(
 
 def test_answer_is_compare_and_set(store: FactoryStore) -> None:
     d, _ = _ask(store, "cas")
-    answered = store.answer_decision(d.id, option_id="a", text="use the header", by="luka")
+    answered = store.answer_decision(d.id, option_id="a", text="use the header", by="lena")
     assert answered.status == "answered"
     assert (answered.answer_option_id, answered.answer_text, answered.answered_by) == (
         "a",
         "use the header",
-        "luka",
+        "lena",
     )
     assert answered.answered_at is not None
     with pytest.raises(DecisionNotOpen) as excinfo:
         store.answer_decision(d.id, option_id="b", text=None, by="bob")
-    assert excinfo.value.decision.answered_by == "luka"
+    assert excinfo.value.decision.answered_by == "lena"
     assert excinfo.value.decision.answer_option_id == "a"
     with pytest.raises(DecisionNotFound):
-        store.answer_decision(uuid.uuid4().hex, option_id=None, text="x", by="luka")
+        store.answer_decision(uuid.uuid4().hex, option_id=None, text="x", by="lena")
 
 
 def test_decision_status_transitions_and_delivery(store: FactoryStore) -> None:
@@ -258,7 +258,7 @@ def test_decision_status_transitions_and_delivery(store: FactoryStore) -> None:
     assert expired.status == "expired"
 
     e, _ = _ask(store, "deliver")
-    store.answer_decision(e.id, option_id=None, text="ok", by="luka")
+    store.answer_decision(e.id, option_id=None, text="ok", by="lena")
     delivered = store.update_decision(e.id, delivered_mail_id="mail_0123456789abcdef")
     assert delivered is not None and delivered.delivered_mail_id == "mail_0123456789abcdef"
     delivered = store.update_decision(e.id, delivered_at=123)
@@ -271,7 +271,7 @@ def test_decision_status_transitions_and_delivery(store: FactoryStore) -> None:
 def test_list_and_count_decisions(store: FactoryStore) -> None:
     a, _ = _ask(store, "a")
     b, _ = _ask(store, "b")
-    store.answer_decision(a.id, option_id=None, text="x", by="luka")
+    store.answer_decision(a.id, option_id=None, text="x", by="lena")
     o, _ = store.create_decision(OTHER_FID, dedupe_key="o", question="other?")
     open_here = store.list_decisions(factory_id=FID, status="open")
     assert [d.id for d in open_here] == [b.id]
@@ -460,7 +460,7 @@ def test_demo_create_get_list(store: FactoryStore) -> None:
         summary="GET /version works",
         files=files,
         manifest=manifest,
-        preview_url="https://app-x-p9630.envs.sandbox.caffeinelabs.io",
+        preview_url="https://app-x-p9630.envs.sandbox.example.com",
     )
     store.create_demo(
         factory_id=FID,

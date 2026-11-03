@@ -752,7 +752,7 @@ def factory_guardrails(role: str) -> dict[str, Any]:
                 "type": "function",
                 "function": {
                     "path": "omnigent.policies.builtins.factory.factory_role_guard",
-                    "arguments": {"role": role, "write_repos": ["caffeinelabs/app"]},
+                    "arguments": {"role": role, "write_repos": ["sample-org/sample-app"]},
                 },
             },
         }

@@ -45,7 +45,7 @@ class Actor:
     :param session_id: The agent's session id.
     :param role: Roster role of a human (``viewer`` … ``owner``, or ``creator``)
         or factory role of an agent (``lead``, ``project_lead``, …).
-    :param title: Display text, e.g. ``"alice@caffeine.ai (operator)"`` or ``"Atlas"``.
+    :param title: Display text, e.g. ``"alice@example.com (operator)"`` or ``"Atlas"``.
     :param on_behalf_of: The human whose chat message an agent's act answers.
     """
 

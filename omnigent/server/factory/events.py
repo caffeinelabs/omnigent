@@ -138,7 +138,7 @@ async def emit(
     :param project: Project slug.
     :param from_id: Acting session id; a non-session actor is kept in ``data["from"]``.
     :param to_id: Target session id; likewise ``data["to"]``.
-    :param subject: e.g. ``"pr:caffeinelabs/app#9630"``.
+    :param subject: e.g. ``"pr:sample-org/sample-app#9630"``.
     :param summary: One line (clipped to 300 chars).
     :param data: JSON payload.
     :param ts: Epoch milliseconds, for callers on their own clock; defaults to now.

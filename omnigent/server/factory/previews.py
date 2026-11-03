@@ -123,7 +123,7 @@ def ttl_notice_text(pr: FactoryPr, ttl_h: float) -> str:
 
 
 def pr_subject(pr: FactoryPr) -> str:
-    """:returns: The event subject of a PR, e.g. ``"pr:caffeinelabs/app#9630"``."""
+    """:returns: The event subject of a PR, e.g. ``"pr:sample-org/sample-app#9630"``."""
     return f"pr:{pr.repo}#{pr.number}"
 
 

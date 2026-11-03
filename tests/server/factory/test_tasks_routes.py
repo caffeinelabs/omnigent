@@ -22,14 +22,14 @@ from omnigent.server.factory import binder, definition, snapshot, tasks
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 
 SLUG = "api-version"
-REPO = "caffeinelabs/app"
+REPO = "sample-org/sample-app"
 PLAN = [
     {
         "key": "route",
         "title": "GET /version",
         "do": "Add GET /version returning the build sha",
         "scope": ["services/api/src/routes/**"],
-        "acceptance": ["pnpm -F caffeine-api test -- version"],
+        "acceptance": ["pnpm -F sample-api test -- version"],
         "env_checks": ["curl {api}/version -> 200"],
         "preview": True,
         "demo_focus": "GET /version",
@@ -55,7 +55,7 @@ async def cockpit(
             SLUG,
             title="API version",
             repo=REPO,
-            base_branch="temp-main",
+            base_branch="develop",
             charter={"goal": "GET /version", "budget_ics": 2, "budgets": {"task_usd": 9}},
             pl_session_id=world.id("pl"),
         )
@@ -118,7 +118,7 @@ async def test_upsert_registers_tasks_and_answers_the_graph(cockpit: Cockpit) ->
     assert body["blocked"] == [{"key": "release-note", "waiting_on": ["decision:D-1"]}]
     rows = {t.key: t for t in cockpit.store.list_tasks(cockpit.fid)}
     assert rows["route"].state == "ready" and rows["tests"].state == "planned"
-    assert rows["route"].card["acceptance"] == ["pnpm -F caffeine-api test -- version"]
+    assert rows["route"].card["acceptance"] == ["pnpm -F sample-api test -- version"]
     assert rows["route"].created_via == "agent"
     assert rows["route"].created_by == cockpit.world.id("pl")
     created = cockpit.events("task.created")
@@ -221,8 +221,8 @@ async def test_ready_returns_server_cards_for_the_wave(cockpit: Cockpit) -> None
     assert "cost_budget" not in route  # only in enforce mode
     card = route["card_text"]
     assert card.startswith("TASK route · GET /version · T-1 · attempt 1/3")
-    assert "Base: temp-main (branch from origin/temp-main" in card
-    assert "- pnpm -F caffeine-api test -- version" in card
+    assert "Base: develop (branch from origin/develop" in card
+    assert "- pnpm -F sample-api test -- version" in card
     assert "Branch: factory/api-version/route" in card
     assert "Budget left: 3 of 3 attempts · $9.00 of $9.00" in card
     assert 'sys_factory_task(op="report", key="route"' in card

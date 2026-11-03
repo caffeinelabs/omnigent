@@ -37,6 +37,7 @@ from omnigent.resources import examples as _examples_resources
 from omnigent.spec import load, materialize_bundle
 from omnigent.spec.types import AgentSpec, FunctionPolicySpec, ProviderAuth
 from omnigent.tools.builtins.factory import FACTORY_TOOL_NAMES
+from tests.examples.factory_sample_tokens import FORBIDDEN_SAMPLE_PATTERN, token_lines
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _FACTORY_DIR = _REPO_ROOT / "examples" / "factory"
@@ -998,8 +999,8 @@ _PLACEHOLDERS = (
     (re.compile(r"<sha7>"), "7767f0d"),
     (re.compile(r"<repo>"), "/home/omnigent/workspace/app"),
     (re.compile(r"<tooling ref>"), "main"),
-    (re.compile(r"<base>"), "temp-main"),
-    (re.compile(r"<pr url>|<url>"), "https://github.com/caffeinelabs/app/pull/9630"),
+    (re.compile(r"<base>"), "develop"),
+    (re.compile(r"<pr url>|<url>"), "https://github.com/sample-org/sample-app/pull/9630"),
     (re.compile(r"<[^<>\n]+>"), "x"),
 )
 
@@ -1016,7 +1017,7 @@ def _shell_blocks(path: Path) -> list[str]:
 
 def _guard(role: str, command: str) -> dict[str, object]:
     event = {"type": "tool_call", "data": {"name": "Bash", "arguments": {"command": command}}}
-    return factory_role_guard(role=role, write_repos=["caffeinelabs/app"])(event, {})
+    return factory_role_guard(role=role, write_repos=["sample-org/sample-app"])(event, {})
 
 
 @pytest.mark.parametrize(
@@ -1133,7 +1134,7 @@ def test_preview_overlay_and_harness_lookup_stay_portable() -> None:
 
 
 def test_preview_tooling_ref_is_app_main() -> None:
-    """caffeinelabs/app main carries the preview tooling; the deleted branch only maps to main."""
+    """The app's main carries the preview tooling; the deleted branch only maps to main."""
     env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
     deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
     assert re.search(r"^REF=main\b", deploy, re.M)
@@ -1206,7 +1207,7 @@ def _commit(repo: Path, files: dict[str, str], message: str) -> str:
 
 @pytest.fixture
 def app_repo(tmp_path: Path) -> dict[str, object]:
-    """An app origin whose main gained the preview tooling, a temp-main base cut before it, and a
+    """An app origin whose main gained the preview tooling, a develop base cut before it, and a
     clone with five PR heads."""
     origin = tmp_path / "origin"
     origin.mkdir()
@@ -1219,10 +1220,10 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
     _git(origin, "checkout", "-q", "-b", "old-tooling", base)
     heads["conflict"] = _commit(origin, {"Tiltfile": "pr\n"}, "old-based tooling PR")
     # The project's base (the deploy block's <base>) changed a tooling file main never had.
-    _git(origin, "checkout", "-q", "-b", "temp-main", base)
-    _commit(origin, {"Tiltfile": "temp-main tweak\n"}, "temp-main tweak")
+    _git(origin, "checkout", "-q", "-b", "develop", base)
+    _commit(origin, {"Tiltfile": "develop tweak\n"}, "develop tweak")
     _git(origin, "checkout", "-q", "-b", "temp-head")
-    heads["temp"] = _commit(origin, {"app.txt": "feature\n"}, "temp-main-based PR")
+    heads["temp"] = _commit(origin, {"app.txt": "feature\n"}, "develop-based PR")
     _git(origin, "checkout", "-q", "main")
     new = dict.fromkeys(_TOOLING_FILES, "new\n")
     new["scripts/factory.ts"] = "switch (command) {\n    case 'preview':\n}\n"
@@ -1248,7 +1249,7 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
         "new-head",
         "mixed-head",
         "temp-head",
-        "temp-main",
+        "develop",
         "tilt-head",
     )
     _git(clone, "fetch", "-q", "origin", *branches)
@@ -1269,7 +1270,7 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
 
 
 def _run_deploy(
-    app_repo: dict[str, object], head: str, *, ref: str = "main", base: str = "temp-main"
+    app_repo: dict[str, object], head: str, *, ref: str = "main", base: str = "develop"
 ) -> subprocess.CompletedProcess[str]:
     clone = app_repo["clone"]
     assert isinstance(clone, Path)
@@ -1277,9 +1278,9 @@ def _run_deploy(
     env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
     deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
     deploy = deploy.replace("cd /home/omnigent/workspace/wt/preview-p9630", f"cd {clone}")
-    assert "\nREF=main " in deploy and "\nBASE=temp-main " in deploy
+    assert "\nREF=main " in deploy and "\nBASE=develop " in deploy
     deploy = deploy.replace("\nREF=main ", f"\nREF={ref} ").replace(
-        "\nBASE=temp-main ", f"\nBASE={base} "
+        "\nBASE=develop ", f"\nBASE={base} "
     )
     path = f"{app_repo['stubs']}{os.pathsep}{os.environ.get('PATH', '')}"
     env = _git_env(
@@ -1468,7 +1469,7 @@ def test_real_bundles_seed_with_the_demo_harness(
     assert not (harness / "node_modules").exists()
 
 
-# ── Temp-main lane: integration env and base notices ───────────
+# ── Base-branch lane: integration env and base notices ───────
 
 
 def _row_pattern(row: str) -> re.Pattern[str]:
@@ -1523,9 +1524,9 @@ def test_the_integration_project_has_its_own_branch(pl: AgentSpec) -> None:
         id="c" * 32,
         factory_id="f" * 32,
         slug="base-env",
-        title="Base env · temp-main",
-        repo="caffeinelabs/app",
-        base_branch="temp-main",
+        title="Base env · develop",
+        repo="sample-org/sample-app",
+        base_branch="develop",
         charter=normalize_charter({"kind": "integration"}),
     )
     charter = render_pl_charter(project).splitlines()
@@ -1575,15 +1576,15 @@ def test_base_notices_have_dispatch_rows(pl: AgentSpec) -> None:
     pr = FactoryPr(
         id="p" * 32,
         factory_id="f" * 32,
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         number=9630,
-        url="https://github.com/caffeinelabs/app/pull/9630",
+        url="https://github.com/sample-org/sample-app/pull/9630",
     )
     head, old = "a" * 40, "b" * 40
     texts = [
-        base_notice(pr, "main", "temp-main"),
-        sync_notice("temp-main", head),
-        redeploy_notice("caffeinelabs/app", "temp-main", old, head),
+        base_notice(pr, "main", "develop"),
+        sync_notice("develop", head),
+        redeploy_notice("sample-org/sample-app", "develop", old, head),
     ]
     for text in texts:
         header = text.split("]", 1)[0] + "]"
@@ -1596,7 +1597,7 @@ def test_idle_dev_env_notices_have_rows(pl: AgentSpec) -> None:
     from omnigent.server.factory import idle_env
 
     project = FactoryProject(
-        id="p" * 32, factory_id="f" * 32, slug="api-version", title="API", base_branch="temp-main"
+        id="p" * 32, factory_id="f" * 32, slug="api-version", title="API", base_branch="develop"
     )
     texts = {
         "DOWN reason=idle": idle_env.down_notice_text(
@@ -1762,8 +1763,8 @@ def test_server_cards_keep_the_ic_contract() -> None:
         factory_id="f" * 32,
         slug="db",
         title="DB",
-        repo="caffeinelabs/app",
-        base_branch="temp-main",
+        repo="sample-org/sample-app",
+        base_branch="develop",
     )
     task = FactoryTask(
         id="t" * 32,
@@ -1777,8 +1778,8 @@ def test_server_cards_keep_the_ic_contract() -> None:
     lines = card_text(task, project, pl_id="pl1", attempt=2).splitlines()
     assert lines[0] == "TASK route · GET /db/version · T-4 · attempt 2/3"
     base = next(line for line in lines if " · Base: " in line)
-    assert base.split(" · Base: ", 1)[1].split(" ", 1)[0] == "temp-main"
-    assert "origin/temp-main" in base and "--base temp-main" in base
+    assert base.split(" · Base: ", 1)[1].split(" ", 1)[0] == "develop"
+    assert "origin/develop" in base and "--base develop" in base
     assert "Branch: factory/db/route" in " ".join(lines)
     assert "- pnpm test" in lines
     for name in ("ic", "ic_codex"):
@@ -1946,14 +1947,14 @@ def test_engine_hints_and_loop_mails_have_pl_rows(pl: AgentSpec) -> None:
     pr = FactoryPr(
         id="p" * 32,
         factory_id="f" * 32,
-        repo="caffeinelabs/app",
+        repo="sample-org/sample-app",
         number=9631,
         url="u",
         head_sha=head,
     )
     args = {"checks": "lint", "pr": 9631, "app": "A", "api": "B"}
     for name in sorted(MAILED):
-        header = hint_text(pr, Step(name, head, "CI green", args), base="temp-main")
+        header = hint_text(pr, Step(name, head, "CI green", args), base="develop")
         assert any(p.fullmatch(header) for p in next_rows), header
     task = FactoryTask(
         id="t" * 32, factory_id="f" * 32, number=12, project_slug="x", key="route", title="r"
@@ -1976,7 +1977,7 @@ def test_engine_hints_and_loop_mails_have_pl_rows(pl: AgentSpec) -> None:
             spec={"attempts": 3, "rounds": 3, "per_head": 2},
             last_reason="env failures 2/1" if kind == "verify" else "red",
         )
-        facts = LoopFacts(loop=loop, task=task, pr=pr, pl=pl_conv, base="temp-main")
+        facts = LoopFacts(loop=loop, task=task, pr=pr, pl=pl_conv, base="develop")
         texts.append(escalation_text(facts, state, None if kind == "verify" else "D-31"))
     decision = FactoryDecision(id="d" * 32, factory_id="f" * 32, number=31, question="q")
     implement = FactoryLoop(
@@ -2240,17 +2241,16 @@ def test_there_are_three_benchmarks() -> None:
 
 # ── Product-agnostic bundles ─────────────────────────────────────────────────
 
-# (sample) Names of the products factories run on today. A factory learns its
-# product from its definition (``product`` block), never from bundle text.
-_PRODUCT_NAMES = re.compile(r"caffeine", re.IGNORECASE)
+# A factory learns its product from its definition (``product`` block), never
+# from bundle text.
+_PRODUCT_NAMES = FORBIDDEN_SAMPLE_PATTERN
 # Env tooling and repo conventions of one product that still live in skills
 # until the environment profile replaces them: the line counts may only shrink.
 _PRODUCT_TEXT_LEFT = {
-    "factory-pl/agents/demo/skills/factory-demo/SKILL.md": 2,
+    "factory-pl/agents/demo/skills/factory-demo/SKILL.md": 1,
     "factory-pl/agents/demo/skills/factory-demo/harness/explore.mjs": 1,
     "factory-pl/agents/demo/skills/factory-demo/harness/fixtures.ts": 1,
     "factory-pl/agents/demo/skills/factory-demo/harness/run.mjs": 1,
-    "factory-pl/agents/demo/skills/factory-demo/harness/selftest.mjs": 2,
     "factory-pl/agents/env_keeper/config.yaml": 1,
     "factory-pl/agents/env_keeper/skills/factory-env/SKILL.md": 21,
     "factory-pl/agents/ic/config.yaml": 1,
@@ -2261,19 +2261,12 @@ _PRODUCT_TEXT_LEFT = {
 
 def _product_lines() -> dict[str, int]:
     """:returns: Bundle file (relative to ``examples/factory``) -> lines naming a product."""
-    out: dict[str, int] = {}
-    for path in sorted(_FACTORY_DIR.rglob("*")):
-        rel = path.relative_to(_FACTORY_DIR).as_posix()
-        if not path.is_file() or rel.startswith("benchmarks/"):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        hits = sum(1 for line in text.splitlines() if _PRODUCT_NAMES.search(line))
-        if hits:
-            out[rel] = hits
-    return out
+    files = [
+        path
+        for path in sorted(_FACTORY_DIR.rglob("*"))
+        if not path.relative_to(_FACTORY_DIR).as_posix().startswith("benchmarks/")
+    ]
+    return token_lines(files, root=_FACTORY_DIR)
 
 
 def test_no_product_names_in_bundles() -> None:

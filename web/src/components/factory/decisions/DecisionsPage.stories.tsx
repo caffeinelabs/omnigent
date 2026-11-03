@@ -38,7 +38,7 @@ function history(): OpenDecisionItem[] {
         30,
         "Use knex_migrations as the source of truth?",
         0,
-        "mia@caffeine.ai",
+        "mia@example.com",
         12,
       ),
     },
@@ -48,7 +48,7 @@ function history(): OpenDecisionItem[] {
         29,
         "Ship the Settings row before the DB endpoint?",
         1,
-        "luka@caffeine.ai",
+        "lena@example.com",
         95,
       ),
     },
@@ -58,7 +58,7 @@ function history(): OpenDecisionItem[] {
         28,
         `Rename the version header ${"to something much longer ".repeat(4)}?`,
         0,
-        "luka@caffeine.ai",
+        "lena@example.com",
         300,
       ),
     },
@@ -115,7 +115,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Luka (creator): owners' items are his role's; D-2 is Mia's. Proposals render as their cards. */
+/** Lena (creator): owners' items are his role's; D-2 is Mia's. Proposals render as their cards. */
 export const Open = page();
 
 export const OpenDark = page({ theme: "dark" });

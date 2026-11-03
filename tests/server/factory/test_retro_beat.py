@@ -178,7 +178,7 @@ async def test_human_feedback_alone_is_enough_for_a_retro(
         target_kind="issue",
         target_id="F-1",
         author_kind="human",
-        author="luka@caffeine.ai",
+        author="lena@example.com",
         kind="calibration",
         tags=["wrong_label"],
     )

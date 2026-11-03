@@ -17,10 +17,10 @@ from omnigent.server.factory.decision_routing import default_assignee, is_mine, 
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld, Supervision
 
-MIA = "mia@caffeine.ai"
-OPAL = "opal@caffeine.ai"
-OWEN = "owen@caffeine.ai"
-VIC = "vic@caffeine.ai"
+MIA = "mia@example.com"
+OPAL = "opal@example.com"
+OWEN = "owen@example.com"
+VIC = "vic@example.com"
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +49,7 @@ async def cockpit(
             value.fid,
             "api-version",
             title="API version",
-            repo="caffeinelabs/app",
+            repo="sample-org/sample-app",
             pl_session_id=value.world.id("pl"),
             charter={"goal": "GET /version", "human_owner": MIA},
         )
@@ -123,9 +123,9 @@ async def test_an_agent_question_goes_to_the_projects_human_owner(cockpit: Cockp
         ("owners", "owners", False),
         ("operators", "operators", False),
         (OPAL, OPAL, False),
-        ("OPAL@caffeine.ai", OPAL, False),
+        ("OPAL@example.com", OPAL, False),
         ("owen", OWEN, False),
-        ("nobody@caffeine.ai", "operators", True),
+        ("nobody@example.com", "operators", True),
         (VIC, "operators", True),
     ],
 )

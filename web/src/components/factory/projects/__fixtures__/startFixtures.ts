@@ -157,7 +157,7 @@ export function startStorySnapshot(): FactorySnapshot {
     ...structuredClone(merged),
     id: `${number}`.repeat(8),
     number,
-    url: `https://github.com/caffeinelabs/app/pull/${number}`,
+    url: `https://github.com/sample-org/sample-app/pull/${number}`,
     title,
     project_slug: slug,
     head_ref: head,
@@ -170,7 +170,7 @@ export function startStorySnapshot(): FactorySnapshot {
     pl: { ...plRef(pl, slug, n), running: true, status: "running" as const },
     ...patch,
   });
-  // validate-build-tier: made after Luka merged app#9774; its PL deploys a preview to check it.
+  // validate-build-tier: made after Lena merged app#9774; its PL deploys a preview to check it.
   const pr9774 = mergedPr(
     9774,
     "validate-build-tier",

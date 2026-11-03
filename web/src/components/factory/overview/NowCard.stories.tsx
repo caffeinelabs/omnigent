@@ -100,7 +100,7 @@ type Story = StoryObj<typeof meta>;
 // ── The live factory, 2 Nov 11:45 UTC ─────────────────────────
 
 /**
- * Four projects only wait on Luka to merge their PRs: each is listed once,
+ * Four projects only wait on Lena to merge their PRs: each is listed once,
  * under Waiting on you, with Review → and the Slack DMs he got about it.
  * validate-build-tier is the one project in progress; Atlas's note links the
  * PRs it names; spend says the 24 h and the $/h.
@@ -113,7 +113,7 @@ export const BusyWithPrsWaitingPhone = phone(withSnapshotStory());
 
 export const BusyWithPrsWaitingPhoneDark = phone(withSnapshotStory("dark"));
 
-/** validate-build-tier done too: idle (still spending), and the four PRs wait on Luka. */
+/** validate-build-tier done too: idle (still spending), and the four PRs wait on Lena. */
 export const IdleWaitingOnYou = nowStory(idleWaitingNow());
 
 export const IdleWaitingOnYouDark = nowStory(idleWaitingNow(), "dark");
@@ -122,7 +122,7 @@ export const IdleWaitingOnYouPhone = phone(nowStory(idleWaitingNow()));
 
 // ── Busy ───────────────────────────────────────────────────────
 
-/** Luka on Atlas's factory: 8 things wait on him, 2 projects in flight, one queued. */
+/** Lena on Atlas's factory: 8 things wait on him, 2 projects in flight, one queued. */
 export const Busy = nowStory(busyNow());
 
 export const BusyDark = nowStory(busyNow(), "dark");

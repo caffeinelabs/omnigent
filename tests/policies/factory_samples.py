@@ -12,9 +12,9 @@ import pytest
 
 from omnigent.policies.builtins import factory as guard
 
-SAMPLE_WRITE_REPOS = ("caffeinelabs/app",)
-SAMPLE_DENY_REPOS = ("caffeinelabs/infra", "caffeinelabs/omnigent")
-SAMPLE_ALWAYS_DENY_REPOS = ("caffeinelabs/infra",)
+SAMPLE_WRITE_REPOS = ("sample-org/sample-app",)
+SAMPLE_DENY_REPOS = ("sample-org/sample-infra", "sample-org/sample-tool")
+SAMPLE_ALWAYS_DENY_REPOS = ("sample-org/sample-infra",)
 
 
 def use_sample_repos(monkeypatch: pytest.MonkeyPatch) -> None:

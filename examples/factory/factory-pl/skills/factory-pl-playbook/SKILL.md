@@ -9,7 +9,7 @@ description: Project-lead playbook for the Omnigent software factory - the integ
 
 `<base>` is the project's base branch: the charter's `Base branch:` line (or
 the `#<branch>` of `Repo#branch:`), `main` when the charter names none, e.g.
-`temp-main` for a test base. Every PR of the project targets it, and the dev
+`develop` for a test base. Every PR of the project targets it, and the dev
 env tracks origin/<base>. Pass it on every dispatch, never assume `main`:
 - env_keeper: `UP base=<base>`, `PREVIEW pr=<n> head=<sha> base=<base> …` and
   `MERGED pr=<n> base=<base>`;
