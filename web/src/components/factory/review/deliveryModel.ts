@@ -6,7 +6,7 @@
 import type { DeliveryDef, FactorySnapshot, PrView } from "@/lib/factoryApi";
 
 /** What the review says while the profile sets no merge policy. */
-export const DEFAULT_MERGE_POLICY = "Humans merge every pull request. The factory never merges.";
+export const DEFAULT_MERGE_POLICY = "Humans merge every pull request. Agents never merge.";
 
 /** The profile's delivery block, when the snapshot carries one. */
 export function deliveryOf(snapshot: FactorySnapshot | null | undefined): DeliveryDef | null {
@@ -14,13 +14,28 @@ export function deliveryOf(snapshot: FactorySnapshot | null | undefined): Delive
 }
 
 /** Added to a profile's merge policy unless it already says so (the PL's charter does the same). */
-export const FACTORY_NEVER_MERGES = "The factory never merges.";
+export const FACTORY_NEVER_MERGES = "Agents never merge.";
 
-/** The merge policy in words: the profile's (the factory never merges either way), or the default. */
-export function mergePolicyText(delivery: DeliveryDef | null | undefined): string {
+/** The headline of a ready PR the server merges itself (an owner-set auto-merge target). */
+export const AUTO_MERGE_LABEL = "Ready · merges automatically when checks pass";
+
+/**
+ * The merge policy in words: the profile's (agents never merge either way), or
+ * the default. A PR into an owner-set auto-merge target says the server merges it.
+ */
+export function mergePolicyText(
+  delivery: DeliveryDef | null | undefined,
+  pr?: Pick<PrView, "auto_merge" | "base_ref"> | null,
+): string {
+  if (pr?.auto_merge) {
+    const into = pr.base_ref ? ` into ${pr.base_ref}` : "";
+    return `The factory's server merges it${into} when every check passes. Agents never merge.`;
+  }
   const policy = delivery?.merge_policy?.trim().replace(/\.+$/, "");
   if (!policy) return DEFAULT_MERGE_POLICY;
-  return /factory never merges/i.test(policy) ? `${policy}.` : `${policy}. ${FACTORY_NEVER_MERGES}`;
+  return /(factory|agents) never merges?\b/i.test(policy)
+    ? `${policy}.`
+    : `${policy}. ${FACTORY_NEVER_MERGES}`;
 }
 
 function escapeRegExp(text: string): string {

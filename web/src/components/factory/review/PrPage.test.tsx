@@ -720,7 +720,7 @@ describe("PR page · actions", () => {
     });
     const { drawer } = renderDrawer(scenario);
     expect(within(drawer).getByTestId("review-merge-github")).toHaveAccessibleDescription(
-      "Release managers merge into main after QA. The factory never merges.",
+      "Release managers merge into main after QA. Agents never merge.",
     );
   });
 

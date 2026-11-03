@@ -25,7 +25,8 @@ dropping a measured bet, or answering "did it help?"), ``broken``
   at most :data:`ITEMS_MAX` sub-items and ``more_count`` for the rest; a
   viewer who merges as an operator and as a project's owner gets one row.
   A ready PR into an owner-set auto-merge target asks nobody: it is a
-  ``handled`` sentence ("merges automatically when checks pass").
+  ``handled`` sentence ("merges automatically when checks pass"), until the
+  merger raises an incident on it (it cannot merge it), which is the row.
 - An incident folds into the row of what it is about: a ready PR's merge
   row, or the decision whose options act on the same target (an agent that
   could not restart, a loop out of budget), as long as that row waits on
@@ -66,6 +67,7 @@ from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import issues
 from omnigent.server.factory import status_summary as summary_mod
 from omnigent.server.factory.auto_merge import AUTO_TEXT
+from omnigent.server.factory.auto_merge import INCIDENT_RULES as AUTO_MERGE_INCIDENTS
 from omnigent.server.factory.decision_routing import is_mine_by
 from omnigent.server.factory.stuck import STUCK_RULES
 
@@ -1072,11 +1074,22 @@ def _stuck_sentence(issue: FactoryIssue, ctx: _Ctx) -> str:
 
 
 def _auto_merging(ctx: _Ctx) -> list[str]:
-    """One sentence per ready PR the server merges itself (an owner-set target)."""
+    """
+    One sentence per ready PR the server merges itself (an owner-set target),
+    unless an open merge incident on it already asks the owners to look.
+    """
+    stuck = {
+        _norm_id((issue.target or "").partition(":")[2])
+        for issue in ctx.inputs.incidents
+        if issue.rule in AUTO_MERGE_INCIDENTS and issue.status in ("open", "acked", "snoozed")
+    }
     prs = [
         pr
         for pr in ctx.inputs.snapshot.get("prs") or []
-        if pr.get("state") == "open" and pr.get("ready") and pr.get("auto_merge")
+        if pr.get("state") == "open"
+        and pr.get("ready")
+        and pr.get("auto_merge")
+        and _norm_id(str(pr.get("id"))) not in stuck
     ]
     prs.sort(key=lambda p: (int(p.get("ready_since") or 0), int(p.get("number") or 0)))
     lines: list[str] = []

@@ -712,7 +712,10 @@ export interface PrView {
   gates: GatesView;
   ready: boolean;
   ready_since: number | null;
-  /** Its repo and base are an owner-set auto-merge target: the server merges it when green. */
+  /**
+   * The server merges it when green: its repo and base are an owner-set auto-merge
+   * target, it comes from a factory branch of an active project, and the merger runs.
+   */
   auto_merge?: boolean;
   sentinel: SentinelView | null;
   human_review: HumanReviewView | null;

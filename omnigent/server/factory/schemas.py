@@ -807,7 +807,8 @@ class PrView(_View):
     ready: bool
     ready_since: int | None = None
     auto_merge: bool = False
-    """Its repo and base are an owner-set auto-merge target: the server merges it when green."""
+    """The server merges it when green: its repo and base are an owner-set auto-merge target,
+    it comes from a factory branch of an active project, and this server runs the merger."""
     sentinel: SentinelView | None = None
     human_review: HumanReviewView | None = None
     preview: PreviewView | None = None

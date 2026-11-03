@@ -888,11 +888,49 @@ LEGACY_MODELS: Final[dict[str, str]] = {
 """The unread ``models.*`` settings and the ``role_defaults`` paths they moved to."""
 
 
+AUTO_MERGE_KEY: Final = "auto_merge_targets"
+"""Where a version stores ``product.delivery.auto_merge``: its own top-level key, so a
+server from before the targets drops only them (it still reads the product block)."""
+
+
 def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with legacy blocks moved: an owner-set ``models.<kind>``
-        becomes ``role_defaults.<kind>.model`` unless that is already set.
+        becomes ``role_defaults.<kind>.model`` unless that is already set, and
+        the stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery``.
     """
+    return _upgrade_models(_lower_targets(stored))
+
+
+def _lower_targets(stored: dict[str, Any]) -> dict[str, Any]:
+    if AUTO_MERGE_KEY not in stored:
+        return stored
+    out = {k: v for k, v in stored.items() if k != AUTO_MERGE_KEY}
+    targets = stored[AUTO_MERGE_KEY]
+    product = dict(out.get("product") or {})
+    delivery = dict(product.get("delivery") or {})
+    delivery["auto_merge"] = targets
+    product["delivery"] = delivery
+    out["product"] = product
+    return out
+
+
+def _lift_targets(stored: dict[str, Any]) -> dict[str, Any]:
+    product = stored.get("product")
+    delivery = product.get("delivery") if isinstance(product, Mapping) else None
+    if not isinstance(delivery, Mapping) or "auto_merge" not in delivery:
+        return stored
+    assert isinstance(product, Mapping)
+    out = dict(stored)
+    out["product"] = {
+        **product,
+        "delivery": {k: v for k, v in delivery.items() if k != "auto_merge"},
+    }
+    out[AUTO_MERGE_KEY] = delivery["auto_merge"]
+    return out
+
+
+def _upgrade_models(stored: dict[str, Any]) -> dict[str, Any]:
     models = stored.get("models")
     if "models" not in stored:
         return stored
@@ -920,9 +958,14 @@ def downgrade(stored: Mapping[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with ``role_defaults`` written as the legacy ``models``
         block when all it sets is the model alias of ``ic``, ``reviewer`` or
-        ``planner`` (:func:`upgrade` reads it back), so a server from before
-        ``role_defaults`` still reads the version. Anything else stays as it is.
+        ``planner``, and ``product.delivery.auto_merge`` under
+        :data:`AUTO_MERGE_KEY` (:func:`upgrade` reads both back), so a server
+        from before them still reads the version. Anything else stays as it is.
     """
+    return _lift_targets(_downgrade_models(stored))
+
+
+def _downgrade_models(stored: Mapping[str, Any]) -> dict[str, Any]:
     defaults = stored.get("role_defaults")
     if not isinstance(defaults, Mapping):
         return dict(stored)
@@ -1174,6 +1217,7 @@ __all__ = [
     "AGENT_NEVER_REASON",
     "AGENT_PATHS",
     "ALLOWLIST_SEATS",
+    "AUTO_MERGE_KEY",
     "BLOCKS",
     "BRIEF_MAX",
     "CONSENT",

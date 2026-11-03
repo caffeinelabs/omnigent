@@ -177,9 +177,12 @@ def seed_into(doc: dict[str, Any], repo: str | None) -> dict[str, Any]:
 def _block_set(doc: Mapping[str, Any] | None, seed: ProfileSeed) -> bool:
     """Whether a stored version sets a field of *seed*'s block (versions store blocks sparsely).
 
-    A field a version leaves out reads as its default (see ``definition.SPARSE_FIELDS``).
+    A field a version leaves out reads as its default (see ``definition.SPARSE_FIELDS``),
+    and one it keeps under its own key is read where it belongs (``blocks.upgrade``).
     """
-    found: Any = doc or {}
+    from omnigent.server.factory import definition_blocks
+
+    found: Any = definition_blocks.upgrade(dict(doc or {}))
     for part in seed.path.split("."):
         found = found.get(part) if isinstance(found, Mapping) else None
     defaults = seed.default()

@@ -37,7 +37,13 @@ from omnigent.factory_gates import (
     parse_time,
 )
 from omnigent.server.factory import events, live, nudge
-from omnigent.server.factory.auto_merge import factory_targets, is_target, nudge_merger
+from omnigent.server.factory.auto_merge import (
+    INCIDENT_RULES,
+    factory_targets,
+    merger_on,
+    merges_itself,
+    nudge_merger,
+)
 from omnigent.server.factory.charter import (
     DEFAULT_BASE_BRANCH,
     normalize_charter,
@@ -904,7 +910,10 @@ async def _announce(
     if lift is not None:
         _announce_lift(pr, lift, pl_target, out)
     auto = (
-        pr.ready and pr.state == "open" and await asyncio.to_thread(_auto_merge_target, deps, pr)
+        pr.ready
+        and pr.state == "open"
+        and merger_on(app_state)
+        and await asyncio.to_thread(_auto_merge_target, deps, pr, project)
     )
     if pr.ready and not row.ready:
         summary = (
@@ -989,9 +998,11 @@ async def _announce(
             mailer.notify(target, text)
         except RuntimeError:
             _logger.warning("factory: mailer closed; dropped PR notice for %s", target)
-    if auto:
+    if auto and (not row.ready or row.head_sha != pr.head_sha or row.gates != pr.gates):
         # The server's merger looks at it now instead of on its next pass.
         nudge_merger(pr.id)
+    if row.state == "open" and pr.state in ("merged", "closed"):
+        await _clear_merge_incidents(app_state, scope.factory_id, pr)
     if pr.project_slug and (
         out.events or row.state != pr.state or row.ready != pr.ready or row.gates != pr.gates
     ):
@@ -1001,13 +1012,23 @@ async def _announce(
         live.announce_factory_changed(app_state, scope.factory_id, ("snapshot",))
 
 
-def _auto_merge_target(deps: FactoryDeps, pr: FactoryPr) -> bool:
-    """Whether *pr* goes into one of its factory's auto-merge targets (never raises)."""
+def _auto_merge_target(deps: FactoryDeps, pr: FactoryPr, project: FactoryProject | None) -> bool:
+    """Whether the server, not a person, merges *pr* once it is green (never raises)."""
     try:
-        return is_target(factory_targets(deps, pr.factory_id), pr.repo, pr.base_ref)
+        return merges_itself(pr, factory_targets(deps, pr.factory_id), project)
     except Exception:  # noqa: BLE001 - a person merges it, as without targets
         _logger.warning("factory: could not read the auto-merge targets", exc_info=True)
         return False
+
+
+async def _clear_merge_incidents(app_state: Any, factory_id: str, pr: FactoryPr) -> None:
+    """A merged or closed PR no longer waits on the server's merger."""
+    from omnigent.server.factory import issues
+
+    for rule in INCIDENT_RULES:
+        await issues.clear_issue(
+            app_state, factory_id, rule, f"pr:{pr.id}", reason=f"PR {pr.state}"
+        )
 
 
 _VISIBLE_FIELDS: Final = (

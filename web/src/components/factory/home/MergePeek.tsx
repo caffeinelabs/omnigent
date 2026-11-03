@@ -3,7 +3,8 @@
  * viewer's merge row stands for, each with what users get, its PR and how long
  * it has waited, a link to review it, one to its code host, and "I merged it"
  * (the poller looks again now). The merge policy is quoted from the product
- * profile; the factory itself never merges.
+ * profile; agents never merge (a PR into an owner-set auto-merge target is
+ * merged by the server and never listed here).
  */
 
 import { ExternalLinkIcon } from "lucide-react";
@@ -49,7 +50,7 @@ export function MergePeekBody({
     <div data-testid="merge-peek" className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">
         {policy ? `${policy.replace(/\.?$/, ".")} ` : "A person merges. "}
-        The factory never merges.
+        Agents never merge.
       </p>
       {prs.length === 0 ? (
         <p className="text-sm text-muted-foreground">No pull request waits for a merge.</p>

@@ -206,7 +206,7 @@ export function ReviewActions({
   /** The product profile's delivery settings (`null`: none); the shell snapshot's when omitted. */
   delivery?: DeliveryDef | null;
 }) {
-  const mergePolicy = mergePolicyText(useDelivery(deliveryProp));
+  const mergePolicy = mergePolicyText(useDelivery(deliveryProp), pr);
   const invalidate = useInvalidateFactory(factoryId);
   const [feedback, setFeedback] = useState<FeedbackState>({ phase: "idle" });
   const [composing, setComposing] = useState(false);

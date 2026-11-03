@@ -20,7 +20,7 @@ import { PreviewPill } from "../board/PreviewPill";
 import { mergeUrl } from "../board/PrRow";
 import { useFactoryNow } from "../factoryClock";
 import { plural, readyForHuman, shortSha } from "../factoryFormat";
-import { demoMissing, demoPathsTouched, mergePolicyText } from "./deliveryModel";
+import { AUTO_MERGE_LABEL, demoMissing, demoPathsTouched, mergePolicyText } from "./deliveryModel";
 import { IMergedItButton } from "./ReviewActions";
 import { gateTally, sentinelVerifiedHead } from "./reviewModel";
 import { DotParts } from "./reviewParts";
@@ -46,7 +46,7 @@ export interface ReadyForMergeBannerProps {
 }
 
 /** The headline of a ready PR the server merges itself (an owner-set auto-merge target). */
-export const AUTO_LABEL = "Ready · merges automatically when checks pass";
+export const AUTO_LABEL = AUTO_MERGE_LABEL;
 
 function Headline({ pr, nowS, label }: { pr: PrView; nowS: number; label: string }) {
   const tally = gateTally(pr);
@@ -193,11 +193,11 @@ export function ReadyForMergeBanner({
                 </a>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{mergePolicyText(delivery)}</TooltipContent>
+            <TooltipContent>{mergePolicyText(delivery, pr)}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <span id={`merge-policy-${pr.number}`} className="sr-only">
-          {mergePolicyText(delivery)}
+          {mergePolicyText(delivery, pr)}
         </span>
         {factoryId && (
           <IMergedItButton factoryId={factoryId} pr={pr} testId={`i-merged-it-${pr.number}`} />

@@ -91,7 +91,7 @@ describe("ReadyForMergeBanner", () => {
       s.factory.product = sampleProduct({ merge_policy: "Maintainers merge on Fridays" });
     });
     expect(within(el).getByTestId("merge-link-9630")).toHaveAccessibleDescription(
-      "Maintainers merge on Fridays. The factory never merges.",
+      "Maintainers merge on Fridays. Agents never merge.",
     );
   });
 

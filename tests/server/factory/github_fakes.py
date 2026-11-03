@@ -101,6 +101,10 @@ class FakePr:
     closed_at: float | None = None
     closed_by: str | None = None
     review_decision: str | None = None
+    head_repo: str | None = None
+    """The head branch's repository (``None``: the PR's own; another name is a fork)."""
+    updated_at: float | None = None
+    """GitHub's ``updatedAt``; ``None`` derives it from the newest commit, comment or review."""
 
     @property
     def url(self) -> str:
@@ -113,8 +117,10 @@ class FakePr:
         self.commits.append((new_sha, iso(at)))
         self.checks = checks if checks is not None else []
 
-    def comment(self, body: str, at: float, login: str = "factory-bot") -> None:
-        """Add an issue comment."""
+    def comment(
+        self, body: str, at: float, login: str = "factory-bot", association: str = "MEMBER"
+    ) -> None:
+        """Add an issue comment (*association*: GitHub's ``authorAssociation``, e.g. ``NONE``)."""
         n = len(self.comments) + 1
         self.comments.append(
             {
@@ -122,10 +128,18 @@ class FakePr:
                 "createdAt": iso(at),
                 "url": f"{self.url}#issuecomment-{n}",
                 "author": {"login": login},
+                "authorAssociation": association,
             }
         )
 
-    def review(self, body: str, at: float, state: str = "COMMENTED", login: str = "lena") -> None:
+    def review(
+        self,
+        body: str,
+        at: float,
+        state: str = "COMMENTED",
+        login: str = "lena",
+        association: str = "MEMBER",
+    ) -> None:
         """Add a PR review."""
         n = len(self.reviews) + 1
         self.reviews.append(
@@ -135,9 +149,19 @@ class FakePr:
                 "state": state,
                 "url": f"{self.url}#pullrequestreview-{n}",
                 "author": {"login": login},
+                "authorAssociation": association,
                 "commit": {"oid": self.head_sha},
             }
         )
+
+    def updated(self) -> str:
+        """:returns: GitHub's ``updatedAt``: the newest commit, comment or review."""
+        if self.updated_at is not None:
+            return iso(self.updated_at)
+        times = [iso(self.created_at), *(at for _, at in self.commits)]
+        times += [c["createdAt"] for c in self.comments]
+        times += [r["submittedAt"] for r in self.reviews]
+        return max(times)
 
     def dismiss(self, login: str) -> None:
         """Dismiss *login*'s newest review: GitHub keeps it, with state DISMISSED."""
@@ -181,6 +205,9 @@ class FakePr:
             "createdAt": iso(self.created_at),
             "headRefOid": self.head_sha,
             "headRefName": self.head_ref,
+            "isCrossRepository": (self.head_repo or self.repo) != self.repo,
+            "headRepository": {"nameWithOwner": self.head_repo or self.repo},
+            "updatedAt": self.updated(),
             "baseRefName": self.base_ref,
             "mergeable": self.mergeable,
             "reviewDecision": self.review_decision,

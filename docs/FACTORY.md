@@ -1638,18 +1638,39 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   class B, a person's edit, never an agent's proposal). Steer warns when a
   target is the repo's default branch. The server's auto-merger
   (`server/factory/background/auto_merger.py`) then squash-merges a factory PR
-  into a target, with the owner's GitHub connection, only when the factory
-  marks it ready (the merge ask's condition: every gate passed on its head, no
-  change request on it) and GitHub, read just before, reports the same head,
-  open, not a draft, `MERGEABLE`, no change request and every check on the head
-  completed as success, skipped or neutral. The merge names that head as the
-  expected one, so a later push is refused. It records `pr.auto_merged` (the
-  Room shows it in the PR's and the project's threads), and the poller's merged
-  flow runs as for any merge. A GitHub error backs the PR off (5 min, doubling
-  to an hour) and raises one incident (`pr.auto_merge_failed`, for owners).
-  Those PRs never wait in Needs you: they read "merges automatically when
-  checks pass". The PL's charter says "PRs into `<repo>#<base>` are merged by
-  the factory's server when ready; never merge yourself".
+  into a target, with the owner's GitHub connection, only when
+  - its head is a factory branch of its project (`factory/<slug>/<task>`) and
+    the project is active; the factory is not paused and the project's lead is
+    not paused (the owner's brakes hold merges too);
+  - the factory marks it ready (the merge ask's condition: every gate passed on
+    its head, no change request on it);
+  - GitHub, read just before, reports the same head in the same repository
+    (never a fork), open, not a draft, `MERGEABLE`, no change request, nothing
+    changed since the poller's last read (else the poller reads it again
+    first), every check on the head completed as success, skipped or neutral
+    (optional checks too), and the review and verify markers that pass the
+    head written by a repo owner, member or collaborator, or by the factory
+    owner's login the agents act as (an outsider's marker never decides);
+  - the stored row, the targets and the brakes, read again right before the
+    merge, still allow it.
+
+  The merge names that head as the expected one, so a later push is refused.
+  It records `pr.auto_merged` (the Room shows it in the PR's and the project's
+  threads), and the poller's merged flow runs as for any merge. Those PRs leave
+  Needs you while the merger runs (`OMNIGENT_FACTORY_AUTO_MERGE_S > 0`): they
+  read "merges automatically when checks pass". Nothing waits silently: a
+  GitHub error backs the PR off (5 min, doubling to an hour) and raises
+  `pr.auto_merge_failed`; a ready PR that does not merge for a reason a person
+  must fix (a failing check, no checks, a fork's head, an untrusted marker, a
+  change request, GitHub not connected) at once, or for any reason for 30 min,
+  raises `pr.auto_merge_waiting`, which replaces the "merges automatically"
+  line with a Needs you row. Both are owners' incidents; they clear when the
+  PR merges or closes, leaves the targets, is no longer ready or gets a new
+  head. The PL's charter says "PRs into `<repo>#<base>` are merged by the
+  factory's server when ready; never merge yourself". A version stores the
+  targets under their own top-level key (`auto_merge_targets`), so a server
+  from before them drops only the targets on a rollback and keeps the rest of
+  the profile (`protected_repos` included).
 - **Merge gate.** `python -m omnigent.factory_merge <pr-url> [--admin-fallback] [--dry-run]`
   is a verdict tool for agents: the guard admits it only with `--dry-run`
   (see Invariants). Run by a human, it

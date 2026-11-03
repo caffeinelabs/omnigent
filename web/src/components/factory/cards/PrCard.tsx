@@ -1,6 +1,6 @@
 /**
  * A PR as a Room card: number, title, where it stands (open, ready for human
- * merge, merged, closed), its head, its gates as chips, and Review → to the
+ * merge or merging automatically into an auto-merge target, merged, closed), its head, its gates as chips, and Review → to the
  * PR page. A PR the snapshot no longer lists shows the event's line.
  */
 
@@ -18,11 +18,14 @@ import { GateChip, shownGates } from "../board/GateChip";
 import { useFactoryServerNowS } from "../factoryClock";
 import { TONE_CHIP, type FactoryTone } from "../factoryFormat";
 import { prPageHref } from "../factoryRoutes";
+import { AUTO_MERGE_LABEL } from "../review/deliveryModel";
 
 export function prStateView(pr: PrView): { label: string; tone: FactoryTone } {
   if (pr.state === "merged") return { label: "Merged", tone: "merged" };
   if (pr.state === "closed") return { label: "Closed", tone: "muted" };
-  if (pr.ready) return { label: "Ready for human merge", tone: "pass" };
+  if (pr.ready) {
+    return { label: pr.auto_merge ? AUTO_MERGE_LABEL : "Ready for human merge", tone: "pass" };
+  }
   if (pr.is_draft) return { label: "Draft", tone: "muted" };
   return { label: "Open", tone: "active" };
 }

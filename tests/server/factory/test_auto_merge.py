@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.entities.factory import FactoryProject
+from omnigent.factory import LABEL_STATE, STATE_ACTIVE, STATE_PAUSED
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.auth import LEVEL_OWNER
 from omnigent.server.factory import (
@@ -37,12 +38,20 @@ from omnigent.server.factory.background.auto_merger import (
     BACKOFF_START_S,
     EVENT_KIND,
     INCIDENT_RULE,
+    MERGER_STATE_ATTR,
+    QUIET_S,
+    WAIT_INCIDENT_S,
+    WAITING_RULE,
     AutoMerger,
 )
 from omnigent.server.factory.background.pr_poller import PrPoller
 from omnigent.server.factory.charter import render_pl_charter
 from omnigent.server.factory.control import CockpitError
-from omnigent.server.factory.definition_blocks import DeliveryDef, agent_may_propose
+from omnigent.server.factory.definition_blocks import (
+    AUTO_MERGE_KEY,
+    DeliveryDef,
+    agent_may_propose,
+)
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
 from omnigent.server.factory.slackdm import rules as dm_rules
 from omnigent.server.factory.snapshot import _pr_view
@@ -103,10 +112,22 @@ def test_targets_are_stored_only_once_set() -> None:
     stored = definition.stored_form(doc)
     # A server from before the targets still reads the profile while none is set.
     assert "auto_merge" not in stored["product"]["delivery"]
+    assert AUTO_MERGE_KEY not in stored
     assert doc["product"]["delivery"]["auto_merge"] == []
     assert definition.full_doc(stored)["product"]["delivery"]["auto_merge"] == []
     doc["product"]["delivery"]["auto_merge"] = TARGETS
-    assert definition.stored_form(doc)["product"]["delivery"]["auto_merge"] == TARGETS
+    stored = definition.stored_form(doc)
+    # Set, they live under their own key: an older server drops only them on a
+    # rollback and still reads the profile (its protected repos guard writes).
+    assert stored[AUTO_MERGE_KEY] == TARGETS
+    assert "auto_merge" not in stored["product"]["delivery"]
+    assert stored["product"]["delivery"]["protected_repos"] == ["sample-org/sample-infra"]
+    assert DeliveryDef.model_fields.keys() - {"auto_merge"} >= set(stored["product"]["delivery"])
+    full = definition.full_doc(stored)
+    assert full["product"]["delivery"]["auto_merge"] == TARGETS
+    assert definition.effective(stored)["product"]["delivery"]["auto_merge"] == TARGETS
+    assert product_profile._block_set({AUTO_MERGE_KEY: TARGETS}, product_profile.DELIVERY)
+    assert {d["path"] for d in definition.diff({}, {AUTO_MERGE_KEY: TARGETS})} == {PATH}
 
 
 def test_a_deployment_seed_carries_targets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -297,12 +318,22 @@ class Merging:
         return list(self.gh.merges)
 
     def pr_views(self) -> list[dict[str, Any]]:
-        """The PR views the snapshot shows (its ``auto_merge`` flag from the targets)."""
-        targets = auto_merge.factory_targets(self.world.deps, self.fid)
-        return [_pr_view(pr, [], {}, targets) for pr in self.store.list_prs(self.fid)]
+        """The PR views the snapshot shows (``auto_merge`` set as ``build_snapshot`` sets it)."""
+        on = auto_merge.merger_on(self.world.app_state)
+        targets = auto_merge.factory_targets(self.world.deps, self.fid) if on else frozenset()
+        projects = {p.slug: p for p in self.store.list_projects(self.fid)}
+        return [
+            _pr_view(
+                pr, [], {}, auto_merge.merges_itself(pr, targets, projects.get(pr.project_slug))
+            )
+            for pr in self.store.list_prs(self.fid)
+        ]
+
+    def incidents(self, rule: str = WAITING_RULE) -> list[Any]:
+        return issues.open_issues(self.world.deps, self.fid, rule)
 
     def asks(self) -> dict[str, Any]:
-        """The owner's Needs you over those PR views."""
+        """The owner's Needs you over those PR views and the open incidents."""
         body = {
             "factory": {"id": self.fid, "name": "Sample factory (sample)"},
             "projects": [],
@@ -311,7 +342,13 @@ class Merging:
             "members": [],
         }
         built = build_asks(
-            AskInputs(snapshot=body, user_id=None, level=LEVEL_OWNER), now=self.clock.now
+            AskInputs(
+                snapshot=body,
+                user_id=None,
+                level=LEVEL_OWNER,
+                incidents=issues.open_issues(self.world.deps, self.fid),
+            ),
+            now=self.clock.now,
         )
         AsksResponse.model_validate(built)
         return built
@@ -350,10 +387,12 @@ async def merging(
     setattr(state, MAILER_STATE_ATTR, mailer)
     poller = PrPoller(state, clock=clock, poll_s=POLL_S)
     merger = AutoMerger(state, clock=clock, interval_s=POLL_S)
+    setattr(state, MERGER_STATE_ATTR, merger)  # the server runs it (see background.auto_merger)
     unmirror = chat_cards.register()  # the Room's cards, as the server runs them
     try:
         yield Merging(world, gh, poller, merger, clock, fake_deliver, mailer)
     finally:
+        setattr(state, MERGER_STATE_ATTR, None)
         await mailer.close()
         restore()
         if unmirror is not None:
@@ -502,8 +541,13 @@ async def test_a_stored_draft_or_a_target_without_checks_never_merges(merging: M
 
     assert await m.merger.run_once() == []
     assert m.merger.waiting[row.id] == "no checks reported on the head yet"
+    # That does not clear by itself: owners hear of it at once, in Needs you.
+    [incident] = m.incidents()
+    assert "no checks reported on the head yet" in incident.summary
+    assert [a["kind"] for a in m.asks()["asks"]] == ["broken"]
     draft = replace(row, is_draft=True)
-    assert auto_merge.local_refusal(draft, frozenset({(REPO, BASE)})) == "PR is a draft"
+    project = m.store.get_project(m.fid, "api-version")
+    assert auto_merge.local_refusal(draft, frozenset({(REPO, BASE)}), project) == "PR is a draft"
 
 
 async def test_a_push_after_the_read_is_refused_by_github(merging: Merging) -> None:
@@ -582,3 +626,348 @@ async def test_no_targets_no_merge_and_off_means_off(merging: Merging) -> None:
     assert await off.run_once() == []
     assert m.merges() == []
     assert await m.merger.run_once() == [m.pr().id]
+
+
+# ── Only factory PRs, never a fork's, never on an outsider's word ────────────
+
+
+async def test_a_tracked_pr_off_a_factory_branch_waits_for_a_person(merging: Merging) -> None:
+    m = merging
+    gh_pr = m.new_pr(9650)
+    gh_pr.head_ref = "feature/a-humans-work"
+    # An agent reported it (sys_factory_pr): tracked, with no branch check.
+    m.store.upsert_pr(
+        m.fid, REPO, 9650, project_slug="api-version", head_ref=gh_pr.head_ref, source="tool"
+    )
+    await m.poll()
+    row = m.pr(9650)
+    assert row.ready is True and row.head_ref == "feature/a-humans-work"
+    queries = len(m.gh.pr_queries)
+
+    assert await m.merger.run_once() == []
+
+    assert m.merges() == [] and len(m.gh.pr_queries) == queries
+    assert m.pr_views()[0]["auto_merge"] is False
+    assert [a["kind"] for a in m.asks()["asks"]] == ["merge"]
+    [ready] = [t for t in m.deliver.texts_to(m.pl) if "READY FOR HUMAN MERGE" in t]
+    assert "A human merges it on GitHub" in ready
+
+
+async def test_a_forks_head_never_merges_and_owners_hear_of_it(merging: Merging) -> None:
+    m = merging
+    m.new_pr(head_repo="someone/sample-app")
+    await m.poll()
+    row = m.pr()
+    assert row.ready is True
+
+    assert await m.merger.run_once() == []
+
+    assert m.merges() == []
+    assert "never merges a fork's branch" in m.merger.waiting[row.id]
+    [incident] = m.incidents()
+    assert incident.target == f"pr:{row.id}" and incident.assignee == issues.ASSIGN_OWNERS
+    assert incident.project_slug == "api-version" and "someone/sample-app" in incident.summary
+    asks = m.asks()
+    assert [a["kind"] for a in asks["asks"]] == ["broken"] and asks["handled"] == []
+    # Not read again while its row stays the same; raised once.
+    queries = len(m.gh.pr_queries)
+    m.clock.advance(POLL_S)
+    assert await m.merger.run_once() == []
+    assert len(m.gh.pr_queries) == queries and m.incidents()[0].count == 1
+
+
+async def test_an_outsiders_marker_never_decides_a_merge(merging: Merging) -> None:
+    m = merging
+    gh_pr = m.new_pr()
+    head = gh_pr.head_sha
+    # A member's FAIL, then a drive-by PASS: the poller's gate reads the newest.
+    gh_pr.comment(f"<!-- factory:verify sha={head} result=FAIL -->", m.clock.now + 40)
+    gh_pr.comment(
+        f"<!-- factory:verify sha={head} result=PASS -->",
+        m.clock.now + 50,
+        login="drive-by",
+        association="NONE",
+    )
+    await m.poll()
+    row = m.pr()
+    assert row.ready is True
+
+    assert await m.merger.run_once() == []
+
+    assert m.merges() == []
+    assert "verify marker that passes the head is not by a repo owner" in m.merger.waiting[row.id]
+    assert len(m.incidents()) == 1
+    # The owner's own login (the one the agents act as) counts whatever GitHub calls it.
+    gh_pr.comment(
+        f"<!-- factory:verify sha={head} result=PASS -->",
+        m.clock.now + 5,
+        login="Lena",
+        association="CONTRIBUTOR",
+    )
+    await m.poll()
+    assert await m.merger.run_once() == [row.id]
+    assert m.incidents() == []
+
+
+async def test_a_marker_posted_after_the_poll_is_read_before_a_merge(merging: Merging) -> None:
+    m = merging
+    gh_pr = m.new_pr()
+    await m.poll()
+    row = m.pr()
+    gh_pr.comment(f"<!-- factory:verify sha={gh_pr.head_sha} result=FAIL -->", m.clock.now + 1)
+
+    assert await m.merger.run_once() == []
+
+    assert m.merges() == []
+    assert m.merger.waiting[row.id] == "changed on GitHub since the factory last read it"
+    # The poller reads it again at once, and it is no longer ready.
+    assert m.pr().last_polled_at is None
+    await m.poll(advance=2)
+    assert m.pr().ready is False
+    assert await m.merger.run_once() == []
+    assert m.incidents() == []
+    # Even when GitHub's updatedAt lags, the gates are re-run on what it reports.
+    gh_pr.updated_at = gh_pr.created_at
+    assert auto_merge.github_refusal(row, gh_pr.graphql(), frozenset({(REPO, BASE)})) == (
+        auto_merge.Refusal(
+            "the verify gate is fail on GitHub now: latest verify marker for "
+            f"{gh_pr.head_sha} says FAIL",
+            refresh=True,
+        )
+    )
+
+
+def test_checks_of_another_commit_than_the_head_never_count() -> None:
+    head = sha("head")
+    gh_pr = FakePr(REPO, 1, "factory/status/t", head, 1_700_000_000.0, base_ref=BASE)
+    gh_pr.checks = [FakeCheck("ci / test")]
+    node = gh_pr.graphql()
+    node["head"]["nodes"][0]["commit"]["oid"] = sha("other")
+    row = replace(_row(head), last_polled_at=1_800_000_000)
+
+    refusal = auto_merge.github_refusal(row, node, frozenset({(REPO, BASE)}))
+
+    assert refusal == auto_merge.Refusal(
+        "GitHub reported the checks of another commit than the head"
+    )
+
+
+def _row(head: str) -> Any:
+    from omnigent.entities.factory import FactoryPr
+
+    return FactoryPr(
+        id="pr_1",
+        factory_id="fac_1",
+        repo=REPO,
+        number=1,
+        url=f"https://github.com/{REPO}/pull/1",
+        head_ref="factory/status/t",
+        base_ref=BASE,
+        head_sha=head,
+        project_slug="status",
+        ready=True,
+    )
+
+
+# ── Nothing waits silently ───────────────────────────────────────────────────
+
+
+async def test_an_optional_failing_check_is_a_needs_you_row_until_it_merges(
+    merging: Merging,
+) -> None:
+    m = merging
+    gh_pr = m.new_pr(
+        checks=[FakeCheck("ci / test"), FakeCheck("lint", conclusion="FAILURE", required=False)]
+    )
+    await m.poll()
+    row = m.pr()
+    # The factory's checks gate counts required checks; the merger counts every one.
+    assert row.ready is True
+    assert m.asks()["handled"] == [
+        "PR #9630 (factory change) merges automatically when checks pass."
+    ]
+
+    assert await m.merger.run_once() == []
+
+    [incident] = m.incidents()
+    assert "checks not green: lint (failure)" in incident.summary
+    assert "merge or close it on GitHub" in incident.summary
+    asks = m.asks()
+    assert [a["kind"] for a in asks["asks"]] == ["broken"] and asks["handled"] == []
+    # Someone re-runs it green: a later pass merges it and the incident clears.
+    gh_pr.checks = [FakeCheck("ci / test"), FakeCheck("lint", required=False)]
+    m.clock.advance(QUIET_S + 1)
+    assert await m.merger.run_once() == [row.id]
+    assert m.incidents() == []
+
+
+async def test_any_long_wait_raises_its_incident_once(merging: Merging) -> None:
+    m = merging
+    m.new_pr(checks=[FakeCheck("ci / test"), FakeCheck("e2e", "QUEUED", required=False)])
+    await m.poll()
+
+    assert await m.merger.run_once() == []
+    assert m.incidents() == []  # still running: no alarm yet
+
+    m.clock.advance(WAIT_INCIDENT_S)
+    assert await m.merger.run_once() == []
+    [incident] = m.incidents()
+    assert "checks still running: e2e" in incident.summary
+    m.clock.advance(POLL_S)
+    assert await m.merger.run_once() == []
+    assert m.incidents()[0].count == 1
+
+
+async def test_github_not_connected_is_an_incident(merging: Merging) -> None:
+    m = merging
+    m.new_pr()
+    await m.poll()
+    m.world.app_state.github_store = FakeGithubStore({})
+
+    assert await m.merger.run_once() == []
+
+    [incident] = m.incidents()
+    assert "GitHub is not connected for the factory owner" in incident.summary
+
+
+async def test_with_the_merger_off_a_person_merges_as_before(merging: Merging) -> None:
+    m = merging
+    off = AutoMerger(m.world.app_state, clock=m.clock, interval_s=0)
+    setattr(m.world.app_state, MERGER_STATE_ATTR, off)
+    m.new_pr()
+    await m.poll()
+
+    [ready] = [t for t in m.deliver.texts_to(m.pl) if "READY FOR HUMAN MERGE" in t]
+    assert "A human merges it on GitHub" in ready
+    assert m.pr_views()[0]["auto_merge"] is False
+    assert [a["kind"] for a in m.asks()["asks"]] == ["merge"]
+    assert await off.run_once() == []
+
+
+async def test_a_merge_incident_clears_once_the_pr_closes(merging: Merging) -> None:
+    m = merging
+    gh_pr = m.new_pr()
+    await m.poll()
+    m.gh.merge_status = 409
+    assert await m.merger.run_once() == []
+    assert len(m.incidents(INCIDENT_RULE)) == 1
+
+    gh_pr.state = "CLOSED"
+    gh_pr.closed_at = m.clock.now + 1
+    gh_pr.closed_by = "lena"
+    await m.poll()
+
+    assert m.pr().state == "closed"
+    assert m.incidents(INCIDENT_RULE) == []
+
+
+async def test_a_merge_incident_clears_once_targets_go_or_the_head_moves(
+    merging: Merging,
+) -> None:
+    m = merging
+    gh_pr = m.new_pr()
+    await m.poll()
+    m.gh.merge_status = 405
+    assert await m.merger.run_once() == []
+    [failed] = m.incidents(INCIDENT_RULE)
+
+    definition.set_values(m.world.deps, m.fid, {PATH: []}, created_by="alice")
+    assert await m.merger.run_once() == []
+    assert m.incidents(INCIDENT_RULE) == []
+    stored = m.store.get_issue_by_dedupe(m.fid, failed.dedupe_key)
+    assert stored.status == "resolved"
+
+    # Back on; it fails again, then a new head is ready: the old failure clears
+    # and the new head is tried at once (no back-off carried over).
+    definition.set_values(m.world.deps, m.fid, {PATH: TARGETS}, created_by="alice")
+    m.clock.advance(BACKOFF_START_S + 1)
+    assert await m.merger.run_once() == []
+    assert len(m.incidents(INCIDENT_RULE)) == 1
+    m.gh.merge_status = None
+    new_head = sha("second")
+    gh_pr.push(new_head, m.clock.now + 1, checks=[FakeCheck("ci / test")])
+    gh_pr.review(f"<!-- factory:review sha={new_head} verdict=APPROVE -->", m.clock.now + 2)
+    gh_pr.comment(f"<!-- factory:verify sha={new_head} result=PASS env=x -->", m.clock.now + 2)
+    await m.poll()
+    assert m.pr().head_sha == new_head and m.pr().ready is True
+    assert await m.merger.run_once() == [m.pr().id]
+    assert m.incidents(INCIDENT_RULE) == []
+
+
+# ── The owner's brakes hold merges ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("brake", ["factory paused", "project paused", "project cancelled"])
+async def test_the_owners_brakes_hold_merges(merging: Merging, brake: str) -> None:
+    m = merging
+    m.new_pr()
+    await m.poll()
+    conversations = m.world.deps.conversation_store
+    if brake == "factory paused":
+        conversations.set_labels(m.fid, {LABEL_STATE: STATE_PAUSED})
+    elif brake == "project paused":
+        conversations.set_labels(m.pl, {LABEL_STATE: STATE_PAUSED})
+    else:
+        m.store.upsert_project(m.fid, "api-version", status="cancelled")
+
+    assert await m.merger.run_once() == []
+
+    assert m.merges() == []
+    assert m.incidents() == []
+    if brake == "project cancelled":
+        # Nobody merges a cancelled project's PR automatically: a person decides.
+        assert m.pr_views()[0]["auto_merge"] is False
+        return
+    assert m.merger.waiting[m.pr().id] == brake
+    conversations.set_labels(
+        m.fid if brake == "factory paused" else m.pl, {LABEL_STATE: STATE_ACTIVE}
+    )
+    assert await m.merger.run_once() == [m.pr().id]
+
+
+@pytest.mark.parametrize("change", ["targets cleared", "change request", "factory paused"])
+async def test_a_change_during_the_read_stops_the_merge(merging: Merging, change: str) -> None:
+    m = merging
+    m.new_pr()
+    await m.poll()
+    row = m.pr()
+    real = m.gh.client().graphql
+
+    async def read_then_change(*args: Any, **kwargs: Any) -> Any:
+        result = await real(*args, **kwargs)
+        if change == "targets cleared":
+            definition.set_values(m.world.deps, m.fid, {PATH: []}, created_by="alice")
+        elif change == "change request":
+            m.store.update_pr(
+                row.id,
+                human_review={
+                    "verdict": "changes_requested",
+                    "head_sha": row.head_sha,
+                    "by": "alice",
+                    "text": "not yet (sample)",
+                },
+            )
+        else:
+            m.world.deps.conversation_store.set_labels(m.fid, {LABEL_STATE: STATE_PAUSED})
+        return result
+
+    client = m.gh.client()
+    client.graphql = read_then_change  # type: ignore[method-assign]
+    m.world.app_state.github_client = client
+
+    assert await m.merger.run_once() == []
+
+    assert m.merges() == []
+
+
+async def test_the_poller_nudges_the_merger_only_when_a_target_pr_turns_ready(
+    merging: Merging,
+) -> None:
+    m = merging
+    m.new_pr()
+    await m.poll()
+    assert await nudge.wait(auto_merge.NUDGE_TOPIC, 0) == {m.pr().id}
+
+    await m.poll()  # nothing changed on GitHub
+
+    assert await nudge.wait(auto_merge.NUDGE_TOPIC, 0) is None
