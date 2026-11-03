@@ -2,11 +2,12 @@
 
 A project with unmet dependencies stays queued with the overlay
 "waiting on …" and emits ``project.held``. When a dependency reaches the
-project's ``depends_mode`` (``merged``: its PR merged into the base, the
-default; ``ready``: ready for human merge), ``project.released`` fires and the
-server spawns its PL. Release runs on ``stage.changed``, ``pr.merged`` and
-``pr.ready`` events, on ``base.moved`` (the base watcher's hook) and on the
-minute sweep. The checks here (dependencies, cycles, scope overlap) are pure.
+project's ``depends_mode`` (``merged``: its PRs merged into the base and none
+of its tasks still open, the default; ``ready``: ready for human merge),
+``project.released`` fires and the server spawns its PL. Release runs on
+``stage.changed``, ``pr.merged`` and ``pr.ready`` events, on ``base.moved``
+(the base watcher's hook) and on the minute sweep. The checks here
+(dependencies, cycles, scope overlap) are pure.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final
 
 from omnigent.entities import Conversation
-from omnigent.entities.factory import FactoryEvent, FactoryPr, FactoryProject
-from omnigent.factory import STAGE_DONE, STAGE_MERGED, STAGE_READY
+from omnigent.entities.factory import FactoryEvent, FactoryPr, FactoryProject, FactoryTask
+from omnigent.factory import STAGE_DONE, STAGE_MERGED, STAGE_READY, TASK_CLOSED_STATES, TASK_STATES
 from omnigent.server.factory import events
 from omnigent.server.factory.charter import (
     DEPENDS_READY,
@@ -59,21 +60,34 @@ def resolve_alias(slug: str, projects: Mapping[str, FactoryProject]) -> FactoryP
     return row
 
 
-def dependency_met(project: FactoryProject, prs: Sequence[FactoryPr], mode: str) -> bool:
+OPEN_TASK_STATES: Final = tuple(s for s in TASK_STATES if s not in TASK_CLOSED_STATES)
+"""Task states that leave a project's work unfinished (a ``merged`` dependency waits on them)."""
+
+
+def dependency_met(
+    project: FactoryProject,
+    prs: Sequence[FactoryPr],
+    mode: str,
+    tasks: Iterable[FactoryTask] = (),
+) -> bool:
     """
     Whether *project* satisfies a dependent's *mode*.
 
-    ``merged``: its PRs are merged and none is open, or it is merged or done.
-    ``ready``: that, or one of its open PRs is ready for human merge.
+    ``merged``: its PRs are merged, none is open and none of its tasks is still
+    open (a first merge does not finish a project that still works); or it is
+    done. ``ready``: that, or one of its open PRs is ready for human merge.
+
+    :param tasks: The factory's tasks (any state; others' and closed ones are ignored).
     """
-    if project.status == "done":
+    if project.status == "done" or project.stage == STAGE_DONE:
         return True
     if project.status == "cancelled":
         return False
     own = [p for p in prs if p.project_slug == project.slug]
     open_prs = [p for p in own if p.state == "open"]
+    working = any(t.project_slug == project.slug and t.state in OPEN_TASK_STATES for t in tasks)
     merged = any(p.state == "merged" for p in own) and not open_prs
-    if merged or project.stage in (STAGE_MERGED, STAGE_DONE):
+    if (merged or project.stage == STAGE_MERGED) and not working:
         return True
     if mode == DEPENDS_READY:
         return any(p.ready for p in open_prs) or project.stage == STAGE_READY
@@ -84,20 +98,29 @@ def unmet_dependencies(
     project: FactoryProject,
     projects: Mapping[str, FactoryProject],
     prs: Sequence[FactoryPr],
+    tasks: Iterable[FactoryTask] = (),
 ) -> list[str]:
     """
     The slugs *project* still waits for, in charter order.
 
     :param projects: Every project of the factory by slug.
     :param prs: The factory's PRs.
+    :param tasks: The factory's open tasks (:func:`open_tasks`): a project that
+        still has one is not there yet.
     """
     depends_on, mode = project_depends_on(project)
+    rows = list(tasks)
     out: list[str] = []
     for slug in depends_on:
         target = resolve_alias(slug, projects)
-        if target is None or not dependency_met(target, prs, mode):
+        if target is None or not dependency_met(target, prs, mode, rows):
             out.append(slug)
     return out
+
+
+def open_tasks(store: Any, factory_id: str) -> list[FactoryTask]:
+    """:returns: The factory's open tasks, what :func:`unmet_dependencies` reads (synchronous)."""
+    return store.list_tasks(factory_id, states=list(OPEN_TASK_STATES))
 
 
 def find_cycle(graph: Mapping[str, Iterable[str]]) -> list[str] | None:
@@ -230,6 +253,7 @@ def _candidates(deps: Any, factory_id: str) -> list[tuple[FactoryProject, list[s
     rows = store.list_projects(factory_id)
     by_slug = {p.slug: p for p in rows}
     prs = store.list_prs(factory_id)
+    tasks = open_tasks(store, factory_id)
     out: list[tuple[FactoryProject, list[str]]] = []
     for project in rows:
         if project.status != "active" or spawn_owner(project) != SPAWN_SERVER:
@@ -242,7 +266,7 @@ def _candidates(deps: Any, factory_id: str) -> list[tuple[FactoryProject, list[s
                 continue
             out.append((project, []))
             continue
-        out.append((project, unmet_dependencies(project, by_slug, prs)))
+        out.append((project, unmet_dependencies(project, by_slug, prs, tasks)))
     return out
 
 
@@ -316,11 +340,13 @@ register()
 
 
 __all__ = [
+    "OPEN_TASK_STATES",
     "RELEASE_EVENTS",
     "dependency_met",
     "find_cycle",
     "globs_overlap",
     "hold",
+    "open_tasks",
     "project_subject",
     "register",
     "release_ready",

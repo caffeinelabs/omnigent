@@ -43,7 +43,7 @@ from omnigent.server.factory.charter import project_depends_on
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import display_title
-from omnigent.server.factory.gating import unmet_dependencies
+from omnigent.server.factory.gating import open_tasks, unmet_dependencies
 from omnigent.server.factory.graph import MailFact, SpanFact
 from omnigent.server.factory.membership import factory_members, resolve_role
 from omnigent.server.factory.snapshot import RawSnapshot, get_snapshot, readable_for
@@ -95,6 +95,7 @@ def work_graph(
     data = tasks.load_factory(deps, factory_id, slug)
     slugs = [slug] if slug else sorted(set(data.projects) | {t.project_slug for t in data.tasks})
     prs = data.prs or None
+    work: list[Any] | None = None if slug else data.tasks
     out: dict[str, Any] = {
         "projects": [],
         "tasks": [],
@@ -160,7 +161,9 @@ def work_graph(
             )
         if project is not None and _depends_on(project):
             prs = prs if prs is not None else deps.factory_store.list_prs(factory_id)
-            unmet = set(unmet_dependencies(project, data.projects, prs))
+            if work is None:
+                work = open_tasks(deps.factory_store, factory_id)
+            unmet = set(unmet_dependencies(project, data.projects, prs, work))
             for dep in _depends_on(project):
                 if dep not in hidden:
                     out["project_edges"].append(

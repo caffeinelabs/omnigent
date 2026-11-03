@@ -60,6 +60,7 @@ and proposals outlive it."""
 WRAPPED_UP_SOURCES: Final = frozenset({"done_check"})
 """Expired already when the project's stage is done: "Mark it done?" was answered by its PL."""
 _QUESTION_MAX: Final = 1000
+_WAS_MAX: Final = 200
 _CONTEXT_MAX: Final = 4000
 
 
@@ -201,13 +202,54 @@ def _default_assignee(
     )
 
 
+def closed_data(
+    row: FactoryDecision,
+    why: str,
+    *,
+    real_ask: str | None = None,
+    real_ask_verb: str | None = None,
+    about: str | None = None,
+) -> dict[str, Any]:
+    """
+    What a decision the server closed records with its event: why it closed
+    (``cause``), the ask a person really owes instead (``real_ask``, e.g.
+    ``D-45``, and what it has them do, ``real_ask_verb``), the node it was
+    about (``about``) and what it asked (``was``). The cockpit's Health area
+    reads these back as closed alarms.
+    """
+    out: dict[str, Any] = {"cause": why, "was": _clip(row.question, _WAS_MAX)}
+    if real_ask:
+        out["real_ask"] = real_ask
+        if real_ask_verb:
+            out["real_ask_verb"] = _clip(real_ask_verb, _WAS_MAX)
+    if about:
+        out["about"] = about
+    return out
+
+
+EXPIRED_DEFAULT: Final = "the situation cleared"
+"""The summary's end for an expiry that names no cause (it records none)."""
+
+
 async def expire_decision(
-    app_state: Any, decision_id: str, *, why: str = "the situation cleared"
+    app_state: Any,
+    decision_id: str,
+    *,
+    why: str | None = None,
+    about: str | None = None,
+    superseded_by: str | None = None,
 ) -> FactoryDecision | None:
     """
     Expire an open server decision whose episode ended. Never raises.
 
-    :param why: The end of the event's summary, e.g. ``"docs is done"``.
+    Only an expiry with *why* records a cause (:func:`closed_data`): the
+    cockpit lists it as an alarm the server closed. One *superseded_by* a
+    newer decision was escalated, not closed: it records that instead.
+
+    :param why: Why it no longer applies, e.g. ``"docs is done"`` (the end of
+        the event's summary).
+    :param about: The node it was about (a ref, e.g. ``T-16``), when known.
+    :param superseded_by: The decision that replaces it (``D-n``).
     :returns: The expired decision, or ``None`` when it was no longer open.
     """
     store = _store(app_state)
@@ -227,10 +269,22 @@ async def expire_decision(
         project=row.project_slug,
         from_id=row.asked_by_session_id,
         subject=f"decision:{row.ref}",
-        summary=f"{row.ref} expired: {why}",
-        data={"decision_id": row.id, "source": row.source},
+        summary=f"{row.ref} expired: "
+        + (f"replaced by {superseded_by}" if superseded_by else why or EXPIRED_DEFAULT),
+        data=_expired_data(row, why, about=about, superseded_by=superseded_by),
     )
     return row
+
+
+def _expired_data(
+    row: FactoryDecision, why: str | None, *, about: str | None, superseded_by: str | None
+) -> dict[str, Any]:
+    out: dict[str, Any] = {"decision_id": row.id, "source": row.source}
+    if superseded_by:
+        out["superseded_by"] = superseded_by
+    elif why:
+        out.update(closed_data(row, why, about=about))
+    return out
 
 
 SERVER_BY: Final = "server"
@@ -243,21 +297,35 @@ def server_closed(data: Mapping[str, Any]) -> bool:
     return data.get("by_kind") == SERVER_BY
 
 
-async def close_by_server(app_state: Any, decision_id: str, *, why: str) -> FactoryDecision | None:
+async def close_by_server(
+    app_state: Any,
+    decision_id: str,
+    *,
+    why: str,
+    real_ask: str | None = None,
+    real_ask_verb: str | None = None,
+    about: str | None = None,
+) -> FactoryDecision | None:
     """
     Close an open decision whose question no longer applies: answered by the
     server with *why*, recorded with nobody to tell, and logged. Never raises.
 
     The answer shows in the decision's history ("Closed by the server: PR #9881
-    merged · server") and ``decision.answered`` carries the reason.
+    merged · server") and ``decision.answered`` carries the reason, plus
+    :func:`closed_data` (cause, the real ask, the node it was about).
 
     :param why: Why it no longer applies, e.g. ``"T-16 is done"``.
+    :param real_ask: The ask a person owes instead, e.g. ``"D-45"``.
+    :param real_ask_verb: What that ask has them do, e.g. ``"Apply C-16"``.
+    :param about: The node it was about (a ref, e.g. ``T-16``), when known.
     :returns: The closed decision, or ``None`` when it was no longer open.
     """
     store = _store(app_state)
     if store is None:
         return None
-    text = _clip(f"{CLOSED_PREFIX}{why}", _QUESTION_MAX)
+    verb = f" ({real_ask_verb})" if real_ask and real_ask_verb else ""
+    tail = f". The real ask is {real_ask}{verb}." if real_ask else ""
+    text = _clip(f"{CLOSED_PREFIX}{why}{tail}", _QUESTION_MAX)
     try:
         row = await asyncio.to_thread(
             store.answer_decision, decision_id, option_id=None, text=text, by=SERVER_BY
@@ -290,6 +358,7 @@ async def close_by_server(app_state: Any, decision_id: str, *, why: str) -> Fact
             "reason": why,
             "nobody_to_tell": True,
             "auto": True,
+            **closed_data(row, why, real_ask=real_ask, real_ask_verb=real_ask_verb, about=about),
         },
     )
     return row
@@ -584,6 +653,7 @@ async def open_storm_decision(
 
 __all__ = [
     "CLOSED_PREFIX",
+    "EXPIRED_DEFAULT",
     "PROJECT_RUN_SOURCES",
     "SERVER_BY",
     "SOURCE_BLOCKED",
@@ -592,6 +662,7 @@ __all__ = [
     "WRAPPED_UP_SOURCES",
     "blocked_key",
     "close_by_server",
+    "closed_data",
     "ended_project_decisions",
     "expire_by_key",
     "expire_decision",

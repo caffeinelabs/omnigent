@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
-from omnigent.server.factory import base, chat_cards, live, nudge, status
+from omnigent.server.factory import base, chat_cards, events, live, nudge, status
 from omnigent.server.factory.background import pr_poller
 from omnigent.server.factory.background.pr_poller import BASE_WATCH_INTERVAL_S, PrPoller
 from omnigent.server.factory.charter import normalize_charter
@@ -459,6 +459,7 @@ def test_base_view_reads_the_default_base_and_the_live_env(world: FactoryWorld) 
         "moved_at": 1700000000,
         "env": env,
         "env_project": "base-env",
+        "deployed": None,
     }
     plain = world.get("other_lead")
     assert base.base_view(plain, [], {}) is None
@@ -489,3 +490,107 @@ async def test_a_pr_batch_reads_the_watched_bases_not_the_prs_bases(watching: Wa
     assert move.data["to"] == sha("b")
     queries = [r.content.decode() for r in w.gh.pr_queries]
     assert all("refs/heads/develop" in q and 'refs/heads/main"' not in q for q in queries)
+
+
+# ── The commit the base env runs ───────────────────────────────
+
+
+async def _env_ready(w: Watching, at_sha: str, state: str = "ready") -> None:
+    await events.emit(
+        w.world.app_state,
+        w.fid,
+        "env.reported",
+        project=F.INTEGRATION_ENV_SLUG,
+        summary=f"dev env {state} at {at_sha[:7]}",
+        data={"state": state, "env_id": "sample", "sha": at_sha},
+    )
+
+
+def _deployed(w: Watching) -> base.DeployedHead | None:
+    root = w.world.store.get_conversation(w.fid)
+    assert root is not None
+    return base.read_deployed(root.labels, REPO, BASE)
+
+
+async def test_the_base_env_runs_a_head_the_watcher_saw(watching: Watching) -> None:
+    """A merge is in the base env when the env runs a head the watcher saw after it."""
+    w = watching
+    await w.poll()
+    w.gh.branches[(REPO, BASE)] = sha("b")
+    await w.poll(advance=BASE_WATCH_INTERVAL_S + 1)
+    moved = w.head()
+    assert moved is not None and moved.sha == sha("b") and moved.moved_at
+
+    await _env_ready(w, sha("b")[:7])
+    deployed = _deployed(w)
+
+    assert deployed is not None
+    assert (deployed.sha, deployed.head_at) == (sha("b"), moved.moved_at)
+    assert base.contains(deployed, merged_sha=None, merged_at=moved.moved_at - 5)
+    assert not base.contains(deployed, merged_sha=None, merged_at=moved.moved_at + 5)
+    assert base.contains(deployed, merged_sha=sha("b"), merged_at=moved.moved_at + 5)
+    # Another report at the same commit keeps when it was first deployed.
+    await _env_ready(w, sha("b"))
+    assert _deployed(w) == deployed
+    # Served on the snapshot's base view.
+    root = w.world.store.get_conversation(w.fid)
+    assert root is not None
+    rows = w.store.list_projects(w.fid)
+    view = base.base_view(root, rows, {})
+    assert view is not None and view["deployed"] == deployed.to_json()
+
+
+async def test_a_head_deployed_before_the_watcher_saw_it_is_placed_on_its_move(
+    watching: Watching,
+) -> None:
+    w = watching
+    await w.poll()
+    await _env_ready(w, sha("c")[:7])
+    early = _deployed(w)
+    assert early is not None and (early.sha, early.head_at) == (sha("c")[:7], None)
+    # Not placed yet: only the deployed commit itself is in it, not a merge before its report.
+    assert not base.contains(early, merged_sha=None, merged_at=early.at - 5)
+    assert base.contains(early, merged_sha=sha("c"), merged_at=early.at - 5)
+    # A report that is not ready records nothing new.
+    await _env_ready(w, sha("d")[:7], state="deploying")
+    assert _deployed(w) == early
+
+    w.gh.branches[(REPO, BASE)] = sha("c")
+    await w.poll(advance=BASE_WATCH_INTERVAL_S + 1)
+    placed = _deployed(w)
+    head = w.head()
+
+    assert head is not None and placed is not None
+    assert (placed.sha, placed.at, placed.head_at) == (sha("c"), early.at, head.moved_at)
+    assert base.contains(placed, merged_sha=None, merged_at=early.at - 5)
+
+
+async def test_a_deployed_head_is_placed_from_the_moves_the_watcher_recorded(
+    watching: Watching,
+) -> None:
+    """The env catches up to an older head: its move is still in the event log."""
+    w = watching
+    await w.poll()
+    w.gh.branches[(REPO, BASE)] = sha("b")
+    await w.poll(advance=BASE_WATCH_INTERVAL_S + 1)
+    first = w.head()
+    w.gh.branches[(REPO, BASE)] = sha("e")
+    await w.poll(advance=BASE_WATCH_INTERVAL_S + 1)
+    assert first is not None and w.head() != first
+
+    await _env_ready(w, sha("b")[:7])
+    deployed = _deployed(w)
+
+    assert deployed is not None and (deployed.sha, deployed.head_at) == (sha("b"), first.moved_at)
+
+
+def test_a_deployed_record_of_another_pair_or_a_bad_sha_is_not_read() -> None:
+    record = base.DeployedHead("817480d", 1700000000, 1699999990)
+    value = base.deployed_value(record, REPO, BASE)
+    label = base.deployed_label(REPO, BASE)
+    assert base.read_deployed({label: value}, REPO, BASE) == record
+    assert base.read_deployed({label: value}, "other/repo", BASE) is None
+    assert base.read_deployed({label: f"nothex 0 1 {REPO}#{BASE}"}, REPO, BASE) is None
+    assert base.same_commit("817480d", "817480d" + "0" * 33)
+    assert not base.same_commit("817480", "817480d")
+    assert not base.contains(None, merged_sha="817480d", merged_at=1)

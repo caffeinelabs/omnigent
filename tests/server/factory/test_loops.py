@@ -16,6 +16,7 @@ import pytest_asyncio
 
 from omnigent.entities.factory import FactoryLoop, FactoryPr, FactoryTask
 from omnigent.server.factory import (
+    alarms,
     budgets,
     decisions,
     detectors,
@@ -1335,6 +1336,14 @@ async def test_a_stalled_wait_that_ends_refuted_swaps_its_decision(
     [exhausted] = [d for d in loop_decisions(cockpit) if d.status == "open"]
     assert exhausted.options[0]["action"] == "fresh_restart"
     assert row.decision_id == exhausted.id
+    # The "Keep waiting?" was escalated, not closed: Health does not list it.
+    [expired] = [
+        e
+        for e in cockpit.store.find_events(cockpit.fid, "decision.expired", 0)
+        if e.data.get("decision_id") == wait.id
+    ]
+    assert expired.data["superseded_by"] == exhausted.ref and "cause" not in expired.data
+    assert wait.ref not in [a.ref for a in alarms.load(cockpit.store, cockpit.fid, time.time())]
     assert cockpit.mailer.texts_to(pl)[-1].startswith(
         f"[Factory loop · EXHAUSTED · PR #9631 · claim 2/2 · {exhausted.ref}] Hold PR #9631"
     )

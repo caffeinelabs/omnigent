@@ -1,7 +1,8 @@
 """Dependency gating: a project waits until what it ``depends_on`` is met.
 
-``depends_mode=merged`` (the default) releases once a dependency's PR merged
-into the base; ``ready`` once it is ready for human merge. Release runs on
+``depends_mode=merged`` (the default) releases once a dependency's PRs merged
+into the base and none of its tasks is still open; ``ready`` once one is
+ready for human merge. Release runs on
 ``pr.merged`` / ``pr.ready`` / ``stage.changed`` events and on the base
 watcher's ``base.moved`` hook, and then the server spawns the PL.
 """
@@ -15,7 +16,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from omnigent.entities.factory import FactoryPr, FactoryProject
+from omnigent.entities.factory import FactoryPr, FactoryProject, FactoryTask
 from omnigent.server.factory import base, events, gating, snapshot
 from omnigent.server.factory.gating import (
     dependency_met,
@@ -84,6 +85,36 @@ def _pr(slug: str, state: str = "open", *, ready: bool = False, number: int = 1)
 )
 def test_dependency_met(prs: list[FactoryPr], stage: str, mode: str, met: bool) -> None:
     assert dependency_met(_row("a", stage=stage), prs, mode) is met
+
+
+def _task(slug: str, state: str, number: int = 1) -> FactoryTask:
+    return FactoryTask(
+        id=f"{number:032x}",
+        factory_id=FID,
+        number=number,
+        project_slug=slug,
+        key=f"k{number}",
+        title=f"Task {number}",
+        state=state,
+    )
+
+
+def test_a_project_that_still_works_does_not_meet_a_merged_dependency() -> None:
+    """Its first PR merged with nothing open, but a task is still open: not there yet."""
+    merged = [_pr("a", "merged")]
+    open_task, done_task = _task("a", "ready", 1), _task("a", "done", 2)
+    other = _task("b", "running", 3)
+
+    assert not dependency_met(_row("a", stage="building"), merged, "merged", [open_task])
+    assert not dependency_met(_row("a", stage="merged"), [], "merged", [open_task])
+    assert dependency_met(_row("a", stage="building"), merged, "merged", [done_task, other])
+    assert dependency_met(_row("a", status="done"), [], "merged", [open_task])
+    assert dependency_met(
+        _row("a", stage="ready"), [_pr("a", "open", ready=True)], "ready", [open_task]
+    )
+    rows = {"a": _row("a"), "x": _row("x", charter={"depends_on": ["a"]})}
+    assert unmet_dependencies(rows["x"], rows, merged, [open_task]) == ["a"]
+    assert unmet_dependencies(rows["x"], rows, merged, [done_task]) == []
 
 
 def test_a_cancelled_dependency_is_never_met_and_a_merged_one_follows_its_survivor() -> None:

@@ -888,6 +888,80 @@ async def test_a_pl_holding_its_task_for_an_open_proposal_is_not_asked_about(
     assert _recommended(asked) == ["Nudge the lead"]
 
 
+async def test_a_stall_then_held_on_purpose_is_closed_with_its_cause_and_the_real_ask(
+    stall: Stall,
+) -> None:
+    """D-48: the alarm fired, then the lead held T-1 for C-n. The server answers it."""
+    import time
+
+    from omnigent.server.factory import alarms
+
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(65 * MIN)
+    (asked,) = stall.stall_decisions()
+    proposal, decision = _proposal(stall)
+    await tasks.hold_task(
+        cockpit.app.state,
+        cockpit.fid,
+        task(cockpit, KEY),
+        tasks.HoldIn(on=f"C-{proposal.number}"),
+        _pl_actor(stall),
+    )
+    row = await stall.tick(MIN)
+
+    assert row.state == "running"
+    closed = cockpit.store.get_decision(asked.id)
+    assert closed is not None and (closed.status, closed.answered_by) == ("answered", "server")
+    cause = f"T-1 is held on purpose for C-{proposal.number}; a held task is not stalled"
+    verb = f"Apply C-{proposal.number}"
+    assert (
+        closed.answer_text
+        == f"Closed by the server: {cause}. The real ask is {decision.ref} ({verb})."
+    )
+    [event] = [
+        e for e in cockpit.events("decision.answered") if e.data.get("decision_id") == asked.id
+    ]
+    assert (event.data["cause"], event.data["real_ask"], event.data["about"]) == (
+        cause,
+        decision.ref,
+        "T-1",
+    )
+    assert event.data["real_ask_verb"] == verb
+    assert event.data["was"] == asked.question
+    # Health reads it back; the lead hears nothing (the hold stands).
+    found = alarms.load(cockpit.store, cockpit.fid, time.time())
+    assert [(a.ref, a.cause, a.real_ask, a.about) for a in found] == [
+        (asked.ref, cause, decision.ref, "T-1")
+    ]
+    assert not [t for t in cockpit.mailer.texts_to(cockpit.world.id("pl")) if "RESUMED" in t]
+
+
+async def test_a_stall_closed_on_its_merge_records_its_cause_for_health(stall: Stall) -> None:
+    """D-46 / D-47: closed when the work merged, read back with the node it was about."""
+    import time
+
+    from omnigent.server.factory import alarms
+    from tests.server.factory.test_loops import make_pr
+
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    await stall.ticks(65 * MIN)
+    (asked,) = stall.stall_decisions()
+    pr = make_pr(cockpit, KEY)
+    cockpit.store.update_pr(pr.id, state="merged", merged_at=int(stall.clock()))
+    await stall.tick(MIN)
+
+    [found] = alarms.load(cockpit.store, cockpit.fid, time.time())
+    assert (found.ref, found.cause, found.real_ask, found.about) == (
+        asked.ref,
+        f"PR #{pr.number} merged",
+        None,
+        "T-1",
+    )
+    assert found.was == asked.question
+
+
 async def test_an_open_proposal_about_the_project_holds_its_tasks_without_a_hold(
     stall: Stall,
 ) -> None:

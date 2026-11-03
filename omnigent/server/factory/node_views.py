@@ -195,11 +195,44 @@ class TryStepView(_View):
     api: bool | None = None
 
 
+class SmokeView(_View):
+    ok: bool
+    checks: str | None = None
+
+
+class BaseEnvView(_View):
+    """The base env on the root: its branch, the commit it runs and its links."""
+
+    name: str
+    branch: str
+    sha: str | None = None
+    deployed_at: str | None = None
+    state: str | None = None
+    smoke: SmokeView | None = None
+    app_url: str | None = None
+    api_url: str | None = None
+    note: str | None = None
+    ref: str | None = None
+
+
+class ClosedAlarmView(_View):
+    """An alarm the server closed: what it asked, why it closed, the real ask."""
+
+    id: str
+    was: str
+    cause: str
+    real_ask: str | None = None
+    real_ask_verb: str | None = None
+    ref: str | None = None
+
+
 class NodeFullView(NodeSummaryView):
     why_html: str
     try_it: list[TryStepView] | None = None
     acceptance: AcceptanceView | None = None
     evidence: EvidenceView | None = None
+    env: BaseEnvView | None = None
+    closed_alarms: list[ClosedAlarmView] | None = None
 
 
 class CrumbView(_View):

@@ -1935,6 +1935,18 @@ def _idle_stall(loop: FactoryLoop) -> bool:
     )
 
 
+def resumes_when_held(loop: FactoryLoop, now: float) -> bool:
+    """
+    Whether a hold on *loop*'s task ends its stall (:func:`wake`): a no-progress
+    stall within its wall budget. A wall stall, an exhausted or a thrashing
+    loop stays bad whatever holds its task.
+    """
+    if not _idle_stall(loop):
+        return False
+    wall_h = float((loop.spec or {}).get("wall_h") or 0)
+    return not (wall_h and _worked_s(loop, now) >= wall_h * 3600)
+
+
 def wake(ctx: Ctx, loop: FactoryLoop, watch: task_pulse.Watch) -> FactoryLoop:
     """
     A no-progress stall whose IC works again, or that now waits on a person, runs again.
@@ -2894,6 +2906,7 @@ __all__ = [
     "project_subject",
     "reset",
     "resolve_spec",
+    "resumes_when_held",
     "reword_stall",
     "set_budget_resolver",
     "snapshot_fields",

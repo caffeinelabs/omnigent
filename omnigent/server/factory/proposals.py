@@ -2794,7 +2794,7 @@ async def _close_decision(app_state: Any, row: FactoryProposal, status: str) -> 
     )
 
 
-def _expiry_start(row: FactoryProposal) -> int:
+def expiry_start(row: FactoryProposal) -> int:
     """
     When a proposal's 72 h start: its filing, the co-sign that let a person see
     it, or a person reopening it after it closed itself.
@@ -3090,7 +3090,7 @@ async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None)
     )
     expired: list[str] = []
     for row in rows:
-        if _expiry_start(row) + PROPOSAL_EXPIRY_S > now:
+        if expiry_start(row) + PROPOSAL_EXPIRY_S > now:
             continue
         label = proposal_ref(row.number)
         try:
@@ -3226,6 +3226,7 @@ __all__ = [
     "decline",
     "execute_answer",
     "expire_due",
+    "expiry_start",
     "find_proposal",
     "fingerprint",
     "is_mirror",

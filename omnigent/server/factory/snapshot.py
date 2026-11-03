@@ -1442,7 +1442,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     for project in projects:
         pl = pick_pl(project, project.slug, loaded.members)
         waiting = (
-            unmet_dependencies(project, by_slug, loaded.prs)
+            unmet_dependencies(project, by_slug, loaded.prs, open_tasks)
             if pl is None and project.status == "active"
             else []
         )
@@ -1786,6 +1786,7 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     base = factory.get("base")
     if base is not None and base.get("env_project") in hidden:
         base["env"] = None
+        base["deployed"] = None
     rate = body["totals"].get("usd_per_h")
     if len(readable) < len(raw.top_level_of):
         member_costs = [m["cost_usd"] for m in body["members"] if m["is_top_level"]]

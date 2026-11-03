@@ -396,6 +396,20 @@ class NextBeatView(_View):
     at: int
 
 
+class DeployedEnvView(_View):
+    """
+    What the base env runs, placed in its base's history (``base.DeployedHead``).
+
+    :param sha: The deployed commit (the full head sha once the watcher saw it).
+    :param at: When the env first reported it ready at this commit.
+    :param head_at: When the watcher saw it become the base head (``None``: never).
+    """
+
+    sha: str
+    at: int
+    head_at: int | None = None
+
+
 class FactoryBaseView(_View):
     """
     The factory's default base and the live env at its head (``base-env``).
@@ -404,6 +418,7 @@ class FactoryBaseView(_View):
     :param moved_at: When the server saw it move (``None`` before the first move).
     :param env: The integration project's env, when there is one.
     :param env_project: Slug of the integration project, e.g. ``"base-env"``.
+    :param deployed: The commit the base env runs, as the server recorded it.
     """
 
     repo: str
@@ -412,6 +427,7 @@ class FactoryBaseView(_View):
     moved_at: int | None = None
     env: EnvView | None = None
     env_project: str | None = None
+    deployed: DeployedEnvView | None = None
 
 
 class FactoryView(_View):

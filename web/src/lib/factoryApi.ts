@@ -352,6 +352,16 @@ export interface FactoryBaseView {
   /** The integration project's env (`base-env`), when there is one. */
   env: EnvView | null;
   env_project: string | null;
+  /** The commit the base env runs, placed in the base's history by the watcher. */
+  deployed?: DeployedEnvView | null;
+}
+
+/** What the base env runs: the commit, when it was first reported, when it became the head. */
+export interface DeployedEnvView {
+  sha: string;
+  at: number;
+  /** When the watcher saw it become the base head (null: never seen move there). */
+  head_at: number | null;
 }
 
 export interface FactoryView {

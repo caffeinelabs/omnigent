@@ -555,6 +555,7 @@ async def test_start_with_a_live_env_creates_base_env(cockpit: Cockpit) -> None:
         "moved_at": None,
         "env": None,
         "env_project": "base-env",
+        "deployed": None,
     }
     kinds = {p["slug"]: p["charter"]["kind"] for p in body["projects"]}
     assert kinds["base-env"] == "integration" and kinds["api-status"] == "work"

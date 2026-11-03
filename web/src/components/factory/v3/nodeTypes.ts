@@ -228,11 +228,42 @@ export interface TryStep {
   api?: boolean;
 }
 
+/** The base env on the root: its branch, the commit it runs and its links (api.md §3.8). */
+export interface BaseEnv {
+  name: string;
+  branch: string;
+  sha?: string;
+  deployed_at?: string;
+  state?: string;
+  smoke?: { ok: boolean; checks?: string };
+  app_url?: string;
+  api_url?: string;
+  note?: string;
+  /** The project that keeps it, in the factory tree. */
+  ref?: string;
+}
+
+/** An alarm the server closed by itself: what it asked, why it closed, the real ask. */
+export interface ClosedAlarm {
+  id: string;
+  was: string;
+  cause: string;
+  real_ask?: string;
+  /** What the real ask has a person do ("Apply C-16"). */
+  real_ask_verb?: string;
+  /** The node it was about. */
+  ref?: string;
+}
+
 export interface NodeFull extends NodeSummary {
   /** Product words; may hold `<b>` and `<a data-ref>` (see `RichText`). */
   why_html: string;
   budget?: number;
   try_it?: TryStep[];
+  /** On the product root. */
+  env?: BaseEnv;
+  /** On the factory tree's Health area: today's alarms the server closed. */
+  closed_alarms?: ClosedAlarm[];
   acceptance?: { steps: AcceptanceStep[]; note?: string; run_at?: string };
   evidence?: {
     summary: string;

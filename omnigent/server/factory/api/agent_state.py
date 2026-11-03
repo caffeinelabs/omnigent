@@ -844,12 +844,16 @@ async def get_charter(
 
 def _held(deps: Any, factory_id: str, slug: str) -> bool:
     """Whether the project waits on its dependencies now."""
-    from omnigent.server.factory.gating import unmet_dependencies
+    from omnigent.server.factory.gating import open_tasks, unmet_dependencies
 
     store = deps.factory_store
     rows = {p.slug: p for p in store.list_projects(factory_id)}
     row = rows.get(slug)
-    return row is not None and bool(unmet_dependencies(row, rows, store.list_prs(factory_id)))
+    if row is None:
+        return False
+    return bool(
+        unmet_dependencies(row, rows, store.list_prs(factory_id), open_tasks(store, factory_id))
+    )
 
 
 # ── Versions ───────────────────────────────────────────────────
