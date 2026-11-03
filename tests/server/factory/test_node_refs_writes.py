@@ -148,9 +148,18 @@ async def test_rows_written_before_read_back_as_refs(cockpit: Cockpit) -> None:
     old, _ = cockpit.store.create_decision(
         cockpit.fid, dedupe_key="old", question="Old subject?", subject="pr:" + pr_id
     )
+    feature = cockpit.store.create_initiative(
+        cockpit.fid, title="Guided setup (sample)", ask="Make setup guided (sample)"
+    )
     facts = RefFacts.load(cockpit.deps, cockpit.fid)
 
     assert node_refs.normalize(old.subject, facts) == "PR-9630"
+    found = node_refs.resolve(facts, f"initiative:I-{feature.number}")
+    assert found is not None and (found.ref, found.level, found.title) == (
+        f"I-{feature.number}",
+        "feature",
+        "Guided setup (sample)",
+    )
     assert node_refs.normalize("task:api-version/route", facts) == task.ref
     assert node_refs.normalize(f"session:{cockpit.world.id('ic')}", facts) == (
         f"run:{cockpit.world.id('ic')}"

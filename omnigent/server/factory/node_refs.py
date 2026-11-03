@@ -443,9 +443,8 @@ class RefFacts:
 
 
 def stored_features(store: Any, factory_id: str) -> list[Any]:
-    """:returns: The factory's stored features (``I-n``) once the store keeps them, else none."""
-    lister: Callable[..., Iterable[Any]] | None = getattr(store, "list_initiatives", None)
-    return list(lister(factory_id, limit=5000)) if lister is not None else []
+    """:returns: The factory's stored features: its initiatives (``I-n``)."""
+    return list(store.list_initiatives(factory_id, limit=5000))
 
 
 # ── Reading any spelling ───────────────────────────────────────
