@@ -20,6 +20,7 @@ import { ShareDialog } from "@/components/factory/people/ShareDialog";
 import { RoomDrawer, mentionCount } from "@/components/factory/room/RoomDock";
 import { useRoomThreads } from "@/components/factory/room/roomQueries";
 import { Peek } from "@/components/factory/ui/Peek";
+import { FactoryToastProvider } from "@/components/factory/ui/Toast";
 import { PAGE_PALETTE_ATTRIBUTE } from "@/hooks/useCommandPaletteHotkey";
 import {
   mentionNotices,
@@ -171,7 +172,8 @@ export function CockpitShell({
           data-testid="factory-page-body"
           className="min-w-0 pt-1 outline-none"
         >
-          {children}
+          {/* The cockpit toast (Undo after Apply) outlives the page that showed it. */}
+          <FactoryToastProvider>{children}</FactoryToastProvider>
         </main>
       </div>
       <RoomDrawer

@@ -37,7 +37,7 @@ import { RoomPage } from "./RoomPage";
 import { SettingsPage } from "./SettingsPage";
 import { SteerPage } from "./SteerPage";
 import { TimelinePage } from "./TimelinePage";
-import { AgentRoute, TeamsRoute } from "./cockpitV2Routes";
+import { AgentRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
 function ActivityPage() {
@@ -82,6 +82,7 @@ export function FactoryPage() {
         <Route index element={<OverviewPage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:slug" element={<ProjectPage />} />
+        <Route path="projects/:slug/team" element={<ProjectTeamRoute />} />
         <Route path="prs/:prId" element={<PrPage />} />
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:sid" element={<AgentRoute />} />

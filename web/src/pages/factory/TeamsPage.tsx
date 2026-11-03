@@ -43,6 +43,7 @@ import {
   teamsPageHref,
 } from "@/components/factory/factoryRoutes";
 import { EmptyState } from "@/components/factory/project/projectParts";
+import { teamEditorHref } from "@/components/factory/team/teamStaging";
 import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { Peek } from "@/components/factory/ui/Peek";
@@ -182,7 +183,19 @@ function TeamCard({
         ))}
       </div>
       <footer className="mt-auto flex items-center gap-2 border-t border-border px-4 py-2 text-xs text-muted-foreground">
-        <span className="grow">Editing a team comes with team specs.</span>
+        <span className="grow">
+          {team.project?.team_spec && team.project.status !== "cancelled" ? (
+            <Link
+              to={teamEditorHref(factoryId, team.slug)}
+              componentId="factory.teams.edit_team"
+              className="font-medium text-foreground underline-offset-2 hover:underline"
+            >
+              Edit team
+            </Link>
+          ) : (
+            "Editing a team needs its team spec."
+          )}
+        </span>
         <span>
           {team.members.length} {team.members.length === 1 ? "member" : "members"}
           {team.earlier
