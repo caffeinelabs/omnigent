@@ -68,7 +68,7 @@ function stateChip(state: string, held: boolean) {
     case "trial":
       return { text: "on trial", cls: cn(MEANING.selected.surface, MEANING.selected.text) };
     default:
-      return { text: "paused", cls: "bg-muted text-muted-foreground" };
+      return { text: "paused", cls: "bg-muted text-foreground/80" };
   }
 }
 

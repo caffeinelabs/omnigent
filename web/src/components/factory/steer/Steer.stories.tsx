@@ -7,12 +7,15 @@ import { homeRoutes } from "../home/__fixtures__/homeFixtures";
 import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { teamCatalog } from "../team/__fixtures__/teamFixtures";
 import {
+  SAMPLE_SOURCES,
+  STEER_VERSION,
   type SteerRouteOptions,
   goalSuggestion,
   previewFocus,
   previewOperator,
   previewRestore,
   previewRubric,
+  previewStale,
   previewWith,
   steerDefinition,
   steerProposals,
@@ -26,8 +29,10 @@ import {
   replaceEdit,
   stageEdit,
   stageProposal,
+  stageRemoveItem,
   stageRestore,
   trialRule,
+  withBase,
 } from "./steerModel";
 import { resetSteerStaging, writeSteerStaging } from "./steerStaging";
 
@@ -36,8 +41,10 @@ import { resetSteerStaging, writeSteerStaging } from "./steerStaging";
 // a change staged, the rubric with a running trial (its field locked, a
 // second trial refused), sources with one waiting for an owner, the add-source
 // sheet's four steps, Scout's brief diff from an agent's proposal, versions
-// with an undone one and a staged restore, an operator's change that waits
-// for an owner, a viewer, discovery off, and a 390 px phone.
+// with an undone one and a staged restore, Undo of the version in force, a
+// change staged on a version no longer in force, an operator's change that
+// waits for an owner, a viewer, discovery off, empty sections, light, and a
+// 390 px phone. A story's staging is staged on v12 unless it says otherwise.
 
 interface SteerStoryOptions extends SteerRouteOptions {
   role?: ViewerRole;
@@ -86,7 +93,9 @@ function steer(path: string, options: SteerStoryOptions = {}): Story {
   return {
     beforeEach: () => {
       resetSteerStaging();
-      if (options.staging) writeSteerStaging(fid, options.staging());
+      if (options.staging) {
+        writeSteerStaging(fid, withBase(options.staging(), STEER_VERSION));
+      }
       return () => resetSteerStaging();
     },
     render: () => (
@@ -109,6 +118,8 @@ function steer(path: string, options: SteerStoryOptions = {}): Story {
 function phone(story: Story): Story {
   return { ...story, globals: { viewport: { value: "mobile2" } } };
 }
+
+const light: SteerStoryOptions = { frame: { theme: "light" } };
 
 const doc = () => steerDefinition().effective;
 const focusStaged = () =>
@@ -165,6 +176,13 @@ export const OverviewStarterStaged = steer("/steer/overview", {
 
 export const Strategy = steer("/steer/strategy");
 
+/** Staged on v12, but v13 (someone else's) came into force since: Apply waits for Rebase. */
+export const StrategyStagedOnOlderVersion = steer("/steer/strategy", {
+  moved: true,
+  staging: focusStaged,
+  preview: previewStale(),
+});
+
 /** J7: "Active builders" toggled into focus, with the re-rank before Apply. */
 export const StrategyFocusStaged = steer("/steer/strategy", {
   staging: focusStaged,
@@ -219,9 +237,25 @@ export const Sources = steer("/steer/sources");
 
 export const SourcesMobile = phone(steer("/steer/sources"));
 
-function addSource(steps: number): Story {
+/** Discovery runs, but no source is connected yet. */
+export const SourcesEmpty = steer("/steer/sources", { noSources: true, proposals: [] });
+
+/** Removing the forum staged. */
+export const SourcesStaged = steer("/steer/sources", {
+  staging: () =>
+    stageRemoveItem(
+      EMPTY_STEER,
+      "sources",
+      "discovery.sources",
+      "forum",
+      "Source: Public community forum (sample)",
+      SAMPLE_SOURCES[0],
+    ),
+});
+
+function addSource(steps: number, options: SteerStoryOptions = {}): Story {
   return {
-    ...steer("/steer/sources"),
+    ...steer("/steer/sources", options),
     play: async ({ canvasElement }) => {
       const body = within(canvasElement.ownerDocument.body);
       await userEvent.click(await body.findByTestId("steer-add-source-open"));
@@ -238,6 +272,7 @@ export const AddSourceStep1 = addSource(1);
 export const AddSourceStep2 = addSource(2);
 export const AddSourceStep3 = addSource(3);
 export const AddSourceStep4 = addSource(4);
+export const AddSourceStep4Light = addSource(4, light);
 
 // ── Rubric ─────────────────────────────────────────────────────
 
@@ -247,6 +282,12 @@ export const RubricTrial = steer("/steer/rubric", {
   preview: previewRubric(),
 });
 
+export const RubricTrialLight = steer("/steer/rubric", {
+  staging: rubricStaged,
+  preview: previewRubric(),
+  ...light,
+});
+
 export const RubricTrialMobile = phone(
   steer("/steer/rubric", { staging: rubricStaged, preview: previewRubric() }),
 );
@@ -254,6 +295,15 @@ export const RubricTrialMobile = phone(
 // ── Roles and briefs ───────────────────────────────────────────
 
 export const RolesBuilder = steer("/steer/roles?role=ic");
+
+/** A factory that never set a brief or a rule, on a server without team specs. */
+export const RolesEmpty = steer("/steer/roles?role=ic", {
+  bare: true,
+  noCatalog: true,
+  discovery: false,
+  noTrial: true,
+  proposals: [],
+});
 
 /** Sentinel's C-35 staged: Scout's brief, before → after. */
 export const RolesScoutBriefDiff = steer("/steer/roles?role=scout", {
@@ -306,6 +356,21 @@ export const BudgetsStaged = steer("/steer/budgets", {
     ),
 });
 
+export const BudgetsStagedLight = steer("/steer/budgets", {
+  ...light,
+  staging: () =>
+    stageEdit(
+      EMPTY_STEER,
+      replaceEdit(
+        "budgets",
+        "budgets.factory_usd_per_day",
+        "Factory per day",
+        (doc().budgets as { factory_usd_per_day: number }).factory_usd_per_day,
+        300,
+      ),
+    ),
+});
+
 /** An operator's raise waits for an owner: Propose to owners. */
 export const BudgetsOperator = steer("/steer/budgets", {
   role: "operator",
@@ -343,12 +408,32 @@ export const AlertsAndRulesStaged = steer("/steer/alerts", {
     ),
 });
 
+/** No rules yet. */
+export const AlertsEmpty = steer("/steer/alerts", { bare: true });
+
 export const Cadence = steer("/steer/cadence");
+
+export const CadenceStaged = steer("/steer/cadence", {
+  staging: () =>
+    stageEdit(
+      EMPTY_STEER,
+      replaceEdit(
+        "cadence",
+        "previews.max",
+        "Live previews",
+        (doc().previews as { max?: number } | undefined)?.max ?? null,
+        2,
+      ),
+    ),
+});
 
 // ── Versions ───────────────────────────────────────────────────
 
 /** v11 undone, v10 restored v8, C-33 on trial. */
 export const Versions = steer("/steer/versions");
+
+/** v13, applied by the viewer two minutes ago: Undo stays for 10 minutes, here and in the column. */
+export const VersionsUndo = steer("/steer/versions", { undoable: true });
 
 /** Restore v10 staged: its diff, and the trial it ends. */
 export const VersionsRestoreStaged = steer("/steer/versions", {

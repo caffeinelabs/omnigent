@@ -5,8 +5,10 @@
  * strategy and rubric changes; what else it does; who can change it; whether
  * it may run as a trial and why not; then Discard and Apply (Apply as a trial
  * where a trial makes sense; Propose to the owners when only they apply it).
- * Apply creates one version, says so in the toast, and offers Undo (it pins
- * the version before for 10 minutes). Under it: agents' proposals and the
+ * Apply sends the version it was staged on, so it never overwrites a version
+ * applied since (the column says so and offers Rebase). Apply creates one
+ * version, says so in the toast, and offers Undo (it pins the version before
+ * for 10 minutes, here and in Versions). Under it: agents' proposals and the
  * trials running now.
  */
 
@@ -15,6 +17,7 @@ import { forwardRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  type DefinitionPreviewEntry,
   type DefinitionPreviewResponse,
   FactoryApiError,
   type ProposalView,
@@ -37,6 +40,7 @@ import {
   EMPTY_STEER,
   type StagedEdit,
   type TrialRule,
+  dotted,
   movesRank,
   proposalIntact,
   rerankRows,
@@ -46,14 +50,29 @@ import {
   trialRule,
 } from "./steerModel";
 import { useRestoreDefinition } from "./steerQueries";
+import { UndoLatestButton, useUndoLatest } from "./UndoLatest";
+import { CompareDialog } from "./Versions";
 import { WhoCanChange } from "./WhoCanChange";
 
 interface Preview {
   data: DefinitionPreviewResponse | undefined;
   error: Error | null;
   isFetching: boolean;
+  /** The last staging's answer, shown while this one's loads. */
+  isPlaceholderData: boolean;
   settled: boolean;
   refetch: () => unknown;
+}
+
+/** The value in force the preview's diff states for an edit (it may be newer than at staging). */
+export function inForceBefore(
+  diff: readonly DefinitionPreviewEntry[] | undefined,
+  edit: StagedEdit,
+): unknown {
+  if (!diff || edit.change.op === "add") return edit.before;
+  const path = dotted(edit.change.path);
+  const entry = diff.find((d) => d.path === path);
+  return entry ? (entry.before ?? null) : edit.before;
 }
 
 /** The trial rule the column states: the server's once it answers, else the client's. */
@@ -87,7 +106,15 @@ export function columnTrialRule(
   return { ...fallback, ok: false, code: verdict.code ?? fallback.code };
 }
 
-function EditRow({ edit, names }: { edit: StagedEdit; names: ReadonlyMap<string, string> }) {
+function EditRow({
+  edit,
+  before,
+  names,
+}: {
+  edit: StagedEdit;
+  before: unknown;
+  names: ReadonlyMap<string, string>;
+}) {
   const steer = useSteer();
   const op = edit.change.op;
   return (
@@ -113,7 +140,7 @@ function EditRow({ edit, names }: { edit: StagedEdit; names: ReadonlyMap<string,
         </button>
       )}
       <span className="text-sm font-medium">{edit.label}</span>
-      <span className="font-mono text-xs break-all text-muted-foreground">
+      <span className="font-mono text-xs break-all text-foreground/75">
         {op === "add"
           ? `+ ${edit.change.path}`
           : op === "remove"
@@ -124,10 +151,10 @@ function EditRow({ edit, names }: { edit: StagedEdit; names: ReadonlyMap<string,
         {op === "add" ? (
           <ins className="no-underline">{showValue(edit.after, names)}</ins>
         ) : op === "remove" ? (
-          <s className="text-muted-foreground">{showValue(edit.before, names)}</s>
+          <s className="text-foreground/75">{showValue(before, names)}</s>
         ) : (
           <>
-            <s className="text-muted-foreground">{showValue(edit.before, names)}</s> →{" "}
+            <s className="text-foreground/75">{showValue(before, names)}</s> →{" "}
             <ins className="font-semibold no-underline">{showValue(edit.after, names)}</ins>
           </>
         )}
@@ -145,29 +172,41 @@ function StagedCard({ preview }: { preview: Preview }) {
   const restore = useRestoreDefinition(steer.factoryId);
   const answer = useAnswerProposal(steer.factoryId);
   const propose = useProposeChange(steer.factoryId);
+  const latest = useUndoLatest();
   const [rationale, setRationale] = useState("");
   const [proposing, setProposing] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const { staging, definition } = steer;
+  const { staging, definition, stale } = steer;
   const version = definition.def_version;
+  // The version this was staged on: Apply sends it, so a version applied since is never overwritten.
+  const base = staging.base ?? version;
   const next = preview.data?.version_next ?? version + 1;
+  // The answer for what is staged now (not the last staging's, kept on screen while this one loads).
+  const fresh = preview.settled && !preview.isPlaceholderData ? preview.data : undefined;
   const changes = stagedChanges(staging);
-  const paths = preview.data?.diff.map((d) => d.path) ?? changes.map((c) => c.path);
+  const paths = fresh?.diff.map((d) => d.path) ?? changes.map((c) => c.path);
   const fallback = trialRule(paths, definition, { restore: staging.restore, nowS: steer.nowS });
-  const rule = columnTrialRule(preview.settled ? preview.data : undefined, fallback);
+  const rule = columnTrialRule(fresh, fallback);
   const names = segmentNames(steer.effective.product?.segments);
   const intact = proposalIntact(staging);
   const busy = edit.isPending || restore.isPending || answer.isPending || propose.isPending;
-  const blocked = preview.settled ? (preview.data?.blocked ?? []) : [];
-  // Until the preview answers nobody knows the class; only a failed preview falls back to the role.
-  const waiting = !preview.data && !preview.error;
-  const canApply = preview.data
-    ? preview.settled && preview.data.you_can_apply && blocked.length === 0
-    : steer.owner && !waiting;
-  const canPropose = !steer.owner && !waiting && (preview.data?.you_can_propose ?? steer.canEdit);
-  const effects = (preview.settled ? (preview.data?.effects ?? []) : []).filter(
-    (e) => e.kind !== "restore",
-  );
+  // The stale line below says it in words; the server's row would repeat it.
+  const blocked = (fresh?.blocked ?? []).filter((b) => !(stale && b.code === "stale_definition"));
+  const showRerank = staging.restore == null && movesRank(paths);
+  // Until the preview answers nobody knows the class; only a failed preview falls back to the
+  // role, and never for a scoring change, which applies only with its re-rank shown.
+  const waiting = !fresh && !preview.error;
+  const canApply =
+    !stale &&
+    (fresh
+      ? fresh.you_can_apply && fresh.blocked.length === 0
+      : steer.owner && !waiting && !showRerank);
+  const canPropose =
+    !steer.owner && !waiting && !stale && (fresh?.you_can_propose ?? steer.canEdit);
+  // An agent's proposal staged as it stands already waits for an owner: no second ask.
+  const proposalWaits = intact && staging.proposal != null && !waiting && !canApply;
+  const effects = (fresh?.effects ?? []).filter((e) => e.kind !== "restore");
 
   const clear = () => steer.setStaging(EMPTY_STEER);
   const undo = (to: number, from: number | null) =>
@@ -191,7 +230,7 @@ function StagedCard({ preview }: { preview: Preview }) {
     setFailure(null);
     try {
       if (staging.restore != null) {
-        const res = await restore.mutateAsync({ version: staging.restore, base_version: version });
+        const res = await restore.mutateAsync({ version: staging.restore, base_version: base });
         clear();
         toast.show({
           message: `Restored v${res.restored} as definition v${res.def_version}.`,
@@ -211,7 +250,7 @@ function StagedCard({ preview }: { preview: Preview }) {
       }
       const res = await edit.mutateAsync({
         changes,
-        base_version: version,
+        base_version: base,
         ...(staging.proposal
           ? { note: `Based on ${staging.proposal.ref} (${staging.proposal.by})` }
           : {}),
@@ -259,11 +298,21 @@ function StagedCard({ preview }: { preview: Preview }) {
             ? "Nothing staged. Edit anything in the middle column: it turns violet here first, with its effect, who must approve and, for scoring changes, how the opportunities re-rank."
             : "You can look, not change. Ask an operator or an owner to change this."}
         </p>
+        {latest.row && (
+          <p
+            data-testid="steer-undo-line"
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"
+          >
+            <span className="min-w-0 flex-1">
+              v{latest.row.version} is in force; undo it to put v{latest.row.parent} back.
+            </span>
+            <UndoLatestButton latest={latest} testId="steer-undo-column" />
+          </p>
+        )}
       </section>
     );
   }
 
-  const showRerank = staging.restore == null && movesRank(paths);
   return (
     <section
       data-testid="steer-staged"
@@ -338,9 +387,61 @@ function StagedCard({ preview }: { preview: Preview }) {
       ) : (
         <ul className="flex min-w-0 flex-col gap-1.5">
           {staging.edits.map((e) => (
-            <EditRow key={e.key} edit={e} names={names} />
+            <EditRow key={e.key} edit={e} before={inForceBefore(fresh?.diff, e)} names={names} />
           ))}
         </ul>
+      )}
+      {stale && (
+        <div
+          data-testid="steer-stale"
+          role="status"
+          className={cn(
+            "flex min-w-0 flex-col gap-2 rounded-lg border p-2.5 text-sm",
+            MEANING.needsYou.border,
+            MEANING.needsYou.surface,
+          )}
+        >
+          <p className="flex items-start gap-1.5">
+            <AlertTriangleIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+            <span className="min-w-0">
+              v{version} came into force since you staged this on v{base}. Rebase to stage it on v
+              {version}: the values before are read again, and edits v{version} already made drop.
+            </span>
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => setReviewing(true)}
+              data-testid="steer-stale-review"
+              componentId="factory.steer.stale_review"
+            >
+              Review
+            </Button>
+            {steer.canEdit && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  setFailure(null);
+                  steer.rebase();
+                }}
+                data-testid="steer-rebase"
+                componentId="factory.steer.rebase"
+              >
+                Rebase on v{version}
+              </Button>
+            )}
+          </div>
+          <CompareDialog
+            from={reviewing ? base : null}
+            to={version}
+            onClose={() => setReviewing(false)}
+            title={`What changed since v${base}`}
+            description={`What v${version}, in force now, changed from v${base}, the version you staged on.`}
+            testId="steer-stale-compare"
+          />
+        </div>
       )}
       {blocked.length > 0 && (
         <ul
@@ -382,7 +483,7 @@ function StagedCard({ preview }: { preview: Preview }) {
           ))}
         </ul>
       )}
-      <WhoCanChange preview={preview.data} owner={steer.owner} version={version} />
+      <WhoCanChange preview={fresh} owner={steer.owner} version={version} />
       {rule.code !== "no_change" && (
         <p
           data-testid="steer-trial-rule"
@@ -399,8 +500,9 @@ function StagedCard({ preview }: { preview: Preview }) {
         </p>
       )}
       {preview.error && (
-        <p className="text-sm text-muted-foreground">
-          The preview did not answer ({preview.error.message}).{" "}
+        <p data-testid="steer-preview-error" className="text-sm text-muted-foreground">
+          The preview did not answer ({preview.error.message}).
+          {showRerank && !fresh && " A scoring change applies only with its re-rank shown."}{" "}
           <button
             type="button"
             onClick={() => void preview.refetch()}
@@ -416,7 +518,26 @@ function StagedCard({ preview }: { preview: Preview }) {
         </p>
       )}
       {steer.canEdit &&
-        (canPropose && !canApply ? (
+        (proposalWaits && !steer.owner ? (
+          <div className="flex flex-col gap-2">
+            <p data-testid="steer-proposal-waits" className="text-sm">
+              {staging.proposal!.ref} already waits for an owner; an owner applies or rejects it.
+              Change what is staged to propose your own version.
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={clear}
+                disabled={busy}
+                data-testid="steer-discard"
+                componentId="factory.steer.discard"
+              >
+                Discard
+              </Button>
+            </div>
+          </div>
+        ) : canPropose && !canApply ? (
           proposing ? (
             <div className="flex flex-col gap-2">
               <label htmlFor="steer-rationale" className="text-sm">
@@ -487,7 +608,7 @@ function StagedCard({ preview }: { preview: Preview }) {
               Discard
             </Button>
             <span className="flex-1" />
-            {rule.ok && !intact && staging.restore == null && (
+            {fresh && rule.ok && !intact && staging.restore == null && (
               <Button
                 size="sm"
                 variant="outline"

@@ -55,6 +55,9 @@ export const STEER_GROUPS: readonly { title: string; sections: readonly SteerSec
 /** Sections that only mean something while discovery runs (Strategy and Product stay). */
 export const DISCOVERY_SECTIONS: ReadonlySet<SteerSection> = new Set(["sources", "rubric"]);
 
+/** Roles shown in Roles and briefs only while discovery runs. */
+export const DISCOVERY_ROLES: ReadonlySet<string> = new Set(["scout"]);
+
 /** The sections shown: discovery's hide while it is off. */
 export function visibleSections(discoveryOn: boolean): SteerSection[] {
   return STEER_SECTIONS.filter((s) => discoveryOn || !DISCOVERY_SECTIONS.has(s));
@@ -233,9 +236,55 @@ export interface SteerStaging {
   edits: StagedEdit[];
   restore: number | null;
   proposal: StagedProposal | null;
+  /** The version in force when the first edit (or the restore) was staged; Apply sends it. */
+  base: number | null;
 }
 
-export const EMPTY_STEER: SteerStaging = { edits: [], restore: null, proposal: null };
+export const EMPTY_STEER: SteerStaging = { edits: [], restore: null, proposal: null, base: null };
+
+/** Whether nothing is staged. */
+export function stagingEmpty(staging: SteerStaging): boolean {
+  return staging.edits.length === 0 && staging.restore == null;
+}
+
+/**
+ * `staging` with its base: an empty staging resets to nothing, and the first
+ * thing staged records `version`, the version in force, so Apply cannot
+ * overwrite a version applied since.
+ */
+export function withBase(staging: SteerStaging, version: number): SteerStaging {
+  if (stagingEmpty(staging)) return EMPTY_STEER;
+  return staging.base == null ? { ...staging, base: version } : staging;
+}
+
+/** Whether another version came into force since `staging` was staged. */
+export function isStale(staging: SteerStaging, version: number): boolean {
+  return !stagingEmpty(staging) && staging.base != null && staging.base !== version;
+}
+
+/**
+ * Stage again on the version in force: each edit's "before" is read anew, an
+ * edit that now equals the value in force (or removes an item already gone)
+ * drops, and the base moves to `version`.
+ */
+export function rebaseStaging(
+  staging: SteerStaging,
+  effective: DefinitionDoc,
+  version: number,
+): SteerStaging {
+  if (staging.restore != null) return { ...staging, base: version };
+  const edits: StagedEdit[] = [];
+  for (const edit of staging.edits) {
+    if (edit.change.op === "add") {
+      edits.push(edit);
+      continue;
+    }
+    const now = valueAt(effective, edit.change.path) ?? null;
+    if (edit.change.op === "remove" ? now == null : same(now, edit.after)) continue;
+    edits.push({ ...edit, before: now });
+  }
+  return withBase({ ...staging, edits, base: version }, version);
+}
 
 function signature(edits: readonly StagedEdit[]): string {
   return JSON.stringify(edits.map((e) => e.change));
@@ -283,7 +332,7 @@ export function dropEdit(staging: SteerStaging, key: string): SteerStaging {
 
 /** Stage a restore of version `version` (it replaces whatever was staged). */
 export function stageRestore(version: number): SteerStaging {
-  return { edits: [], restore: version, proposal: null };
+  return { edits: [], restore: version, proposal: null, base: null };
 }
 
 /** The `changes[]` of `PUT …/definition` for what is staged, in staging order. */
@@ -949,6 +998,10 @@ export interface VersionRow {
   undone: string | null;
   restoredFrom: number | null;
   pinned: boolean;
+  /** Who made it (their id: an email, or an agent's session). */
+  createdBy: string;
+  /** The version it was made from (its Undo pins this one). */
+  parent: number | null;
 }
 
 const VIA: Record<DefinitionView["created_via"], string> = {
@@ -992,9 +1045,32 @@ export function versionRows(
         undone: v.undone_by ? shortName(v.undone_by) : null,
         restoredFrom: v.restored_from ?? null,
         pinned: v.pinned,
+        createdBy: v.created_by,
+        parent: v.parent_version,
       };
     });
 }
 
 /** Undo after Apply works this long (seconds): it re-pins the version before. */
 export const UNDO_WINDOW_S = 600;
+
+/**
+ * Seconds left to undo `row` (re-pin its parent), or null: it is the version
+ * in force, not undone, made from another version within the window, and the
+ * viewer is an owner or made it themselves (the server's rule for Undo).
+ */
+export function undoLeft(
+  row: VersionRow | null | undefined,
+  nowS: number,
+  viewer: { userId: string | null | undefined; owner: boolean },
+): number | null {
+  if (!row || !row.pinned || row.undone || row.parent == null) return null;
+  if (!viewer.owner && (!viewer.userId || row.createdBy !== viewer.userId)) return null;
+  const left = row.at + UNDO_WINDOW_S - nowS;
+  return left > 0 ? left : null;
+}
+
+/** "Undo (8 min left)". */
+export function undoLabel(left: number): string {
+  return `Undo (${Math.max(1, Math.ceil(left / 60))} min left)`;
+}

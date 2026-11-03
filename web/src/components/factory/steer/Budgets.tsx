@@ -2,8 +2,8 @@
  * Steer › Budgets and autonomy: money (per project, per day, the spend
  * alert), the loops' attempts and rounds, discovery's budget while it runs,
  * and who decides what (project proposals, bets from opportunities, the
- * engine's mode). Raising a budget is an owner change; lowering one narrows
- * what agents may spend, so editors apply it too. Every field stages.
+ * engine's mode). Owners apply budget changes; editors propose them, and the
+ * change column's preview says which. Every field stages.
  */
 
 import { SectionCard } from "../project/projectParts";
@@ -23,8 +23,8 @@ export function Budgets() {
   return (
     <div data-testid="steer-budgets" className="flex min-w-0 flex-col gap-4">
       <p className="text-sm text-muted-foreground">
-        Raising a budget is an owner change; lowering one applies for anyone who may edit. Every
-        change is one version you can undo.
+        Owners apply budget changes; editors propose them, and the preview says which. Every change
+        is one version you can undo.
       </p>
       <FieldGroups section="budgets" groups={BUDGET_GROUPS} testId="steer-budget-fields" />
       {steer.discoveryOn && (

@@ -1,10 +1,11 @@
 /**
  * Steer › Versions and trials: every definition version (who, the change
  * that made it, when, its class, whether it ran as a trial, whether it was
- * undone or restores an older one), newest first. Compare shows a version
- * against the one in force; Restore stages that version as the next one, with
- * its diff in the change column (applying creates a version you can undo).
- * Then the agent bundles members run, and "Ask Sentinel for a retro now".
+ * undone or restores an older one), newest first. The version in force offers
+ * Undo for 10 minutes after it was made. Compare shows a version against the
+ * one in force; Restore stages that version as the next one, with its diff in
+ * the change column (applying creates a version you can undo). Then the agent
+ * bundles members run, and "Ask Sentinel for a retro now".
  */
 
 import { HistoryIcon, RotateCcwIcon } from "lucide-react";
@@ -29,27 +30,33 @@ import { useFactoryToast } from "../ui/Toast";
 import { useSteer } from "./SteerContext";
 import { STAGED_CONTROL } from "./steerFields";
 import { stageRestore, stagedCount, versionRows } from "./steerModel";
+import { UndoLatestButton, useUndoLatest } from "./UndoLatest";
 
-function CompareDialog({
+/** Two versions' differences, in the server's words. */
+export function CompareDialog({
   from,
   to,
   onClose,
+  title,
+  description,
+  testId = "steer-compare",
 }: {
   from: number | null;
   to: number;
   onClose: () => void;
+  title?: string;
+  description?: string;
+  testId?: string;
 }) {
   const steer = useSteer();
   const diff = useDefinitionDiff(steer.factoryId, from, to);
   return (
     <Dialog open={from != null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-xl" data-testid="steer-compare">
+      <DialogContent className="sm:max-w-xl" data-testid={testId}>
         <DialogHeader>
-          <DialogTitle>
-            v{from} against v{to} (in force)
-          </DialogTitle>
+          <DialogTitle>{title ?? `v${from} against v${to} (in force)`}</DialogTitle>
           <DialogDescription>
-            What restoring v{from} would change in the version in force.
+            {description ?? `What restoring v${from} would change in the version in force.`}
           </DialogDescription>
         </DialogHeader>
         {diff.isLoading ? (
@@ -82,6 +89,7 @@ export function Versions({
   const steer = useSteer();
   const toast = useFactoryToast();
   const retro = useRequestRetro(steer.factoryId);
+  const latest = useUndoLatest();
   const [compare, setCompare] = useState<number | null>(null);
   const rows = versionRows(versions ?? [], proposals ?? []);
   const pinned = rows.find((r) => r.pinned)?.version ?? steer.definition.def_version;
@@ -156,7 +164,10 @@ export function Versions({
                     </span>
                   </span>
                   {v.pinned ? (
-                    <span className="rounded-md bg-muted px-1.5 text-xs leading-5">in force</span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {latest.row?.version === v.version && <UndoLatestButton latest={latest} />}
+                      <span className="rounded-md bg-muted px-1.5 text-xs leading-5">in force</span>
+                    </span>
                   ) : (
                     <span className="flex shrink-0 items-center gap-1">
                       <Button

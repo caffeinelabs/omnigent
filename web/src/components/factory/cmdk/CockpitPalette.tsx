@@ -232,7 +232,7 @@ function PaletteBody({
     },
   };
 
-  const places = useMemo(() => placeItems(fid), [fid]);
+  const places = useMemo(() => placeItems(fid, { discoveryOn }), [fid, discoveryOn]);
   const sections: PaletteSection<PaletteVerb>[] = (() => {
     if (slash) return [];
     if (!typed) {

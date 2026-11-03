@@ -97,7 +97,12 @@ export function SteerOutline({
                   )}
                   {isStaged && <StagedChip className={count > 0 ? "" : "ml-auto"} />}
                 </span>
-                <span className="truncate text-xs font-normal text-muted-foreground max-md:hidden">
+                <span
+                  className={cn(
+                    "truncate text-xs font-normal max-md:hidden",
+                    on ? "text-foreground/80" : "text-muted-foreground",
+                  )}
+                >
                   {values[section] ?? SECTION_INFO[section].hint}
                 </span>
               </Link>

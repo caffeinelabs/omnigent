@@ -127,8 +127,10 @@ function GoalCard({ goal }: { goal: GoalDef & { staged?: "added" | "changed" | "
           help={
             goal.metric ? undefined : (
               <span>
-                <span className="rounded bg-muted px-1 font-medium">not measured yet</span> No
-                source can measure it yet; opportunities still rank against the goal.
+                <span className="rounded bg-muted px-1 font-medium text-foreground">
+                  not measured yet
+                </span>{" "}
+                No source can measure it yet; opportunities still rank against the goal.
               </span>
             )
           }

@@ -5,7 +5,7 @@
  * anything themselves: they stage, and the change column applies.
  */
 
-import { type ReactNode, createContext, useContext, useMemo } from "react";
+import { type ReactNode, createContext, useCallback, useContext, useMemo } from "react";
 import type { DefinitionDoc, DefinitionResponse, FactorySnapshot } from "@/lib/factoryApi";
 import type { SteerSection } from "../factoryRoutes";
 import {
@@ -13,7 +13,9 @@ import {
   type SteerStaging,
   addItemEdit,
   dropEdit,
+  isStale,
   lockedBy,
+  rebaseStaging,
   replaceEdit,
   stageEdit,
   stageRemoveItem,
@@ -21,6 +23,7 @@ import {
   stagedValue,
   trialLocks,
   valueAt,
+  withBase,
 } from "./steerModel";
 import { useSteerStaging } from "./steerStaging";
 
@@ -31,7 +34,12 @@ export interface SteerApi {
   definition: DefinitionResponse;
   effective: DefinitionDoc;
   staging: SteerStaging;
+  /** Replace what is staged; the first thing staged records the version in force as its base. */
   setStaging: (next: SteerStaging | ((prev: SteerStaging) => SteerStaging)) => void;
+  /** Another version came into force since this was staged (Apply would be refused). */
+  stale: boolean;
+  /** Stage it again on the version in force (befores read anew, no-op edits dropped). */
+  rebase: () => void;
   /** The viewer may stage changes (operators and owners). */
   canEdit: boolean;
   /** The viewer is an owner (applies class B). */
@@ -95,8 +103,14 @@ export function SteerProvider({
   children: ReactNode;
 }) {
   const factoryId = snapshot.factory.id;
-  const [staging, setStaging] = useSteerStaging(factoryId);
+  const [staging, setStored] = useSteerStaging(factoryId);
   const effective = definition.effective;
+  const version = definition.def_version;
+  const setStaging = useCallback(
+    (next: SteerStaging | ((prev: SteerStaging) => SteerStaging)) =>
+      setStored((prev) => withBase(typeof next === "function" ? next(prev) : next, version)),
+    [setStored, version],
+  );
   const locks = useMemo(() => trialLocks(definition.on_trial ?? []), [definition.on_trial]);
   const api = useMemo<SteerApi>(() => {
     const frozen =
@@ -115,6 +129,8 @@ export function SteerProvider({
       effective,
       staging,
       setStaging,
+      stale: isStale(staging, version),
+      rebase: () => guard((prev) => rebaseStaging(prev, effective, version)),
       canEdit,
       owner,
       frozen,
@@ -156,6 +172,7 @@ export function SteerProvider({
     effective,
     staging,
     setStaging,
+    version,
     canEdit,
     owner,
     discoveryOn,

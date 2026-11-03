@@ -40,9 +40,11 @@ import {
 } from "../settings/settingsModel";
 import {
   CADENCE_GROUPS,
+  DISCOVERY_ROLES,
   DISCOVERY_SECTIONS,
   SECTION_INFO,
   sectionOfPath,
+  visibleSections,
 } from "../steer/steerModel";
 
 export type JumpKind = "page" | "project" | "pr" | "task" | "decision" | "agent";
@@ -534,10 +536,11 @@ export function hitItems(
     if (!group || (!discoveryOn && DISCOVERY_GROUPS.has(group))) continue;
     const target = hitTarget(factoryId, hit, { discoveryOn });
     if (!target) continue;
-    // Discovery's Steer sections hide while it is off.
+    // Discovery's Steer sections and roles (Scout) hide while it is off.
     if (hit.kind === "setting" && !discoveryOn) {
       const found = settingTarget(hit.path ?? hit.ref ?? "");
       if (found && DISCOVERY_SECTIONS.has(found.section)) continue;
+      if (found?.params?.role && DISCOVERY_ROLES.has(found.params.role)) continue;
     }
     let { title, detail } = hit;
     if (hit.kind === "setting") {
@@ -575,8 +578,14 @@ const DEBUG_VIEW_LABEL: Partial<Record<DebugView, string>> = {
   insights: "Insights",
 };
 
-/** The five places, Teams' tabs, Steer's sections, personal settings and Debug's views. */
-export function placeItems(factoryId: string): PaletteItem[] {
+/**
+ * The five places, Teams' tabs, Steer's sections (discovery's only while it
+ * runs), personal settings and Debug's views.
+ */
+export function placeItems(
+  factoryId: string,
+  { discoveryOn = true }: { discoveryOn?: boolean } = {},
+): PaletteItem[] {
   const page = (
     key: string,
     group: PaletteGroup,
@@ -623,7 +632,7 @@ export function placeItems(factoryId: string): PaletteItem[] {
       "Teams",
     ),
     page("steer", "places", "page", "Steer", steerPageHref(factoryId), ["definition", "change"]),
-    ...STEER_SECTIONS.map((section) =>
+    ...visibleSections(discoveryOn).map((section) =>
       page(
         `steer:${section}`,
         "settings",

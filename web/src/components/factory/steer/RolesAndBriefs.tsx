@@ -303,7 +303,12 @@ export function RolesAndBriefs() {
               <MemberAvatar size={24} role={e.role} seat={e.seat} state="idle" label={e.label} />
               <span className="flex min-w-0 flex-col">
                 <span className="text-foreground">{e.label}</span>
-                <span className="truncate text-xs font-normal text-muted-foreground max-lg:hidden">
+                <span
+                  className={cn(
+                    "truncate text-xs font-normal max-lg:hidden",
+                    on ? "text-foreground/80" : "text-muted-foreground",
+                  )}
+                >
                   {e.does}
                 </span>
               </span>

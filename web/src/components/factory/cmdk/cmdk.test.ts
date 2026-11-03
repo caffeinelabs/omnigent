@@ -284,6 +284,25 @@ describe("hitItems", () => {
     expect(hitItems(TFID, [rubric], { discoveryOn: true })[0]?.target).toEqual({
       href: `/factory/${TFID}/steer/rubric`,
     });
+    // Scout's settings open Scout in Roles and briefs, which hides while discovery is off.
+    const scout = ["briefs.scout", "discovery.seat.model", "discovery.cadence.sweep_h"].map((p) =>
+      hit("setting", p, "x", { path: p }),
+    );
+    expect(hitItems(TFID, scout, { discoveryOn: false })).toHaveLength(0);
+    expect(hitItems(TFID, scout, { discoveryOn: true }).map((i) => i.target)).toEqual(
+      scout.map(() => ({ href: `/factory/${TFID}/steer/roles?role=scout` })),
+    );
+  });
+
+  it("lists Steer's discovery sections as places only while discovery runs", () => {
+    const steer = (on: boolean) =>
+      placeItems(TFID, { discoveryOn: on })
+        .filter((i) => i.key.startsWith("page:steer:"))
+        .map((i) => i.key.slice("page:steer:".length));
+    expect(steer(true)).toEqual(expect.arrayContaining(["sources", "rubric", "strategy"]));
+    expect(steer(false)).not.toContain("sources");
+    expect(steer(false)).not.toContain("rubric");
+    expect(steer(false)).toEqual(expect.arrayContaining(["strategy", "product", "versions"]));
   });
 
   it("hides discovery's kinds while discovery is off, and keeps the strategy's goals", () => {

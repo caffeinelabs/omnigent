@@ -87,10 +87,24 @@ export const SAMPLE_SOURCES: SourceDef[] = [
   }),
 ];
 
+/** What a sample definition leaves out or moves (stories and tests). */
+export interface SteerDefinitionOptions {
+  discovery?: boolean;
+  server?: boolean;
+  noGoal?: boolean;
+  noTrial?: boolean;
+  /** No discovery sources yet. */
+  noSources?: boolean;
+  /** No rules and no briefs: a factory that never set them. */
+  bare?: boolean;
+  /** v13 is in force: someone else added "Teams" to the focus after v12. */
+  moved?: boolean;
+  /** v13 is in force: the viewer applied it two minutes ago (Undo still open). */
+  undoable?: boolean;
+}
+
 /** The definition of a factory that steers: profile, goal, focus, sources, rubric. */
-export function steerDefinition(
-  options: { discovery?: boolean; server?: boolean; noGoal?: boolean; noTrial?: boolean } = {},
-): DefinitionResponse {
+export function steerDefinition(options: SteerDefinitionOptions = {}): DefinitionResponse {
   const discovery = options.discovery ?? true;
   const base = definitionResponse();
   const effective = clone(base.effective);
@@ -136,23 +150,26 @@ export function steerDefinition(
         ],
     guardrails: ["Support requests per 1,000 accounts (sample)"],
     non_goals: ["Enterprise single sign-on (sample)", "Pricing changes (sample)"],
-    focus_segments: ["new-users"],
+    focus_segments: options.moved ? ["new-users", "teams"] : ["new-users"],
     mix: { outcome: 60, tests: 20, enablers: 15, hunches: 5 },
   };
   const disc = effective.discovery!;
   disc.enabled = discovery;
   disc.seat = { model: "sonnet" };
-  disc.sources = discovery ? clone(SAMPLE_SOURCES) : [];
+  disc.sources = discovery && !options.noSources ? clone(SAMPLE_SOURCES) : [];
   disc.rubric.decay_half_life_days = 45;
-  effective.briefs = {
-    ...effective.briefs!,
-    scout: "Focus on people in their first two weeks (sample).",
-  };
+  effective.briefs = options.bare
+    ? (Object.fromEntries(
+        Object.keys(effective.briefs ?? {}).map((k) => [k, ""]),
+      ) as unknown as typeof effective.briefs)
+    : { ...effective.briefs!, scout: "Focus on people in their first two weeks (sample)." };
+  if (options.bare) effective.rules = [];
   const trial = options.noTrial ? [] : [rubricTrial()];
+  const inForce = options.moved || options.undoable ? STEER_VERSION + 1 : STEER_VERSION;
   return {
     ...base,
-    def_version: STEER_VERSION,
-    version: base.version ? { ...base.version, version: STEER_VERSION } : null,
+    def_version: inForce,
+    version: base.version ? { ...base.version, version: inForce } : null,
     effective,
     bounds: {
       ...base.bounds,
@@ -373,8 +390,13 @@ export function steerAllProposals(): ProposalView[] {
   return [...steerProposals(), rubricTrial()];
 }
 
-/** Versions v12 … v8: v11 was undone, v12 restores v10, v9 is C-33's parent. */
-export function steerVersions(): DefinitionVersionsResponse {
+/**
+ * Versions v12 … v8: v11 was undone, v10 restores v8, v12 is C-33's. With
+ * `latest`, v13 is in force, made from v12 by `latest.by` `latest.age_s` ago.
+ */
+export function steerVersions(
+  latest: { by: string; age_s: number; title?: string } | null = null,
+): DefinitionVersionsResponse {
   const row = (version: number, patch: Partial<DefinitionView> = {}): DefinitionView => ({
     factory_id: "f",
     version,
@@ -389,14 +411,26 @@ export function steerVersions(): DefinitionVersionsResponse {
     doc: {},
     ...patch,
   });
+  const newest = latest
+    ? [
+        row(13, {
+          created_by: latest.by,
+          created_by_title: latest.title ?? null,
+          created_at: NOW - latest.age_s,
+          pinned: true,
+        }),
+      ]
+    : [];
   return {
-    pinned: STEER_VERSION,
+    pinned: latest ? STEER_VERSION + 1 : STEER_VERSION,
     data: [
+      ...newest,
       row(12, {
         created_via: "proposal",
         created_by: "s-sentinel",
         created_by_title: "Sentinel",
         proposal_ref: "C-33",
+        pinned: !latest,
       }),
       row(11, { undone_by: "mia@example.com", undone_at: NOW - 2 * D }),
       row(10, { proposal_ref: "C-30", restored_from: 8 }),
@@ -438,6 +472,30 @@ const RERANK = [
 ];
 
 /** The preview of toggling "Active builders" into focus. */
+/** The focus change staged on v12 after v13 (someone else's) came into force. */
+export function previewStale(): DefinitionPreviewResponse {
+  const preview = previewFocus();
+  const before = ["new-users", "teams"];
+  return {
+    ...preview,
+    def_version: STEER_VERSION + 1,
+    version_next: STEER_VERSION + 2,
+    diff: preview.diff.map((d) => ({
+      ...d,
+      before,
+      line: "strategy.focus_segments: new-users, teams → new-users, active-builders",
+    })),
+    blocked: [
+      {
+        index: null,
+        path: "",
+        code: "stale_definition",
+        message: `v${STEER_VERSION + 1} is in force, not v${STEER_VERSION}`,
+      },
+    ],
+  };
+}
+
 export function previewFocus(): DefinitionPreviewResponse {
   return {
     def_version: STEER_VERSION,
@@ -728,11 +786,7 @@ export function steerDiscoverySummary() {
   };
 }
 
-export interface SteerRouteOptions {
-  discovery?: boolean;
-  server?: boolean;
-  noGoal?: boolean;
-  noTrial?: boolean;
+export interface SteerRouteOptions extends SteerDefinitionOptions {
   preview?: DefinitionPreviewResponse;
   proposals?: ProposalView[];
 }
@@ -743,7 +797,15 @@ export function steerRoutes(factoryId: string, options: SteerRouteOptions = {}):
   const proposals = options.proposals ?? steerAllProposals();
   return {
     [`${base}/definition`]: { body: steerDefinition(options) },
-    [`${base}/definition/versions`]: { body: steerVersions() },
+    [`${base}/definition/versions`]: {
+      body: steerVersions(
+        options.undoable
+          ? { by: "lena@example.com", age_s: 120 }
+          : options.moved
+            ? { by: "mia@example.com", age_s: 300 }
+            : null,
+      ),
+    },
     [`${base}/definition/preview`]: { body: options.preview ?? previewFocus() },
     [`${base}/definition/diff`]: {
       body: {

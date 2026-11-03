@@ -10,12 +10,16 @@ import {
 import { STARTER_SOURCES, stageStarter } from "./discoveryStarter";
 import {
   EMPTY_STEER,
+  UNDO_WINDOW_S,
   addItemEdit,
   agentProposals,
   dropEdit,
+  isStale,
   movesRank,
   outlineValue,
   proposalIntact,
+  rebaseStaging,
+  removeItemEdit,
   replaceEdit,
   rerankRows,
   sectionOfPath,
@@ -30,9 +34,12 @@ import {
   trialLocks,
   trialRule,
   lockedBy,
+  undoLabel,
+  undoLeft,
   versionRows,
   visibleGroups,
   visibleSections,
+  withBase,
 } from "./steerModel";
 
 const definition = steerDefinition();
@@ -268,6 +275,81 @@ describe("versions", () => {
     expect(rows[1]).toMatchObject({ undone: "mia" });
     expect(rows[2]).toMatchObject({ via: "restore", restoredFrom: 8 });
     expect(rows[4]).toMatchObject({ via: "seeded" });
+  });
+});
+
+describe("the version a staging was staged on", () => {
+  const focus = (after: string[]) =>
+    replaceEdit("strategy", "strategy.focus_segments", "Focus segments", ["new-users"], after);
+
+  it("records the version in force when the first thing is staged, and forgets it when emptied", () => {
+    const staged = withBase(stageEdit(EMPTY_STEER, focus(["new-users", "teams"])), 12);
+    expect(staged.base).toBe(12);
+    expect(withBase(stageEdit(staged, focus(["teams"])), 13).base).toBe(12);
+    expect(withBase(dropEdit(staged, "strategy.focus_segments"), 13)).toEqual(EMPTY_STEER);
+    expect(withBase(stageRestore(10), 12).base).toBe(12);
+    expect(isStale(staged, 12)).toBe(false);
+    expect(isStale(staged, 13)).toBe(true);
+    expect(isStale(EMPTY_STEER, 13)).toBe(false);
+  });
+
+  it("rebases on the version in force: befores read again, edits it already made dropped", () => {
+    const moved = structuredClone(doc);
+    moved.strategy!.focus_segments = ["new-users", "teams"];
+    moved.strategy!.non_goals = ["Enterprise billing (sample)"];
+    let staged = withBase(stageEdit(EMPTY_STEER, focus(["new-users", "active-builders"])), 12);
+    staged = stageEdit(
+      staged,
+      replaceEdit(
+        "strategy",
+        "strategy.non_goals",
+        "Non-goals",
+        [],
+        ["Enterprise billing (sample)"],
+      ),
+    );
+    staged = stageEdit(
+      staged,
+      removeItemEdit("product", "product.segments", "gone", "Segment gone", { id: "gone" }),
+    );
+    const rebased = rebaseStaging(staged, moved, 13);
+    expect(rebased.base).toBe(13);
+    expect(rebased.edits.map((e) => e.key)).toEqual(["strategy.focus_segments"]);
+    expect(rebased.edits[0]).toMatchObject({
+      before: ["new-users", "teams"],
+      after: ["new-users", "active-builders"],
+    });
+    expect(isStale(rebased, 13)).toBe(false);
+    // Nothing left to stage: the staging empties.
+    expect(
+      rebaseStaging(withBase(stageEdit(EMPTY_STEER, focus(["new-users", "teams"])), 12), moved, 13),
+    ).toEqual(EMPTY_STEER);
+  });
+});
+
+describe("undo of the version in force", () => {
+  const rows = () => {
+    const [latest] = versionRows(steerVersions().data);
+    return { ...latest!, version: 13, parent: 12, createdBy: "mia@example.com", undone: null };
+  };
+  const at = 1_000_000;
+
+  it("lasts 10 minutes, for owners and for the editor who made it", () => {
+    const row = { ...rows(), at };
+    const mia = { userId: "mia@example.com", owner: false };
+    expect(undoLeft(row, at + 120, mia)).toBe(UNDO_WINDOW_S - 120);
+    expect(undoLabel(UNDO_WINDOW_S - 120)).toBe("Undo (8 min left)");
+    expect(undoLeft(row, at + UNDO_WINDOW_S, mia)).toBeNull();
+    expect(undoLeft(row, at + 60, { userId: "lena@example.com", owner: false })).toBeNull();
+    expect(undoLeft(row, at + 60, { userId: "lena@example.com", owner: true })).toBe(540);
+  });
+
+  it("is not offered for a version undone, not in force, or with nothing before it", () => {
+    const row = { ...rows(), at };
+    const owner = { userId: "lena@example.com", owner: true };
+    expect(undoLeft({ ...row, undone: "mia" }, at + 1, owner)).toBeNull();
+    expect(undoLeft({ ...row, pinned: false }, at + 1, owner)).toBeNull();
+    expect(undoLeft({ ...row, parent: null }, at + 1, owner)).toBeNull();
   });
 });
 

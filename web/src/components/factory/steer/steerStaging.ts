@@ -1,7 +1,8 @@
 // What is staged in Steer, per factory, until Apply or Discard: it outlives
 // moving between sections and a reload in the same tab (session storage, when
 // the browser allows it), so the outline's "staged" chips and the phone's
-// staged bar stay true wherever the person goes in Steer.
+// staged bar stay true wherever the person goes in Steer. It keeps the version
+// it was staged on, which Apply sends as its base.
 
 import { useCallback, useSyncExternalStore } from "react";
 import { EMPTY_STEER, type SteerStaging } from "./steerModel";
@@ -18,7 +19,9 @@ function isStaging(value: unknown): value is SteerStaging {
     Array.isArray(v.edits) &&
     v.edits.every((e) => typeof e?.key === "string" && typeof e?.change?.path === "string") &&
     (v.restore === null || typeof v.restore === "number") &&
-    (v.proposal === null || typeof v.proposal?.ref === "string")
+    (v.proposal === null || typeof v.proposal?.ref === "string") &&
+    // Without the version it was staged on, Apply could overwrite a newer one.
+    typeof v.base === "number"
   );
 }
 

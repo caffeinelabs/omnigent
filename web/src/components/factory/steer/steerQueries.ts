@@ -36,21 +36,28 @@ function retryTransient(failureCount: number, error: unknown): boolean {
   return failureCount < 1;
 }
 
-/** The preview body for what is staged: the changes, or the version to restore. */
+/**
+ * The preview body for what is staged: the changes, or the version to
+ * restore, on the version it was staged on (else `baseVersion`), so the
+ * preview says when another version came into force since.
+ */
 export function previewBody(
   staging: SteerStaging,
   baseVersion: number | null,
 ): DefinitionPreviewRequest | null {
-  if (staging.restore != null) return { restore: staging.restore };
+  const base = staging.base ?? baseVersion;
+  const on = base != null ? { base_version: base } : {};
+  if (staging.restore != null) return { restore: staging.restore, ...on };
   const changes = stagedChanges(staging);
   if (!changes.length) return null;
-  return { changes, ...(baseVersion != null ? { base_version: baseVersion } : {}) };
+  return { changes, ...on };
 }
 
 /**
  * The server's dry run of what is staged (nothing stored): diff, class, who
  * applies it, effects, the re-rank and the trial verdict. `settled` is false
- * while a newer staging waits out the debounce.
+ * while a newer staging waits out the debounce; `isPlaceholderData` is true
+ * while the last staging's answer shows as the new one loads.
  */
 export function useSteerPreview(
   factoryId: string,

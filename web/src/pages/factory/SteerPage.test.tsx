@@ -15,10 +15,17 @@ import {
   previewOperator,
   previewRestore,
   previewRubric,
+  steerDefinition,
   steerRoutes,
+  steerVersions,
 } from "@/components/factory/steer/__fixtures__/steerFixtures";
 import { resetSteerStaging } from "@/components/factory/steer/steerStaging";
-import type { DefinitionPreviewResponse, ViewerRole } from "@/lib/factoryApi";
+import type {
+  DefinitionPreviewResponse,
+  DefinitionResponse,
+  DefinitionVersionsResponse,
+  ViewerRole,
+} from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
 import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 
@@ -67,6 +74,11 @@ function serve(
     role?: ViewerRole;
     /** The preview for what the last preview call sent (a restore, else changes). */
     preview?: DefinitionPreviewResponse;
+    /** The definition in force, read on every fetch (it can move during a test). */
+    definition?: () => DefinitionResponse;
+    versions?: () => DefinitionVersionsResponse;
+    /** The answer to `PUT …/definition`. */
+    put?: () => Response;
   } = {},
 ) {
   const snapshot = round3Snapshot(options.role ?? "creator");
@@ -77,11 +89,42 @@ function serve(
       "GET /v1/factory/preflight": () => json({ ...preflightOk(), cockpit_v2: true }),
       [`GET ${SNAPSHOT}/notify/me/ui`]: () => json({ cockpit: "v2" }),
       [`GET ${SNAPSHOT}/notify/me`]: () => json(notifyMe()),
+      ...(options.definition
+        ? { [`GET ${SNAPSHOT}/definition`]: () => json(options.definition!()) }
+        : {}),
+      ...(options.versions
+        ? { [`GET ${SNAPSHOT}/definition/versions`]: () => json(options.versions!()) }
+        : {}),
       [`POST ${SNAPSHOT}/definition/preview`]: () => {
-        const last = server.calls.at(-1)!.body as { restore?: number };
-        return json(last.restore != null ? previewRestore() : (options.preview ?? previewFocus()));
+        const last = server.calls.at(-1)!.body as { restore?: number; base_version?: number };
+        if (last.restore != null) return json(previewRestore());
+        const preview = options.preview ?? previewFocus();
+        if (!options.definition) return json(preview);
+        // As the server: the diff's "before" is the version in force; a moved base blocks.
+        const now = options.definition();
+        const focus = now.effective.strategy?.focus_segments;
+        return json({
+          ...preview,
+          def_version: now.def_version,
+          version_next: now.def_version + 1,
+          diff: preview.diff.map((d) =>
+            d.path === "strategy.focus_segments" ? { ...d, before: focus } : d,
+          ),
+          blocked:
+            last.base_version != null && last.base_version !== now.def_version
+              ? [
+                  {
+                    index: null,
+                    path: "",
+                    code: "stale_definition",
+                    message: `v${now.def_version} is in force, not v${last.base_version}`,
+                  },
+                ]
+              : [],
+        });
       },
       [`PUT ${SNAPSHOT}/definition`]: () =>
+        options.put?.() ??
         json({ proposal: "C-40", proposal_id: "p40", status: "applied", def_version: 13 }),
       [`POST ${SNAPSHOT}/definition/pin`]: () =>
         json({ def_version: 12, changed: true, from: 13, ended: [] }),
@@ -392,5 +435,136 @@ describe("Steer", () => {
     expect(await screen.findAllByTestId("steer-gate-review")).not.toHaveLength(0);
     expect(screen.getByTestId("steer-gates-table")).toHaveTextContent("Tier 0 · read only");
     expect(screen.queryByTestId("steer-apply")).toBeNull();
+  });
+
+  it("applies on the version it was staged on, and offers Rebase once another version came into force", async () => {
+    let current = steerDefinition();
+    let put = () =>
+      json(
+        {
+          error: {
+            code: "stale_definition",
+            message: "v13 is in force, not v12; reload and edit again",
+          },
+        },
+        409,
+      );
+    serve({ definition: () => current, put: () => put() });
+    renderAt("/steer/strategy");
+
+    fireEvent.click(await screen.findByTestId("steer-focus-active-builders"));
+    const column = screen.getByTestId("steer-change-column");
+    await waitFor(() => expect(within(column).getByTestId("steer-apply")).not.toBeDisabled());
+
+    // Someone else applies v13 on the same path while this stays staged.
+    const moved = steerDefinition();
+    moved.def_version = 13;
+    moved.effective.strategy!.focus_segments = ["new-users", "teams"];
+    current = moved;
+    fireEvent.click(within(column).getByTestId("steer-apply"));
+
+    await waitFor(() =>
+      expect(sent("PUT", "/definition")).toEqual([
+        {
+          changes: [
+            {
+              op: "replace",
+              path: "strategy.focus_segments",
+              value: ["new-users", "active-builders"],
+            },
+          ],
+          base_version: 12,
+        },
+      ]),
+    );
+    expect(await within(column).findByTestId("steer-apply-error")).toHaveTextContent(
+      "Your staged change is kept",
+    );
+    const stale = await within(column).findByTestId("steer-stale");
+    expect(stale).toHaveTextContent("v13 came into force since you staged this on v12.");
+    expect(within(column).getByTestId("steer-apply")).toBeDisabled();
+    // The value in force now, from the preview's diff, not the one seen when staging.
+    await waitFor(() =>
+      expect(within(column).getByTestId("steer-staged-strategy.focus_segments")).toHaveTextContent(
+        "New users, Teams",
+      ),
+    );
+
+    put = () => json({ proposal: "C-40", proposal_id: "p40", status: "applied", def_version: 14 });
+    fireEvent.click(within(stale).getByTestId("steer-rebase"));
+    expect(within(column).queryByTestId("steer-stale")).toBeNull();
+    await waitFor(() => expect(within(column).getByTestId("steer-apply")).not.toBeDisabled());
+    fireEvent.click(within(column).getByTestId("steer-apply"));
+    await waitFor(() => expect(sent("PUT", "/definition")).toHaveLength(2));
+    expect(sent("PUT", "/definition")[1]).toMatchObject({ base_version: 13 });
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent(
+      "Applied as definition v14.",
+    );
+  });
+
+  it("offers Undo of the version in force for 10 minutes, after the toast is gone", async () => {
+    serve({ undoable: true });
+    renderAt("/steer/versions");
+
+    const undo = await screen.findByTestId("steer-undo-latest");
+    expect(undo).toHaveTextContent(/Undo \([89] min left\)/);
+    expect(screen.queryByTestId("factory-toast")).toBeNull();
+    expect(screen.getByTestId("steer-undo-column")).toBeInTheDocument();
+    fireEvent.click(undo);
+    await waitFor(() => expect(sent("POST", "/definition/pin")).toEqual([{ version: 12 }]));
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent(
+      "Undone. v12 is in force again; v13 stays in history.",
+    );
+  });
+
+  it.each([
+    ["after 10 minutes", "creator" as const, 11 * 60],
+    ["for an operator who did not make it", "operator" as const, 120],
+  ])("offers no Undo %s", async (_, role, age) => {
+    serve({ role, versions: () => steerVersions({ by: "lena@example.com", age_s: age }) });
+    renderAt("/steer/versions");
+
+    expect(await screen.findByTestId("steer-version-v13")).toHaveAttribute("data-pinned", "true");
+    expect(screen.queryByTestId("steer-undo-latest")).toBeNull();
+    expect(screen.queryByTestId("steer-undo-column")).toBeNull();
+  });
+
+  it("does not apply while the preview of a newer staging loads", async () => {
+    let release: () => void = () => {};
+    let calls = 0;
+    serve();
+    const previewRoute = `POST ${SNAPSHOT}/definition/preview`;
+    const base = authenticatedFetch.getMockImplementation()!;
+    authenticatedFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (`${init?.method ?? "GET"} ${path.split("?")[0]}` === previewRoute && ++calls > 1) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return base(path, init);
+    });
+    renderAt("/steer/strategy");
+
+    fireEvent.click(await screen.findByTestId("steer-focus-active-builders"));
+    const column = screen.getByTestId("steer-change-column");
+    await waitFor(() => expect(within(column).getByTestId("steer-apply")).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId("steer-focus-teams"));
+    // The first answer stays on screen while the second loads, but it does not apply this.
+    await waitFor(() => expect(calls).toBe(2));
+    expect(within(column).getByTestId("steer-apply")).toBeDisabled();
+    release();
+    await waitFor(() => expect(within(column).getByTestId("steer-apply")).not.toBeDisabled());
+  });
+
+  it("does not propose an agent's proposal again for an operator who cannot apply it", async () => {
+    serve({ role: "operator", preview: previewOperator() });
+    renderAt("/steer/roles?role=scout");
+
+    fireEvent.click(await screen.findByTestId("steer-proposal-stage-C-35"));
+    const column = screen.getByTestId("steer-change-column");
+    expect(await within(column).findByTestId("steer-proposal-waits")).toHaveTextContent(
+      "C-35 already waits for an owner; an owner applies or rejects it.",
+    );
+    expect(within(column).queryByTestId("steer-propose")).toBeNull();
   });
 });

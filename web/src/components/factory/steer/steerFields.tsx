@@ -42,7 +42,7 @@ export function TrialLock({ trial, what }: { trial: string; what?: string }) {
   return (
     <p
       data-testid={`trial-lock-${trial}`}
-      className="flex items-start gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-sm text-muted-foreground"
+      className="flex items-start gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-sm text-foreground/80"
     >
       <FlaskConicalIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
       <span>
@@ -56,7 +56,7 @@ export function TrialLock({ trial, what }: { trial: string; what?: string }) {
 /** A Tier-0 note: what no definition change touches. */
 export function TierZero({ children }: { children: ReactNode }) {
   return (
-    <p className="flex items-start gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-sm text-muted-foreground">
+    <p className="flex items-start gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-sm text-foreground/80">
       <LockIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
       <span>{children}</span>
     </p>
