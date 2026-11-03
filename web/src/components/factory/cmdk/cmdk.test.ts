@@ -203,7 +203,7 @@ describe("hitItems", () => {
     expect(href(hit("goal", "G-1", "x"))).toBe("/discovery?goal=G-1");
     // The strategy stands without Scout: a goal opens in Steer while discovery is off.
     expect(hitTarget(TFID, hit("goal", "G-1", "x"), { discoveryOn: false })).toEqual({
-      href: `/factory/${TFID}/steer/definition`,
+      href: `/factory/${TFID}/steer/strategy`,
     });
     expect(href(hit("project", "#csv-export", "x", { slug: "csv-export" }))).toBe(
       "/projects/csv-export",
@@ -227,16 +227,30 @@ describe("hitItems", () => {
     });
   });
 
-  it("finds models.ic in the section that edits it, and leaves out what no section edits yet", () => {
+  it("finds models.ic in the section that edits it: Roles and briefs, on the builder", () => {
     expect(settingTarget("role_defaults.ic.model")).toEqual({
-      section: "definition",
-      title: "Models · Implementers",
+      section: "roles",
+      title: "Roles and briefs · Builder",
+      params: { role: "ic" },
     });
     expect(settingTarget("budgets.factory_usd_per_day")).toEqual({
       section: "budgets",
       title: "Money · Factory per day",
     });
-    expect(settingTarget("product.delivery.merge_policy")).toBeNull();
+    expect(settingTarget("product.delivery.merge_policy")).toEqual({
+      section: "product",
+      title: "Product profile · merge policy",
+    });
+    expect(settingTarget("discovery.rubric.off_focus_factor")).toEqual({
+      section: "rubric",
+      title: "Scoring rubric · off focus factor",
+    });
+    expect(settingTarget("strategy.focus_segments")?.section).toBe("strategy");
+    expect(settingTarget("cadence.lead")?.section).toBe("cadence");
+    expect(settingTarget("briefs.scout")).toMatchObject({
+      section: "roles",
+      params: { role: "scout" },
+    });
     const items = hitItems(
       TFID,
       [
@@ -251,13 +265,44 @@ describe("hitItems", () => {
       ],
       { discoveryOn: true },
     );
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({
       group: "settings",
-      title: "Models · Implementers",
-      detail: "models.ic → role_defaults.ic.model · Cadence, previews and models",
-      target: { href: `/factory/${TFID}/steer/definition` },
+      title: "Roles and briefs · Builder",
+      detail: "models.ic → role_defaults.ic.model · Roles and briefs",
+      target: { href: `/factory/${TFID}/steer/roles?role=ic` },
     });
+    expect(items[1]).toMatchObject({
+      title: "Product profile · merge policy",
+      target: { href: `/factory/${TFID}/steer/product` },
+    });
+    // Discovery's sections hide while it is off, and so do settings that open them.
+    const rubric = hit("setting", "discovery.rubric.off_focus_factor", "x", {
+      path: "discovery.rubric.off_focus_factor",
+    });
+    expect(hitItems(TFID, [rubric], { discoveryOn: false })).toHaveLength(0);
+    expect(hitItems(TFID, [rubric], { discoveryOn: true })[0]?.target).toEqual({
+      href: `/factory/${TFID}/steer/rubric`,
+    });
+    // Scout's settings open Scout in Roles and briefs, which hides while discovery is off.
+    const scout = ["briefs.scout", "discovery.seat.model", "discovery.cadence.sweep_h"].map((p) =>
+      hit("setting", p, "x", { path: p }),
+    );
+    expect(hitItems(TFID, scout, { discoveryOn: false })).toHaveLength(0);
+    expect(hitItems(TFID, scout, { discoveryOn: true }).map((i) => i.target)).toEqual(
+      scout.map(() => ({ href: `/factory/${TFID}/steer/roles?role=scout` })),
+    );
+  });
+
+  it("lists Steer's discovery sections as places only while discovery runs", () => {
+    const steer = (on: boolean) =>
+      placeItems(TFID, { discoveryOn: on })
+        .filter((i) => i.key.startsWith("page:steer:"))
+        .map((i) => i.key.slice("page:steer:".length));
+    expect(steer(true)).toEqual(expect.arrayContaining(["sources", "rubric", "strategy"]));
+    expect(steer(false)).not.toContain("sources");
+    expect(steer(false)).not.toContain("rubric");
+    expect(steer(false)).toEqual(expect.arrayContaining(["strategy", "product", "versions"]));
   });
 
   it("hides discovery's kinds while discovery is off, and keeps the strategy's goals", () => {
@@ -270,7 +315,7 @@ describe("hitItems", () => {
     ];
     const off = hitItems(TFID, hits, { discoveryOn: false });
     expect(off.map((i) => i.group)).toEqual(["goals", "projects"]);
-    expect(off[0]!.target).toEqual({ href: `/factory/${TFID}/steer/definition` });
+    expect(off[0]!.target).toEqual({ href: `/factory/${TFID}/steer/strategy` });
     expect(hitItems(TFID, hits, { discoveryOn: true })).toHaveLength(5);
   });
 });

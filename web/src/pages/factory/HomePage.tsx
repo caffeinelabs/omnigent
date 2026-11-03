@@ -202,7 +202,7 @@ function HomeBody() {
             loop.discoveryOn
               ? {
                   label: loop.goal?.statement ? "Edit strategy" : "Set a goal",
-                  to: steerPageHref(fid),
+                  to: steerPageHref(fid, "strategy"),
                 }
               : undefined
           }

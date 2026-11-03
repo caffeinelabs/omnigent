@@ -1,126 +1,201 @@
 /**
- * Steer (`/steer/<section>`): how the factory works, and changing it. Every
- * change here is one definition version with Undo and restore. This first
- * Steer holds what the cockpit can change today, each section as it was:
- * Versions and trials (every change, what is on trial, what agents proposed,
- * the findings), Budgets and autonomy, Alerts and rules, and the cadence,
- * previews and models. One change (`?peek=C-n`) opens in a side panel.
+ * Steer (`/steer/<section>`): the one place to change how the factory works.
+ * Three columns on desktop: the outline (each section with its current value
+ * in one line, what waits for an owner and what is staged), the section, and
+ * the always-on change column (the staged change for the next definition
+ * version with its effect, the re-rank of opportunities, who can apply it and
+ * whether it may run as a trial; then agents' proposals and running trials).
+ * Every change, in any section, is one definition version with Undo and
+ * restore. Sources and the rubric hide while discovery is off; Strategy and
+ * the product profile stay. On a phone the outline is a chip row, the change
+ * column follows the section, and a staged bar sits above the tab bar.
+ * One change (`?peek=C-n`) opens in a side panel.
  */
 
+import { SlidersHorizontalIcon } from "lucide-react";
+import { useMemo, useRef } from "react";
 import { Navigate } from "react-router-dom";
-import {
-  BellIcon,
-  HistoryIcon,
-  type LucideIcon,
-  SlidersHorizontalIcon,
-  TimerIcon,
-  WalletIcon,
-} from "lucide-react";
+import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import {
   STEER_SECTIONS,
   type SteerSection,
   steerPageHref,
 } from "@/components/factory/factoryRoutes";
-import { AUTONOMY_GROUPS, BUDGET_GROUPS } from "@/components/factory/settings/settingsModel";
+import { discoveryRuns } from "@/components/factory/home/homeModel";
+import { useFactoryAsks } from "@/components/factory/home/homeQueries";
+import {
+  useDefinitionVersions,
+  useFactoryDefinition,
+  useLearnProposals,
+} from "@/components/factory/insights/learnQueries";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
+import { useViewerCan } from "@/components/factory/shell/viewerCan";
+import { AlertsAndRules } from "@/components/factory/steer/AlertsAndRules";
+import { Budgets } from "@/components/factory/steer/Budgets";
+import { Cadence } from "@/components/factory/steer/Cadence";
+import { ChangeColumn } from "@/components/factory/steer/ChangeColumn";
+import { Gates } from "@/components/factory/steer/Gates";
+import { Overview } from "@/components/factory/steer/Overview";
+import { ProductProfile } from "@/components/factory/steer/ProductProfile";
+import { RolesAndBriefs } from "@/components/factory/steer/RolesAndBriefs";
+import { Rubric } from "@/components/factory/steer/Rubric";
+import { Sources } from "@/components/factory/steer/Sources";
+import { SteerProvider, useSteer } from "@/components/factory/steer/SteerContext";
+import {
+  type OutlineFacts,
+  outlineValue,
+  stagedCount,
+  stagedSections,
+  visibleGroups,
+  visibleSections,
+} from "@/components/factory/steer/steerModel";
+import { SteerOutline } from "@/components/factory/steer/SteerOutline";
+import { useSteerPreview } from "@/components/factory/steer/steerQueries";
+import { Strategy } from "@/components/factory/steer/Strategy";
+import { Templates } from "@/components/factory/steer/Templates";
+import { Versions } from "@/components/factory/steer/Versions";
 import { Peek } from "@/components/factory/ui/Peek";
-import { FOCUS_RING } from "@/components/factory/ui/statusTokens";
-import { Link, useParams, useSearchParams } from "@/lib/routing";
-import { cn } from "@/lib/utils";
-import { ImprovementsPage } from "./ImprovementsPage";
+import { StagedBar } from "@/components/factory/ui/StagedBar";
+import type { DefinitionView, ProposalView } from "@/lib/factoryApi";
+import type { Ask } from "@/lib/factoryAsksApi";
+import { useParams, useSearchParams } from "@/lib/routing";
 import { ProposalPage } from "./ProposalPage";
-import { DefinitionGroups, DefinitionSections } from "./SettingsPage";
 
-export const STEER_SECTION: Record<
-  SteerSection,
-  { label: string; hint: string; icon: LucideIcon }
-> = {
-  versions: {
-    label: "Versions and trials",
-    hint: "Every change, trials and agents' proposals",
-    icon: HistoryIcon,
-  },
-  budgets: {
-    label: "Budgets and autonomy",
-    hint: "Money, attempts, who decides",
-    icon: WalletIcon,
-  },
-  alerts: { label: "Alerts and rules", hint: "Thresholds and rules per role", icon: BellIcon },
-  definition: {
-    label: "Cadence, previews and models",
-    hint: "Heartbeats, supervisor, mail, models",
-    icon: TimerIcon,
-  },
-};
+function Section({
+  section,
+  asks,
+  proposals,
+  versions,
+  versionsLoading,
+}: {
+  section: SteerSection;
+  asks: readonly Ask[] | null | undefined;
+  proposals: readonly ProposalView[] | undefined;
+  versions: readonly DefinitionView[] | undefined;
+  versionsLoading: boolean;
+}) {
+  switch (section) {
+    case "overview":
+      return <Overview asks={asks} versions={versions} />;
+    case "cadence":
+      return <Cadence />;
+    case "strategy":
+      return <Strategy proposals={proposals} />;
+    case "product":
+      return <ProductProfile proposals={proposals} />;
+    case "sources":
+      return <Sources proposals={proposals} />;
+    case "rubric":
+      return <Rubric />;
+    case "roles":
+      return <RolesAndBriefs />;
+    case "templates":
+      return <Templates />;
+    case "gates":
+      return <Gates />;
+    case "budgets":
+      return <Budgets />;
+    case "alerts":
+      return <AlertsAndRules />;
+    case "versions":
+      return <Versions versions={versions} proposals={proposals} loading={versionsLoading} />;
+  }
+}
 
-function Outline({ factoryId, active }: { factoryId: string; active: SteerSection }) {
+function SteerBody({ active }: { active: SteerSection }) {
+  const steer = useSteer();
+  const { factoryId, definition, discoveryOn, staging } = steer;
+  const proposals = useLearnProposals(factoryId);
+  const versions = useDefinitionVersions(factoryId);
+  const asks = useFactoryAsks(factoryId);
+  const preview = useSteerPreview(factoryId, staging, definition.def_version);
+  const column = useRef<HTMLElement>(null);
+  const askRows = asks.data?.factory_id === factoryId ? asks.data.asks : null;
+  const facts: OutlineFacts = {
+    definition,
+    discoveryOn,
+    sourcesWaiting: (askRows ?? []).filter((a) => a.kind === "source").length,
+    templates:
+      (definition.effective.team as { templates?: unknown[] } | undefined)?.templates?.length ??
+      null,
+    trialsRunning: definition.on_trial.length,
+  };
+  const groups = visibleGroups(discoveryOn);
+  const values = Object.fromEntries(
+    visibleSections(discoveryOn).map((s) => [s, outlineValue(s, facts)]),
+  ) as Partial<Record<SteerSection, string>>;
+  const waiting: Partial<Record<SteerSection, number>> = {
+    sources: facts.sourcesWaiting,
+    product: (askRows ?? []).filter((a) => a.kind === "profile").length,
+    strategy: (askRows ?? []).filter((a) => a.kind === "goal").length,
+    versions: 0,
+  };
+  const count = stagedCount(staging);
+  const next = preview.data?.version_next ?? definition.def_version + 1;
   return (
-    <nav
-      aria-label="Steer sections"
-      data-testid="steer-outline"
-      className="flex min-w-0 gap-1 md:sticky md:top-2 md:w-60 md:shrink-0 md:flex-col max-md:overflow-x-auto max-md:[scrollbar-width:none]"
-    >
-      {STEER_SECTIONS.map((key) => {
-        const { label, hint, icon: Icon } = STEER_SECTION[key];
-        const on = key === active;
-        return (
-          <Link
-            key={key}
-            to={steerPageHref(factoryId, key)}
-            componentId={`factory.steer.nav.${key}`}
-            data-testid={`steer-nav-${key}`}
-            aria-current={on ? "page" : undefined}
-            className={cn(
-              "flex shrink-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm",
-              FOCUS_RING,
-              on
-                ? "bg-muted font-medium text-foreground"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-            )}
-          >
-            <Icon aria-hidden className="mt-0.5 size-4 shrink-0" />
-            <span className="flex min-w-0 flex-col">
-              <span className="whitespace-nowrap">{label}</span>
-              <span className="text-xs font-normal text-muted-foreground max-md:hidden">
-                {hint}
-              </span>
-            </span>
-          </Link>
-        );
-      })}
-    </nav>
+    <>
+      <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_22rem]">
+        <div className="min-w-0 md:row-span-2">
+          <SteerOutline
+            factoryId={factoryId}
+            active={active}
+            groups={groups}
+            values={values}
+            staged={stagedSections(staging)}
+            waiting={waiting}
+          />
+        </div>
+        <div
+          data-testid="steer-section"
+          data-section={active}
+          className="flex min-w-0 flex-col gap-4"
+        >
+          {steer.frozen && (
+            <p className="rounded-lg border border-dashed border-status-violet px-3 py-2 text-sm">
+              {steer.frozen}
+            </p>
+          )}
+          <Section
+            section={active}
+            asks={askRows}
+            proposals={proposals.data}
+            versions={versions.data?.data}
+            versionsLoading={versions.isLoading}
+          />
+        </div>
+        <ChangeColumn
+          ref={column}
+          preview={preview}
+          proposals={proposals.data}
+          proposalsLoading={proposals.isLoading}
+          className="md:col-start-2 xl:sticky xl:top-2 xl:col-start-3 xl:row-start-1 xl:max-h-[calc(100vh-6rem)] xl:self-start xl:overflow-y-auto"
+        />
+      </div>
+      <StagedBar
+        count={count}
+        context={`v${next}`}
+        onReview={() => column.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        className="xl:hidden"
+      />
+    </>
   );
 }
 
-function Section({ section }: { section: SteerSection }) {
-  switch (section) {
-    case "versions":
-      return <ImprovementsPage />;
-    case "budgets":
-      return (
-        <DefinitionGroups groups={[...BUDGET_GROUPS, ...AUTONOMY_GROUPS]} testId="steer-budgets" />
-      );
-    case "alerts":
-      return (
-        <div className="flex min-w-0 flex-col gap-4">
-          <DefinitionSections section="alerts" slack={false} />
-          <DefinitionSections section="rules" />
-        </div>
-      );
-    case "definition":
-      return <DefinitionSections section="definition" />;
-  }
-}
-
 export function SteerPage() {
-  const { section = "versions" } = useParams<{ section: string }>();
-  const { snapshot } = useFactoryShell();
+  const { section = "overview" } = useParams<{ section: string }>();
+  const { snapshot, nowS } = useFactoryShell();
   const fid = snapshot.factory.id;
+  const { can } = useViewerCan();
+  const definition = useFactoryDefinition(fid);
   const [params, setParams] = useSearchParams();
-  if (!(STEER_SECTIONS as readonly string[]).includes(section)) {
+  const discoveryOn = discoveryRuns(definition.data);
+  const known = (STEER_SECTIONS as readonly string[]).includes(section);
+  const shown = useMemo(() => visibleSections(discoveryOn), [discoveryOn]);
+  if (!known) return <Navigate to={steerPageHref(fid)} replace />;
+  const active = section as SteerSection;
+  if (definition.data && !shown.includes(active)) {
     return <Navigate to={steerPageHref(fid)} replace />;
   }
-  const active = section as SteerSection;
   const peek = params.get("peek");
   const change = peek && /^[CF]-\d+$/i.test(peek) ? peek.toUpperCase() : null;
   const closePeek = () =>
@@ -136,24 +211,57 @@ export function SteerPage() {
     <div
       data-testid="factory-steer-page"
       data-section={active}
-      className="flex min-w-0 flex-col gap-3"
+      className="flex min-w-0 flex-col gap-3 pb-16 xl:pb-0"
     >
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <SlidersHorizontalIcon aria-hidden className="size-5 text-muted-foreground" />
-          Steer
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          How this factory works, and changing it. Every change is one definition version you can
-          undo or restore.
-        </p>
-      </div>
-      <div className="flex min-w-0 gap-4 max-md:flex-col">
-        <Outline factoryId={fid} active={active} />
-        <div className="flex min-w-0 flex-1 flex-col gap-4">
-          <Section section={active} />
+      <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <h1 className="flex items-center gap-2 text-xl font-semibold">
+            <SlidersHorizontalIcon aria-hidden className="size-5 text-muted-foreground" />
+            Steer
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            How this factory works. Every section is versioned data: change it with a preview, apply
+            it as a new version, run it as a trial where that makes sense, and restore any version.
+          </p>
         </div>
+        {definition.data && (
+          <span
+            data-testid="steer-version"
+            className="shrink-0 rounded-md border border-border px-2 py-0.5 font-mono text-sm"
+          >
+            definition v{definition.data.def_version}
+          </span>
+        )}
       </div>
+      {definition.data ? (
+        <SteerProvider
+          snapshot={snapshot}
+          nowS={nowS}
+          definition={definition.data}
+          discoveryOn={discoveryOn}
+          canEdit={can.settings || can.apply_projects}
+          owner={can.settings}
+        >
+          <SteerBody active={active} />
+        </SteerProvider>
+      ) : definition.isLoading ? (
+        <div
+          aria-busy="true"
+          data-testid="steer-loading"
+          className="grid gap-4 md:grid-cols-[15rem_minmax(0,1fr)]"
+        >
+          <div className="h-80 animate-pulse rounded-xl bg-muted/70" />
+          <div className="h-80 animate-pulse rounded-xl bg-muted/70" />
+        </div>
+      ) : (
+        <FactoryLoadError
+          error={definition.error ?? new Error("unavailable")}
+          updatedAt={0}
+          onRetry={() => void definition.refetch()}
+          what="the factory definition"
+          testId="steer-error"
+        />
+      )}
       <Peek
         open={change != null}
         onOpenChange={(open) => !open && closePeek()}

@@ -64,10 +64,24 @@ export const DISCOVERY_VIEWS = [
 export type DiscoveryView = (typeof DISCOVERY_VIEWS)[number];
 
 /**
- * Steer's sections the cockpit has today (`/steer/<section>`): how the
- * factory runs, its budgets, alerts and rules, and its versions and trials.
+ * Steer's sections (`/steer/<section>`; Overview when omitted), in outline
+ * order: how the factory works, its product and strategy, the discovery
+ * method, teams and roles, guardrails, and its versions and trials.
  */
-export const STEER_SECTIONS = ["versions", "budgets", "alerts", "definition"] as const;
+export const STEER_SECTIONS = [
+  "overview",
+  "strategy",
+  "product",
+  "sources",
+  "rubric",
+  "roles",
+  "templates",
+  "gates",
+  "budgets",
+  "alerts",
+  "cadence",
+  "versions",
+] as const;
 export type SteerSection = (typeof STEER_SECTIONS)[number];
 
 /** Debug's views (`/debug/<view>`): today's operator pages, one level down. */
@@ -237,10 +251,10 @@ export function discoveryPageHref(factoryId: string, view?: DiscoveryView): stri
   return `${factoryPageHref(factoryId)}/discovery${tail}`;
 }
 
-/** `/factory/<fid>/steer/<section>` with an optional query (`?tab=`, `?peek=C-4`). */
+/** `/factory/<fid>/steer/<section>` with an optional query (`?role=`, `?peek=C-4`). */
 export function steerPageHref(
   factoryId: string,
-  section: SteerSection = "versions",
+  section: SteerSection = "overview",
   params?: Record<string, string>,
 ): string {
   return withQuery(`${factoryPageHref(factoryId)}/steer/${section}`, params);
