@@ -369,9 +369,13 @@ export function dropChange(staging: TeamStaging, index: number): TeamStaging {
   return { ...staging, changes: staging.changes.filter((_, i) => i !== index) };
 }
 
-/** What Apply and Undo leave: nothing staged (Undo never puts changes back as staged). */
-export function clearedStaging(staging: TeamStaging): TeamStaging {
-  return { ...staging, changes: [] };
+/**
+ * What Apply, Discard and Undo leave: nothing staged, and When and Scope back
+ * to their defaults so the next change does not inherit "Now" or a template
+ * write (Undo never puts changes back as staged).
+ */
+export function clearedStaging(): TeamStaging {
+  return EMPTY_STAGING;
 }
 
 // ── The team after the staged changes ──────────────────────────
@@ -922,8 +926,23 @@ export interface ChangeWords {
   path: string | null;
 }
 
+/** The server's review-route sentence about `member` ("M-3's PRs then get …"), as the chart names it. */
+function reviewRoute(
+  routes: readonly string[] | undefined,
+  member: Pick<BaseMember, "id" | "handle">,
+  name: string,
+): string {
+  for (const text of routes ?? []) {
+    const said = [member.handle, member.id].find((n) => n && text.startsWith(`${n}'s `));
+    if (said) return ` ${name}${text.slice(said.length)}`;
+  }
+  return "";
+}
+
 /**
  * @param names - Member id → the name the chart shows (handles from live sessions).
+ * @param reviewRoutes - The preview's `review_route` texts for this project
+ *   (the server owns the routing rule; none until it answers).
  */
 export function changeWords(
   change: StagedTeamChange,
@@ -934,9 +953,10 @@ export function changeWords(
     bench?: BenchResponse | null;
     when: TeamChangeWhen;
     names?: ReadonlyMap<string, string>;
+    reviewRoutes?: readonly string[];
   },
 ): ChangeWords {
-  const { slug, base, catalog, bench, when, names } = context;
+  const { slug, base, catalog, bench, when, names, reviewRoutes } = context;
   const path = teamPath(slug);
   const member =
     "member" in change ? (base.members.find((m) => m.id === change.member) ?? null) : null;
@@ -949,10 +969,7 @@ export function changeWords(
       const now = runsOn(catalog, member?.role ?? "", change.vendor, change.model);
       const lead =
         when === "now" ? `${name} is interrupted now and` : `${name} finishes its current task,`;
-      const route =
-        member?.role === "ic" && member.vendor !== change.vendor
-          ? ` Its PRs then get a ${change.vendor === "codex" ? "Claude" : "Codex"} review (cross-vendor rule).`
-          : "";
+      const route = member ? reviewRoute(reviewRoutes, member, name) : "";
       const oldRow = member ? benchFor(bench, member.role, member.vendor, member.modelLabel) : null;
       const newRow = benchFor(
         bench,
@@ -1093,10 +1110,12 @@ export interface ChartMember {
 
 /**
  * Match the project's live sessions to its team spec. The snapshot does not
- * link sessions to members, so sessions are matched by role and vendor: the
- * most relevant session (busy first, then the newest) goes to the lowest
- * member number, and so on round the members of that role and vendor.
- * Sessions no member fits are returned in `outside`.
+ * link sessions to members, so sessions are matched by role and vendor in the
+ * order given (the snapshot lists a lead's sessions oldest first): the oldest
+ * goes to the lowest member number, and so on round the members of that role
+ * and vendor, so a session keeps its member as others get busy or go quiet.
+ * A member's `live` is the most relevant of its own sessions (busy first, then
+ * the newest). Sessions no member fits are returned in `outside`.
  */
 export function chartMembers(
   spec: TeamSpecView | null | undefined,
@@ -1116,7 +1135,7 @@ export function chartMembers(
   }
   const key = (role: string, vendor: string | null | undefined) => `${role}|${vendor ?? ""}`;
   const pools = new Map<string, TeamMember[]>();
-  for (const m of [...live].sort(relevance)) {
+  for (const m of live) {
     const role = liveRole(m);
     const k = key(role, role === "project_lead" ? "claude" : (m.row.vendor ?? vendorGuess(m)));
     pools.set(k, [...(pools.get(k) ?? []), m]);
@@ -1140,7 +1159,7 @@ export function chartMembers(
     });
   }
   const members = spec.members.map((m): ChartMember => {
-    const sessions = assigned.get(m.id) ?? [];
+    const sessions = [...(assigned.get(m.id) ?? [])].sort(relevance);
     const costs = sessions.map((s) => s.row.cost_usd).filter((c): c is number => c != null);
     return {
       spec: m,
@@ -1162,7 +1181,9 @@ function vendorGuess(member: TeamMember): string | null {
 
 /**
  * The member a name in a command means ("swap rex to claude"): a member's own
- * handle, else the handle of the session doing its work, else its id; any case.
+ * handle or id, else the handle of one of its sessions; any case. A session's
+ * handle names no one (null, so the caller asks) when other members share its
+ * role and vendor: the session could be doing any of their work.
  */
 export function memberByName(
   spec: TeamSpecView | null | undefined,
@@ -1178,8 +1199,10 @@ export function memberByName(
   const { members } = chartMembers(spec, live);
   const found = members.find((m) =>
     m.sessions.some((s) => s.row.handle?.toLowerCase() === want || s.name.toLowerCase() === want),
-  );
-  return found?.spec ?? null;
+  )?.spec;
+  if (!found) return null;
+  const pool = spec.members.filter((m) => m.role === found.role && m.vendor === found.vendor);
+  return pool.length > 1 ? null : found;
 }
 
 /** Members by chart place: the lead, then each group (in group order). */
@@ -1374,6 +1397,31 @@ export function teamHistory(
     });
   }
   return rows;
+}
+
+/**
+ * The version that last changed the team in force: the first of the pinned
+ * version and its parents that changed it, so an undone version, or one left
+ * when an older version was pinned, does not count. Null when that line runs
+ * out of the listed versions first.
+ */
+export function teamChangedIn(
+  rows: readonly TeamHistoryRow[],
+  versions: readonly Pick<DefinitionView, "version" | "parent_version">[],
+  pinned: number | null | undefined,
+): number | null {
+  if (pinned == null) return null;
+  const changed = new Set(rows.map((r) => r.version));
+  const parents = new Map(versions.map((v) => [v.version, v.parent_version]));
+  const seen = new Set<number>();
+  let at: number | null | undefined = pinned;
+  while (at != null && !seen.has(at)) {
+    if (changed.has(at)) return at;
+    if (!parents.has(at)) return null;
+    seen.add(at);
+    at = parents.get(at);
+  }
+  return null;
 }
 
 /** The change that puts back the team of history row `row` (null when it is the team in force). */

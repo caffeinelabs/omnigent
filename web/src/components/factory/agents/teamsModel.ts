@@ -375,6 +375,7 @@ export function teamRows(
     return {
       ...row,
       handle: m?.handle ?? null,
+      vendor: m?.vendor ?? null,
       stuck: m?.stuck ?? false,
       stuck_reason: m?.stuck_reason ?? null,
       stuck_since: m?.stuck_since ?? null,

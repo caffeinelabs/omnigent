@@ -19,6 +19,7 @@ import { agentPageHref } from "../factoryRoutes";
 import { formatElapsed, plural } from "../factoryFormat";
 import { usePinDefinition } from "../insights/learnQueries";
 import { EmptyState } from "../project/projectParts";
+import { SECTION_SCROLL_MARGIN } from "../projects/ProjectSections";
 import { Peek } from "../ui/Peek";
 import { StagedBar } from "../ui/StagedBar";
 import { DATA_HUE } from "../ui/statusTokens";
@@ -68,14 +69,20 @@ function SpendBar({ spent, budget }: { spent: number; budget: number }) {
   );
 }
 
+/**
+ * @param sectionId - The page section id it stands for (`team`), so the
+ *   section nav and `#team` land on it.
+ */
 export function TeamSection({
   snapshot,
   project,
   nowS,
+  sectionId,
 }: {
   snapshot: FactorySnapshot;
   project: ProjectView;
   nowS: number;
+  sectionId?: string;
 }) {
   const fid = snapshot.factory.id;
   const slug = project.slug;
@@ -148,12 +155,15 @@ export function TeamSection({
     : spec
       ? "Bundle"
       : null;
-  const changedIn = latest?.version ?? null;
+  // Not `latest`: after an Undo (or an older pin) the newest row is not the team in force.
+  const changedIn = data.changedIn;
   return (
     <section
+      id={sectionId}
       aria-labelledby="team-heading"
       data-testid="team-section"
       className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-card p-4"
+      style={sectionId ? { scrollMarginTop: SECTION_SCROLL_MARGIN } : undefined}
     >
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 id="team-heading" className="text-base font-semibold">

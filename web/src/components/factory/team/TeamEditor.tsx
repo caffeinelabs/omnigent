@@ -68,6 +68,10 @@ import { useProjectTeam } from "./useProjectTeam";
 /** Why Apply is off while the server only records dispatches outside a team. */
 export const NOT_ENFORCED =
   "Preview only: applying team changes stays off until this server enforces teams (OMNIGENT_FACTORY_TEAM_SPEC=enforce). You can stage changes and see what they would do.";
+const WATCHING = "You can look, not change: operators and owners edit teams.";
+/** The staged panel's "Who applies" while the editor is read-only (the edit bar says why). */
+const NOBODY_YET = "No one yet: this server previews team changes but does not apply them.";
+const NOT_YOU = "Operators and owners. You can look, not change.";
 
 function Breadcrumb({ factoryId, project }: { factoryId: string; project: ProjectView }) {
   return (
@@ -193,13 +197,16 @@ export function TeamEditor({
     () => (spec ? teamBase(slug, spec, data.briefs) : null),
     [spec, slug, data.briefs],
   );
-  // Changes staged from elsewhere (the palette) merge once the team and catalog are known.
-  const normalized = useRef(false);
+  // Changes staged from elsewhere (the palette appends them raw, also while the
+  // editor is open) merge as if staged here, once the team and catalog are known.
+  const normalized = useRef<string | null>(null);
   useEffect(() => {
-    if (!base || !catalog || normalized.current) return;
-    normalized.current = true;
+    if (!base || !catalog) return;
+    const raw = JSON.stringify(staging);
+    if (raw === normalized.current) return;
     const next = normalizeStaging(staging, base, catalog);
-    if (JSON.stringify(next) !== JSON.stringify(staging)) setStaging(next);
+    normalized.current = JSON.stringify(next);
+    if (normalized.current !== raw) setStaging(next);
   }, [base, catalog, staging, setStaging]);
 
   const team = useMemo(
@@ -214,11 +221,8 @@ export function TeamEditor({
   const facts = teamFacts(catalog);
   const restoring = hasRestore(staging);
   const enforced = (catalog?.mode ?? spec?.mode) === "enforce";
-  const readOnly = watcher
-    ? "You can look, not change: operators and owners edit teams."
-    : !enforced
-      ? NOT_ENFORCED
-      : null;
+  const readOnly = watcher ? WATCHING : !enforced ? NOT_ENFORCED : null;
+  const readOnlyWho = watcher ? NOT_YOU : !enforced ? NOBODY_YET : null;
   const frozen = watcher || restoring;
 
   const stage = useCallback(
@@ -263,7 +267,7 @@ export function TeamEditor({
         when: staging.when,
         ...(baseVersion != null ? { base_version: baseVersion } : {}),
       });
-      setStaging(clearedStaging(staging));
+      setStaging(clearedStaging());
       const version = res.def_version;
       toast.show({
         message: `Applied as definition v${version ?? "?"}. ${leadName} gets one TEAM UPDATE.`,
@@ -281,7 +285,7 @@ export function TeamEditor({
   const proposeToOwners = async (rationale: string) => {
     try {
       const res = await propose.mutateAsync({ kind: "tuning", changes, rationale });
-      setStaging(clearedStaging(staging));
+      setStaging(clearedStaging());
       toast.show({
         message: `Proposed as ${res.proposal.ref}. It waits for an owner (${res.decision}).`,
       });
@@ -532,13 +536,14 @@ export function TeamEditor({
             bench={bench}
             names={names}
             preview={staging.changes.length ? preview.data : undefined}
-            previewStale={!preview.settled || preview.isPlaceholderData || preview.isFetching}
+            // A background refetch of the same body is not stale; a new body is.
+            previewStale={!preview.settled || preview.isPlaceholderData}
             previewError={preview.error}
             onRetryPreview={() => void preview.refetch()}
-            readOnly={readOnly}
+            readOnly={readOnlyWho}
             busy={edit.isPending || propose.isPending}
             onDrop={(i) => setStaging(dropChange(staging, i))}
-            onDiscard={() => setStaging(clearedStaging(staging))}
+            onDiscard={() => setStaging(clearedStaging())}
             onWhen={(when) => setStaging({ ...staging, when })}
             onScope={(scope) => setStaging({ ...staging, scope })}
             onApply={() => void apply()}

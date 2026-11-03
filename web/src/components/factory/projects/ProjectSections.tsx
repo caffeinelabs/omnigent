@@ -42,7 +42,7 @@ export const SECTION_LABEL: Record<ProjectSection, string> = {
 };
 
 /** Where a jumped-to section's top lands: under the header and the stuck nav. */
-const SECTION_SCROLL_MARGIN =
+export const SECTION_SCROLL_MARGIN =
   "calc(var(--omnigent-header-height) + var(--omnigent-inset-top) + 3.5rem)";
 
 /** The page's section links (anchors), with counts; scrolls sideways on a phone. */

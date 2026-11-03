@@ -1,16 +1,17 @@
 // Everything the team chart and editor read about one project's team: its
-// team spec (from the snapshot), the live sessions behind each member (the
-// fleet read, else the snapshot), the catalog and bench (editor and options),
-// its brief texts (the definition) and its history (the definition versions).
+// team spec and the live sessions behind each member (both from the snapshot,
+// which every `now` tick refreshes), the catalog and bench (editor and
+// options), its brief texts (the definition the shell already reads) and its
+// history (the definition versions). The catalog and versions only re-read on
+// definition frames (see `teamQueries`).
 
 import { useMemo } from "react";
 import type { FactorySnapshot, ProjectView, TeamSpecView } from "@/lib/factoryApi";
 import { waitingOnViewer } from "../agents/fleetModel";
-import { useFactoryAgents } from "../agents/opsQueries";
 import { type TeamMember, handleName, teamMember, teamRows } from "../agents/teamsModel";
 import { useFactoryBench } from "../agents/teamsQueries";
-import { useDefinitionVersions, useFactoryDefinition } from "../insights/learnQueries";
-import { useTeamCatalog } from "./teamQueries";
+import { useFactoryDefinition } from "../insights/learnQueries";
+import { useTeamCatalog, useTeamVersions } from "./teamQueries";
 import {
   type ChartMember,
   type RestoredTeam,
@@ -19,6 +20,7 @@ import {
   type TeamRole,
   chartMembers,
   liveRole,
+  teamChangedIn,
   teamHistory,
   teamInDoc,
 } from "./teamModel";
@@ -39,6 +41,8 @@ export interface ProjectTeamData {
   briefs: Record<string, string>;
   history: TeamHistoryRow[];
   historyLoading: boolean;
+  /** The version that last changed the team in force (null until the versions load). */
+  changedIn: number | null;
   /** The project's own team in force (`null`: it follows today's bundle). */
   current: RestoredTeam | null;
 }
@@ -55,12 +59,9 @@ export function useProjectTeam(
   const fid = snapshot.factory.id;
   const slug = project.slug;
   const spec = project.team_spec ?? null;
-  const agents = useFactoryAgents(fid);
-  const fallback = agents.error != null && !agents.data;
-  const rows = useMemo(
-    () => (agents.data || fallback ? teamRows(snapshot, agents.data?.data) : []),
-    [agents.data, fallback, snapshot],
-  );
+  // The snapshot's rows, not the fleet read: the page already re-reads it on
+  // every tick, and the chart and editor then name members the same way.
+  const rows = useMemo(() => teamRows(snapshot, undefined), [snapshot]);
   const waitingOnMe = useMemo(
     () => waitingOnViewer(snapshot.decisions, snapshot.viewer),
     [snapshot.decisions, snapshot.viewer],
@@ -99,10 +100,19 @@ export function useProjectTeam(
   const effective = definition.data?.effective as Record<string, unknown> | undefined;
   const current = useMemo(() => teamInDoc(effective, slug), [effective, slug]);
   const briefs = current?.briefs ?? NO_BRIEFS;
-  const versions = useDefinitionVersions(fid, Boolean(spec) && Boolean(options.history));
+  const versions = useTeamVersions(fid, Boolean(spec) && Boolean(options.history));
+  const pinned =
+    versions.data?.pinned ??
+    versions.data?.data.find((v) => v.pinned)?.version ??
+    snapshot.def_version ??
+    null;
   const history = useMemo(
-    () => teamHistory(versions.data?.data ?? [], slug, versions.data?.pinned),
-    [versions.data, slug],
+    () => teamHistory(versions.data?.data ?? [], slug, pinned),
+    [versions.data, slug, pinned],
+  );
+  const changedIn = useMemo(
+    () => (versions.data ? teamChangedIn(history, versions.data.data, pinned) : null),
+    [history, versions.data, pinned],
   );
   return {
     spec,
@@ -115,6 +125,7 @@ export function useProjectTeam(
     briefs,
     history,
     historyLoading: versions.isLoading,
+    changedIn,
     current,
   };
 }

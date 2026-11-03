@@ -636,9 +636,14 @@ function version(
 /**
  * v9 (no team of its own) → v10 its own standard team → v11 one builder at
  * once → v12 two builders at once, in force; with `justApplied`, v13 (Rex to
- * Claude) is in force and made two minutes ago, so it can still be undone.
+ * Claude) is in force and made two minutes ago, so it can still be undone;
+ * with `undone`, v13 was undone a minute later and v12 is in force again.
  */
-export function teamVersions(options: { justApplied?: boolean } = {}): DefinitionVersionsResponse {
+export function teamVersions(
+  options: { justApplied?: boolean; undone?: boolean } = {},
+): DefinitionVersionsResponse {
+  const v13 = Boolean(options.justApplied || options.undone);
+  const pinned13 = v13 && !options.undone;
   const standard = SHAPES.standard;
   const rows = [
     version(9, null, { at: TEAM_NOW_S - 30 * H, ref: "C-2" }),
@@ -653,16 +658,23 @@ export function teamVersions(options: { justApplied?: boolean } = {}): Definitio
     version(12, ownTeam(standard), {
       at: TEAM_NOW_S - 3 * H,
       ref: "C-5",
-      pinned: !options.justApplied,
+      pinned: !pinned13,
     }),
   ];
-  if (options.justApplied) {
+  if (v13) {
     const moved = standard.map((s): Seat =>
       s[0] === "M-3" ? ["M-3", "ic", "claude", "sonnet", "sonnet"] : s,
     );
-    rows.push(version(13, ownTeam(moved), { at: TEAM_NOW_S - 120, ref: "C-6", pinned: true }));
+    rows.push(
+      version(13, ownTeam(moved), {
+        at: TEAM_NOW_S - 120,
+        ref: "C-6",
+        pinned: pinned13,
+        undone: options.undone,
+      }),
+    );
   }
-  return { data: rows.reverse(), pinned: options.justApplied ? 13 : 12 };
+  return { data: rows.reverse(), pinned: pinned13 ? 13 : 12 };
 }
 
 /** `GET …/definition` with the sample project's own team in its effective document. */
@@ -686,6 +698,8 @@ export interface TeamRouteOptions {
   mode?: "warn" | "enforce";
   preview?: DefinitionPreviewResponse;
   justApplied?: boolean;
+  /** The last team change (v13) was undone: v12 is in force again. */
+  undone?: boolean;
 }
 
 /** `/v1/factory/*` for the team chart and editor over `snapshot` (Teams' routes, plus the team's). */
@@ -695,7 +709,9 @@ export function teamRoutes(snapshot: FactorySnapshot, options: TeamRouteOptions 
     ...teamsRoutes(snapshot),
     [`${base}/catalog`]: { body: teamCatalog({ mode: options.mode, shape: options.shape }) },
     [`${base}/definition`]: { body: teamDefinition(options.shape) },
-    [`${base}/definition/versions`]: { body: teamVersions({ justApplied: options.justApplied }) },
+    [`${base}/definition/versions`]: {
+      body: teamVersions({ justApplied: options.justApplied, undone: options.undone }),
+    },
     [`${base}/definition/preview`]: { body: options.preview ?? previewOneChange() },
     [`${base}/projects/${TEAM_SLUG}/demos`]: { body: { data: [], count: 0 } },
   };

@@ -159,7 +159,9 @@ function ProjectBody({
     <div data-testid={`project-page-${project.slug}`} className="flex min-w-0 flex-col gap-4">
       <Breadcrumb factoryId={fid} title={project.title} />
       <ProjectHeader snapshot={snapshot} project={project} nowS={nowS} onDecision={onDecision} />
-      {cockpitV2 && <TeamSection snapshot={snapshot} project={project} nowS={nowS} />}
+      {cockpitV2 && (
+        <TeamSection snapshot={snapshot} project={project} nowS={nowS} sectionId="team" />
+      )}
       <SectionNav
         sections={PROJECT_SECTIONS}
         counts={counts}
@@ -234,9 +236,12 @@ function ProjectBody({
             </p>
           )}
         </PageSection>
-        <PageSection id="team" title="Team" meta="agents on this project">
-          <TeamTable project={project} nowS={nowS} factoryId={fid} />
-        </PageSection>
+        {/* The new cockpit's chart above is the Team section. */}
+        {!cockpitV2 && (
+          <PageSection id="team" title="Team" meta="agents on this project">
+            <TeamTable project={project} nowS={nowS} factoryId={fid} />
+          </PageSection>
+        )}
         <PageSection id="loops" title="Loops">
           <ProjectLoops snapshot={snapshot} project={project} nowS={nowS} />
         </PageSection>

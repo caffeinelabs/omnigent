@@ -12,6 +12,7 @@ import {
   type StagedTeamChange,
   type TeamStaging,
   benchRate,
+  changeWords,
   chartMembers,
   clearedStaging,
   definitionChanges,
@@ -25,6 +26,7 @@ import {
   stageChange,
   stagedTeam,
   teamBase,
+  teamChangedIn,
   teamDiffLines,
   teamFacts,
   teamHistory,
@@ -83,9 +85,8 @@ describe("staging", () => {
   it("drops a change by index, and Apply or Undo leave nothing staged", () => {
     const s = stageAll(rexToClaude, { kind: "budget", value: 80 }, { kind: "builders", value: 3 });
     expect(dropChange(s, 1).changes.map((c) => c.kind)).toEqual(["model", "builders"]);
-    const cleared = clearedStaging({ ...s, when: "now", scope: "template" });
-    expect(cleared.changes).toEqual([]);
-    expect(cleared.when).toBe("now");
+    // When and Scope go back to their defaults too: the next change starts from them.
+    expect(clearedStaging()).toEqual({ changes: [], when: "after_current", scope: "project" });
   });
 
   it("removing a member drops its other changes; Keep (remove again) puts it back", () => {
@@ -155,7 +156,7 @@ describe("staging", () => {
     expect(window.sessionStorage.getItem(`omnigent.factory.team-staged.f1/${TEAM_SLUG}`)).toContain(
       "M-3",
     );
-    writeTeamStaging("f1", TEAM_SLUG, clearedStaging(readTeamStaging("f1", TEAM_SLUG)));
+    writeTeamStaging("f1", TEAM_SLUG, clearedStaging());
     expect(
       window.sessionStorage.getItem(`omnigent.factory.team-staged.f1/${TEAM_SLUG}`),
     ).toBeNull();
@@ -316,6 +317,27 @@ describe("options", () => {
   });
 });
 
+describe("words", () => {
+  it("says a builder's review route in the preview's words, about that builder only", () => {
+    const effect = (reviewRoutes?: string[]) =>
+      changeWords(rexToClaude, {
+        slug: TEAM_SLUG,
+        base,
+        catalog,
+        when: "after_current",
+        names: new Map([["M-3", "Rex"]]),
+        reviewRoutes,
+      }).effect;
+    expect(effect()).not.toContain("PRs then get");
+    expect(effect(["M-3's PRs then get a Codex review (cross-vendor rule)."])).toContain(
+      "Rex's PRs then get a Codex review (cross-vendor rule).",
+    );
+    expect(effect(["M-2's PRs then get a Codex review (cross-vendor rule)."])).not.toContain(
+      "PRs then get",
+    );
+  });
+});
+
 describe("definition changes", () => {
   it("compiles each staged change to the team paths, in staging order", () => {
     const s = stageAll(
@@ -387,6 +409,34 @@ describe("live sessions", () => {
     expect(memberByName(teamSpec(), live, "nobody")).toBeNull();
   });
 
+  it("keeps each session on its member as activity changes, and asks when the name is shared", () => {
+    const snapshot = teamSnapshot("pair");
+    const spec = teamSpec("pair");
+    const live = teamRows(snapshot, undefined)
+      .filter((r) => r.project === TEAM_SLUG)
+      .map((r) => teamMember(r, snapshot.factory.root_session_id));
+    const seats = (sessions: typeof live) => {
+      const { members } = chartMembers(spec, sessions);
+      const seat = (handle: string) =>
+        members.find((m) => m.sessions.some((s) => s.row.handle === handle))?.spec?.id;
+      return { ivy: seat("ivy"), rex: seat("rex") };
+    };
+    const before = seats(live);
+    expect(new Set(Object.values(before))).toEqual(new Set(["M-2", "M-7"]));
+    // Rex gets busy and Ivy goes quiet: neither moves to the other's seat.
+    const busy = live.map((m) =>
+      m.row.handle === "rex"
+        ? { ...m, state: "working" as const, row: { ...m.row, last_activity_at: 4e9 } }
+        : m.row.handle === "ivy"
+          ? { ...m, state: "idle" as const, row: { ...m.row, last_activity_at: 1 } }
+          : m,
+    );
+    expect(seats(busy)).toEqual(before);
+    // Two Claude builders: "rex" could be either seat's session, so the palette asks.
+    expect(memberByName(spec, live, "rex")).toBeNull();
+    expect(memberByName(spec, live, "M-7")?.id).toBe("M-7");
+  });
+
   it("estimates the team's rate the server's way", () => {
     const spec = teamSpec();
     // others 1.2 + 0.6 + 0.4 + 0.5; builders (1.6 + 1.3) / 2 × 2.
@@ -406,6 +456,21 @@ describe("history", () => {
       "Got its own team: standard template, 6 members, 1 builder at once, budget $60",
     ]);
     expect(rows[1]!.lines).toContain("Instructions for M-2 set");
+  });
+
+  it("names the version that changed the team in force, not an undone or unpinned one", () => {
+    const applied = teamVersions({ justApplied: true });
+    expect(teamChangedIn(teamHistory(applied.data, TEAM_SLUG, 13), applied.data, 13)).toBe(13);
+    // Undo re-pins v12: v13 stays listed first, but v12's team is in force.
+    const { data } = teamVersions({ undone: true });
+    const rows = teamHistory(data, TEAM_SLUG, 12);
+    expect(rows[0]).toMatchObject({ version: 13, undoneBy: "owner@example.test" });
+    expect(teamChangedIn(rows, data, 12)).toBe(12);
+    // An owner pins v10 from Steer: v10 made that team.
+    expect(teamChangedIn(teamHistory(data, TEAM_SLUG, 10), data, 10)).toBe(10);
+    // v9 had none and its parents are not listed: unknown.
+    expect(teamChangedIn(rows, data, 9)).toBeNull();
+    expect(teamChangedIn(rows, data, null)).toBeNull();
   });
 
   it("restores an earlier team, never the one in force", () => {

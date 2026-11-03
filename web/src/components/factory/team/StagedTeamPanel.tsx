@@ -44,7 +44,10 @@ export interface StagedTeamPanelProps {
   previewStale: boolean;
   previewError: Error | null;
   onRetryPreview: () => void;
-  /** Why nothing can be applied here at all (the editor is read-only), else null. */
+  /**
+   * Who applies, when nothing can be applied here at all (the editor is
+   * read-only; the edit bar says why), else null.
+   */
   readOnly: string | null;
   busy: boolean;
   onDrop: (index: number) => void;
@@ -155,7 +158,6 @@ export function StagedTeamPanel({
             platform code, not a setting.
           </span>
         </p>
-        {readOnly && <p className="text-xs text-muted-foreground">{readOnly}</p>}
       </section>
     );
   }
@@ -163,20 +165,26 @@ export function StagedTeamPanel({
   const rate = effect(preview, "rate")[0];
   const finish = effect(preview, "finish")[0];
   const update = effect(preview, "team_update")[0];
-  // Each change already says its restart and review route; "now" adds what it interrupts.
-  const restart = staging.when === "now" ? effect(preview, "restart")[0] : undefined;
   const named = (text: string) => text.replace(/\bM-\d+\b/g, (id) => names.get(id) ?? id);
+  const reviewRoutes = effect(preview, "review_route")
+    .filter((e) => e.project == null || e.project === slug)
+    .map((e) => e.text);
   const blocked = preview?.blocked ?? [];
   const templateLabel =
     catalog?.templates.find((t) => t.id === team.template)?.label ?? team.template;
   const others = catalog?.templates.find((t) => t.id === team.template);
   const canApply = fresh?.you_can_apply === true && !readOnly && blocked.length === 0;
+  // From the last answer, so the mode holds while a newer one loads (Propose waits for it).
   const propose =
-    fresh != null &&
-    !fresh.you_can_apply &&
-    fresh.you_can_propose &&
+    preview != null &&
+    !preview.you_can_apply &&
+    preview.you_can_propose &&
     !readOnly &&
     blocked.length === 0;
+  // A proposal carries no When: it applies after current tasks once approved.
+  const when: TeamChangeWhen = propose ? "after_current" : staging.when;
+  // Each change already says its restart and review route; "now" adds what it interrupts.
+  const restart = when === "now" ? effect(preview, "restart")[0] : undefined;
   const classOf = (path: string | null, kind: string): "A" | "B" | null => {
     if (kind === "add") return "B";
     // A switch or a restore adds and removes members: the change's class is the whole diff's.
@@ -205,14 +213,6 @@ export function StagedTeamPanel({
           Discard all
         </Button>
       </header>
-      {readOnly && (
-        <p
-          className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-foreground/80"
-          data-testid="team-read-only"
-        >
-          {readOnly}
-        </p>
-      )}
       <ol className="flex flex-col gap-2">
         {changes.map((change, index) => {
           const words = changeWords(change, {
@@ -220,8 +220,9 @@ export function StagedTeamPanel({
             base,
             catalog,
             bench,
-            when: staging.when,
+            when,
             names,
+            reviewRoutes,
           });
           const klass = classOf(words.path, change.kind);
           return (
@@ -323,7 +324,9 @@ export function StagedTeamPanel({
               </span>
             </Row>
           )}
-          <Row term="Who applies">{preview.who}</Row>
+          <Row term="Who applies">
+            <span data-testid="team-who-applies">{readOnly ?? preview.who}</span>
+          </Row>
           <Row term="Version">
             Becomes definition v{preview.version_next}. {update ? named(update.text) : ""}
           </Row>
@@ -331,12 +334,13 @@ export function StagedTeamPanel({
           <Row term="Does not undo">Work already pushed, money already spent.</Row>
         </dl>
       )}
-      <fieldset className="flex flex-col gap-1.5">
+      <fieldset className="flex flex-col gap-1.5" disabled={propose}>
         <legend className="mb-1 text-xs font-semibold text-muted-foreground">When</legend>
         <Radio
           name={`${radioName}-when`}
-          checked={staging.when === "after_current"}
+          checked={when === "after_current"}
           onChange={() => onWhen("after_current")}
+          disabled={propose}
           testId="team-when-after"
         >
           <b className="font-semibold">After current tasks</b>{" "}
@@ -344,8 +348,9 @@ export function StagedTeamPanel({
         </Radio>
         <Radio
           name={`${radioName}-when`}
-          checked={staging.when === "now"}
+          checked={when === "now"}
           onChange={() => onWhen("now")}
+          disabled={propose}
           testId="team-when-now"
         >
           <b className="font-semibold">Now</b>{" "}
@@ -353,6 +358,11 @@ export function StagedTeamPanel({
             interrupts the affected members; about 20 minutes of work restarts
           </span>
         </Radio>
+        {propose && (
+          <p className="text-xs text-muted-foreground" data-testid="team-when-proposed">
+            Applies after current tasks once an owner approves.
+          </p>
+        )}
       </fieldset>
       <fieldset className="flex flex-col gap-1.5">
         <legend className="mb-1 text-xs font-semibold text-muted-foreground">Scope</legend>
@@ -439,7 +449,7 @@ export function StagedTeamPanel({
           <Button
             type="button"
             componentId="factory.team.propose"
-            disabled={busy || blocked.length > 0 || !rationale.trim()}
+            disabled={busy || !fresh || blocked.length > 0 || !rationale.trim()}
             loading={busy}
             onClick={() => onPropose(rationale.trim())}
           >

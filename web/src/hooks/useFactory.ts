@@ -69,6 +69,12 @@ export const factorySpansQueryKey = (
   sinceMs: number,
   kinds: readonly SpanKind[] | null = null,
 ) => ["factory-spans", factoryId, sinceMs, kinds] as const;
+/**
+ * Team reads that are costly and move only with the definition (the team
+ * catalog, its versions, the editor's dry run): full frames refresh them only
+ * when they carry the `definition` scope, so their stale time holds otherwise.
+ */
+export const factoryTeamQueryKey = (factoryId: string) => ["factory-team", factoryId] as const;
 export const FACTORIES_QUERY_KEY = ["factories"] as const;
 export const FACTORY_DECISIONS_QUERY_KEY = ["factory-decisions"] as const;
 export const FACTORY_PREFLIGHT_QUERY_KEY = ["factory-preflight"] as const;
@@ -113,6 +119,8 @@ export function factoryInvalidationKeys(
     ["factory-room", factoryId],
     FACTORIES_QUERY_KEY,
     FACTORY_DECISIONS_QUERY_KEY,
+    // A frame without scopes (a local write) may have changed anything.
+    ...(!scopes?.length || scopes.includes("definition") ? [factoryTeamQueryKey(factoryId)] : []),
   ];
 }
 

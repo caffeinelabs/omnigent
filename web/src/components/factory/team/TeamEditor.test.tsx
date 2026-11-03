@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightOk } from "@/components/factory/__fixtures__/liveRun";
@@ -18,7 +18,12 @@ import {
   teamRoutes,
   teamSnapshot,
 } from "./__fixtures__/teamFixtures";
-import { readTeamStaging, resetTeamStaging, writeTeamStaging } from "./teamStaging";
+import {
+  readTeamStaging,
+  resetTeamStaging,
+  stageTeamChanges,
+  writeTeamStaging,
+} from "./teamStaging";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -94,6 +99,16 @@ function sent(calls: ServedCall[], method: string, suffix: string): unknown[] {
 
 const EDITOR = `/projects/${TEAM_SLUG}/team`;
 
+/** A tile's vendor · model select, once the catalog has filled its options. */
+async function modelSelect(
+  name: string,
+  scope: Pick<typeof screen, "findByRole"> = screen,
+): Promise<HTMLElement> {
+  const select = await scope.findByRole("combobox", { name: `Vendor and model for ${name}` });
+  await waitFor(() => expect(within(select).getAllByRole("option").length).toBeGreaterThan(1));
+  return select;
+}
+
 beforeEach(() => {
   authenticatedFetch.mockReset();
   resetFactoryControls();
@@ -128,7 +143,7 @@ describe("the team editor", () => {
     const { snapshot } = serve();
     renderAt(snapshot, EDITOR);
     const lead = await screen.findByTestId("team-edit-tile-M-1");
-    const select = await within(lead).findByRole("combobox", { name: "Vendor and model for Nova" });
+    const select = await modelSelect("Nova", within(lead));
     const codex = within(select)
       .getAllByRole("option")
       .filter((o) => o.textContent?.startsWith("codex"));
@@ -158,7 +173,7 @@ describe("the team editor", () => {
   it("stages a model change, applies it as one version, and Undo pins the one before", async () => {
     const { snapshot, calls } = serve();
     renderAt(snapshot, EDITOR);
-    const select = await screen.findByRole("combobox", { name: "Vendor and model for Rex" });
+    const select = await modelSelect("Rex");
     fireEvent.change(select, { target: { value: "claude|" } });
     expect(await screen.findByText("1. Rex (Builder): vendor and model")).toBeInTheDocument();
     expect(screen.getByTestId("team-edit-tile-M-3")).toHaveAttribute("data-tag", "staged");
@@ -228,6 +243,56 @@ describe("the team editor", () => {
     );
     await screen.findByTestId("staged-team-effects");
     expect(screen.getByTestId("team-apply")).toBeDisabled();
+    // Said once, and "Who applies" does not promise an Apply that is off.
+    expect(screen.getAllByText(/OMNIGENT_FACTORY_TEAM_SPEC=enforce/)).toHaveLength(1);
+    expect(screen.getByTestId("team-who-applies")).toHaveTextContent(
+      "No one yet: this server previews team changes but does not apply them.",
+    );
+  });
+
+  it("folds changes staged from the palette while the editor is open", async () => {
+    const { snapshot } = serve();
+    renderAt(snapshot, EDITOR);
+    await modelSelect("Rex");
+    const fid = snapshot.factory.id;
+    act(() =>
+      stageTeamChanges(fid, TEAM_SLUG, [
+        { kind: "model", member: "M-3", vendor: "claude", model: null },
+        { kind: "model", member: "M-3", vendor: "claude", model: "opus" },
+        { kind: "add", key: "", role: "reviewer", vendor: "claude", model: null },
+        { kind: "add", key: "", role: "ic", vendor: "claude", model: null },
+      ]),
+    );
+    await waitFor(() =>
+      expect(readTeamStaging(fid, TEAM_SLUG).changes).toMatchObject([
+        { kind: "model", member: "M-3", model: "opus" },
+        { kind: "add", key: "new-1", role: "reviewer" },
+        { kind: "add", key: "new-2", role: "ic" },
+      ]),
+    );
+    expect(within(screen.getByTestId("staged-team-panel")).getByRole("heading")).toHaveTextContent(
+      "3 staged changes",
+    );
+  });
+
+  it("starts the next change from After current tasks and This project after Apply", async () => {
+    const { snapshot } = serve();
+    writeTeamStaging(snapshot.factory.id, TEAM_SLUG, {
+      changes: [{ kind: "model", member: "M-3", vendor: "claude", model: null }],
+      when: "now",
+      scope: "template",
+    });
+    renderAt(snapshot, EDITOR);
+    await waitFor(() => expect(screen.getByTestId("team-apply")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("team-apply"));
+    await waitFor(() =>
+      expect(location).toBe(`/factory/${snapshot.factory.id}/projects/${TEAM_SLUG}`),
+    );
+    expect(readTeamStaging(snapshot.factory.id, TEAM_SLUG)).toEqual({
+      changes: [],
+      when: "after_current",
+      scope: "project",
+    });
   });
 
   it("lets an operator propose an owner change to the owners", async () => {
@@ -242,6 +307,12 @@ describe("the team editor", () => {
     expect(
       await screen.findByText(/It waits for an owner: propose it to them/),
     ).toBeInTheDocument();
+    // A proposal carries no When: it applies after current tasks once approved.
+    expect(screen.getByTestId("team-when-now")).toBeDisabled();
+    expect(screen.getByTestId("team-when-after")).toBeChecked();
+    expect(screen.getByTestId("team-when-proposed")).toHaveTextContent(
+      "Applies after current tasks once an owner approves.",
+    );
     const propose = screen.getByRole("button", { name: "Propose to owners" });
     expect(propose).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Why (the owners read it)"), {
@@ -296,7 +367,7 @@ describe("the team editor", () => {
 
 describe("the project page's team", () => {
   it("draws the team as a chart with each member's model, state and spend", async () => {
-    const { snapshot } = serve();
+    const { snapshot, calls } = serve();
     renderAt(snapshot, `/projects/${TEAM_SLUG}`);
     const section = await screen.findByTestId("team-section");
     await waitFor(() =>
@@ -304,6 +375,11 @@ describe("the project page's team", () => {
         "6 members · 2 builders at once · changed in definition v12",
       ),
     );
+    // One Team region: the chart is the page's Team section (`#team`).
+    expect(screen.getAllByRole("region", { name: "Team" })).toHaveLength(1);
+    expect(section).toHaveAttribute("id", "team");
+    // The chart reads the snapshot's sessions, not the fleet.
+    expect(calls.filter((c) => c.path.endsWith("/agents"))).toEqual([]);
     await waitFor(() =>
       expect(within(section).getByTestId("team-tile-M-6")).toHaveTextContent("Dot"),
     );
@@ -353,6 +429,18 @@ describe("the project page's team", () => {
     await screen.findByTestId("team-section");
     fireEvent.keyDown(window, { key: "e" });
     await waitFor(() => expect(location).toBe(`/factory/${snapshot.factory.id}${EDITOR}`));
+  });
+
+  it("names the version in force after an Undo, not the undone one", async () => {
+    const { snapshot } = serve({ undone: true });
+    renderAt(snapshot, `/projects/${TEAM_SLUG}`);
+    const section = await screen.findByTestId("team-section");
+    await waitFor(() =>
+      expect(within(section).getByTestId("team-summary")).toHaveTextContent(
+        "changed in definition v12",
+      ),
+    );
+    expect(screen.queryByTestId("team-undo")).toBeNull();
   });
 
   it("offers Undo in the header while the last team change is fresh", async () => {

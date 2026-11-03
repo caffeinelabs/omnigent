@@ -25,6 +25,7 @@ interface TeamStoryOptions {
   staged?: StagedTeamChange[];
   preview?: DefinitionPreviewResponse;
   justApplied?: boolean;
+  undone?: boolean;
   peek?: string;
   theme?: "light" | "dark";
   phone?: boolean;
@@ -69,6 +70,7 @@ function team(options: TeamStoryOptions): Story {
             mode: options.mode,
             preview: options.preview,
             justApplied: options.justApplied,
+            undone: options.undone,
           })}
         />
       </Seeded>
@@ -124,6 +126,11 @@ export const ViewInvestigationMobile = team({
 export const ViewJustApplied = team({ page: "view", justApplied: true });
 export const ViewJustAppliedDark = team({ page: "view", justApplied: true, theme: "dark" });
 export const ViewJustAppliedMobile = team({ page: "view", justApplied: true, phone: true });
+
+/** After an Undo: v13 stays in history, undone, and the header names v12, the team in force. */
+export const ViewUndone = team({ page: "view", undone: true });
+export const ViewUndoneDark = team({ page: "view", undone: true, theme: "dark" });
+export const ViewUndoneMobile = team({ page: "view", undone: true, phone: true });
 
 /** History: every team change is a definition version, with Restore. */
 export const History = team({ page: "view", peek: "team-history" });
