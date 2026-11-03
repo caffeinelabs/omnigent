@@ -1,7 +1,33 @@
 import { describe, expect, it } from "vitest";
+import type { Ask } from "@/lib/factoryAsksApi";
+import type { SearchHit } from "@/lib/factoryPaletteApi";
+import { teamMember, teamRows } from "../agents/teamsModel";
 import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
-import { filterJumpItems, jumpItems } from "./paletteModel";
-import { matchingCommands, parseSlashCommand } from "./slashCommands";
+import { TEAM_SLUG, teamCatalog, teamSnapshot } from "../team/__fixtures__/teamFixtures";
+import {
+  SCORE,
+  arrangePalette,
+  askItems,
+  filterJumpItems,
+  foldQuery,
+  hitItems,
+  hitTarget,
+  jumpItems,
+  placeItems,
+  scoreMatch,
+  settingTarget,
+  snapshotItems,
+} from "./paletteModel";
+import {
+  type PaletteVerb,
+  type VerbContext,
+  askAtlasVerb,
+  idleVerbs,
+  matchingCommands,
+  paletteVerbs,
+  parseSlashCommand,
+  swapTarget,
+} from "./slashCommands";
 
 const FID = "f4f4ba9c77725331b12f0fa7072dc4d3";
 
@@ -89,5 +115,346 @@ describe("parseSlashCommand", () => {
   it("suggests commands by prefix", () => {
     expect(matchingCommands("/p").map((c) => c.name)).toEqual(["pause", "project", "people"]);
     expect(matchingCommands("/").length).toBeGreaterThan(4);
+  });
+});
+
+// ── The new cockpit's palette ──────────────────────────────────
+
+const TFID = teamSnapshot().factory.id;
+
+function hit(kind: SearchHit["kind"], ref: string, title: string, extra: Partial<SearchHit> = {}) {
+  return { kind, ref, title, detail: null, score: SCORE.words, ...extra } satisfies SearchHit;
+}
+
+function context(overrides: Partial<VerbContext> = {}): VerbContext {
+  const snapshot = overrides.snapshot ?? teamSnapshot();
+  const live = teamRows(snapshot, undefined)
+    .filter((r) => r.role !== "lead")
+    .map((r) => teamMember(r, snapshot.factory.root_session_id));
+  return {
+    snapshot,
+    live,
+    discoveryOn: true,
+    threads: ["factory", "improvements"],
+    sources: [
+      {
+        id: "repo-issues",
+        label: "Repo issues (sample)",
+        kind: "repo",
+        params: {},
+        roles: ["scout"],
+        privacy: { level: "public", redact: [], quote_max: 280, keep_days: 365 },
+        consent: "public",
+        budget: { calls_per_day: 100 },
+        interval_min: 60,
+        state: "active",
+      },
+      {
+        id: "web",
+        label: "Web and market (sample)",
+        kind: "web",
+        params: {},
+        roles: ["scout"],
+        privacy: { level: "public", redact: [], quote_max: 280, keep_days: 365 },
+        consent: "public",
+        budget: { calls_per_day: 30 },
+        interval_min: 0,
+        state: "paused",
+      },
+    ],
+    catalog: teamCatalog(),
+    perAsk: 2,
+    can: { post: true, control: true, team: true },
+    ...overrides,
+  };
+}
+
+function actions(verbs: readonly PaletteVerb[]) {
+  return verbs.map((v) => v.action);
+}
+
+describe("scoreMatch (the server's rules)", () => {
+  const score = (q: string, ref: string | null, title: string, keywords: string[] = []) =>
+    scoreMatch(foldQuery(q)!, { ref, title, keywords });
+
+  it("ranks a full ref, then its prefix or bare number, then titles, then words", () => {
+    expect(score("O-7", "O-7", "anything")).toBe(SCORE.ref);
+    expect(score("O-7", "O-70", "anything")).toBe(SCORE.refPrefix);
+    expect(score("9631", "!9631", "anything")).toBe(SCORE.refPrefix);
+    expect(score("custom", null, "Custom domain")).toBe(SCORE.titleStart);
+    expect(score("domain", null, "Custom domain")).toBe(SCORE.title);
+    expect(score("domain custom", null, "Custom domain")).toBe(SCORE.words);
+    expect(score("export", null, "Custom domain", ["csv-export"])).toBe(SCORE.words);
+    expect(score("nothing", null, "Custom domain")).toBe(0);
+    expect(foldQuery("   ")).toBeNull();
+  });
+});
+
+describe("hitItems", () => {
+  it("opens every kind where the new cockpit keeps it", () => {
+    const href = (h: SearchHit) => {
+      const target = hitTarget(TFID, h);
+      return target && "href" in target ? target.href.replace(`/factory/${TFID}`, "") : target;
+    };
+    expect(href(hit("opportunity", "O-7", "x"))).toBe("/discovery?peek=O-7");
+    expect(href(hit("signal", "S-1180", "x"))).toBe("/discovery/signals?peek=S-1180");
+    expect(href(hit("source", "repo-issues", "x"))).toBe("/discovery?peek=source%3Arepo-issues");
+    expect(href(hit("goal", "G-1", "x"))).toBe("/discovery?goal=G-1");
+    expect(href(hit("project", "#csv-export", "x", { slug: "csv-export" }))).toBe(
+      "/projects/csv-export",
+    );
+    expect(href(hit("pr", "!9631", "x", { id: "abc" }))).toBe("/prs/abc");
+    expect(href(hit("agent", "@rex", "Rex", { id: "s1", handle: "rex" }))).toBe("/agents/rex");
+    expect(href(hit("bet", "C-31", "x"))).toBe("/steer/versions?peek=C-31");
+    expect(href(hit("proposal", "C-32", "x"))).toBe("/steer/versions?peek=C-32");
+    expect(href(hit("decision", "D-2", "x", { slug: "csv-export" }))).toBe(
+      "/projects/csv-export?decision=D-2",
+    );
+    expect(href(hit("task", "T-7", "x", { slug: "csv-export", pr_id: "abc" }))).toBe("/prs/abc");
+    expect(href(hit("incident", "INC-4", "x"))).toBe("/debug/incidents/4");
+    expect(href(hit("finding", "F-2", "x"))).toBe("/debug/incidents/F-2");
+    expect(href(hit("rule", "R-3", "x"))).toBe("/steer/alerts");
+    expect(href(hit("version", "v12", "x", { version: 12, proposal: "C-32" }))).toBe(
+      "/steer/versions?peek=C-32",
+    );
+    expect(hitTarget(TFID, hit("thread", "#factory", "#factory", { thread: "factory" }))).toEqual({
+      room: "factory",
+    });
+  });
+
+  it("finds models.ic in the section that edits it, and leaves out what no section edits yet", () => {
+    expect(settingTarget("role_defaults.ic.model")).toEqual({
+      section: "definition",
+      title: "Models · Implementers",
+    });
+    expect(settingTarget("budgets.factory_usd_per_day")).toEqual({
+      section: "budgets",
+      title: "Money · Factory per day",
+    });
+    expect(settingTarget("product.delivery.merge_policy")).toBeNull();
+    const items = hitItems(
+      TFID,
+      [
+        hit("setting", "role_defaults.ic.model", "role_defaults.ic.model", {
+          path: "role_defaults.ic.model",
+          alias: "models.ic",
+          score: SCORE.ref,
+        }),
+        hit("setting", "product.delivery.merge_policy", "product.delivery.merge_policy", {
+          path: "product.delivery.merge_policy",
+        }),
+      ],
+      { discoveryOn: true },
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      group: "settings",
+      title: "Models · Implementers",
+      detail: "Cadence, previews and models · role_defaults.ic.model (was models.ic)",
+      target: { href: `/factory/${TFID}/steer/definition` },
+    });
+  });
+
+  it("hides discovery's kinds while discovery is off", () => {
+    const hits = [
+      hit("opportunity", "O-7", "Own domain (sample)"),
+      hit("signal", "S-1", "a quote (sample)"),
+      hit("source", "web", "Web (sample)"),
+      hit("goal", "G-1", "A goal (sample)"),
+      hit("project", "#csv-export", "CSV export (sample)", { slug: "csv-export" }),
+    ];
+    expect(hitItems(TFID, hits, { discoveryOn: false }).map((i) => i.group)).toEqual(["projects"]);
+    expect(hitItems(TFID, hits, { discoveryOn: true })).toHaveLength(5);
+  });
+});
+
+describe("arrangePalette", () => {
+  const verb = (title: string): PaletteVerb => ({
+    key: `verb:${title}`,
+    title,
+    detail: null,
+    action: { kind: "theme" },
+  });
+
+  it("puts a title that contains the query above the verbs (title beats verb)", () => {
+    const items = hitItems(
+      TFID,
+      [
+        hit("opportunity", "O-7", "Toggle theme per project (sample)", { score: SCORE.titleStart }),
+        hit("project", "#csv-export", "CSV export (sample)", { slug: "csv-export" }),
+      ],
+      { discoveryOn: true },
+    );
+    const sections = arrangePalette("toggle theme", items, [verb("Toggle theme")]);
+    expect(sections.map((s) => s.group)).toEqual(["opportunities", "actions", "projects"]);
+  });
+
+  it("puts the verbs above matches that only share words", () => {
+    const items = hitItems(
+      TFID,
+      [hit("project", "#csv-export", "CSV export (sample)", { slug: "csv-export" })],
+      { discoveryOn: true },
+    );
+    expect(arrangePalette("swap rex", items, [verb("Swap Rex to claude · opus")])[0]!.group).toBe(
+      "actions",
+    );
+  });
+
+  it("shows a server hit and its snapshot twin once, and caps each group", () => {
+    const snapshot = round3Snapshot();
+    const twin = snapshotItems(snapshot).find((i) => i.kind === "project")!;
+    const server = hitItems(
+      snapshot.factory.id,
+      [hit("project", twin.ref!, twin.title, { slug: twin.ref!.slice(1), score: SCORE.ref })],
+      { discoveryOn: false },
+    );
+    const sections = arrangePalette(twin.ref!, [...server, twin], []);
+    expect(sections[0]!.rows).toHaveLength(1);
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      ...twin,
+      key: `k${i}`,
+      title: `Export ${i} (sample)`,
+      score: undefined,
+    }));
+    expect(arrangePalette("export", many, [])[0]!.rows).toHaveLength(6);
+  });
+
+  it("lists Needs you, the verbs, then the rest while nothing is typed", () => {
+    const ask = {
+      id: "D-2",
+      kind: "decision",
+      ref: "D-2",
+      title: "Pick a file format (sample)",
+      href: "/factory/x",
+      meta: [],
+      project: "csv-export",
+    } as unknown as Ask;
+    const places = placeItems(TFID).filter((i) => i.group === "places");
+    const sections = arrangePalette("", [...places, ...askItems([ask])], [verb("Toggle theme")]);
+    expect(sections.map((s) => s.group)).toEqual(["needs", "actions", "places"]);
+  });
+});
+
+describe("palette verbs", () => {
+  it("swap stages a model change on the member a name means, never applying it", () => {
+    const ctx = context();
+    const target = swapTarget("swap rex to claude", ctx);
+    expect(target).toMatchObject({ slug: TEAM_SLUG, name: "Rex", rest: "claude" });
+    expect(target!.member.id).toBe("M-3");
+    const verbs = paletteVerbs("swap rex to claude · opus", ctx);
+    expect(verbs.map((v) => v.title)).toEqual(["Swap Rex to claude · opus"]);
+    expect(actions(verbs)).toEqual([
+      {
+        kind: "stage",
+        slug: TEAM_SLUG,
+        changes: [{ kind: "model", member: "M-3", vendor: "claude", model: "opus" }],
+      },
+    ]);
+    expect(verbs.every((v) => v.detail?.includes("stages a team change"))).toBe(true);
+    // Every model the role runs but its own (codex · gpt-5-codex), best first.
+    expect(paletteVerbs("swap rex to", ctx).map((v) => v.title)).toEqual([
+      "Swap Rex to claude · sonnet",
+      "Swap Rex to claude · opus",
+      "Swap Rex to claude · haiku",
+    ]);
+  });
+
+  it("swap names a vendor before the catalog answers, and suggests names while one is typed", () => {
+    expect(actions(paletteVerbs("swap rex to claude", context({ catalog: null })))).toEqual([
+      {
+        kind: "stage",
+        slug: TEAM_SLUG,
+        changes: [{ kind: "model", member: "M-3", vendor: "claude", model: null }],
+      },
+    ]);
+    expect(paletteVerbs("swap nobody to claude", context())).toEqual([]);
+  });
+
+  it("add a reviewer and raise a budget stage too", () => {
+    const ctx = context();
+    expect(actions(paletteVerbs("add a reviewer to csv", ctx))).toEqual([
+      {
+        kind: "stage",
+        slug: TEAM_SLUG,
+        changes: [{ kind: "add", key: "", role: "reviewer", vendor: "codex", model: null }],
+      },
+    ]);
+    expect(paletteVerbs("add a reviewer to csv", ctx)[0]!.title).toBe(
+      "Add a reviewer to csv-export",
+    );
+    expect(actions(paletteVerbs("raise budget csv-export to $80", ctx))).toEqual([
+      { kind: "stage", slug: TEAM_SLUG, changes: [{ kind: "budget", value: 80 }] },
+    ]);
+    expect(actions(paletteVerbs("raise budget csv-export to $5000", ctx))).toEqual([
+      { kind: "none" },
+    ]);
+    expect(actions(paletteVerbs("raise budget", ctx))).toEqual([
+      { kind: "fill", text: "raise budget csv-export to $" },
+    ]);
+    expect(actions(paletteVerbs("raise the factory budget", ctx))[0]).toEqual({
+      kind: "go",
+      href: `/factory/${TFID}/steer/budgets`,
+    });
+  });
+
+  it("a viewer stages nothing and asks nothing", () => {
+    const ctx = context({ can: { post: false, control: false, team: false } });
+    expect(paletteVerbs("swap rex to claude", ctx)).toEqual([]);
+    expect(paletteVerbs("hunch: people want X (sample)", ctx)).toEqual([]);
+    expect(askAtlasVerb("anything", ctx)).toBeNull();
+    expect(idleVerbs(ctx).map((v) => v.title)).toEqual(["Toggle theme"]);
+  });
+
+  it("discovery's verbs call its levers, and are hidden while it is off", () => {
+    const ctx = context();
+    expect(actions(paletteVerbs("hunch: people share drafts first (sample)", ctx))).toEqual([
+      { kind: "hunch", text: "people share drafts first (sample)" },
+    ]);
+    expect(actions(paletteVerbs("I think they leave because builds fail (sample)", ctx))).toEqual([
+      { kind: "hunch", text: "I think they leave because builds fail (sample)" },
+    ]);
+    expect(actions(paletteVerbs("plan o-7", ctx))).toEqual([{ kind: "plan", opportunity: "O-7" }]);
+    expect(actions(paletteVerbs("research O-7: who asks for it? (sample)", ctx))).toEqual([
+      { kind: "research", opportunity: "O-7", question: "who asks for it? (sample)" },
+    ]);
+    expect(actions(paletteVerbs("pause source", ctx))).toEqual([
+      { kind: "source", source: "repo-issues", label: "Repo issues (sample)", paused: true },
+    ]);
+    expect(actions(paletteVerbs("resume source we", ctx))).toEqual([
+      { kind: "source", source: "web", label: "Web and market (sample)", paused: false },
+    ]);
+    const off = context({ discoveryOn: false });
+    for (const q of ["hunch: x", "ask scout: x", "plan O-7", "research O-7: x", "pause source"]) {
+      expect(paletteVerbs(q, off)).toEqual([]);
+    }
+    expect(idleVerbs(off).map((v) => v.title)).toEqual(["swap … to …", "Toggle theme"]);
+    expect(idleVerbs(ctx).map((v) => v.title)).toEqual([
+      "hunch: …",
+      "ask scout: …",
+      "swap … to …",
+      "Toggle theme",
+    ]);
+  });
+
+  it("ask scout researches a named opportunity, else posts to #discovery once it exists", () => {
+    expect(actions(paletteVerbs("ask scout: why O-7 now? (sample)", context()))).toEqual([
+      { kind: "research", opportunity: "O-7", question: "why O-7 now? (sample)" },
+    ]);
+    expect(actions(paletteVerbs("ask scout: why now? (sample)", context()))).toEqual([
+      { kind: "fill", text: "ask scout O-" },
+    ]);
+    const scout = context({ threads: ["factory", "discovery"] });
+    expect(actions(paletteVerbs("ask scout: why now? (sample)", scout))).toEqual([
+      { kind: "ask_scout", text: "why now? (sample)", thread: "discovery" },
+    ]);
+  });
+
+  it("toggles the theme and asks Atlas when nothing else matches", () => {
+    expect(actions(paletteVerbs("toggle th", context()))).toEqual([{ kind: "theme" }]);
+    expect(askAtlasVerb("what is slow? (sample)", context())).toMatchObject({
+      title: "Ask Atlas: “what is slow? (sample)”",
+      detail: "posts to #factory",
+      action: { kind: "ask_atlas", text: "what is slow? (sample)" },
+    });
   });
 });

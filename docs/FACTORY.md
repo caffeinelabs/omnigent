@@ -295,6 +295,7 @@ if they stay silent the board is still right.
 | `PUT /v1/factory/agent/tasks`, `GET …/agent/tasks?view=list\|ready\|get`, `POST …/agent/tasks/{key}/start\|done\|fail\|cancel\|report` | runner (`sys_factory_task`) | The PL writes its project's tasks; leads read; the bound worker reports. |
 | `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled; `default_repo`, `default_base` and `max_projects` for the start form. |
 | `GET /v1/factory/factories/{fid}/spans?kind=&project=&pr_id=&task_id=&since=`, `GET /v1/factory/prs/{id}/timeline`, `GET …/{fid}/cost?group_by=day,project,role,agent,model`, `GET …/{fid}/export?tables=&format=ndjson\|csv` | human (READ on the root; hidden projects dropped) | Telemetry (see below). The export streams and never carries transcript content. |
+| `GET /v1/factory/factories/{fid}/search?q=&limit=` | human (READ on the root; what the viewer cannot read is left out, as in every other read) | The new cockpit's ⌘K: hits of `q` over every id (`O-`, `S-`, `G-`, `C-`, `D-`, `INC-`, `F-`, `T-`, `R-`, `!` PRs, `#` projects, `v` versions), titles, members (vendor, model, state), definition field names (old names such as `models.ic` too), versions and Room threads, best first (a full ref, then titles that contain the query, then words). Opportunities, signals and sources only while discovery runs. The palette's verbs stage team changes in the editor; discovery's verbs call the discovery routes. |
 
 ### Tools
 
