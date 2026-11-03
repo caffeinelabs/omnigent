@@ -48,7 +48,11 @@ Sections:
 - **Verdict** (``verdict``): the top bar's dot and one sentence by fixed
   rules: red when something is broken, amber when things only wait on the
   viewer, grey when paused, finished or idle, green otherwise; the digest of
-  someone on the new cockpit opens with the same sentence.
+  someone on the new cockpit opens with the same sentence. It counts only
+  what the one "Needs you" list (:mod:`.asks`) shows, so an incident the
+  factory heals itself never turns it amber.
+- **Needs you** (``counts.needs_you``): how many rows of that list wait on
+  the viewer, the count the new cockpit's top bar and Home show.
 """
 
 from __future__ import annotations
@@ -71,7 +75,12 @@ from omnigent.server.factory.decision_routing import is_mine_by, roster_owner
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
-    from omnigent.entities.factory import FactoryCostDaily, FactoryEvent, FactoryIssue
+    from omnigent.entities.factory import (
+        FactoryCostDaily,
+        FactoryEvent,
+        FactoryIssue,
+        FactoryProposal,
+    )
     from omnigent.server.factory.context import FactoryDeps
     from omnigent.server.factory.snapshot import RawSnapshot
 
@@ -386,6 +395,8 @@ class SummaryCounts(_Model):
 
     :param cant_start: Queued projects that can't start (counted in ``queued`` too).
     :param held: Projects that only wait on people (not counted in ``working``).
+    :param needs_you: Rows of the one "Needs you" list for the viewer
+        (:mod:`.asks`: ready PRs folded into one row, self-healing incidents left out).
     """
 
     waiting_for_you: int
@@ -394,6 +405,7 @@ class SummaryCounts(_Model):
     queued: int
     cant_start: int = 0
     held: int = 0
+    needs_you: int = 0
 
 
 class StatusSummary(_Model):
@@ -440,6 +452,8 @@ class StatusInputs:
     :param owners: Project slug -> its ``human_owner`` on the roster: their
         ready PRs wait on them, not on every operator.
     :param usd_per_h_alert: The factory's hourly spend alert, for the verdict's rate.
+    :param proposals: Pending, co-signing and trial proposals (``ProposalView``-like
+        dicts), which the "Needs you" list sorts into bets, sources and the rest.
     """
 
     snapshot: Mapping[str, Any]
@@ -451,6 +465,7 @@ class StatusInputs:
     notified: Mapping[str, Sequence[Mapping[str, Any]]] = field(default_factory=dict)
     owners: Mapping[str, str] = field(default_factory=dict)
     usd_per_h_alert: float | None = None
+    proposals: Sequence[Mapping[str, Any]] = ()
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -1531,10 +1546,14 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
     :param inputs: See :class:`StatusInputs` (:func:`load_inputs` gathers them).
     :param now: Epoch seconds (the 24 h window and ``generated_at``).
     """
+    from omnigent.server.factory import asks
+
     body = inputs.snapshot
     factory = body.get("factory") or {}
     links = _Links(str(factory.get("id") or ""))
     waiting = waiting_items(inputs, links)
+    needs = asks.assemble(asks.AskInputs.from_status(inputs), now=now)
+    covered = needs.covered()
     held = held_projects(body, waiting, now)
     holding = {key for keys in held.values() for key in keys}
     waiting = [item.model_copy(update={"holds": item.key in holding}) for item in waiting]
@@ -1558,13 +1577,15 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         queued=len(upcoming),
         cant_start=sum(1 for item in upcoming if item.problem is not None),
         held=len(held),
+        needs_you=sum(1 for draft in needs.drafts if draft.for_you),
     )
     summary = StatusSummary(
         factory_id=str(factory.get("id") or ""),
         factory_name=str(factory.get("name") or ""),
         generated_at=int(now),
         headline=headline(state, counts, health, spend.idle_spend, waiting),
-        verdict=verdict(state, health, waiting, inputs, links),
+        # The verdict says only what Needs you lists (self-healing incidents stay calm).
+        verdict=verdict(state, health, [i for i in waiting if i.key in covered], inputs, links),
         state=state,
         waiting=waiting,
         working=working,
@@ -1654,9 +1675,9 @@ def load_inputs(
     """
     Read what the snapshot does not carry (synchronous; run it in a worker thread).
 
-    One issues read, one two-day ledger read, a roster read only when a
-    project names a human owner, and a control-events read only while the
-    factory is paused. Slack DM receipts come with the snapshot.
+    One issues read, one two-day ledger read, one proposals read, a roster
+    read only when a project names a human owner, and a control-events read
+    only while the factory is paused. Slack DM receipts come with the snapshot.
 
     :param body: The viewer's filtered snapshot.
     :param raw: The unfiltered snapshot (who may see which incident).
@@ -1678,11 +1699,11 @@ def load_inputs(
         for slug, value in named.items():
             if (owner := roster_owner(people, value)) is not None:
                 owners[slug] = owner
+    # Every severity: the waiting list keeps warning and worse, Needs you folds the rest.
     incidents = [
         issue
         for issue in store.list_issues(root_id, class_=issues.INCIDENT, statuses=["open", "acked"])
-        if issue.severity in WAIT_SEVERITIES
-        and issues.visible_to(
+        if issues.visible_to(
             issue.project_slug,
             issue.target,
             hidden=hidden,
@@ -1709,7 +1730,12 @@ def load_inputs(
         )
         pause = controls[-1] if controls else None
     level = LEVEL_OWNER if deps.permission_store is None else viewer_level(deps, root_id, user_id)
+    proposals = [
+        proposal_row(row)
+        for row in store.list_proposals(root_id, status=list(PROPOSAL_ASK_STATUSES), limit=500)
+    ]
     return StatusInputs(
+        proposals=proposals,
         usd_per_h_alert=detectors.threshold(root_id, "usd_per_hour_alert"),
         snapshot=body,
         user_id=user_id,
@@ -1720,6 +1746,34 @@ def load_inputs(
         notified=raw.notified,
         owners=owners,
     )
+
+
+PROPOSAL_ASK_STATUSES: Final = ("pending", "awaiting_cosign", "trial")
+"""Proposals the "Needs you" list reads (awaiting a person, a co-sign, or on trial)."""
+
+
+def proposal_row(row: FactoryProposal) -> dict[str, Any]:
+    """The fields of a proposal the "Needs you" list reads, as plain JSON."""
+    return {
+        "id": row.id,
+        "number": row.number,
+        "kind": row.kind,
+        "status": row.status,
+        "title": row.title,
+        "ops": row.ops,
+        "before": row.before,
+        "after": row.after,
+        "rationale": row.rationale,
+        "author_kind": row.author_kind,
+        "author": row.author,
+        "author_role": row.author_role,
+        "cosigned_by": row.cosigned_by,
+        "opportunity": row.opportunity,
+        "bet": row.bet,
+        "case_against": row.case_against,
+        "trial_until": row.trial_until,
+        "created_at": row.created_at,
+    }
 
 
 def summary_from_raw(
@@ -1778,6 +1832,7 @@ async def status_summary_for(
 
 
 __all__ = [
+    "PROPOSAL_ASK_STATUSES",
     "CheckIn",
     "HealthBlock",
     "HealthItem",
@@ -1804,6 +1859,7 @@ __all__ = [
     "note_parts",
     "plain_lines",
     "pr_status",
+    "proposal_row",
     "spend_text",
     "start_reason",
     "status_summary_for",

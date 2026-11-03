@@ -116,7 +116,7 @@ function clip(text: string | null | undefined, limit = TEXT_MAX): string | null 
 }
 
 /** `text` on one line, cut at a word to at most `limit` characters (as `clip_words`). */
-function clipWords(text: string | null | undefined, limit: number): string | null {
+export function clipWords(text: string | null | undefined, limit: number): string | null {
   const flat = (text ?? "").trim().split(/\s+/).filter(Boolean).join(" ");
   if (!flat) return null;
   if (flat.length <= limit) return flat;
@@ -149,7 +149,7 @@ function plural(n: number, noun: string): string {
 }
 
 /** Python-style tuple order: numbers and booleans by value, strings by code point. */
-function byKeys<T>(key: (item: T) => (string | number | boolean)[]): (a: T, b: T) => number {
+export function byKeys<T>(key: (item: T) => (string | number | boolean)[]): (a: T, b: T) => number {
   return (a, b) => {
     const ka = key(a);
     const kb = key(b);
@@ -182,14 +182,18 @@ function agentName(
 
 // ── Waiting on people ──────────────────────────────────────────
 
-function decisionWho(assignee: string | null, claimedBy: string | null, userId: string | null) {
+export function decisionWho(
+  assignee: string | null,
+  claimedBy: string | null,
+  userId: string | null,
+) {
   if (claimedBy) return userId != null && claimedBy === userId ? "you" : person(claimedBy);
   const target = assignee || "operators";
   if (target === "operators" || target === "owners") return target;
   return userId != null && target === userId ? "you" : person(target);
 }
 
-function isMineBy(
+export function isMineBy(
   assignee: string | null,
   claimedBy: string | null,
   userId: string | null,
@@ -203,14 +207,14 @@ function isMineBy(
   return target === userId;
 }
 
-function subjectAgent(decision: DecisionView): string {
+export function subjectAgent(decision: DecisionView): string {
   const quoted = /^"([^"]+)"/.exec(decision.question);
   const title = quoted ? quoted[1] : decision.asked_by_title;
   const project = decision.project_slug;
   return agentName(title, null, project) ?? (project ? `the ${project} lead` : "an agent");
 }
 
-function serverDecisionText(decision: DecisionView): string | null {
+export function serverDecisionText(decision: DecisionView): string | null {
   const { question, project_slug: project } = decision;
   switch (decision.source) {
     case "relaunch_failed":
@@ -269,7 +273,7 @@ function incidentWho(assignee: string | null, userId: string | null): string {
   return userId != null && assignee === userId ? "you" : person(assignee);
 }
 
-function incidentIsMine(issue: IssueView, userId: string | null, level: number): boolean {
+export function incidentIsMine(issue: IssueView, userId: string | null, level: number): boolean {
   if (userId == null) return true;
   const assignee = issue.assignee;
   if (assignee === "owners") return level >= LEVEL_MANAGE;
@@ -986,6 +990,81 @@ function broken(
   return [parts, reasons];
 }
 
+/** Incident rules that clear by themselves (the server's `asks.SELF_HEALING_RULES`). */
+export const SELF_HEALING_RULES = new Set(["agent.repeat", "agent.quiet", "mail.stuck"]);
+
+/** The server's `asks.needs_person`: a named person, a report, critical, or warning that won't heal. */
+export function needsPerson(issue: IssueView): boolean {
+  const assignee = issue.assignee ?? "";
+  if (
+    (assignee !== "" && assignee !== "operators" && assignee !== "owners") ||
+    issue.rule === "human.report"
+  ) {
+    return true;
+  }
+  if (issue.severity === "critical") return true;
+  return issue.severity === "warning" && !SELF_HEALING_RULES.has(issue.rule);
+}
+
+/** `member:<id>` with a bare lowercase hex id; other targets as they are. */
+export function normTarget(target: string | null | undefined): string | null {
+  if (!target) return null;
+  const at = target.indexOf(":");
+  if (at < 0) return `${target}:`;
+  const rest = target.slice(at + 1);
+  const id = /^[0-9a-fA-F-]{32,36}$/.test(rest) ? rest.replace(/-/g, "").toLowerCase() : rest;
+  return `${target.slice(0, at)}:${id}`;
+}
+
+/**
+ * What the one Needs-you list (`asks.py`) makes of the waiting items (a
+ * fixture port without proposals, so every decision shows): the keys some row
+ * stands for, and its rows for the viewer: ready PRs one row per person who
+ * merges, an incident folded into the row of what it is about, and an
+ * incident that heals itself left out.
+ */
+function needsYou(
+  snapshot: FactorySnapshot,
+  waiting: readonly StatusWaitingItem[],
+  incidents: readonly IssueView[],
+): { covered: Set<string>; count: number } {
+  const decisions = new Map(snapshot.decisions.map((d) => [`decision:${d.id}`, d]));
+  const targets = new Set<string>();
+  for (const item of waiting) {
+    const decision = item.kind === "decision" ? decisions.get(item.key) : undefined;
+    if (!decision) continue;
+    for (const option of decision.options ?? []) {
+      const target = normTarget(option.target);
+      if (target) targets.add(target);
+    }
+    if (decision.subject) targets.add(decision.subject);
+  }
+  const readyPrs = new Set(
+    waiting
+      .filter((i) => i.kind === "pr")
+      .map((i) => i.key.slice(3).replace(/-/g, "").toLowerCase()),
+  );
+  const byId = new Map(incidents.map((i) => [`incident:${i.id}`, i]));
+  const covered = new Set<string>();
+  const mergers = new Set<string>();
+  let count = 0;
+  for (const item of waiting) {
+    if (item.kind !== "incident") {
+      covered.add(item.key);
+      if (item.for_you && item.kind === "decision") count += 1;
+      if (item.for_you && item.kind === "pr") mergers.add(item.who);
+      continue;
+    }
+    const issue = byId.get(item.key);
+    const target = normTarget(issue?.target) ?? "";
+    const prId = target.startsWith("pr:") ? (target.slice(3).split("@")[0] ?? "") : "";
+    const folded = targets.has(target) || (prId !== "" && readyPrs.has(prId));
+    if (folded || (issue != null && needsPerson(issue))) covered.add(item.key);
+    if (!folded && issue != null && needsPerson(issue) && item.for_you) count += 1;
+  }
+  return { covered, count: count + mergers.size };
+}
+
 function verdictOf(
   snapshot: FactorySnapshot,
   state: StatusSummary["state"],
@@ -1063,6 +1142,7 @@ export function statusSummaryOf(
   const heldSince = new Map(
     [...held].map(([slug, keys]) => [slug, Math.max(...[...keys].map((k) => since.get(k)!))]),
   );
+  const needs = needsYou(snapshot, waiting, incidents);
   const working = workingItems(snapshot, nowS, held);
   const next = nextItems(snapshot);
   const idle = working.length === 0 && next.length === 0;
@@ -1078,13 +1158,22 @@ export function statusSummaryOf(
     queued: next.length,
     cant_start: next.filter((n) => n.problem != null).length,
     held: held.size,
+    needs_you: needs.count,
   };
   return {
     factory_id: snapshot.factory.id,
     factory_name: snapshot.factory.name,
     generated_at: nowS,
     headline: headline(state, counts, health, spend.idle_spend, waiting),
-    verdict: verdictOf(snapshot, state, health, waiting, incidents, options.usdPerHAlert ?? null),
+    // The verdict says only what Needs you lists (self-healing incidents stay calm).
+    verdict: verdictOf(
+      snapshot,
+      state,
+      health,
+      waiting.filter((item) => needs.covered.has(item.key)),
+      incidents,
+      options.usdPerHAlert ?? null,
+    ),
     state,
     waiting,
     working,

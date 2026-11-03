@@ -28,8 +28,9 @@ import type {
 } from "@/lib/factoryApi";
 import round3Json from "../../__fixtures__/snapshot.round3.json";
 import type { StoryRoutes } from "../../factoryStoryFixtures";
+import { asksOf } from "../../home/__fixtures__/asksFixtures";
 import { statusSummaryOf } from "../../overview/__fixtures__/nowFixtures";
-import { roomRoutes } from "../../room/__fixtures__/roomFixtures";
+import { roomProposals, roomRoutes } from "../../room/__fixtures__/roomFixtures";
 import {
   ROUND3_NOW_S,
   round3Snapshot,
@@ -722,6 +723,10 @@ export function opsRoutes(
     // The Overview's Now card, as the server would build it for this snapshot's viewer.
     [`${base}/status-summary`]: {
       body: statusSummaryOf(snapshot, { incidents: round3IssueList() }),
+    },
+    // Home's Needs you, as the server would build it for this snapshot's viewer.
+    [`${base}/asks`]: {
+      body: asksOf(snapshot, { incidents: round3IssueList(), proposals: roomProposals() }),
     },
     [`${base}/alerts/routing`]: {
       body: { cockpit: true, browser: true, slack: false, slack_min_severity: "warning" },

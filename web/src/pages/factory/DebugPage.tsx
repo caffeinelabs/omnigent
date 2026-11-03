@@ -9,6 +9,8 @@
 
 import { BugIcon, ChevronRightIcon } from "lucide-react";
 import { ActivityList } from "@/components/factory/activity/ActivityList";
+import { ActivityHeatmap } from "@/components/factory/overview/ActivityHeatmap";
+import { LiveFeed } from "@/components/factory/overview/LiveFeed";
 import { DEBUG_VIEWS, type DebugView, debugPageHref } from "@/components/factory/factoryRoutes";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
@@ -38,14 +40,21 @@ export function debugViewOf(id: string | null | undefined): DebugView {
   return (DEBUG_VIEWS as readonly string[]).includes(id ?? "") ? (id as DebugView) : "fleet";
 }
 
+/** Debug › Activity: the last hour per project and the live feed (Home's before), then every event. */
 function ActivityView() {
-  const { snapshot } = useFactoryShell();
+  const { snapshot, nowS } = useFactoryShell();
   return (
-    <ActivityList
-      factoryId={snapshot.factory.id}
-      projects={snapshot.projects}
-      members={snapshot.members}
-    />
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className="grid min-w-0 grid-cols-1 items-start gap-4 2xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <ActivityHeatmap snapshot={snapshot} nowS={nowS} />
+        <LiveFeed snapshot={snapshot} />
+      </div>
+      <ActivityList
+        factoryId={snapshot.factory.id}
+        projects={snapshot.projects}
+        members={snapshot.members}
+      />
+    </div>
   );
 }
 

@@ -27,7 +27,7 @@
           },
           {
             "kind": "waiting",
-            "text": "2 incidents wait on you",
+            "text": "1 incident waits on you",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
           },
           {
@@ -323,7 +323,8 @@
         "working": 2,
         "queued": 1,
         "cant_start": 0,
-        "held": 2
+        "held": 2,
+        "needs_you": 6
       }
     },
     "operator": {
@@ -352,7 +353,7 @@
           },
           {
             "kind": "waiting",
-            "text": "2 incidents wait on you",
+            "text": "1 incident waits on you",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
           },
           {
@@ -648,7 +649,8 @@
         "working": 2,
         "queued": 1,
         "cant_start": 0,
-        "held": 2
+        "held": 2,
+        "needs_you": 4
       }
     },
     "viewer": {
@@ -958,7 +960,8 @@
         "working": 2,
         "queued": 1,
         "cant_start": 0,
-        "held": 2
+        "held": 2,
+        "needs_you": 0
       }
     }
   },
@@ -1660,7 +1663,8 @@
         "working": 2,
         "queued": 2,
         "cant_start": 0,
-        "held": 5
+        "held": 5,
+        "needs_you": 2
       }
     }
   }
