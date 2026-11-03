@@ -41,6 +41,29 @@
           "short": "proposed in C-19",
           "state": "ghost",
           "status_compact": {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "35m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-49",
+              "subject": "C-19",
+              "title": "Start the live-search fix?",
+              "verb": "Apply C-19"
+            },
             "detail": "proposed in C-19",
             "ends": "other",
             "kind": "proposed",
@@ -48,12 +71,14 @@
             "segments": []
           },
           "tag": "C-19",
-          "title": "Fix live search"
+          "title": "Fix live search",
+          "try_ready": true
         }
       ],
       "items": [
         {
           "budget": 150.0,
+          "burn": 2.5,
           "col": 0,
           "cost": 25.13,
           "grandchildren": {
@@ -88,12 +113,71 @@
           "short": "The shared core the panel, connectors and skills build on",
           "state": "needs",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "ends": "person",
             "kind": "needs",
-            "label": "Needs you",
-            "segments": []
+            "label": "Needs you:",
+            "segments": [
+              {
+                "ref": "T-16",
+                "sep": "›",
+                "title": "T-16"
+              },
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "expires": "2d 16h",
+                  "id": "D-45",
+                  "subject": "C-16",
+                  "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                  "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                  "verb": "Apply C-16"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "title": "assistant-core",
+          "try_ready": true,
           "working": []
         },
         {
@@ -124,6 +208,7 @@
           "ref": "connectors-core",
           "state": "done",
           "status_compact": {
+            "detail": "#9882 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -159,6 +244,7 @@
           "ref": "skill-discovery",
           "state": "done",
           "status_compact": {
+            "detail": "#9881 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -191,10 +277,45 @@
           "short": "The assistant panel inside the app",
           "state": "waiting",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "ends": "person",
             "kind": "waiting",
-            "label": "Waiting",
-            "segments": []
+            "label": "Waits on",
+            "segments": [
+              {
+                "label": "",
+                "ref": "assistant-core",
+                "sep": "→",
+                "title": "assistant-core"
+              },
+              {
+                "label": "held for C-16",
+                "sep": "→"
+              }
+            ]
           },
           "title": "assistant-panel-ux"
         }
@@ -220,7 +341,8 @@
             "label": "Later",
             "segments": []
           },
-          "title": "ads-integration"
+          "title": "ads-integration",
+          "try_ready": true
         },
         {
           "col": "later",
@@ -242,7 +364,8 @@
             "label": "Later",
             "segments": []
           },
-          "title": "growth-seo"
+          "title": "growth-seo",
+          "try_ready": true
         },
         {
           "col": "later",
@@ -264,7 +387,8 @@
             "label": "Later",
             "segments": []
           },
-          "title": "sales-skill"
+          "title": "sales-skill",
+          "try_ready": true
         },
         {
           "col": "later",
@@ -286,7 +410,8 @@
             "label": "Later",
             "segments": []
           },
-          "title": "promotion-skill"
+          "title": "promotion-skill",
+          "try_ready": true
         }
       ],
       "later_title": "Later (held)",
@@ -379,6 +504,8 @@
           }
         ]
       },
+      "budget": 300.0,
+      "burn": 2.5,
       "cost": 51.13,
       "grandchildren": {
         "by_state": {
@@ -414,13 +541,91 @@
       "short": "An assistant inside the app that helps users build",
       "state": "needs",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "expires": "2d 16h",
+          "id": "D-45",
+          "subject": "C-16",
+          "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+          "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+          "verb": "Apply C-16"
+        },
+        "ends": "person",
         "kind": "needs",
-        "label": "Needs you",
-        "segments": []
+        "label": "Needs you:",
+        "segments": [
+          {
+            "ref": "assistant-core",
+            "sep": "›",
+            "title": "assistant-core"
+          },
+          {
+            "ref": "T-16",
+            "sep": "›",
+            "title": "T-16"
+          },
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "tag": "I-1",
       "title": "Agent assistant (sample)",
+      "try_it": [
+        {
+          "acceptance_step": 2,
+          "api": true,
+          "how": "API only: assistant-panel-ux not built yet",
+          "text": "Ask how the app is doing: the answer uses analytics"
+        },
+        {
+          "acceptance_step": 3,
+          "api": true,
+          "how": "API only: assistant-panel-ux not built yet",
+          "text": "A flag-off user gets no assistant"
+        }
+      ],
+      "try_ready": true,
       "why_html": "An assistant inside the app that helps users build"
     },
     "results": {
@@ -430,10 +635,12 @@
       "readouts": "not measured"
     },
     "rollup": {
+      "budget": 300.0,
+      "burn": 2.5,
       "cost": 51.13,
       "in_base_env": {
         "sha": "817480d",
-        "try_it": false
+        "try_it": true
       },
       "moving_anywhere": false,
       "progress": {
@@ -445,10 +652,102 @@
       }
     },
     "status": {
-      "ends": "other",
+      "also_holds": [
+        {
+          "ref": "assistant-panel-ux",
+          "title": "assistant-panel-ux"
+        }
+      ],
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "expires": "2d 16h",
+        "id": "D-45",
+        "subject": "C-16",
+        "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+        "verb": "Apply C-16"
+      },
+      "ends": "person",
       "kind": "needs",
-      "label": "Needs you",
-      "segments": []
+      "label": "Not moving:",
+      "segments": [
+        {
+          "ref": "assistant-core",
+          "sep": "›",
+          "title": "assistant-core"
+        },
+        {
+          "ref": "T-16",
+          "sep": "›",
+          "title": "T-16"
+        },
+        {
+          "label": "held for C-16",
+          "sep": "→"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "Agent assistant (sample) is not moving."
+        },
+        {
+          "html": "The project that holds it is <a data-ref=\"assistant-core\">assistant-core</a>."
+        },
+        {
+          "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
+        },
+        {
+          "html": "T-16 is held for C-16."
+        },
+        {
+          "html": "Needs you: Apply C-16 (D-45), asked by Atlas 5h 54m ago; it expires in 2d 16h.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why Agent assistant (sample) is not moving"
     },
     "thread": {
       "key": "feature:I-1",
@@ -487,7 +786,7 @@
         "verb": "move"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "PR-9876": {
     "breadcrumb": [
@@ -594,6 +893,7 @@
       "ref": "PR-9876",
       "state": "done",
       "status_compact": {
+        "detail": "#9876 merged · in base env",
         "ends": "other",
         "kind": "done",
         "label": "Done",
@@ -618,6 +918,7 @@
       "moving_anywhere": false
     },
     "status": {
+      "detail": "#9876 merged · in base env",
       "ends": "other",
       "kind": "done",
       "label": "Done",
@@ -636,7 +937,7 @@
         "verb": "talk"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "T-16": {
     "breadcrumb": [
@@ -679,7 +980,14 @@
       "tiles": false,
       "total": 0
     },
-    "chips": [],
+    "chips": [
+      {
+        "kind": "alarm closed",
+        "ref": "D-48",
+        "state": "T-16 is held on purpose for C-16; a held task is not stalled",
+        "title": "D-48"
+      }
+    ],
     "levels_below": [],
     "more_chips": 0,
     "node": {
@@ -701,10 +1009,63 @@
       "ref": "T-16",
       "state": "waiting",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "expires": "2d 16h",
+          "id": "D-45",
+          "subject": "C-16",
+          "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+          "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+          "verb": "Apply C-16"
+        },
+        "ends": "person",
         "kind": "waiting",
-        "label": "Waiting",
-        "segments": []
+        "label": "Held for C-16:",
+        "segments": [
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "tag": "T-16",
       "title": "Debit each turn",
@@ -721,10 +1082,80 @@
       "moving_anywhere": false
     },
     "status": {
-      "ends": "other",
-      "kind": "waiting",
-      "label": "Waiting",
-      "segments": []
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "expires": "2d 16h",
+        "id": "D-45",
+        "subject": "C-16",
+        "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+        "verb": "Apply C-16"
+      },
+      "ends": "person",
+      "kind": "needs",
+      "label": "Held on purpose:",
+      "segments": [
+        {
+          "label": "held for C-16",
+          "sep": "→"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "Debit each turn is not moving."
+        },
+        {
+          "html": "T-16 is held for C-16."
+        },
+        {
+          "html": "Needs you: Apply C-16 (D-45), asked by Atlas 5h 54m ago; it expires in 2d 16h.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why Debit each turn is not moving"
     },
     "thread": {
       "key": "task:T-16",
@@ -751,7 +1182,7 @@
         "verb": "move"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1": {
     "breadcrumb": [
@@ -768,6 +1199,8 @@
       "ghosts": [],
       "items": [
         {
+          "budget": 300.0,
+          "burn": 2.5,
           "cost": 51.13,
           "grandchildren": {
             "by_state": {
@@ -803,13 +1236,77 @@
           "short": "An assistant inside the app that helps users build",
           "state": "needs",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "ends": "person",
             "kind": "needs",
-            "label": "Needs you",
-            "segments": []
+            "label": "Needs you:",
+            "segments": [
+              {
+                "ref": "assistant-core",
+                "sep": "›",
+                "title": "assistant-core"
+              },
+              {
+                "ref": "T-16",
+                "sep": "›",
+                "title": "T-16"
+              },
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "expires": "2d 16h",
+                  "id": "D-45",
+                  "subject": "C-16",
+                  "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                  "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                  "verb": "Apply C-16"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "tag": "I-1",
-          "title": "Agent assistant (sample)"
+          "title": "Agent assistant (sample)",
+          "try_ready": true
         }
       ],
       "later": [],
@@ -877,6 +1374,8 @@
     ],
     "more_chips": 0,
     "node": {
+      "budget": 300.0,
+      "burn": 2.5,
       "cost": 51.13,
       "evidence": {
         "items": [
@@ -914,10 +1413,73 @@
       "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
       "state": "needs",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "expires": "2d 16h",
+          "id": "D-45",
+          "subject": "C-16",
+          "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+          "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+          "verb": "Apply C-16"
+        },
+        "ends": "person",
         "kind": "needs",
-        "label": "Needs you",
-        "segments": []
+        "label": "Needs you:",
+        "segments": [
+          {
+            "ref": "I-1",
+            "sep": "›",
+            "title": "Agent assistant (sample)"
+          },
+          {
+            "ref": "T-16",
+            "sep": "›",
+            "title": "T-16"
+          },
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "title": "I want an assistant in the app that helps with building, and later with discovery and sales too.",
       "why_html": "<b>“I want an assistant in the app that helps with building, and later with discovery and sales too.”</b>"
@@ -929,18 +1491,120 @@
       "readouts": "not measured"
     },
     "rollup": {
+      "budget": 300.0,
+      "burn": 2.5,
       "cost": 51.13,
       "in_base_env": {
         "sha": "817480d",
-        "try_it": false
+        "try_it": true
       },
       "moving_anywhere": false
     },
     "status": {
-      "ends": "other",
+      "also_holds": [
+        {
+          "ref": "assistant-panel-ux",
+          "title": "assistant-panel-ux"
+        }
+      ],
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "expires": "2d 16h",
+        "id": "D-45",
+        "subject": "C-16",
+        "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+        "verb": "Apply C-16"
+      },
+      "ends": "person",
       "kind": "needs",
-      "label": "Needs you",
-      "segments": []
+      "label": "Not moving:",
+      "segments": [
+        {
+          "ref": "I-1",
+          "sep": "›",
+          "title": "Agent assistant (sample)"
+        },
+        {
+          "ref": "assistant-core",
+          "sep": "›",
+          "title": "assistant-core"
+        },
+        {
+          "ref": "T-16",
+          "sep": "›",
+          "title": "T-16"
+        },
+        {
+          "label": "held for C-16",
+          "sep": "→"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "I want an assistant in the app that helps with building, and later with discovery and sales too. is not moving."
+        },
+        {
+          "html": "The feature that holds it is <a data-ref=\"I-1\">Agent assistant (sample)</a>."
+        },
+        {
+          "html": "The project that holds it is <a data-ref=\"assistant-core\">assistant-core</a>."
+        },
+        {
+          "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
+        },
+        {
+          "html": "T-16 is held for C-16."
+        },
+        {
+          "html": "Needs you: Apply C-16 (D-45), asked by Atlas 5h 54m ago; it expires in 2d 16h.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why I want an assistant in the app that helps with building, and later with discovery and sales too. is not moving"
     },
     "thread": {
       "key": "need:ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
@@ -961,7 +1625,7 @@
         "verb": "add"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "assistant-core": {
     "breadcrumb": [
@@ -1019,6 +1683,7 @@
           "ref": "T-15",
           "state": "done",
           "status_compact": {
+            "detail": "#9876 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -1046,10 +1711,63 @@
           "ref": "T-16",
           "state": "waiting",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "ends": "person",
             "kind": "waiting",
-            "label": "Waiting",
-            "segments": []
+            "label": "Held for C-16:",
+            "segments": [
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "expires": "2d 16h",
+                  "id": "D-45",
+                  "subject": "C-16",
+                  "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                  "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                  "verb": "Apply C-16"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "tag": "T-16",
           "title": "Debit each turn"
@@ -1106,6 +1824,7 @@
     "more_chips": 0,
     "node": {
       "budget": 150.0,
+      "burn": 2.5,
       "col": 0,
       "cost": 25.13,
       "grandchildren": {
@@ -1140,12 +1859,85 @@
       "short": "The shared core the panel, connectors and skills build on",
       "state": "needs",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "expires": "2d 16h",
+          "id": "D-45",
+          "subject": "C-16",
+          "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+          "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+          "verb": "Apply C-16"
+        },
+        "ends": "person",
         "kind": "needs",
-        "label": "Needs you",
-        "segments": []
+        "label": "Needs you:",
+        "segments": [
+          {
+            "ref": "T-16",
+            "sep": "›",
+            "title": "T-16"
+          },
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "title": "assistant-core",
+      "try_it": [
+        {
+          "acceptance_step": 2,
+          "api": true,
+          "how": "API only: assistant-panel-ux not built yet",
+          "text": "Ask how the app is doing: the answer uses analytics"
+        },
+        {
+          "acceptance_step": 3,
+          "api": true,
+          "how": "API only: assistant-panel-ux not built yet",
+          "text": "A flag-off user gets no assistant"
+        }
+      ],
+      "try_ready": true,
       "why_html": "The shared core the panel, connectors and skills build on <b>Wave 1 of Agent assistant (sample).</b>",
       "working": []
     },
@@ -1157,10 +1949,11 @@
     },
     "rollup": {
       "budget": 150.0,
+      "burn": 2.5,
       "cost": 25.13,
       "in_base_env": {
         "sha": "817480d",
-        "try_it": false
+        "try_it": true
       },
       "moving_anywhere": false,
       "progress": {
@@ -1174,10 +1967,88 @@
       }
     },
     "status": {
-      "ends": "other",
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "expires": "2d 16h",
+        "id": "D-45",
+        "subject": "C-16",
+        "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+        "verb": "Apply C-16"
+      },
+      "ends": "person",
       "kind": "needs",
-      "label": "Needs you",
-      "segments": []
+      "label": "Not moving:",
+      "segments": [
+        {
+          "ref": "T-16",
+          "sep": "›",
+          "title": "T-16"
+        },
+        {
+          "label": "held for C-16",
+          "sep": "→"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "assistant-core is not moving."
+        },
+        {
+          "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
+        },
+        {
+          "html": "T-16 is held for C-16."
+        },
+        {
+          "html": "Needs you: Apply C-16 (D-45), asked by Atlas 5h 54m ago; it expires in 2d 16h.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why assistant-core is not moving"
     },
     "thread": {
       "key": "project:assistant-core",
@@ -1222,7 +2093,7 @@
         "verb": "move"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "assistant-panel-ux": {
     "breadcrumb": [
@@ -1324,10 +2195,45 @@
       "short": "The assistant panel inside the app",
       "state": "waiting",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "expires": "2d 16h",
+          "id": "D-45",
+          "subject": "C-16",
+          "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+          "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+          "verb": "Apply C-16"
+        },
+        "ends": "person",
         "kind": "waiting",
-        "label": "Waiting",
-        "segments": []
+        "label": "Waits on",
+        "segments": [
+          {
+            "label": "",
+            "ref": "assistant-core",
+            "sep": "→",
+            "title": "assistant-core"
+          },
+          {
+            "label": "held for C-16",
+            "sep": "→"
+          }
+        ]
       },
       "title": "assistant-panel-ux",
       "why_html": "The assistant panel inside the app <b>Wave 1 of Agent assistant (sample).</b>"
@@ -1350,10 +2256,99 @@
       }
     },
     "status": {
-      "ends": "other",
-      "kind": "waiting",
-      "label": "Waiting",
-      "segments": []
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "expires": "2d 16h",
+        "id": "D-45",
+        "subject": "C-16",
+        "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+        "verb": "Apply C-16"
+      },
+      "ends": "person",
+      "kind": "needs",
+      "label": "Not started for 7 h:",
+      "note": "It also waited on 3 projects linked without a reason (ux-env-badge-copy, ux-slash-focus, ux-status-page). They are done, so those links are met and no longer hold it.",
+      "segments": [
+        {
+          "label": "waits on",
+          "reason": "needs the session API and per-turn debit",
+          "ref": "assistant-core",
+          "sep": "→",
+          "title": "assistant-core"
+        },
+        {
+          "ref": "T-16",
+          "sep": "›",
+          "title": "T-16"
+        },
+        {
+          "label": "held for C-16",
+          "sep": "→"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "assistant-panel-ux has not started for 7 h."
+        },
+        {
+          "html": "It waits on <a data-ref=\"assistant-core\">assistant-core</a>, because it needs the session API and per-turn debit."
+        },
+        {
+          "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
+        },
+        {
+          "html": "T-16 is held for C-16."
+        },
+        {
+          "html": "Needs you: Apply C-16 (D-45), asked by Atlas 5h 54m ago; it expires in 2d 16h.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why assistant-panel-ux has not started"
     },
     "thread": {
       "key": "project:assistant-panel-ux",
@@ -1404,7 +2399,7 @@
         "verb": "move"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "base-env": {
     "breadcrumb": [
@@ -1492,7 +2487,7 @@
         "verb": "rename"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "build-tier-drafts-3": {
     "breadcrumb": [
@@ -1541,10 +2536,47 @@
           "ref": "PR-9856",
           "state": "waiting",
           "status_compact": {
-            "ends": "other",
-            "kind": "waiting",
-            "label": "Waiting",
-            "segments": []
+            "decision": {
+              "actions": [
+                {
+                  "id": "merge",
+                  "label": "Review and merge"
+                }
+              ],
+              "age": "7h 39m",
+              "asker": "Nova",
+              "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+              "grouped": true,
+              "id": "merge:main",
+              "text": "Ready to merge into main. A person merges main, so the factory does not.",
+              "title": "Merge #9856 and #9857 into main",
+              "verb": "Merge #9856 and #9857"
+            },
+            "ends": "person",
+            "kind": "needs",
+            "label": "Needs you:",
+            "segments": [
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "merge",
+                      "label": "Review and merge"
+                    }
+                  ],
+                  "age": "7h 39m",
+                  "asker": "Nova",
+                  "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                  "grouped": true,
+                  "id": "merge:main",
+                  "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                  "title": "Merge #9856 and #9857 into main",
+                  "verb": "Merge #9856 and #9857"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "tag": "#9856",
           "title": "build-tier-drafts-3, part 1"
@@ -1564,10 +2596,47 @@
           "ref": "PR-9857",
           "state": "waiting",
           "status_compact": {
-            "ends": "other",
-            "kind": "waiting",
-            "label": "Waiting",
-            "segments": []
+            "decision": {
+              "actions": [
+                {
+                  "id": "merge",
+                  "label": "Review and merge"
+                }
+              ],
+              "age": "7h 39m",
+              "asker": "Nova",
+              "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+              "grouped": true,
+              "id": "merge:main",
+              "text": "Ready to merge into main. A person merges main, so the factory does not.",
+              "title": "Merge #9856 and #9857 into main",
+              "verb": "Merge #9856 and #9857"
+            },
+            "ends": "person",
+            "kind": "needs",
+            "label": "Needs you:",
+            "segments": [
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "merge",
+                      "label": "Review and merge"
+                    }
+                  ],
+                  "age": "7h 39m",
+                  "asker": "Nova",
+                  "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                  "grouped": true,
+                  "id": "merge:main",
+                  "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                  "title": "Merge #9856 and #9857 into main",
+                  "verb": "Merge #9856 and #9857"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "tag": "#9857",
           "title": "build-tier-drafts-3, part 2"
@@ -1636,10 +2705,47 @@
       "ref": "build-tier-drafts-3",
       "state": "waiting",
       "status_compact": {
-        "ends": "other",
-        "kind": "waiting",
-        "label": "Waiting",
-        "segments": []
+        "decision": {
+          "actions": [
+            {
+              "id": "merge",
+              "label": "Review and merge"
+            }
+          ],
+          "age": "7h 39m",
+          "asker": "Nova",
+          "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+          "grouped": true,
+          "id": "merge:main",
+          "text": "Ready to merge into main. A person merges main, so the factory does not.",
+          "title": "Merge #9856 and #9857 into main",
+          "verb": "Merge #9856 and #9857"
+        },
+        "ends": "person",
+        "kind": "needs",
+        "label": "Needs you:",
+        "segments": [
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "merge",
+                  "label": "Review and merge"
+                }
+              ],
+              "age": "7h 39m",
+              "asker": "Nova",
+              "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+              "grouped": true,
+              "id": "merge:main",
+              "text": "Ready to merge into main. A person merges main, so the factory does not.",
+              "title": "Merge #9856 and #9857 into main",
+              "verb": "Merge #9856 and #9857"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "title": "build-tier-drafts-3",
       "why_html": ""
@@ -1660,10 +2766,58 @@
       }
     },
     "status": {
-      "ends": "other",
-      "kind": "waiting",
-      "label": "Waiting",
-      "segments": []
+      "decision": {
+        "actions": [
+          {
+            "id": "merge",
+            "label": "Review and merge"
+          }
+        ],
+        "age": "7h 39m",
+        "asker": "Nova",
+        "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+        "grouped": true,
+        "id": "merge:main",
+        "text": "Ready to merge into main. A person merges main, so the factory does not.",
+        "title": "Merge #9856 and #9857 into main",
+        "verb": "Merge #9856 and #9857"
+      },
+      "detail": "Ready to merge into main. A person merges main, so the factory does not.",
+      "ends": "person",
+      "kind": "needs",
+      "label": "Needs you:",
+      "segments": [
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "merge",
+                "label": "Review and merge"
+              }
+            ],
+            "age": "7h 39m",
+            "asker": "Nova",
+            "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+            "grouped": true,
+            "id": "merge:main",
+            "text": "Ready to merge into main. A person merges main, so the factory does not.",
+            "title": "Merge #9856 and #9857 into main",
+            "verb": "Merge #9856 and #9857"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "build-tier-drafts-3 is not moving."
+        },
+        {
+          "html": "Needs you: Merge #9856 and #9857, asked by Nova 7h 39m ago.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why build-tier-drafts-3 is not moving"
     },
     "thread": {
       "key": "project:build-tier-drafts-3",
@@ -1708,7 +2862,7 @@
         "verb": "move"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "feature:from-C-13": {
     "breadcrumb": [
@@ -1759,6 +2913,7 @@
           "ref": "ux-env-badge-copy",
           "state": "done",
           "status_compact": {
+            "detail": "#9826 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -1794,6 +2949,7 @@
           "ref": "ux-slash-focus",
           "state": "done",
           "status_compact": {
+            "detail": "#9828 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -1829,6 +2985,7 @@
           "ref": "ux-status-page",
           "state": "done",
           "status_compact": {
+            "detail": "#9829 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -1864,6 +3021,7 @@
           "ref": "api-request-id",
           "state": "done",
           "status_compact": {
+            "detail": "#9827 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -1945,7 +3103,7 @@
       "ref": "feature:from-C-13",
       "state": "done",
       "status_compact": {
-        "detail": "all 4 done",
+        "detail": "#9826, #9828, #9829 +1 merged · in base env",
         "ends": "other",
         "kind": "done",
         "label": "Done",
@@ -1974,7 +3132,7 @@
       }
     },
     "status": {
-      "detail": "all 4 done",
+      "detail": "#9826, #9828, #9829 +1 merged · in base env",
       "ends": "other",
       "kind": "done",
       "label": "Done",
@@ -1999,7 +3157,7 @@
         "verb": "name"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "fx": {
     "breadcrumb": [],
@@ -2033,10 +3191,64 @@
           "short": "2 open",
           "state": "needs",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "id": "D-50",
+              "subject": "C-17",
+              "title": "Decision 50",
+              "verb": "Apply rule C-17"
+            },
+            "ends": "person",
             "kind": "needs",
-            "label": "Needs you",
-            "segments": []
+            "label": "Needs you:",
+            "segments": [
+              {
+                "ref": "C-17",
+                "sep": "›",
+                "title": "C-17"
+              },
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "id": "D-50",
+                  "subject": "C-17",
+                  "title": "Decision 50",
+                  "verb": "Apply rule C-17"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "title": "Rules"
         },
@@ -2070,7 +3282,12 @@
           "status_compact": {
             "ends": "moving",
             "kind": "moving",
-            "label": "Moving",
+            "label": "Moving:",
+            "moving": {
+              "activity": "working",
+              "ref": "member:00000000000000000000000000000259",
+              "title": "Atlas"
+            },
             "segments": []
           },
           "title": "Team",
@@ -2107,15 +3324,30 @@
           "short": "Base env sample-main @817480d · ready",
           "state": "waiting",
           "status_compact": {
+            "detail": "waiting",
             "ends": "other",
             "kind": "waiting",
-            "label": "Waiting",
-            "segments": []
+            "label": "Waiting:",
+            "segments": [
+              {
+                "ref": "base-env",
+                "sep": "›",
+                "title": "base-env"
+              }
+            ]
           },
           "title": "Environments"
         },
         {
           "glyph": "▦",
+          "grandchildren": {
+            "by_state": {
+              "done": 3
+            },
+            "count": 3,
+            "later": 0,
+            "noun": "items"
+          },
           "kind": "area",
           "kind_name": "Area",
           "level": "area",
@@ -2129,8 +3361,10 @@
             "working": false
           },
           "ref": "fx:health",
+          "short": "3 alarms closed by the server today",
           "state": "done",
           "status_compact": {
+            "detail": "3 alarms closed by the server today, each with its cause",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -2188,12 +3422,13 @@
       },
       {
         "by_state": {
+          "done": 3,
           "moving": 1,
           "needs": 2,
           "notstarted": 1,
           "waiting": 1
         },
-        "count": 5,
+        "count": 8,
         "later": 0,
         "level": "item",
         "name": "Items",
@@ -2228,10 +3463,69 @@
       "ref": "fx",
       "state": "needs",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "id": "D-50",
+          "subject": "C-17",
+          "title": "Decision 50",
+          "verb": "Apply rule C-17"
+        },
+        "ends": "person",
         "kind": "needs",
-        "label": "Needs you",
-        "segments": []
+        "label": "Needs you:",
+        "segments": [
+          {
+            "ref": "fx:rules",
+            "sep": "›",
+            "title": "Rules"
+          },
+          {
+            "ref": "C-17",
+            "sep": "›",
+            "title": "C-17"
+          },
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "id": "D-50",
+              "subject": "C-17",
+              "title": "Decision 50",
+              "verb": "Apply rule C-17"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "title": "Factory",
       "why_html": "How the factory itself runs: its team, rules, environments, health and definition. Product work never shows here."
@@ -2250,9 +3544,276 @@
       }
     },
     "status": {
-      "ends": "other",
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "id": "D-50",
+        "subject": "C-17",
+        "title": "Decision 50",
+        "verb": "Apply rule C-17"
+      },
+      "ends": "person",
       "kind": "needs",
-      "label": "Needs you",
+      "label": "Top blocker:",
+      "segments": [
+        {
+          "ref": "fx:rules",
+          "sep": "›",
+          "title": "Rules"
+        },
+        {
+          "ref": "C-17",
+          "sep": "›",
+          "title": "C-17"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-50",
+            "subject": "C-17",
+            "title": "Decision 50",
+            "verb": "Apply rule C-17"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "Factory has work moving, but this holds the rest."
+        },
+        {
+          "html": "The area that holds it is <a data-ref=\"fx:rules\">Rules</a>."
+        },
+        {
+          "html": "The item that holds it is <a data-ref=\"C-17\">Spike unproven external capabilities first</a>."
+        },
+        {
+          "html": "Needs you: Apply rule C-17 (D-50), asked by Atlas 5h 54m ago.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why Factory is not moving"
+    },
+    "thread": {
+      "key": "improvements",
+      "responder": "Sentinel",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      }
+    ],
+    "version": "bf03ded18b13b923"
+  },
+  "fx:health": {
+    "breadcrumb": [
+      {
+        "level": "fx",
+        "level_name": "Factory",
+        "ref": "fx",
+        "state": "needs",
+        "title": "Factory"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "kind": "alarm",
+          "kind_name": "Alarm",
+          "level": "item",
+          "level_name": "Item",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "D-47",
+          "state": "done",
+          "status_compact": {
+            "detail": "closed by the server: PR #9881 merged.",
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "tag": "D-47",
+          "title": "PR #9881: claim 1/3 stalled - what next?"
+        },
+        {
+          "kind": "alarm",
+          "kind_name": "Alarm",
+          "level": "item",
+          "level_name": "Item",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "D-46",
+          "state": "done",
+          "status_compact": {
+            "detail": "closed by the server: PR #9881 merged.",
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "tag": "D-46",
+          "title": "T-18 Discovery skill with live search: implement 2/3 stalled - what next?"
+        },
+        {
+          "kind": "alarm",
+          "kind_name": "Alarm",
+          "level": "item",
+          "level_name": "Item",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "D-48",
+          "state": "done",
+          "status_compact": {
+            "detail": "closed by the server: T-16 is held on purpose for C-16; a held task is not stalled. The real ask is D-45.",
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "tag": "D-48",
+          "title": "T-16 Debit each turn: implement 1/3 stalled - what next?"
+        }
+      ],
+      "later": [],
+      "level": "item",
+      "level_name": "Items",
+      "tiles": true,
+      "total": 3
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 3
+        },
+        "count": 3,
+        "later": 0,
+        "level": "item",
+        "name": "Items",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "closed_alarms": [
+        {
+          "cause": "PR #9881 merged",
+          "id": "D-47",
+          "ref": "skill-discovery",
+          "was": "PR #9881: claim 1/3 stalled - what next?"
+        },
+        {
+          "cause": "PR #9881 merged",
+          "id": "D-46",
+          "ref": "skill-discovery",
+          "was": "T-18 Discovery skill with live search: implement 2/3 stalled - what next?"
+        },
+        {
+          "cause": "T-16 is held on purpose for C-16; a held task is not stalled",
+          "id": "D-48",
+          "real_ask": "D-45",
+          "ref": "T-16",
+          "was": "T-16 Debit each turn: implement 1/3 stalled - what next?"
+        }
+      ],
+      "glyph": "▦",
+      "grandchildren": {
+        "by_state": {
+          "done": 3
+        },
+        "count": 3,
+        "later": 0,
+        "noun": "items"
+      },
+      "kind": "area",
+      "kind_name": "Area",
+      "level": "area",
+      "level_name": "Area",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Sentinel",
+        "working": false
+      },
+      "ref": "fx:health",
+      "short": "3 alarms closed by the server today",
+      "state": "done",
+      "status_compact": {
+        "detail": "3 alarms closed by the server today, each with its cause",
+        "ends": "other",
+        "kind": "done",
+        "label": "Done",
+        "segments": []
+      },
+      "title": "Health",
+      "why_html": "Alarms the factory handled by itself, each with its cause. An alarm reaches you only when its cause path ends at a person."
+    },
+    "rollup": {
+      "cost": 0.0,
+      "moving_anywhere": false
+    },
+    "status": {
+      "detail": "3 alarms closed by the server today, each with its cause",
+      "ends": "other",
+      "kind": "done",
+      "label": "Done",
       "segments": []
     },
     "thread": {
@@ -2268,7 +3829,7 @@
         "verb": "talk"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "fx:rules": {
     "breadcrumb": [
@@ -2301,10 +3862,59 @@
           "ref": "C-17",
           "state": "needs",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "id": "D-50",
+              "subject": "C-17",
+              "title": "Decision 50",
+              "verb": "Apply rule C-17"
+            },
+            "ends": "person",
             "kind": "needs",
-            "label": "Needs you",
-            "segments": []
+            "label": "Needs you:",
+            "segments": [
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "id": "D-50",
+                  "subject": "C-17",
+                  "title": "Decision 50",
+                  "verb": "Apply rule C-17"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "tag": "C-17",
           "title": "Spike unproven external capabilities first"
@@ -2326,10 +3936,59 @@
           "ref": "C-18",
           "state": "needs",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "id": "D-51",
+              "subject": "C-18",
+              "title": "Decision 51",
+              "verb": "Apply rule C-18"
+            },
+            "ends": "person",
             "kind": "needs",
-            "label": "Needs you",
-            "segments": []
+            "label": "Needs you:",
+            "segments": [
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "id": "D-51",
+                  "subject": "C-18",
+                  "title": "Decision 51",
+                  "verb": "Apply rule C-18"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "tag": "C-18",
           "title": "Name pending scope decisions in READY posts"
@@ -2381,10 +4040,64 @@
       "short": "2 open",
       "state": "needs",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "id": "D-50",
+          "subject": "C-17",
+          "title": "Decision 50",
+          "verb": "Apply rule C-17"
+        },
+        "ends": "person",
         "kind": "needs",
-        "label": "Needs you",
-        "segments": []
+        "label": "Needs you:",
+        "segments": [
+          {
+            "ref": "C-17",
+            "sep": "›",
+            "title": "C-17"
+          },
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "id": "D-50",
+              "subject": "C-17",
+              "title": "Decision 50",
+              "verb": "Apply rule C-17"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "title": "Rules",
       "why_html": "Rules agents follow, with trials. Changes are proposed from what went wrong."
@@ -2394,10 +4107,77 @@
       "moving_anywhere": false
     },
     "status": {
-      "ends": "other",
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "id": "D-50",
+        "subject": "C-17",
+        "title": "Decision 50",
+        "verb": "Apply rule C-17"
+      },
+      "ends": "person",
       "kind": "needs",
-      "label": "Needs you",
-      "segments": []
+      "label": "Not moving:",
+      "segments": [
+        {
+          "ref": "C-17",
+          "sep": "›",
+          "title": "C-17"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-50",
+            "subject": "C-17",
+            "title": "Decision 50",
+            "verb": "Apply rule C-17"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "Rules is not moving."
+        },
+        {
+          "html": "The item that holds it is <a data-ref=\"C-17\">Spike unproven external capabilities first</a>."
+        },
+        {
+          "html": "Needs you: Apply rule C-17 (D-50), asked by Atlas 5h 54m ago.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why Rules is not moving"
     },
     "thread": {
       "key": "improvements",
@@ -2412,7 +4192,7 @@
         "verb": "talk"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   },
   "product": {
     "breadcrumb": [],
@@ -2421,6 +4201,8 @@
       "ghosts": [],
       "items": [
         {
+          "budget": 300.0,
+          "burn": 2.5,
           "cost": 51.13,
           "glyph": "ASK",
           "grandchildren": {
@@ -2447,10 +4229,73 @@
           "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
           "state": "needs",
           "status_compact": {
-            "ends": "other",
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "ends": "person",
             "kind": "needs",
-            "label": "Needs you",
-            "segments": []
+            "label": "Needs you:",
+            "segments": [
+              {
+                "ref": "I-1",
+                "sep": "›",
+                "title": "Agent assistant (sample)"
+              },
+              {
+                "ref": "T-16",
+                "sep": "›",
+                "title": "T-16"
+              },
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "apply",
+                      "label": "Apply"
+                    },
+                    {
+                      "id": "edit",
+                      "label": "Edit & apply"
+                    },
+                    {
+                      "id": "reject",
+                      "label": "Reject"
+                    }
+                  ],
+                  "age": "5h 54m",
+                  "asker": "Atlas",
+                  "expires": "2d 16h",
+                  "id": "D-45",
+                  "subject": "C-16",
+                  "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                  "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                  "verb": "Apply C-16"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
         },
@@ -2486,10 +4331,47 @@
           "ref": "build-tier-drafts-3",
           "state": "waiting",
           "status_compact": {
-            "ends": "other",
-            "kind": "waiting",
-            "label": "Waiting",
-            "segments": []
+            "decision": {
+              "actions": [
+                {
+                  "id": "merge",
+                  "label": "Review and merge"
+                }
+              ],
+              "age": "7h 39m",
+              "asker": "Nova",
+              "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+              "grouped": true,
+              "id": "merge:main",
+              "text": "Ready to merge into main. A person merges main, so the factory does not.",
+              "title": "Merge #9856 and #9857 into main",
+              "verb": "Merge #9856 and #9857"
+            },
+            "ends": "person",
+            "kind": "needs",
+            "label": "Needs you:",
+            "segments": [
+              {
+                "decision": {
+                  "actions": [
+                    {
+                      "id": "merge",
+                      "label": "Review and merge"
+                    }
+                  ],
+                  "age": "7h 39m",
+                  "asker": "Nova",
+                  "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                  "grouped": true,
+                  "id": "merge:main",
+                  "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                  "title": "Merge #9856 and #9857 into main",
+                  "verb": "Merge #9856 and #9857"
+                },
+                "person": true,
+                "sep": "→"
+              }
+            ]
           },
           "title": "build-tier-drafts-3"
         },
@@ -2520,6 +4402,7 @@
           "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
           "state": "done",
           "status_compact": {
+            "detail": "#9826, #9828, #9829 +1 merged · in base env",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -2611,6 +4494,19 @@
     "more_chips": 0,
     "node": {
       "cost": 444.0,
+      "env": {
+        "api_url": "https://api.sample.test",
+        "app_url": "https://app.sample.test",
+        "branch": "sample-main",
+        "deployed_at": "2026-11-03T13:27:00Z",
+        "name": "Base env",
+        "ref": "base-env",
+        "sha": "817480d",
+        "smoke": {
+          "ok": true
+        },
+        "state": "ready"
+      },
       "glyph": "◆",
       "grandchildren": {
         "by_state": {
@@ -2637,10 +4533,73 @@
       "ref": "product",
       "state": "needs",
       "status_compact": {
-        "ends": "other",
+        "decision": {
+          "actions": [
+            {
+              "id": "apply",
+              "label": "Apply"
+            },
+            {
+              "id": "edit",
+              "label": "Edit & apply"
+            },
+            {
+              "id": "reject",
+              "label": "Reject"
+            }
+          ],
+          "age": "5h 54m",
+          "asker": "Atlas",
+          "expires": "2d 16h",
+          "id": "D-45",
+          "subject": "C-16",
+          "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+          "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+          "verb": "Apply C-16"
+        },
+        "ends": "person",
         "kind": "needs",
-        "label": "Needs you",
-        "segments": []
+        "label": "Needs you:",
+        "segments": [
+          {
+            "ref": "I-1",
+            "sep": "›",
+            "title": "Agent assistant (sample)"
+          },
+          {
+            "ref": "T-16",
+            "sep": "›",
+            "title": "T-16"
+          },
+          {
+            "decision": {
+              "actions": [
+                {
+                  "id": "apply",
+                  "label": "Apply"
+                },
+                {
+                  "id": "edit",
+                  "label": "Edit & apply"
+                },
+                {
+                  "id": "reject",
+                  "label": "Reject"
+                }
+              ],
+              "age": "5h 54m",
+              "asker": "Atlas",
+              "expires": "2d 16h",
+              "id": "D-45",
+              "subject": "C-16",
+              "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+              "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+              "verb": "Apply C-16"
+            },
+            "person": true,
+            "sep": "→"
+          }
+        ]
       },
       "title": "Sample app (sample)",
       "why_html": "Builds <b>sample-org/sample-app</b> into <b>sample-main</b>. No goals are set yet, so that level is hidden and needs hang off the product."
@@ -2652,6 +4611,10 @@
       "readouts": "not measured"
     },
     "rollup": {
+      "alarms_closed": {
+        "count": 3,
+        "ref": "fx:health"
+      },
       "burn": 9.37,
       "cost": 444.0,
       "counts": [
@@ -2671,15 +4634,115 @@
       ],
       "in_base_env": {
         "sha": "817480d",
-        "try_it": false
+        "try_it": true
       },
       "moving_anywhere": false
     },
     "status": {
-      "ends": "other",
+      "also_holds": [
+        {
+          "ref": "assistant-panel-ux",
+          "title": "assistant-panel-ux"
+        }
+      ],
+      "decision": {
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply"
+          },
+          {
+            "id": "edit",
+            "label": "Edit & apply"
+          },
+          {
+            "id": "reject",
+            "label": "Reject"
+          }
+        ],
+        "age": "5h 54m",
+        "asker": "Atlas",
+        "expires": "2d 16h",
+        "id": "D-45",
+        "subject": "C-16",
+        "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+        "verb": "Apply C-16"
+      },
+      "ends": "person",
       "kind": "needs",
-      "label": "Needs you",
-      "segments": []
+      "label": "Not moving:",
+      "segments": [
+        {
+          "ref": "I-1",
+          "sep": "›",
+          "title": "Agent assistant (sample)"
+        },
+        {
+          "ref": "assistant-core",
+          "sep": "›",
+          "title": "assistant-core"
+        },
+        {
+          "ref": "T-16",
+          "sep": "›",
+          "title": "T-16"
+        },
+        {
+          "label": "held for C-16",
+          "sep": "→"
+        },
+        {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "person": true,
+          "sep": "→"
+        }
+      ],
+      "why": [
+        {
+          "html": "Sample app (sample) is not moving."
+        },
+        {
+          "html": "The feature that holds it is <a data-ref=\"I-1\">Agent assistant (sample)</a>."
+        },
+        {
+          "html": "The project that holds it is <a data-ref=\"assistant-core\">assistant-core</a>."
+        },
+        {
+          "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
+        },
+        {
+          "html": "T-16 is held for C-16."
+        },
+        {
+          "html": "Needs you: Apply C-16 (D-45), asked by Atlas 5h 54m ago; it expires in 2d 16h.",
+          "tone": "you"
+        }
+      ],
+      "why_title": "Why Sample app (sample) is not moving"
     },
     "thread": {
       "key": "factory",
@@ -2700,6 +4763,6 @@
         "verb": "add"
       }
     ],
-    "version": "4e3d188c9836702d"
+    "version": "bf03ded18b13b923"
   }
 }

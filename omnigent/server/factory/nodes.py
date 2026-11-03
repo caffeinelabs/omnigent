@@ -31,7 +31,7 @@ Adapters (``api.md`` §5):
   number two repos share is ``PR-n`` in the factory's repo and
   ``commit:<sha>`` in the other) and the sessions that ran a task
   (``run:<session id>``, under its PR; a task with runs and no PR yet has no
-  run page: a follow-up with S6).
+  run page yet).
 - states: a closed project is done whatever tasks it left (those are history
   and read "Closed"); a project between queued and ready moves only while its
   lead or a teammate works, else it waits.
@@ -43,8 +43,11 @@ Implicit parents are keyed by their origin and fold into their only child
 (``structure.fold_single_child``). A level hidden by the definition's
 ``show`` rule (``when_any`` with no node, ``when_many`` with one) is left out
 and its nodes' children hang one level up. :func:`check_levels` proves the
-one-parent rule on a built tree; the status line here is the state only (the
-blocker path comes later).
+one-parent rule on a built tree. Each node's status line is its blocker path
+(:mod:`.node_status`); roll-ups add burn (``turn`` spans), budgets, an ETA
+only from observed durations, Try it from passing acceptance steps and what
+is in the base env (:func:`.base.contains`); the factory tree's Health lists
+the alarms the server closed (:mod:`.alarms`).
 
 Nothing here names a product: titles come from the factory's records and
 level names from its definition.
@@ -72,7 +75,8 @@ from omnigent.factory import (
     STAGE_QUEUED,
     STAGE_READY,
 )
-from omnigent.server.factory import features, levels, node_refs
+from omnigent.server.factory import alarms, features, levels, node_refs, node_status, waits
+from omnigent.server.factory.base import DeployedHead, contains, same_commit
 from omnigent.server.factory.charter import normalize_charter, project_kind
 from omnigent.server.factory.definition_blocks import (
     FACTORY_TREE,
@@ -80,7 +84,7 @@ from omnigent.server.factory.definition_blocks import (
     PRODUCT_TREE,
     TREES,
 )
-from omnigent.server.factory.graph import DEFAULT_WEIGHT_MIN, TaskNode, layers
+from omnigent.server.factory.graph import DEFAULT_WEIGHT_MIN, TaskNode, critical_path, layers
 from omnigent.server.factory.initiative_view import RUN_DONE, plan_of
 from omnigent.stores.factory_store import norm_id
 
@@ -89,9 +93,11 @@ if TYPE_CHECKING:
     from omnigent.entities.factory import (
         FactoryDecision,
         FactoryInitiative,
+        FactoryLoop,
         FactoryPr,
         FactoryProject,
         FactoryProposal,
+        FactorySpan,
         FactoryTask,
     )
     from omnigent.entities.factory_discovery import FactoryOpportunity
@@ -102,10 +108,16 @@ _logger = logging.getLogger(__name__)
 
 FACTS_TTL_S: Final = 5.0
 """How long one factory's projection is reused (any recorded write drops it sooner)."""
+BURN_WINDOW_S: Final = 3600
+"""Burn is the spend of the last hour."""
+TURNS_LOOKBACK_S: Final = 3 * 3600
+"""Turn spans read for the burn: long turns that began earlier still end in the hour."""
 PAGE_SIZE: Final = 60
 """Children per page (``children.next`` reads the next ones)."""
 NO_GOAL: Final = "goal:no-goal"
 """The implicit goal of needs that name none, once the factory has goals."""
+_HEALTH: Final = f"{node_refs.FX}:health"
+"""The factory area that lists the alarms the server closed."""
 ROW_LEVELS: Final = frozenset({"task", "change", "run"})
 """Levels drawn only as rows (never tiles); their crumbs carry their code."""
 
@@ -154,6 +166,8 @@ _PROJECT_WAIT_KINDS: Final = frozenset(
     {"stall", "proposal", "hold", "merge", "dependency", "capacity"}
 )
 """Project waits that make it wait (an open question is a decision: it needs you)."""
+_BUILDING: Final = frozenset({"running", "review"})
+"""Task states whose builder works whatever its project still waits on."""
 _RULE_KINDS: Final = frozenset({"tuning", "rules", "code"})
 _RULE_OPEN: Final = frozenset({*PROPOSAL_OPEN_STATUSES, "trial"})
 READ_PROPOSALS: Final = (*sorted(_RULE_OPEN), "applied")
@@ -232,9 +246,17 @@ class NodeFacts:
         ``title``, ``running``, ``is_top_level``, ``role``).
     :param asks: Chat message id (bare hex) -> ``(text, who)`` of the asks
         that the proposals behind live nodes answer.
-    :param base_env: The snapshot's ``factory.base`` (head, the live env).
+    :param base_env: The snapshot's ``factory.base`` (head, the live env and
+        the commit it runs, ``deployed``).
     :param cost: What the viewer may see spent so far; ``burn`` its spend
         per hour (``None`` when part of the factory is hidden from them).
+    :param loops: The bad loops (stalled, exhausted, thrashing): stall waits.
+    :param leads: Project slug -> its lead's session (questions its lead asked).
+    :param targets: The owner-set auto-merge targets the server merges into now.
+    :param observed: Task kind -> observed p50 minutes (kinds with at least five
+        samples): the only inputs an ETA is computed from.
+    :param turns: Recent ``turn`` spans (the cost of the last hour: burn).
+    :param closed_alarms: Alarms the server closed today, with their causes.
     """
 
     factory_id: str
@@ -258,6 +280,12 @@ class NodeFacts:
     cost: float | None = None
     burn: float | None = None
     now: float = 0.0
+    loops: Sequence[FactoryLoop] = ()
+    leads: Mapping[str, str | None] = field(default_factory=dict)
+    targets: frozenset[tuple[str, str]] = frozenset()
+    observed: Mapping[str, float] = field(default_factory=dict)
+    turns: Sequence[FactorySpan] = ()
+    closed_alarms: Sequence[alarms.ClosedAlarm] = ()
 
     def version(self) -> str:
         """:returns: A digest of the rows read (``NodePage.version``; a write's ``based_on``)."""
@@ -321,6 +349,8 @@ def load_facts(
     *,
     readable: Iterable[str] | None = None,
     now: float | None = None,
+    leads: Mapping[str, str | None] | None = None,
+    targets: frozenset[tuple[str, str]] = frozenset(),
 ) -> NodeFacts:
     """
     Read what the projection needs (synchronous; a handful of row reads).
@@ -330,11 +360,16 @@ def load_facts(
         already cut to what the viewer may read.
     :param readable: The sessions the viewer may read; open decisions asked by
         any other session are left out (``None``: every decision).
+    :param leads: Project slug -> its lead's session (the snapshot's); else
+        each project row's own.
+    :param targets: The auto-merge targets the server merges into now.
     """
     from omnigent.server.factory import definition
+    from omnigent.server.factory.tasks import observed_weights
 
     store = deps.factory_store
     fid = root.id
+    clock = time.time() if now is None else now
     resolved = definition.definition_for(deps, fid)
     doc = resolved.doc if resolved is not None else definition.default_doc()
     factory = body.get("factory") or {}
@@ -355,6 +390,12 @@ def load_facts(
         ]
     product = (doc.get("product") or {}).get("name") or factory.get("name") or ""
     totals = body.get("totals") or {}
+    turns = store.list_spans(
+        fid,
+        kinds=["turn"],
+        since_ms=int((clock - TURNS_LOOKBACK_S) * 1000),
+        limit=5000,
+    )
     return NodeFacts(
         factory_id=norm_id(fid),
         product=str(product),
@@ -376,7 +417,13 @@ def load_facts(
         base_env=base or None,
         cost=factory.get("cost_usd"),
         burn=totals.get("usd_per_h"),
-        now=time.time() if now is None else now,
+        now=clock,
+        loops=store.list_loops(fid, states=sorted(waits.BAD_LOOP_STATES)),
+        leads=dict(leads) if leads is not None else {p.slug: p.pl_session_id for p in projects},
+        targets=targets,
+        observed=observed_weights(deps, fid),
+        turns=turns,
+        closed_alarms=alarms.load(store, fid, clock),
     )
 
 
@@ -424,6 +471,10 @@ class _N:
     note: str | None = None
     history: bool = False
     row_id: str | None = None
+    since: int | None = None
+    done_note: str | None = None
+    steps: tuple[tuple[int, str, str | None, str], ...] = ()
+    surfaces: tuple[str, ...] = ()
 
 
 def _esc(text: Any) -> str:
@@ -471,13 +522,35 @@ class Tree:
         self.nodes: dict[str, _N] = {}
         self.kids: dict[str, list[str]] = {}
         self.decisions_at: dict[str, list[FactoryDecision]] = {}
+        self.decision_node: dict[str, str] = {}
         self.hidden_levels: dict[str, list[str]] = {}
         self._memo: dict[tuple[str, str], Any] = {}
+        self._own: dict[str, list[waits.Wait]] = {}
+        self.project_rows: dict[str, FactoryProject] = {
+            p.slug: p for p in facts.projects if p.slug not in self.hidden
+        }
+        self.task_rows: dict[str, FactoryTask] = {
+            t.ref: t for t in facts.tasks if t.project_slug not in self.hidden
+        }
+        self.pr_rows: dict[str, FactoryPr] = {norm_id(p.id): p for p in facts.prs}
+        self.wfacts = waits.Facts(
+            projects={p.slug: p for p in facts.projects},
+            prs=facts.prs,
+            decisions=facts.decisions,
+            proposals=facts.proposals,
+            tasks=facts.tasks,
+            loops=facts.loops,
+            leads=facts.leads,
+            now=facts.now,
+            targets=facts.targets,
+        )
+        self.closed_alarms = alarms.visible(facts.closed_alarms, self.hidden)
         self._build()
         self._hide_levels()
         self._index()
         self._place_decisions()
         self._order_columns()
+        self.paths = node_status.Paths(self)
 
     # ── Building ───────────────────────────────────────────────
 
@@ -501,6 +574,7 @@ class Tree:
         self._goals()
         self._opportunities()
         self._proposals = {p.ref: p for p in facts.proposals}
+        self.proposals_by_ref = self._proposals
         self._created_by = self._creators()
         self._initiatives()
         self._projects()
@@ -704,6 +778,8 @@ class Tree:
             if row.status == "done":
                 node.own, node.leaf = "done", True
             node.acceptance = _acceptance(row)
+            node.steps = _steps(row, node.acceptance)
+            node.surfaces = tuple(str(s) for s in plan.get("user_facing") or [])
 
     def _feature_of(self, project: FactoryProject, home: features.Home) -> str:
         """The project's feature: its home initiative, else the implicit one of its origin."""
@@ -759,10 +835,7 @@ class Tree:
         charter = normalize_charter(project.charter)
         stage = str(view.get("stage") or project.stage or STAGE_QUEUED)
         status = view.get("status") or project.status
-        waits = any(
-            w.get("kind") in _PROJECT_WAIT_KINDS and not w.get("task")
-            for w in view.get("waiting_on") or []
-        )
+        held = any(w.kind in _PROJECT_WAIT_KINDS for w in self._project_waits(project, view))
         pl = view.get("pl") or {}
         team = list(view.get("team") or [])
         working = tuple(str(m.get("title")) for m in team if m.get("running") and m.get("title"))
@@ -792,7 +865,8 @@ class Tree:
             own=own,
             note=note,
             leaf=item,
-            waits=waits,
+            waits=held,
+            since=project.created_at if own == "notstarted" else None,
             paused=bool(view.get("paused_by")),
             short=_clip(charter.get("outcome"), _SHORT_MAX) or None,
             why=why,
@@ -807,6 +881,40 @@ class Tree:
             working=working,
             idle=len(team) - len(working) if team else None,
         )
+
+    def _project_waits(self, project: FactoryProject, view: Mapping[str, Any]) -> list[waits.Wait]:
+        """
+        The project's own waits (not a task's), most decisive first: the
+        snapshot's ``waiting_on`` (:func:`.waits.project_waits`, already cut to
+        the viewer), else computed from the facts for a project it has no view of.
+        """
+        listed = view.get("waiting_on") if view else None
+        if isinstance(listed, list):
+            found = [_wait(w) for w in listed if isinstance(w, Mapping) and not w.get("task")]
+            own = [w for w in found if w is not None]
+        else:
+            start = view.get("start") if isinstance(view.get("start"), Mapping) else None
+            computed = waits.project_waits(project, self.wfacts, start=start) if project.id else []
+            own = [w for w in computed if w.task is None]
+        self._own[_project_ref(project.slug)] = own
+        return own
+
+    def _task_waits(self, task: FactoryTask) -> list[waits.Wait]:
+        """
+        The task's waits, most decisive first. A task being built does not
+        wait on its project's dependencies (its builder works regardless).
+        """
+        found = waits.task_waits(task, self.wfacts)
+        if task.state in _BUILDING:
+            found = [w for w in found if w.kind not in ("dependency", "capacity")]
+        ranked = sorted(enumerate(found), key=lambda p: (waits.KINDS.index(p[1].kind), p[0]))
+        own = [w for _, w in ranked]
+        self._own[task.ref] = own
+        return own
+
+    def own_waits(self, node: _N) -> list[waits.Wait]:
+        """:returns: What *node* itself waits on, most decisive first (projects and tasks)."""
+        return self._own.get(node.ref, [])
 
     def _projects(self) -> None:
         facts = self.facts
@@ -886,7 +994,6 @@ class Tree:
 
     def _tasks_and_changes(self) -> None:
         facts = self.facts
-        held = self._held_tasks()
         tasks_by_id: dict[str, _N] = {}
         estimates: dict[str, list[int]] = {}
         for task in facts.tasks:
@@ -902,6 +1009,11 @@ class Tree:
             own = _TASK_STATE.get(task.state, "notstarted")
             # A closed project's unfinished tasks are history: they never colour it.
             history = own != "done" and self.nodes[project].own == "done"
+            held = (
+                not history
+                and task.state in waits.OPEN_TASK_STATES
+                and bool(self._task_waits(task))
+            )
             node = self._add(
                 _N(
                     task.ref,
@@ -917,7 +1029,7 @@ class Tree:
                     else None,
                     history=history,
                     leaf=True,
-                    waits=not history and task.state != "done" and task.ref in held,
+                    waits=held,
                     why=_esc(_clip((task.card or {}).get("text"), _WHY_MAX)),
                     order=task.key,
                     deps=tuple(str(d) for d in task.deps or ()),
@@ -960,20 +1072,6 @@ class Tree:
             ):
                 change_of[task.ref] = ref
         self._runs(change_of)
-
-    def _held_tasks(self) -> set[str]:
-        """Tasks something holds: a wait the snapshot lists on them, or a hold not lapsed."""
-        out: set[str] = set()
-        for view in self.facts.views.values():
-            for wait in view.get("waiting_on") or []:
-                if wait.get("task"):
-                    out.add(str(wait["task"]))
-        for task in self.facts.tasks:
-            hold = task.hold or {}
-            until = hold.get("until")
-            if hold and (not isinstance(until, int | float) or until > self.facts.now):
-                out.add(task.ref)
-        return out
 
     def _pr_refs(self) -> list[tuple[FactoryPr, str]]:
         """
@@ -1082,7 +1180,30 @@ class Tree:
                 )
             )
         self._team()
+        self._closed_alarms()
         self._areas()
+
+    def _closed_alarms(self) -> None:
+        """Alarms the server closed today, under Health, each with its cause."""
+        for alarm in self.closed_alarms:
+            if alarm.ref in self.nodes:
+                continue
+            real = f" The real ask is {alarm.real_ask}." if alarm.real_ask else ""
+            self._add(
+                _N(
+                    alarm.ref,
+                    FACTORY_TREE,
+                    "item",
+                    "alarm",
+                    _clip(alarm.was, _TITLE_MAX),
+                    _HEALTH,
+                    tag=alarm.ref,
+                    own="done",
+                    leaf=True,
+                    why=f"Closed by the server: {_esc(alarm.cause)}.{_esc(real)}",
+                    done_note=_clip(f"closed by the server: {alarm.cause}.{real}", _WHY_MAX),
+                )
+            )
 
     def _team(self) -> None:
         """Working top-level agents are drawn (and any an open ask names); idle ones counted."""
@@ -1128,6 +1249,11 @@ class Tree:
         rules = sum(1 for n in self.nodes.values() if n.parent == "fx:rules")
         if rules:
             self.nodes["fx:rules"].short = f"{rules} open"
+        if closed := len(self.closed_alarms):
+            noun = "alarm" if closed == 1 else "alarms"
+            health = self.nodes[_HEALTH]
+            health.short = f"{closed} {noun} closed by the server today"
+            health.done_note = f"{health.short}, each with its cause"
         base = self.facts.base_env or {}
         reported = (base.get("env") or {}).get("reported") or {}
         sha = str((reported.get("deployed") or {}).get("sha") or "")[:7]
@@ -1183,12 +1309,30 @@ class Tree:
         self._prs_by_id = {norm_id(p.id): p for p in self.facts.prs}
         self._tasks_by_key = {(t.project_slug, t.key): t for t in self.facts.tasks}
         self._tasks_by_number = {t.number: t for t in self.facts.tasks}
+        self._tasks_by_id = {norm_id(t.id): t for t in self.facts.tasks}
+        loops = {norm_id(lp.decision_id): lp for lp in self.facts.loops if lp.decision_id}
         for decision in self.facts.decisions:
-            if decision.status != "open":
+            if decision.status != "open" or self._held_alarm(decision, loops):
                 continue
             ref = self._decision_target(decision)
             if ref is not None:
                 self.decisions_at.setdefault(ref, []).append(decision)
+                self.decision_node[decision.id] = ref
+
+    def _held_alarm(self, decision: FactoryDecision, loops: Mapping[str, FactoryLoop]) -> bool:
+        """
+        A stall alarm on a task held on purpose is noise, never an ask: the
+        stall clock waits on a held task and the server closes the alarm with
+        that cause (the hold's own decision is the real ask).
+        """
+        if decision.source not in alarms.ALARM_SOURCES:
+            return False
+        loop = loops.get(norm_id(decision.id))
+        task = self._tasks_by_id.get(norm_id(loop.task_id)) if loop and loop.task_id else None
+        if task is None or not task.hold:
+            return False
+        held = waits.explicit_hold(task, self.wfacts)
+        return held is not None and held.on_purpose
 
     def _decision_target(self, decision: FactoryDecision) -> str | None:
         """The node a decision is about (``api.md`` §5): its subject, else its project."""
@@ -1358,10 +1502,18 @@ class Tree:
         if state != "done" and node.waits:
             state = _worst([state, "waiting"])
         if state not in ("done", "later", "ghost") and any(
-            d.blocking for d in self.decisions_at.get(node.ref, [])
+            d.blocking for d in self.own_decisions(node)
         ):
             state = "needs"
         return state
+
+    def own_decisions(self, node: _N) -> list[FactoryDecision]:
+        """Open decisions about *node*, and about the children it was proposed to get."""
+        found = list(self.decisions_at.get(node.ref, []))
+        for kid in self.children(node.ref):
+            if kid.ghost:
+                found += self.decisions_at.get(kid.ref, [])
+        return found
 
     def needs(self, ref: str) -> tuple[int, int]:
         """``(open, blocking)``: distinct open decisions in *ref*'s subtree."""
@@ -1498,8 +1650,8 @@ class Tree:
 
     def in_base_env(self, node: _N) -> bool:
         """
-        Whether *node*'s merged changes are all in the base env (a change: merged
-        before the live env last deployed; ancestry of the merge commit comes later).
+        Whether *node*'s merged changes are all in the base env: the commit it
+        runs contains each merge (:func:`.base.contains`, by ancestry).
         """
 
         def make() -> bool:
@@ -1513,14 +1665,38 @@ class Tree:
     def _env(self) -> Mapping[str, Any]:
         return ((self.facts.base_env or {}).get("env") or {}).get("reported") or {}
 
+    def _deployed(self) -> DeployedHead | None:
+        """
+        The commit the base env runs while it is up: the server's recorded fact
+        (placed in the base's history), else the env's own report.
+        """
+
+        def make() -> DeployedHead | None:
+            env = self._env()
+            if env.get("state") != "ready":
+                return None
+            reported = str((env.get("deployed") or {}).get("sha") or "").lower()
+            stored = (self.facts.base_env or {}).get("deployed") or {}
+            sha = str(stored.get("sha") or "").lower()
+            if sha and (not reported or same_commit(sha, reported)):
+                head_at = stored.get("head_at")
+                return DeployedHead(
+                    sha, int(stored.get("at") or 0), int(head_at) if head_at else None
+                )
+            if reported:
+                return DeployedHead(reported, int(env.get("at") or 0))
+            return None
+
+        return self._cached("deployed", "", make)
+
     def _change_in_base(self, node: _N) -> bool:
-        env = self._env()
-        if not node.merged_at or env.get("state") != "ready":
+        deployed = self._deployed()
+        branch = (self.facts.base_env or {}).get("branch")
+        if deployed is None or not node.merged_at:
             return False
-        deployed = (env.get("deployed") or {}).get("sha")
-        if deployed and node.merged_sha and str(deployed).startswith(str(node.merged_sha)[:7]):
-            return True
-        return int(env.get("at") or 0) >= int(node.merged_at)
+        if branch and node.base and node.base != branch:
+            return False
+        return contains(deployed, merged_sha=node.merged_sha, merged_at=node.merged_at)
 
     # ── The API's shapes ───────────────────────────────────────
 
@@ -1530,8 +1706,23 @@ class Tree:
     def _level_label(self, node: _N) -> str:
         return self._level_name(node.level)
 
-    def status(self, node: _N) -> dict[str, Any]:
-        """The state-only ``StatusLine`` (the blocker path is not computed here yet)."""
+    def status(self, node: _N, *, compact: bool = False) -> dict[str, Any]:
+        """
+        The node's ``StatusLine``: what moves, or its blocker path ending at
+        whoever must act (:mod:`.node_status`); the state alone when nothing
+        holds it. *compact* is a tile's or a row's line: the end of the path.
+        """
+        key = "line:compact" if compact else "line"
+        return self._cached(key, node.ref, lambda: self._status(node, compact=compact))
+
+    def _status(self, node: _N, *, compact: bool) -> dict[str, Any]:
+        out = self.paths.line(node, compact=compact) or self._state_line(node)
+        if not compact and out["kind"] != "done" and (note := self.paths.note(node)):
+            out["note"] = note
+        return out
+
+    def _state_line(self, node: _N) -> dict[str, Any]:
+        """The ``StatusLine`` the state alone says (done, later, proposed, not started …)."""
         state = self.state(node.ref)
         kind, label = _STATUS.get(state, ("idle", state.capitalize()))
         out: dict[str, Any] = {"kind": kind, "label": label, "segments": [], "ends": "other"}
@@ -1539,23 +1730,51 @@ class Tree:
             out["ends"] = "moving"
         if state == "later" and node.held_for:
             out["detail"] = f"held for {node.held_for}"
-        elif state == "ghost" and node.short:
-            out["detail"] = node.short
+        elif state == "ghost":
+            ask = next((d for d in self.decisions_at.get(node.ref, []) if d.blocking), None)
+            if ask is not None:
+                out["decision"] = self.paths.decision_ask(ask).to_json()
+            if node.short:
+                out["detail"] = node.short
         elif state == "done" and node.history:
             out["label"] = "Closed"
             if node.note:
                 out["detail"] = node.note
         elif state == "done":
-            kids = self.real_children(node.ref)
-            left = sum(1 for k in kids if k.history)
-            if left:
-                noun = self._level_name(kids[0].level, plural=left != 1).lower()
-                out["detail"] = f"closed · {left} unfinished {noun} left as history"
-            elif len(kids) > 1:
-                out["detail"] = f"all {len(kids)} done"
+            if detail := self._done_detail(node):
+                out["detail"] = detail
+        elif state == "notstarted" and node.since and node.level == "project":
+            out["detail"] = f"queued {node_status.duration(self.facts.now - node.since)}"
         elif node.note and state == node.own:
             out["detail"] = node.note
         return out
+
+    def _done_detail(self, node: _N) -> str | None:
+        """What a finished node left: its note, its merged changes and where they run."""
+        if node.done_note:
+            return node.done_note
+        kids = self.real_children(node.ref)
+        left = sum(1 for k in kids if k.history)
+        if left:
+            noun = self._level_name(kids[0].level, plural=left != 1).lower()
+            return f"closed · {left} unfinished {noun} left as history"
+        merged = [
+            n for n in [node, *self.subtree(node.ref)] if n.level == "change" and n.merged_at
+        ]
+        if merged and node.tree == PRODUCT_TREE:
+            tags = [n.tag or n.ref for n in merged[:3]]
+            more = f" +{len(merged) - 3}" if len(merged) > 3 else ""
+            where = ""
+            if self._deployed() is not None:
+                where = (
+                    " · in base env"
+                    if all(self._change_in_base(n) for n in merged)
+                    else " · not yet in base env"
+                )
+            return f"{', '.join(tags)}{more} merged{where}"
+        if len(kids) > 1:
+            return f"all {len(kids)} done"
+        return None
 
     def _grandchildren(self, node: _N) -> dict[str, Any] | None:
         if node.level in ROW_LEVELS:
@@ -1596,7 +1815,7 @@ class Tree:
             "kind_name": self.kind_names.get(node.kind, node.kind.capitalize()),
             "title": node.title,
             "state": state,
-            "status_compact": self.status(node),
+            "status_compact": self.status(node, compact=True),
             "needs": dict(zip(("open", "blocking"), self.needs(node.ref), strict=True)),
         }
         if glyph := _GLYPHS.get(node.kind):
@@ -1622,10 +1841,14 @@ class Tree:
         cost = self.cost(node)
         if cost:
             out["cost"] = round(float(cost), 2)
-        if node.budget:
-            out["budget"] = node.budget
+        if (burn := self.burn(node)) and node.ref != node_refs.PRODUCT:
+            out["burn"] = burn
+        if budget := self.budget(node):
+            out["budget"] = budget
         if node.tree == PRODUCT_TREE and node.level != "product" and self.in_base_env(node):
             out["in_base_env"] = True
+        if self.try_it(node):
+            out["try_ready"] = True
         if (grand := self._grandchildren(node)) is not None:
             out["grandchildren"] = grand
         if owner := self._owner(node):
@@ -1745,11 +1968,13 @@ class Tree:
             "cost": round(float(self.cost(node) or 0.0), 2),
             "moving_anywhere": self.moving_anywhere(node.ref),
         }
+        if burn := self.burn(node):
+            out["burn"] = burn
         if node.ref == node_refs.PRODUCT:
             if counts := self._root_counts(node):
                 out["counts"] = counts
-            if self.facts.burn:
-                out["burn"] = round(float(self.facts.burn), 2)
+            if self.closed_alarms:
+                out["alarms_closed"] = {"count": len(self.closed_alarms), "ref": _HEALTH}
         elif node.ref == node_refs.FX:
             members = [m for m in self.facts.members if m.get("is_top_level")]
             working = [m for m in members if m.get("running")]
@@ -1760,18 +1985,208 @@ class Tree:
         else:
             if progress := self.progress(node):
                 out["progress"] = progress
-            if node.budget:
-                out["budget"] = node.budget
+            if budget := self.budget(node):
+                out["budget"] = budget
+            if eta := self.eta(node):
+                out["eta"] = eta
             if node.working or node.idle:
                 out["team"] = {
                     "working": [{"name": n, "working": True} for n in node.working],
                     "idle": node.idle or 0,
                 }
-        env = self._env()
-        sha = (env.get("deployed") or {}).get("sha")
-        if node.tree == PRODUCT_TREE and sha and self.in_base_env(node):
-            out["in_base_env"] = {"sha": str(sha)[:7], "try_it": False}
+        deployed = self._deployed()
+        if node.tree == PRODUCT_TREE and deployed is not None and self.in_base_env(node):
+            out["in_base_env"] = {"sha": deployed.sha[:7], "try_it": self.can_try(node)}
         return out
+
+    def can_try(self, node: _N) -> bool:
+        """Whether something at or under *node* passes in the base env and can be tried."""
+        if node.level in ("feature", "project"):
+            return bool(self.try_it(node))
+        if node.level in ROW_LEVELS:
+            return False
+        return any(self.try_it(n) for n in self.at_level(node.ref, "feature"))
+
+    # ── Money, time and what can be tried ──────────────────────
+
+    def _burn_by_project(self) -> dict[str, float]:
+        """Project slug -> its spend in the last hour, from turn spans (cost at open and close)."""
+
+        def make() -> dict[str, float]:
+            now_ms = int(self.facts.now * 1000)
+            start = now_ms - BURN_WINDOW_S * 1000
+            out: dict[str, float] = {}
+            for span in self.facts.turns:
+                attrs = span.attrs or {}
+                begin, end = attrs.get("cost_start"), attrs.get("cost_end")
+                slug = span.project_slug
+                if not slug or slug in self.hidden or span.ended_at is None:
+                    continue
+                if not isinstance(begin, int | float) or not isinstance(end, int | float):
+                    continue
+                inside = min(span.ended_at, now_ms) - max(span.started_at, start)
+                if inside <= 0 or end <= begin:
+                    continue
+                length = max(1, span.ended_at - span.started_at)
+                out[slug] = out.get(slug, 0.0) + (end - begin) * min(1.0, inside / length)
+            return out
+
+        return self._cached("burns", "", make)
+
+    def burn(self, node: _N) -> float | None:
+        """Spend per hour now: the last hour's turns, summed over the subtree's projects."""
+        if node.ref == node_refs.PRODUCT:
+            return round(float(self.facts.burn), 2) if self.facts.burn else None
+        burns = self._burn_by_project()
+        if not burns:
+            return None
+        if node.level == "project" or (node.level == "item" and node.kind == "env"):
+            found = burns.get(node.order or "", 0.0)
+        elif node.level in ROW_LEVELS or node.tree != PRODUCT_TREE:
+            return None
+        else:
+            found = sum(
+                burns.get(n.order or "", 0.0)
+                for n in self.subtree(node.ref)
+                if n.level == "project"
+            )
+        return round(found, 2) if found >= 0.01 else None
+
+    def budget(self, node: _N) -> float | None:
+        """A node's cap: its own, else the sum of its children's caps."""
+        if node.budget:
+            return float(node.budget)
+        if node.level not in ("feature", "need", "goal") or node.implicit:
+            return None
+        found = [
+            b
+            for k in self.real_children(node.ref)
+            if not k.later and (b := self.budget(k)) is not None
+        ]
+        return round(sum(found), 2) if found else None
+
+    def project_weight(self, node: _N) -> float:
+        """A project's weight: its tasks' estimates, else its siblings' median, else 60 min."""
+        found = self._project_progress(node)
+        if found is not None:
+            return found[3]
+        parent = self.nodes.get(node.parent or "")
+        sibs = [
+            p[3]
+            for k in (self.real_children(parent.ref) if parent is not None else [])
+            if k.level == "project" and k.ref != node.ref and (p := self._project_progress(k))
+        ]
+        sibs.sort()
+        return sibs[len(sibs) // 2] if sibs else DEFAULT_WEIGHT_MIN
+
+    def task_weight(self, node: _N) -> float:
+        return self._weight(node, node.parent or "")
+
+    def _project_eta_min(self, node: _N) -> float | None:
+        """Minutes left on a project's critical path, only from observed task durations."""
+        observed = self.facts.observed
+        if not observed:
+            return None
+        rows = [
+            t
+            for t in self.facts.tasks
+            if t.project_slug == node.order and t.state not in ("cancelled", "failed")
+        ]
+        live = [t for t in rows if t.state != "done"]
+        if not live or any(t.kind not in observed for t in live):
+            return None
+        graph = [
+            TaskNode(
+                key=t.key,
+                number=t.number,
+                kind=t.kind,
+                state=t.state,
+                deps=tuple(str(d) for d in t.deps or ()),
+                estimate_min=t.estimate_min,
+            )
+            for t in rows
+        ]
+        _path, total = critical_path(graph, lambda n: float(observed[n.kind]))
+        return total or None
+
+    def eta_min(self, node: _N) -> float | None:
+        """
+        Minutes left, shown only from observations (each kind with at least
+        :data:`~.graph.MIN_OBSERVED_SAMPLES` samples): a project's remaining
+        critical path; a feature's slowest project per column, summed.
+        """
+
+        def make() -> float | None:
+            if node.level == "project" and not node.later and not node.ghost:
+                if self.state(node.ref) == "done":
+                    return None
+                return self._project_eta_min(node)
+            if node.level != "feature":
+                return None
+            live = [
+                k
+                for k in self.real_children(node.ref)
+                if k.level == "project" and not k.later and self.state(k.ref) != "done"
+            ]
+            if not live:
+                return None
+            slowest: dict[int, float] = {}
+            for kid in live:
+                left = self.eta_min(kid)
+                if left is None:
+                    return None
+                col = kid.col or 0
+                slowest[col] = max(slowest.get(col, 0.0), left)
+            return sum(slowest.values()) or None
+
+        return self._cached("eta", node.ref, make)
+
+    def eta(self, node: _N) -> str | None:
+        left = self.eta_min(node)
+        if left is None:
+            return None
+        if left < 90:
+            return f"~{max(1, round(left))} min"
+        if left < 48 * 60:
+            return f"~{round(left / 60)} h"
+        return f"~{round(left / 1440)} d"
+
+    def try_it(self, node: _N) -> list[dict[str, Any]]:
+        """
+        What can be tried in the base env: the acceptance steps that pass there,
+        on their feature and on the project that owns each. A step whose
+        user-facing projects are not built yet is tried through the API.
+        """
+
+        def make() -> list[dict[str, Any]]:
+            if self._deployed() is None:
+                return []
+            if node.level == "feature":
+                feature, owner = node, None
+            elif node.level == "project":
+                feature = self.nodes.get(node.parent or "")
+                owner = node.order
+            else:
+                return []
+            if feature is None or not feature.steps:
+                return []
+            unbuilt = [
+                self.nodes[r].title
+                for r in (_project_ref(slug) for slug in feature.surfaces)
+                if r in self.nodes and self.state(r) != "done"
+            ]
+            out: list[dict[str, Any]] = []
+            for n, text, step_owner, verdict in feature.steps:
+                if verdict != "pass" or (owner is not None and step_owner != owner):
+                    continue
+                item: dict[str, Any] = {"text": text, "acceptance_step": n}
+                if unbuilt and step_owner not in feature.surfaces:
+                    item["how"] = f"API only: {', '.join(unbuilt)} not built yet"
+                    item["api"] = True
+                out.append(item)
+            return out
+
+        return self._cached("try", node.ref, make)
 
     def _root_counts(self, node: _N) -> list[dict[str, Any]]:
         """What the tree holds, level by level: features, studies, projects (none of zero)."""
@@ -1813,17 +2228,24 @@ class Tree:
         found = next((a for a in self.ancestors(node.ref) if a.level == "feature"), None)
         return found.ref if found is not None else None
 
+    def met_links(self, node: _N) -> list[tuple[str, str]]:
+        """``(dependency, its ref)`` of the links that no longer hold *node* (history)."""
+        done = self.state(node.ref) == "done"
+        out: list[tuple[str, str]] = []
+        for dep in node.depends_on:
+            target = self.nodes.get(_project_ref(dep))
+            if target is not None and (done or self.state(target.ref) == "done"):
+                out.append((dep, target.ref))
+        return out
+
     def chips(self, node: _N) -> list[dict[str, Any]]:
         """Links to other nodes as chips: kind · target · its state. Never a line."""
         out: list[dict[str, Any]] = []
-        met: list[tuple[str, str]] = []
+        met = self.met_links(node)
         done = self.state(node.ref) == "done"
         for dep in node.depends_on:
             target = self.nodes.get(_project_ref(dep))
-            if target is None:
-                continue
-            if done or self.state(target.ref) == "done":
-                met.append((dep, target.ref))
+            if target is None or (dep, target.ref) in met:
                 continue
             chip: dict[str, Any] = {
                 "kind": "depends on",
@@ -1865,7 +2287,34 @@ class Tree:
             ]
         if met:
             out.append(self._met_badge(node, met))
+        if closed := self._alarms_about(node):
+            out.append(
+                {
+                    "kind": "alarm closed" if len(closed) == 1 else "alarms closed",
+                    "ref": closed[0].ref,
+                    "title": ", ".join(a.ref for a in closed[:3]),
+                    "state": _clip(closed[0].cause, 60),
+                }
+            )
         return out
+
+    def _alarms_about(self, node: _N) -> list[alarms.ClosedAlarm]:
+        """The closed alarms that were about *node* (shown once, as a chip)."""
+
+        def make() -> dict[str, list[alarms.ClosedAlarm]]:
+            out: dict[str, list[alarms.ClosedAlarm]] = {}
+            for alarm in self.closed_alarms:
+                if (ref := self._alarm_node(alarm)) is not None:
+                    out.setdefault(ref, []).append(alarm)
+            return out
+
+        return list(self._cached("alarms", "", make).get(node.ref, []))
+
+    def _alarm_node(self, alarm: alarms.ClosedAlarm) -> str | None:
+        node = self.lookup(alarm.about) if alarm.about else None
+        if node is None or node.tree != PRODUCT_TREE:
+            return None
+        return self.fold(node).ref
 
     def _met_badge(self, node: _N, met: Sequence[tuple[str, str]]) -> dict[str, Any]:
         """Met dependencies are history: one count badge that opens them."""
@@ -1907,6 +2356,70 @@ class Tree:
             and not n.ghost
             and self.state(n.ref) != "done"
         ]
+
+    def dependents_of(self, ref: str) -> list[_N]:
+        """
+        What waits on the node *ref* names and is not finished: projects that
+        depend on a project, tasks of the same project that depend on a task.
+        """
+
+        def make() -> list[_N]:
+            node = self.nodes.get(ref)
+            if node is None:
+                return []
+            if node.level == "project":
+                return self._dependents(node)
+            if node.level != "task" or not node.order:
+                return []
+            return [
+                k
+                for k in self.real_children(node.parent or "")
+                if k.level == "task"
+                and node.order in k.deps
+                and not k.history
+                and self.state(k.ref) != "done"
+            ]
+
+        return list(self._cached("dependents", ref, make))
+
+    def asker_of(self, decision: FactoryDecision, proposal: FactoryProposal | None = None) -> str:
+        """Who asked a decision, by name: the asking member, the proposal's author, the server."""
+        member = self._members.get(_bare(decision.asked_by_session_id) or "")
+        if member is not None and member.get("title"):
+            return str(member["title"])
+        if proposal is not None and proposal.author:
+            author = str(proposal.author).split("@", 1)[0]
+            named = next(
+                (
+                    str(m["title"])
+                    for m in self.facts.members
+                    if str(m.get("title") or "").lower() == author.lower()
+                ),
+                None,
+            )
+            return named or author[:1].upper() + author[1:]
+        return "an agent" if decision.source == "agent" else "the server"
+
+    def lead_name(self, slug: str | None) -> str | None:
+        """The name of project *slug*'s lead, when the viewer may see it."""
+        node = self.nodes.get(_project_ref(slug)) if slug else None
+        return node.owner if node is not None else None
+
+    def project_ref(self, slug: str | None) -> str | None:
+        """:returns: The ref of project *slug* (``None`` for text that is no slug)."""
+        if not slug or not PROJECT_SLUG_RE.match(slug):
+            return None
+        return _project_ref(slug)
+
+    def home_index(self, tree: str) -> int:
+        """The index of the level a root lists by default (the strip's home)."""
+        ladder = self.ladder[tree]
+        home = self.home.get(tree) or (ladder[1:2] or [""])[0]
+        return ladder.index(home) if home in ladder else -1
+
+    def level_name(self, key: str, plural: bool = False) -> str:
+        """A level's name from the definition (``Feature``, ``Projects``)."""
+        return self._level_name(key, plural=plural)
 
     def _served_by(self, node: _N) -> list[_N]:
         """Projects whose home is elsewhere but which this feature's plan also lists."""
@@ -1985,6 +2498,54 @@ class Tree:
             }
         if node.evidence:
             out["evidence"] = node.evidence
+        if tried := self.try_it(node):
+            out["try_it"] = tried
+        if node.ref == node_refs.PRODUCT and (env := self.base_env_view()):
+            out["env"] = env
+        if node.ref == _HEALTH and self.closed_alarms:
+            out["closed_alarms"] = [a.to_json() for a in self.closed_alarms]
+        return out
+
+    def _smoke(self, env: Mapping[str, Any]) -> dict[str, Any]:
+        """Whether the base env answers: the server's probe when it ran, else the env's word."""
+        probe = ((self.facts.base_env or {}).get("env") or {}).get("probe") or {}
+        health = probe.get("health")
+        if not health or health == "unknown":
+            return {"ok": env.get("state") == "ready"}
+        out: dict[str, Any] = {"ok": health == "ok"}
+        checks = [
+            f"{key} {code}"
+            for key in ("app", "api")
+            if (code := (probe.get(key) or {}).get("code")) is not None
+        ]
+        if checks:
+            out["checks"] = " · ".join(checks)
+        return out
+
+    def base_env_view(self) -> dict[str, Any] | None:
+        """The base env as the root shows it: its branch, the commit it runs, its links."""
+        base = self.facts.base_env or {}
+        branch = base.get("branch")
+        env = self._env()
+        if not branch or not env:
+            return None
+        out: dict[str, Any] = {"name": "Base env", "branch": str(branch)}
+        deployed = self._deployed()
+        if deployed is not None:
+            out["sha"] = deployed.sha[:7]
+            if deployed.at:
+                out["deployed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(deployed.at))
+        if env.get("state"):
+            out["state"] = str(env["state"])
+            out["smoke"] = self._smoke(env)
+        urls = env.get("urls") or {}
+        for key, name in (("app", "app_url"), ("api", "api_url")):
+            if urls.get(key):
+                out[name] = str(urls[key])
+        if env.get("note"):
+            out["note"] = _clip(env["note"], _SHORT_MAX)
+        if base.get("env_project") and _project_ref(base["env_project"]) in self.nodes:
+            out["ref"] = _project_ref(base["env_project"])
         return out
 
     def child_page(self, node: _N, offset: int = 0) -> dict[str, Any]:
@@ -2071,6 +2632,24 @@ class Tree:
         return out
 
 
+def _wait(item: Mapping[str, Any]) -> waits.Wait | None:
+    """A ``WaitingOnView`` item read back as a :class:`.waits.Wait`."""
+    kind = str(item.get("kind") or "")
+    if kind not in waits.KINDS:
+        return None
+    since = item.get("since")
+    return waits.Wait(
+        kind=kind,
+        ref=str(item.get("ref") or ""),
+        label=str(item.get("label") or ""),
+        who=str(item.get("who") or ""),
+        person=bool(item.get("person")),
+        since=int(since) if isinstance(since, int | float) else None,
+        task=str(item["task"]) if item.get("task") else None,
+        decision_id=str(item["decision_id"]) if item.get("decision_id") else None,
+    )
+
+
 def _project_own(stage: str, status: str | None, *, running: bool) -> tuple[str, str | None]:
     """
     A project's own state (and the one line that says why) from its stage.
@@ -2123,6 +2702,23 @@ def _planned(proposal: FactoryProposal) -> list[tuple[str, str]]:
             if isinstance(item, Mapping) and PROJECT_SLUG_RE.match(str(item.get("slug") or "")):
                 out.append((str(item["slug"]), str(item.get("title") or item["slug"])))
     return out
+
+
+def _steps(
+    row: FactoryInitiative, acceptance: Mapping[str, Any] | None
+) -> tuple[tuple[int, str, str | None, str], ...]:
+    """``(n, text, owner slug, result)`` of each acceptance step (:func:`_acceptance`'s)."""
+    shown = (acceptance or {}).get("steps") or []
+    steps = [s for s in plan_of(row)["acceptance"] if isinstance(s, Mapping)]
+    return tuple(
+        (
+            int(step.get("n") or i),
+            str(view["text"]),
+            str(step["owner"]) if step.get("owner") else None,
+            str(view["result"]),
+        )
+        for i, (step, view) in enumerate(zip(steps, shown, strict=False), start=1)
+    )
 
 
 def _acceptance(row: FactoryInitiative) -> dict[str, Any] | None:
@@ -2235,12 +2831,17 @@ async def tree_for(
     root: Conversation,
     raw: RawSnapshot,
     readable: Iterable[str],
+    *,
+    targets: frozenset[tuple[str, str]] = frozenset(),
 ) -> Tree:
     """
     The factory as a viewer who may read the sessions *readable* sees it, built
     from the cached snapshot cut to that viewer (``snapshot.filter_snapshot``:
     members, team chips, cost and burn, the base env) and from the store rows
     of the projects they may read; reused for :data:`FACTS_TTL_S`.
+
+    :param targets: The auto-merge targets the server merges into now (a ready
+        PR into one waits on the server, not a person).
     """
     from omnigent.server.factory.snapshot import filter_snapshot
 
@@ -2258,7 +2859,9 @@ async def tree_for(
 
         def build() -> Tree:
             body = filter_snapshot(raw, sessions)
-            facts = load_facts(deps, root, body, readable=sessions)
+            facts = load_facts(
+                deps, root, body, readable=sessions, leads=raw.project_pl, targets=targets
+            )
             tree = Tree(facts, hidden=hidden_projects(raw, sessions))
             if bad := check_levels(tree):
                 _logger.warning(

@@ -71,6 +71,8 @@ LABEL_DEFAULT_BASE: Final = "omnigent.factory.default_base"
 """Base branch new projects of the default repo target (root only), e.g. ``"develop"``."""
 LABEL_BASE_HEAD_PREFIX: Final = "omnigent.factory.base_head."
 """Root label prefix recording a watched base's head: ``<sha> <moved_at> <repo>#<base>``."""
+LABEL_BASE_ENV_PREFIX: Final = "omnigent.factory.base_env."
+"""Root label prefix recording what the base env runs: ``<sha> <head_at> <at> <repo>#<base>``."""
 
 PROJECT_KIND_WORK: Final = "work"
 PROJECT_KIND_INTEGRATION: Final = "integration"

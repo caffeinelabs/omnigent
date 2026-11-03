@@ -1786,6 +1786,7 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     base = factory.get("base")
     if base is not None and base.get("env_project") in hidden:
         base["env"] = None
+        base["deployed"] = None
     rate = body["totals"].get("usd_per_h")
     if len(readable) < len(raw.top_level_of):
         member_costs = [m["cost_usd"] for m in body["members"] if m["is_top_level"]]

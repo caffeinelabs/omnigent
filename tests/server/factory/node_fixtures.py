@@ -14,7 +14,12 @@ day, with neutral names (the web's v3 sample tells the same story):
   for a person to merge them into ``main`` (its implicit need and feature
   each hold one child, so both fold);
 - the base env's setup project (``base-env``, an integration project) and
-  two rule proposals belong to the factory tree;
+  two rule proposals belong to the factory tree; the base env runs the head
+  the watcher saw at 13:25:30 (every merge so far is in it);
+- the server closed three alarms today: D-48 (T-16 stalled, but it is held on
+  purpose for C-16; the real ask is D-45), D-46 and D-47 (skill-discovery's
+  stall and claim alarms, closed when #9881 merged);
+- assistant-core's builder spent $2.50 in the last hour;
 - the factory has no goals, so the Goal level is hidden.
 
 :func:`scale_factory` is a synthetic factory of a given size (13 features,
@@ -32,8 +37,10 @@ from omnigent.entities.factory import (
     FactoryPr,
     FactoryProject,
     FactoryProposal,
+    FactorySpan,
     FactoryTask,
 )
+from omnigent.server.factory.alarms import ClosedAlarm
 from omnigent.server.factory.definition_blocks import StructureDef
 from omnigent.server.factory.nodes import NodeFacts
 
@@ -46,9 +53,12 @@ AT_0555: Final = 1793685300
 AT_0601: Final = 1793685660
 AT_0655: Final = 1793688900
 AT_0746: Final = 1793691960
+AT_0847: Final = 1793695620
 AT_1303: Final = 1793710980
 AT_1322: Final = 1793712120
 AT_1325: Final = 1793712300
+HEAD_AT: Final = AT_1325 + 30
+"""When the base watcher saw the deployed commit become the head."""
 ASK_MESSAGE: Final = "a" * 31 + "1"
 SHORTLIST_MESSAGE: Final = "a" * 31 + "2"
 DEPLOYED_SHA: Final = "817480d" + "0" * 33
@@ -182,6 +192,13 @@ def _proposal(
     )
 
 
+APPLY_OPTIONS: Final = (
+    {"id": "apply", "label": "Apply"},
+    {"id": "edit", "label": "Edit & apply"},
+    {"id": "reject", "label": "Reject"},
+)
+
+
 def _decision(
     number: int,
     subject: str,
@@ -189,6 +206,8 @@ def _decision(
     blocking: bool = True,
     question: str = "",
     source: str = "proposal",
+    context: str | None = None,
+    created_at: int = AT_0746,
 ) -> FactoryDecision:
     return FactoryDecision(
         id=hex_id(500 + number),
@@ -198,8 +217,10 @@ def _decision(
         source=source,
         blocking=blocking,
         subject=subject,
-        created_at=AT_0746,
-        updated_at=AT_0746,
+        options=[dict(o) for o in APPLY_OPTIONS] if source == "proposal" else [],
+        context=context,
+        created_at=created_at,
+        updated_at=created_at,
     )
 
 
@@ -284,11 +305,12 @@ def factory_1340() -> NodeFacts:
             team=[("Juno", False), ("Luz", False), ("Mae", False)],
             waiting_on=[
                 {
-                    "kind": "proposal",
-                    "ref": "C-16",
-                    "label": "T-16 held: waiting on D-45 (Apply C-16)",
-                    "who": "an owner",
+                    "kind": "hold",
+                    "ref": "D-45",
+                    "label": "T-16 held: waiting on D-45 (Approve C-16, needs an operator)",
+                    "who": "an operator",
                     "person": True,
+                    "since": AT_0746,
                     "task": "T-16",
                     "decision_id": hex_id(545),
                 }
@@ -453,6 +475,7 @@ def factory_1340() -> NodeFacts:
                 },
             ],
             "skeleton": "assistant-core",
+            "user_facing": ["assistant-panel-ux"],
             "projects": list(WAVE_1),
             "history": [{"wave": 1, "proposal": "C-11", "added": list(WAVE_1), "at": AT_0601}],
             "waves": [
@@ -530,10 +553,20 @@ def factory_1340() -> NodeFacts:
     ]
     sentinel = hex_id(603)
     decisions = [
-        _decision(45, "proposal:C-16", question="Apply C-16?"),
+        _decision(
+            45,
+            "proposal:C-16",
+            question="Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            context="Implements the D-42 answer: debit each turn. T-16 waits for it.",
+        ),
         _decision(43, "proposal:C-14", blocking=False),
         _decision(44, "proposal:C-15", blocking=False),
-        _decision(49, "proposal:C-19", question="Start the live-search fix?"),
+        _decision(
+            49,
+            "proposal:C-19",
+            question="Start the live-search fix?",
+            created_at=AT_1303 + 120,
+        ),
         _decision(50, "proposal:C-17"),
         _decision(51, "proposal:C-18"),
         _decision(37, f"member:{sentinel}", blocking=False, source="agent"),
@@ -600,19 +633,69 @@ def factory_1340() -> NodeFacts:
             "repo": REPO,
             "branch": BASE,
             "head_sha": DEPLOYED_SHA,
+            "moved_at": HEAD_AT,
             "env": {
                 "reported": {
                     "state": "ready",
                     "at": AT_1322 + 300,
-                    "deployed": {"sha": DEPLOYED_SHA},
+                    "urls": {"app": "https://app.sample.test", "api": "https://api.sample.test"},
+                    "deployed": {"sha": DEPLOYED_SHA[:7]},
                 }
             },
             "env_project": "base-env",
+            "deployed": {"sha": DEPLOYED_SHA, "at": AT_1322 + 300, "head_at": HEAD_AT},
         },
         cost=444.0,
         burn=9.37,
         now=NOW,
+        turns=[
+            FactorySpan(
+                id=hex_id(7001),
+                factory_id=FID,
+                trace_key="state:juno",
+                kind="turn",
+                name="working",
+                started_at=(NOW - 2400) * 1000,
+                ended_at=(NOW - 600) * 1000,
+                outcome="ok",
+                project_slug="assistant-core",
+                session_id=hex_id(802),
+                attrs={"segment": "working", "cost_start": 22.63, "cost_end": 25.13},
+            )
+        ],
+        closed_alarms=closed_alarms(),
     )
+
+
+def closed_alarms() -> list[ClosedAlarm]:
+    """:returns: The three alarms the server closed by 13:40, newest first."""
+    return [
+        ClosedAlarm(
+            ref="D-47",
+            was="PR #9881: claim 1/3 stalled - what next?",
+            cause="PR #9881 merged",
+            at=AT_1303 + 60,
+            about="skill-discovery",
+            project="skill-discovery",
+        ),
+        ClosedAlarm(
+            ref="D-46",
+            was="T-18 Discovery skill with live search: implement 2/3 stalled - what next?",
+            cause="PR #9881 merged",
+            at=AT_1303 + 60,
+            about="skill-discovery",
+            project="skill-discovery",
+        ),
+        ClosedAlarm(
+            ref="D-48",
+            was="T-16 Debit each turn: implement 1/3 stalled - what next?",
+            cause="T-16 is held on purpose for C-16; a held task is not stalled",
+            at=AT_0847,
+            real_ask="D-45",
+            about="T-16",
+            project="assistant-core",
+        ),
+    ]
 
 
 def scale_factory(features: int = 13, projects: int = 45, tasks: int = 360) -> NodeFacts:
@@ -726,13 +809,17 @@ def scale_factory(features: int = 13, projects: int = 45, tasks: int = 360) -> N
 
 __all__ = [
     "ASK_MESSAGE",
+    "AT_1325",
     "BASE",
+    "DEPLOYED_SHA",
     "FID",
+    "HEAD_AT",
     "NOW",
     "REPO",
     "SHORTLIST",
     "SHORTLIST_MESSAGE",
     "WAVE_1",
+    "closed_alarms",
     "factory_1340",
     "hex_id",
     "scale_factory",

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -593,7 +594,10 @@ async def settle(app_state: Any, deps: FactoryDeps, changed: list[FactoryLoop]) 
     decision expires (unless a sibling loop still rides on it) and the PL is
     told its hold is lifted; when its work ended (the task closed, its PR
     merged, its project closed) the server answers the decision itself with
-    the reason, so its history says why it closed.
+    the reason, so its history says why it closed. A stall that ran again
+    because its task is now held on purpose was never a stall: the server
+    answers it with that cause and the ask a person really owes (the hold's
+    decision), and the PL is told nothing (the hold stands).
     """
     for loop_id in dict.fromkeys(loop.id for loop in changed):
         try:
@@ -612,17 +616,63 @@ async def _settle(app_state: Any, deps: FactoryDeps, loop_id: str) -> None:
         return
     if await asyncio.to_thread(_still_shared, deps, loop, decision.id):
         return
+    facts = await asyncio.to_thread(read_facts, deps, loop)
+    about = alarm_subject(facts)
     if loop.state in ("converged", "cancelled"):
         await server_decisions.close_by_server(
-            app_state, decision.id, why=loop.last_reason or f"the loop {loop.state}"
+            app_state, decision.id, why=loop.last_reason or f"the loop {loop.state}", about=about
         )
         return
-    expired = await server_decisions.expire_decision(app_state, decision.id)
+    if loop.state == "running" and facts.task is not None:
+        held = await asyncio.to_thread(held_on_purpose, app_state, deps, facts.task)
+        if held is not None:
+            cause, real_ask = held
+            await server_decisions.close_by_server(
+                app_state, decision.id, why=cause, real_ask=real_ask, about=about
+            )
+            return
+    expired = await server_decisions.expire_decision(app_state, decision.id, about=about)
     if expired is None or loop.state != "running":
         return
-    facts = await asyncio.to_thread(read_facts, deps, loop)
     if facts.pl is not None:
         control.send_text(app_state, facts.pl.id, resumed_text(facts, expired.ref), kind="info")
+
+
+def alarm_subject(facts: LoopFacts) -> str | None:
+    """:returns: The node a loop's alarm is about: its task (``T-16``), else its project."""
+    if facts.task is not None:
+        return facts.task.ref
+    return facts.loop.project_slug or None
+
+
+def held_on_purpose(
+    app_state: Any, deps: FactoryDeps, task: FactoryTask
+) -> tuple[str, str | None] | None:
+    """
+    ``(cause, real ask)`` when *task* is held on purpose now, else ``None`` (synchronous).
+
+    The real ask is the decision the hold waits on (``D-45`` for a hold on
+    ``C-16``), when a person must answer one.
+    """
+    from omnigent.server.factory import waits
+
+    hold = task.hold if isinstance(task.hold, dict) else None
+    if not hold:
+        return None
+    facts = waits.Facts.load(
+        deps,
+        task.factory_id,
+        time.time(),
+        targets=waits.auto_targets(app_state, deps, task.factory_id),
+    )
+    found = waits.explicit_hold(task, facts)
+    if found is None or not found.on_purpose:
+        return None
+    named = hold.get("ref") or hold.get("note") or hold.get("on")
+    what = f" for {named}" if named else ""
+    cause = f"{task.ref} is held on purpose{what}; a held task is not stalled"
+    decision = facts.decision_by_id(found.decision_id) if found.decision_id else None
+    return cause, decision.ref if decision is not None else None
 
 
 def _still_shared(deps: FactoryDeps, loop: FactoryLoop, decision_id: str) -> bool:
@@ -752,7 +802,9 @@ async def close_stale(app_state: Any, deps: FactoryDeps, factory_id: str) -> lis
         return []
     closed: list[str] = []
     for decision, why in stale:
-        row = await server_decisions.close_by_server(app_state, decision.id, why=why)
+        row = await server_decisions.close_by_server(
+            app_state, decision.id, why=why, about=decision.project_slug
+        )
         if row is not None:
             closed.append(row.ref)
     return closed
@@ -1369,6 +1421,7 @@ __all__ = [
     "BudgetAnswer",
     "LoopAnswer",
     "LoopFacts",
+    "alarm_subject",
     "answer_text",
     "close_stale",
     "decision_for",
@@ -1376,6 +1429,7 @@ __all__ = [
     "escalate",
     "escalation_text",
     "execute_answer",
+    "held_on_purpose",
     "loop_target",
     "plan_answer",
     "read_facts",

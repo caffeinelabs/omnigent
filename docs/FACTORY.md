@@ -974,9 +974,9 @@ second parent.
 **Node pages** (`GET …/factories/{fid}/n/{ref}`, `nodes.py`) project the
 factory onto the levels one node at a time: the node, its breadcrumb (folded
 implicit ancestors flagged), its state (the worst among its active
-children; the status line is the state for now; a closed project is done
-whatever tasks it left, and those read "Closed"; a project between queued
-and ready moves only while its lead or a teammate works, else it waits),
+children; a closed project is done whatever tasks it left, and those read
+"Closed"; a project between queued and ready moves only while its lead or a
+teammate works, else it waits), its status line (below),
 progress (acceptance steps passing on the base env for a feature, task
 weight for a project),
 its children in order columns (siblings layered by their dependencies;
@@ -992,13 +992,61 @@ under Environments; the Team area draws the working agents (and any an
 open ask names) and counts the idle ones. A PR number two repos share is
 `PR-n` in the factory's repo and `commit:<sha>` in the other. Runs show
 under their task's PR; a task with runs and no PR yet has no run page
-(follow-up with S6). The projection is built from the snapshot cut to the
+(a follow-up). The projection is built from the snapshot cut to the
 viewer (`filter_snapshot`: members, team chips, decisions, cost and burn,
 the base env), memoized for 5 s per factory and set of sessions the viewer
 may read, and dropped on any recorded write; open asks come from one
 batched read of the messages live nodes quote. Cockpit v3 reads these pages
 instead of its sample when `OMNIGENT_FACTORY_NODE_API=1` (preflight
 `node_api`).
+
+**Status lines** (`node_status.py`) say in one line why a node is or isn't
+moving, ending at the person who must act. The blocker path reads the
+node's own waits first (`waits.py`: the snapshot's `waiting_on` for a
+project, `task_waits` for a task, a ready PR's merge), most decisive first:
+an ask a person answers ends it ("needs you: Apply C-16 (D-45)"), a
+dependency, a merge of another project or a hold on another node hops there
+(`→`). With none, it steps down (`›`) into the child that blocks the most:
+paths that end at a person first, by the weight they hold (the estimates of
+the tasks they hold plus the projects that wait on where the ask sits), then
+dependents, then the earliest column. A node's own open decision, or one on
+a child it was proposed to get, ends the path when no child's ends at a
+person. It stops at 6 shown segments, a cycle, a person or the server.
+Ready PRs a person merges into one base are one ask (`merge:<base>`,
+answered on the code host). The header's line carries its label ("Not
+started for 7 h:", "Held on purpose:", "Top blocker:" while other work
+moves, "Not moving:"), what else the path holds (`also_holds`), a numbered
+`why` and a `note` naming met links that had no reason; a tile's line
+(`status_compact`) is only the end of the path. Steps into implicit parents
+and, from a root, into levels above its home are left out of what shows.
+
+**Roll-ups** add burn (the last hour's spend from `turn` spans), a budget
+(the node's own cap, else the sum of its children's caps), an ETA only when
+every unfinished task's kind has at least five observed durations (a
+project's remaining critical path; a feature's slowest project per column,
+summed), feature progress from acceptance on the base env with build
+progress second, Try it (the acceptance steps that pass there, on their
+feature and the project that owns each; "API only" while a user-facing
+project is not built) and, at the root, the base env (`env`) and the alarms
+the server closed (`alarms_closed`). A change is in the base env when the
+commit the env runs contains its merge (`base.contains`): the base watcher
+records that commit on the root (`omnigent.factory.base_env.<key>`, served
+as `factory.base.deployed`) when the integration project's env reports
+ready, placed in the base's history (when the watcher saw it become the
+head); a merge into that base is in every head the watcher saw after it
+landed.
+
+**Alarms closed with a cause.** A stall, claim or done-check alarm the
+server answers or expires records why (`cause`), the ask a person really
+owes (`real_ask`), the node it was about and what it asked on its closing
+event (`server_decisions.closed_data`). A stall that ran again because its
+task is now held on purpose is answered with "T-16 is held on purpose for
+C-16; a held task is not stalled" and the hold's decision as the real ask,
+and the lead is told nothing; an open one on such a task is no ask on the
+node pages even before the tick closes it. The factory tree's Health lists
+today's closed alarms as items (`D-n`) with `closed_alarms` on its page, the
+node each was about carries an "alarm closed" chip, and the root's roll-up
+counts them (`alarms_closed`).
 
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to

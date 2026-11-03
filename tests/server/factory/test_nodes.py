@@ -52,6 +52,7 @@ WEB_PAGES = (
     "feature:from-C-13",
     "fx",
     "fx:rules",
+    "fx:health",
     "base-env",
 )
 
@@ -316,12 +317,9 @@ def test_assistant_core(tree: Tree) -> None:
     assert page["node"]["progress"] == {"value": 0.6667, "label": "1/2", "what": "tasks"}
     assert page["rollup"]["cost"] == 25.13 and page["rollup"]["budget"] == 150.0
     assert page["thread"] == {"key": "project:assistant-core", "unread": 0, "responder": "Juno"}
-    assert page["status"] == {
-        "kind": "needs",
-        "label": "Needs you",
-        "segments": [],
-        "ends": "other",
-    }
+    # The status line is the blocker path (test_node_status.py has every case).
+    assert (page["status"]["kind"], page["status"]["label"]) == ("needs", "Not moving:")
+    assert page["status"]["decision"]["id"] == "D-45"
 
 
 def test_agent_assistant(tree: Tree) -> None:
@@ -395,7 +393,7 @@ def test_the_product(tree: Tree) -> None:
         "readouts": "not measured",
     }
     assert page["node"]["needs"] == {"open": 4, "blocking": 2}
-    assert page["rollup"]["in_base_env"] == {"sha": "817480d", "try_it": False}
+    assert page["rollup"]["in_base_env"] == {"sha": "817480d", "try_it": True}
     assert page["rollup"]["moving_anywhere"] is False
     assert page["breadcrumb"] == [] and page["thread"]["key"] == "factory"
 

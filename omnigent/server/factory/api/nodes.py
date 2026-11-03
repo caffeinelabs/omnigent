@@ -2,10 +2,13 @@
 The cockpit's node pages: ``GET /v1/factory/factories/{fid}/n/{ref}`` (factory readers).
 
 One node of the level tree at a time (:mod:`omnigent.server.factory.nodes`):
-the node, its breadcrumb, its state (the status line is the state for now),
+the node, its breadcrumb, its state and status line,
 its roll-up, its children in order columns (``children_page``: the cursor
 of the next 60), grandchildren as state counts, the levels below it and its
-results. ``ref`` is any node ref (``product``, ``I-1``, ``<slug>``,
+results. The status line is the node's blocker path, ending at whoever must
+act (``node_status``); the roll-up carries burn, budget, ETA (only from
+observed durations), what is in the base env and, at the root, the alarms the
+server closed. ``ref`` is any node ref (``product``, ``I-1``, ``<slug>``,
 ``T-16``, ``PR-9876``, ``fx:health`` …); an implicit parent with one child
 answers as that child. The tree is built from the snapshot cut to the viewer
 (``filter_snapshot``): projects whose lead they cannot read are left out with
@@ -24,7 +27,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from omnigent.server.auth import LEVEL_EDIT
-from omnigent.server.factory import node_views, nodes, people
+from omnigent.server.factory import node_views, nodes, people, waits
 from omnigent.server.factory.api.agents import fleet_context
 from omnigent.server.factory.api.chat import UNREAD_CAP, _reader
 
@@ -45,7 +48,8 @@ async def get_node(
 ) -> dict[str, Any] | JSONResponse:
     """One node page: the node, breadcrumb, state, roll-up and its children (60 a page)."""
     ctx = await fleet_context(request, factory_id)
-    tree = await nodes.tree_for(ctx.deps, ctx.root, ctx.raw, ctx.readable)
+    targets = await asyncio.to_thread(waits.auto_targets, request.app.state, ctx.deps, ctx.root.id)
+    tree = await nodes.tree_for(ctx.deps, ctx.root, ctx.raw, ctx.readable, targets=targets)
     level = await asyncio.to_thread(people.viewer_level, ctx.deps, ctx.root.id, ctx.user_id)
     try:
         page = tree.page(ref, cursor=children_page, can_edit=level >= LEVEL_EDIT)
