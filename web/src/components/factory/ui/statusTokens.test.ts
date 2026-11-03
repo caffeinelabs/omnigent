@@ -98,6 +98,8 @@ describe("roles and vendors", () => {
     }
     expect(roleLook("ic")).toEqual({ label: "Builder", glyph: "code" });
     expect(roleLook("lead", "discovery")).toEqual(SEAT_INFO.discovery);
+    // The discovery seat's own role draws like its seat.
+    expect(roleLook("scout")).toEqual({ label: "Discovery lead", glyph: "radar" });
     expect(roleLook(null)).toEqual({ label: "Agent", glyph: "agent" });
     // A role this build does not know (or an Object.prototype key) draws as a plain agent.
     expect(roleLook("auditor" as FactoryRole)).toEqual({ label: "auditor", glyph: "agent" });
@@ -113,6 +115,7 @@ describe("roles and vendors", () => {
       reviewer: "rev",
       demo: "demo",
       planner: "plan",
+      scout: "scout",
     });
     expect(ROLE_NAME).toEqual({
       lead: "Lead",
@@ -122,6 +125,7 @@ describe("roles and vendors", () => {
       reviewer: "Reviewer",
       demo: "Demo recorder",
       planner: "Planner",
+      scout: "Discovery lead (Scout)",
     });
     expect(ROLE_WORD).toMatchObject({
       lead: "Lead",

@@ -35,6 +35,11 @@ export function roomCandidateList(sources: CandidateSources): RoomCandidate[] {
       detail: "lead · #improvements",
     });
   }
+  // Scout is a member only while discovery runs; #discovery is listed only then too.
+  const scout = snapshot.members.some((m) => m.role === "scout");
+  if (scout) {
+    out.push({ kind: "agent", insert: "@scout", label: "Scout", detail: "discovery · #discovery" });
+  }
   for (const project of snapshot.projects) {
     if (project.pl) {
       out.push({
@@ -62,6 +67,14 @@ export function roomCandidateList(sources: CandidateSources): RoomCandidate[] {
     label: "improvements",
     detail: "Sentinel's thread",
   });
+  if (scout) {
+    out.push({
+      kind: "thread",
+      insert: "#discovery",
+      label: "discovery",
+      detail: "Scout's thread",
+    });
+  }
   for (const project of snapshot.projects) {
     out.push({
       kind: "project",

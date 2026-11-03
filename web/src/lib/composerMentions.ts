@@ -140,8 +140,9 @@ export function buildMentionPreamble(items: MentionItem[], harness: string | nul
 // ── Room tokens ────────────────────────────────────────────────
 //
 // The factory Room's composer types people, agents and objects as tokens:
-// `@atlas`, `@sentinel`, `@pl:<slug>`, `@<email>`, `#slug` (`#factory` and
-// `#improvements` name threads), `!n`, `D-n`, `C-n`, `T-n`, `INC-n`, `F-n`.
+// `@atlas`, `@sentinel`, `@scout`, `@pl:<slug>`, `@<email>`, `#slug` (`#factory`,
+// `#improvements` and `#discovery` name threads), `!n`, `D-n`, `C-n`, `T-n`,
+// `INC-n`, `F-n`.
 // The patterns mirror the server's (`chat_routing._MENTION_RE`,
 // `actor._FIND_RE`), so a chip here is a mention or ref there.
 
@@ -171,10 +172,10 @@ export interface RoomToken {
 const ROOM_SLUG = "[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?";
 const ROOM_NUMBER = "[1-9][0-9]{0,8}";
 const ROOM_EMAIL = "[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}";
-const ROOM_FIXED_THREADS = new Set(["factory", "improvements"]);
+const ROOM_FIXED_THREADS = new Set(["factory", "improvements", "discovery"]);
 
 const ROOM_MENTION_RE = new RegExp(
-  `(?<![\\w@./-])@(atlas|sentinel|pl:${ROOM_SLUG}|${ROOM_EMAIL})(?![\\w@-])`,
+  `(?<![\\w@./-])@(atlas|sentinel|scout|pl:${ROOM_SLUG}|${ROOM_EMAIL})(?![\\w@-])`,
   "gi",
 );
 const ROOM_REF_RE = new RegExp(

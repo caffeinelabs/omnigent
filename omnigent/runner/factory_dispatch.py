@@ -75,7 +75,12 @@ from omnigent.factory import (
 from omnigent.factory_spawn import member_create_body, member_labels
 from omnigent.native.native_coding_agents import public_agent_name
 from omnigent.tools.builtins.factory import (
+    DISCOVERY_TOOL_NAMES,
     SPAWN_ROLES,
+    SYS_DISCOVERY_CODE,
+    SYS_DISCOVERY_OPPORTUNITY,
+    SYS_DISCOVERY_QUERY,
+    SYS_DISCOVERY_READ,
     SYS_FACTORY_ASK,
     SYS_FACTORY_CHAT,
     SYS_FACTORY_DEMO,
@@ -454,6 +459,10 @@ async def execute_factory_tool(
         return await _post_chat(args, server_client=server_client, caller=conversation_id)
     if tool_name in _LEARNING_TOOLS:
         return await _learning(
+            tool_name, args, server_client=server_client, caller=conversation_id
+        )
+    if tool_name in DISCOVERY_TOOL_NAMES:
+        return await _discovery(
             tool_name, args, server_client=server_client, caller=conversation_id
         )
     return _error(f"unknown factory tool {tool_name!r}")
@@ -2201,3 +2210,31 @@ async def _learning(
         else "/v1/factory/agent/retros"
     )
     return await _passthrough(server_client, "POST", path, tool_name=tool, body=body)
+
+
+# ── Discovery ─────────────────────────────────────────────────
+
+_DISCOVERY_PATHS: Final[dict[str, str]] = {
+    SYS_DISCOVERY_READ: "/v1/factory/agent/discovery/read",
+    SYS_DISCOVERY_QUERY: "/v1/factory/agent/discovery/query",
+    SYS_DISCOVERY_CODE: "/v1/factory/agent/discovery/code",
+    SYS_DISCOVERY_OPPORTUNITY: "/v1/factory/agent/discovery/opportunity",
+}
+_DISCOVERY_QUERY_TIMEOUT_S: Final = 120.0
+"""The gateway may take up to 90 s to read a source; the call waits a little longer."""
+
+
+async def _discovery(
+    tool: str, args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str
+) -> str:
+    """``sys_discovery_*`` → ``POST /v1/factory/agent/discovery/<read|query|code|opportunity>``.
+
+    The caller's factory and seat come from its own session on the server, never from
+    the arguments, so the body only adds who is asking.
+    """
+    body: _JsonObject = {k: v for k, v in args.items() if k != "from_session_id"}
+    body["from_session_id"] = caller
+    timeout = _DISCOVERY_QUERY_TIMEOUT_S if tool == SYS_DISCOVERY_QUERY else _TIMEOUT_S
+    return await _passthrough(
+        server_client, "POST", _DISCOVERY_PATHS[tool], tool_name=tool, body=body, timeout=timeout
+    )

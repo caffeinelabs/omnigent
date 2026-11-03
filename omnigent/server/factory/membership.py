@@ -31,6 +31,7 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLES,
+    SEAT_ROLES,
     STATE_ACTIVE,
     TOP_LEVEL_ROLES,
     factory_role_from_spec,
@@ -179,17 +180,19 @@ def sub_agent_role(spec: AgentSpec | None) -> str:
     """
     Return a sub-agent's factory role: its spec's, but never a top-level one.
 
-    ``lead`` and ``project_lead`` belong to top-level members, whose labels a
-    spawn sets. A child that runs a lead's or a PL's spec (a factory member can
-    create one with ``sys_session_create(agent_id=…)``) is an ``ic``, so it
-    never acts with its parent's or a lead's powers.
+    ``lead``, ``project_lead`` and the seats (``scout``) belong to top-level
+    members, whose labels a spawn or the server sets. A child that runs such a
+    spec (a factory member can create one with ``sys_session_create(agent_id=…)``)
+    is an ``ic``, so it never acts with its parent's, a lead's or a seat's powers.
 
     :param spec: The sub-agent's resolved spec, or ``None``.
     :returns: e.g. ``"reviewer"``; ``"ic"`` when the spec declares no role or a
         top-level one.
     """
     role = factory_role_from_spec(spec)
-    return ROLE_IC if role is None or role in TOP_LEVEL_ROLES else role
+    if role is None or role in TOP_LEVEL_ROLES or role in SEAT_ROLES:
+        return ROLE_IC
+    return role
 
 
 def resolve_role(conv: Conversation, deps: FactoryDeps) -> str | None:

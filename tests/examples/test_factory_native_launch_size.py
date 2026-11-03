@@ -66,9 +66,11 @@ _WORKSPACE = Path("/home/omnigent/workspace")
 
 def _bundles() -> Iterator[tuple[str, Path, str]]:
     """``(name, source dir, production bundle dir)`` for every factory agent."""
-    for root_name in ("factory-lead", "factory-pl"):
+    for root_name in ("factory-lead", "factory-pl", "factory-scout"):
         root = _FACTORY_DIR / root_name
         yield root_name, root, _SPEC_CACHE_DIR
+        if not (root / "agents").is_dir():
+            continue
         for agent in sorted((root / "agents").iterdir()):
             if (agent / "config.yaml").is_file():
                 yield agent.name, agent, f"{_SPEC_CACHE_DIR}/agents/{agent.name}"
@@ -170,6 +172,7 @@ def test_every_factory_agent_is_measured() -> None:
             "factory-lead",
             "planner",
             "factory-pl",
+            "factory-scout",
             "demo",
             "env_keeper",
             "ic",

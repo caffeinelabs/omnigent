@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { fireEvent, userEvent, within } from "storybook/test";
 import { FactoryLayout } from "@/pages/factory/FactoryLayout";
 import { CockpitStory, type CockpitStoryOptions } from "../board/boardStoryKit";
+import type { ChatMessageView, FactorySnapshot, ThreadView } from "@/lib/factoryApi";
 import { round3Events, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import {
   ROOM_FID,
@@ -142,6 +143,104 @@ export const PrThread = room(PR_THREAD);
 
 /** #improvements: Sentinel's retro and the C-14 trial card. */
 export const Improvements = room("/room/improvements");
+
+// ── #discovery (Scout's thread, listed while discovery runs) ───
+
+const SCOUT_ID = `scout${"0".repeat(27)}`;
+
+/** The round-3 factory with Scout seated (sample). */
+function withScout(): FactorySnapshot {
+  const snapshot = round3Snapshot();
+  const lead = snapshot.members.find((m) => m.role === "lead" && m.is_top_level)!;
+  snapshot.members = [
+    ...snapshot.members,
+    { ...lead, session_id: SCOUT_ID, title: "Scout", role: "scout", status: "idle" },
+  ];
+  return snapshot;
+}
+
+function discoveryRoom(): RoomRouteOptions {
+  const threads = roomThreads();
+  const fixed = threads.find((t) => t.key === "improvements")!;
+  const discovery: ThreadView = {
+    ...fixed,
+    key: "discovery",
+    kind: "discovery",
+    title: "#discovery",
+    responder_session_id: SCOUT_ID,
+    responder_title: "Scout",
+    unread: 1,
+  };
+  const base = roomMessages("factory")[0]!;
+  const at = (min: number) => ROOM_NOW_S - min * 60;
+  const message = (
+    seq: number,
+    min: number,
+    who: "person" | "scout",
+    text: string,
+  ): ChatMessageView => ({
+    ...base,
+    id: `disc${String(seq).padStart(28, "0")}`,
+    thread: "discovery",
+    seq,
+    author_kind: who === "scout" ? "agent" : "human",
+    author: who === "scout" ? SCOUT_ID : "lena@example.com",
+    author_title: who === "scout" ? "Scout" : "Lena",
+    author_role: who === "scout" ? "scout" : "owner",
+    body: text,
+    mentions: [],
+    refs: [],
+    reply_to: null,
+    card: null,
+    routed: [],
+    auto_reply: false,
+    created_at: at(min),
+  });
+  return {
+    threads: [discovery, ...threads],
+    messages: [
+      ...roomMessages(),
+      message(
+        9001,
+        50,
+        "scout",
+        "Weekly synthesis: 3 new (O-21, O-22, O-23), O-7 merged into O-3, bet notes on O-3 " +
+          "and O-12. Ready to plan: O-3 (moderate), O-12 (moderate). Not hearing from: teams. " +
+          "Spent $4.10 of $10 today. (sample)",
+      ),
+      message(
+        9002,
+        12,
+        "person",
+        "@scout why do teams stop exporting after a week? Answer in #discovery (sample)",
+      ),
+      message(
+        9003,
+        8,
+        "scout",
+        "O-3 holds it: 23 accounts, moderate. Most say they cannot find where to change the " +
+          "export format (S-1042, S-1107). Cheapest next test: a format picker behind a flag; " +
+          "@atlas it is ready to plan. (sample)",
+      ),
+    ],
+  };
+}
+
+/** Scout's thread: its weekly digest, a person's question and Scout's answer, by ids. */
+export const DiscoveryThread = room("/room/discovery", {
+  snapshot: withScout(),
+  room: discoveryRoom(),
+});
+
+export const DiscoveryThreadDark = room("/room/discovery", {
+  snapshot: withScout(),
+  room: discoveryRoom(),
+  theme: "dark",
+});
+
+export const DiscoveryThreadMobile = phone(
+  room("/room/discovery", { snapshot: withScout(), room: discoveryRoom() }),
+);
 
 /** Bus view on: message.* one-liners between the messages, a bounce in red. */
 export const BusView = room("/room", {}, async ({ canvasElement }) => {

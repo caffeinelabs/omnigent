@@ -51,6 +51,7 @@ from omnigent.factory import (
     LABEL_SANDBOX_RELEASED_AT,
     LABEL_STATE,
     ROLE_PROJECT_LEAD,
+    SEAT_ROLES,
     STATE_ACTIVE,
     STATE_DONE,
 )
@@ -442,6 +443,9 @@ class LaunchWatch:
         deps = _deps(self._app_state)
         slug = conv.labels.get(LABEL_PROJECT)
         factory_id = conv.labels.get(LABEL_ID)
+        if deps is not None and conv.labels.get(LABEL_ROLE) in SEAT_ROLES:
+            # A seat the server stopped (discovery off) frees its sandbox once idle.
+            return "seat stopped" if conv.labels.get(LABEL_STATE) == STATE_DONE else None
         if deps is None or conv.labels.get(LABEL_ROLE) != ROLE_PROJECT_LEAD or not slug:
             return None
         project = (

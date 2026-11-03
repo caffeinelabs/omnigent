@@ -231,7 +231,7 @@ async def test_a_signal_trend_readout_writes_back_through_the_ledger(cockpit: Co
         d for d in cockpit.store.list_decisions(factory_id=cockpit.fid) if d.source == "readout"
     ]
     room = [m for m in cockpit.store.list_chat(cockpit.fid, limit=50) if "C-1 · day 7" in m.body]
-    assert room and room[0].thread == F.THREAD_FACTORY
+    assert room and room[0].thread == F.THREAD_DISCOVERY
 
 
 async def test_the_frozen_plan_is_what_is_measured(cockpit: Cockpit) -> None:

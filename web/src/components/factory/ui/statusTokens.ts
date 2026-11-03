@@ -322,6 +322,15 @@ export const ROLE_INFO: Record<FactoryRole, RoleInfo> = {
     group: "lead",
     chip: "",
   },
+  scout: {
+    label: "Discovery lead",
+    name: "Discovery lead (Scout)",
+    short: "scout",
+    word: "Scout",
+    glyph: "radar",
+    group: "lead",
+    chip: "border-brand-accent/40 text-brand-accent",
+  },
 };
 
 export const SEAT_INFO: Record<LeadSeat, { label: string; glyph: RoleGlyph }> = {

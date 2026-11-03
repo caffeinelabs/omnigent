@@ -40,8 +40,6 @@ TOKENS_LEFT: dict[str, int] = {
     # Runner-imported guard constants (hosts lag the server): the default
     # protected branches include a live test base; the smith profile's repo.
     "omnigent/policies/builtins/factory.py": 2,
-    # A tool description example; tool code is out of this sweep's reach.
-    "omnigent/tools/builtins/factory.py": 1,
     # The cockpit's docs link points at the fork that hosts docs/FACTORY.md.
     "web/src/lib/factory.ts": 1,
 }

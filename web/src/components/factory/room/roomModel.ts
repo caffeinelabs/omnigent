@@ -17,6 +17,8 @@ import { findPr } from "../shell/shellRoutes";
 
 export const THREAD_FACTORY = "factory";
 export const THREAD_IMPROVEMENTS = "improvements";
+/** Scout's thread; it exists while discovery runs for the factory. */
+export const THREAD_DISCOVERY = "discovery";
 
 /** `project:db-version` for a slug. */
 export function projectThread(slug: string): string {
@@ -36,6 +38,7 @@ export function threadFromParam(snapshot: FactorySnapshot, param: string | null)
   const raw = (param ?? "").trim();
   if (!raw || raw === THREAD_FACTORY || raw === "#factory") return THREAD_FACTORY;
   if (raw === THREAD_IMPROVEMENTS || raw === "#improvements") return THREAD_IMPROVEMENTS;
+  if (raw === THREAD_DISCOVERY || raw === "#discovery") return THREAD_DISCOVERY;
   if (raw.startsWith("project:")) return raw;
   if (raw.startsWith("pr:")) {
     const pr = findPr(snapshot.prs, raw.slice(3));
@@ -101,6 +104,9 @@ export function pageProjectSlug(
   return null;
 }
 
+/** The fixed threads, in the list's order. */
+const FIXED_ORDER: readonly string[] = [THREAD_FACTORY, THREAD_IMPROVEMENTS, THREAD_DISCOVERY];
+
 export interface ThreadGroups {
   fixed: ThreadView[];
   projects: ThreadView[];
@@ -108,9 +114,10 @@ export interface ThreadGroups {
 }
 
 /**
- * The thread list's groups: `#factory` and `#improvements`, then projects
- * (active first, in the snapshot's order), then PR threads (newest first).
- * Closed projects' threads stay listed but sink.
+ * The thread list's groups: `#factory`, `#improvements` and `#discovery`
+ * (while discovery runs), then projects (active first, in the snapshot's
+ * order), then PR threads (newest first). Closed projects' threads stay
+ * listed but sink.
  */
 export function groupThreads(
   threads: readonly ThreadView[],
@@ -132,8 +139,8 @@ export function groupThreads(
     .filter((t) => t.kind === "pr")
     .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0));
   const fixed = threads
-    .filter((t) => t.kind === "factory" || t.kind === "improvements")
-    .sort((a, b) => (a.kind === "factory" ? -1 : b.kind === "factory" ? 1 : 0));
+    .filter((t) => FIXED_ORDER.includes(t.kind))
+    .sort((a, b) => FIXED_ORDER.indexOf(a.kind) - FIXED_ORDER.indexOf(b.kind));
   return { fixed, projects, prs };
 }
 

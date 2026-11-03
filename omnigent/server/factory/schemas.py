@@ -22,7 +22,8 @@ from omnigent.server.factory.definition_blocks import ProductDef
 Stage = Literal["queued", "planning", "building", "review", "verify", "ready", "merged", "done"]
 AgentStage = Literal["planning", "building", "review", "verify", "ready", "merged"]
 Overlay = Literal["paused", "blocked", "failed", "pr_closed", "cancelled", "merged", "waiting"]
-Role = Literal["lead", "project_lead", "ic", "env_keeper", "reviewer", "demo", "planner"]
+Role = Literal["lead", "project_lead", "ic", "env_keeper", "reviewer", "demo", "planner", "scout"]
+"""A member's factory role; ``scout`` is the discovery seat (``omnigent.factory.SEAT_ROLES``)."""
 MemberState = Literal["active", "paused", "done"]
 Cadence = Literal["demo", "normal"]
 GateState = Literal["pass", "pending", "fail", "skip", "unknown"]

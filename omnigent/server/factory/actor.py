@@ -11,8 +11,8 @@ Refs are the ids humans and agents type and the cockpit renders as chips:
 ``D-7``                   decision 7
 ``INC-13`` / ``F-7``      incident 13 / finding 7
 ``!9630``                 PR number 9630
-``#db-version``           project ``db-version`` (``#factory`` and
-                          ``#improvements`` are the fixed Room threads)
+``#db-version``           project ``db-version`` (``#factory``,
+                          ``#improvements`` and ``#discovery`` are Room threads)
 ``p:db-version``          project ``db-version`` (the explicit form, and the
                           only one for projects named like a fixed thread)
 ``task:db-version/route`` task ``route`` of project ``db-version``
@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from omnigent.factory import FIXED_THREADS, PROJECT_SLUG_RE, TASK_KEY_RE
+from omnigent.factory import FIXED_THREADS, PROJECT_SLUG_RE, TASK_KEY_RE, THREAD_DISCOVERY
 
 ActorKind = Literal["human", "agent", "server"]
 RefKind = Literal[
@@ -33,6 +33,8 @@ RefKind = Literal[
 ]
 
 SERVER_ID: Final = "server"
+THREAD_NAMES: Final = frozenset({*FIXED_THREADS, THREAD_DISCOVERY})
+"""``#<name>`` spellings that name a Room thread, never a project (``p:<name>`` is one)."""
 
 
 @dataclass(frozen=True)
@@ -155,7 +157,7 @@ def parse_ref(text: object) -> Ref | None:
         return Ref("pr", number=int(match.group(1)))
     if match := _HASH_RE.match(value):
         slug = match.group(1)
-        return Ref("thread" if slug in FIXED_THREADS else "project", slug=slug)
+        return Ref("thread" if slug in THREAD_NAMES else "project", slug=slug)
     if match := _PROJECT_RE.match(value):
         return Ref("project", slug=match.group(1))
     if match := _TASK_KEY_RE.match(value):
@@ -189,7 +191,7 @@ def format_ref(ref: Ref) -> str:
         return f"{_PREFIX[ref.kind]}-{ref.number}"
     if ref.kind == "pr" and ref.number is not None:
         return f"!{ref.number}"
-    if ref.kind == "project" and ref.slug in FIXED_THREADS:
+    if ref.kind == "project" and ref.slug in THREAD_NAMES:
         # ``#factory`` would read back as the Room thread.
         return f"p:{ref.slug}"
     if ref.kind in ("project", "thread") and ref.slug:

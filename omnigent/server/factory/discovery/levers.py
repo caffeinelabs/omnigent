@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.factory import KILL_REASONS, LABEL_ROLE, THREAD_FACTORY
+from omnigent.factory import KILL_REASONS, THREAD_FACTORY
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import control, events, people
 from omnigent.server.factory.context import factory_deps
@@ -832,12 +832,11 @@ async def act(
 
 
 def _scout_session(deps: FactoryDeps, fid: str) -> str | None:
-    from omnigent.server.factory.membership import factory_members
+    """:returns: The Scout an ask goes to now; ``None`` queues it (off, paused or over budget)."""
+    from omnigent.server.factory.discovery.seat import awake_scout
 
-    for conv in factory_members(fid, deps.conversation_store):
-        if conv.labels.get(LABEL_ROLE) == views.SCOUT_ROLE and not control.is_gone(conv):
-            return conv.id
-    return None
+    conv = awake_scout(deps, fid)
+    return conv.id if conv is not None else None
 
 
 def _research_text(ref: str, who: str, question: str, budget: float, due: int | None) -> str:
@@ -892,7 +891,12 @@ async def research(
         }
         work = _Work("opportunity.research", f"{_name(actor)} asked Scout to research {row.ref}")
         await asyncio.to_thread(_set, deps, root.id, work, row, research=research)
-        work.data = {"question": body.question, "budget_usd": research["budget_usd"], "due": due}
+        work.data = {
+            "question": body.question,
+            "budget_usd": research["budget_usd"],
+            "due": due,
+            "state": research["state"],
+        }
         if scout is not None:
             control.send_text(
                 app_state,

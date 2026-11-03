@@ -6789,6 +6789,7 @@ async def _auto_create_claude_terminal(
     from omnigent.harnesses.claude_native.bridge import (
         BRIDGE_ID_LABEL_KEY,
         augment_claude_args,
+        disallowed_tools_from_config,
         ensure_claude_workspace_trusted,
         prepare_bridge_dir,
         validate_claude_hook_interpreter_compatibility,
@@ -7417,6 +7418,10 @@ async def _auto_create_claude_terminal(
         # The route-turn hook is registered only when this session can
         # actually route; otherwise every submit would pay its round trip.
         turn_routing=_claude_turn_router is not None,
+        # Tools the bundle switches off (``executor.config.disallowed_tools``).
+        disallowed_tools=disallowed_tools_from_config(
+            getattr(getattr(_unwrap_resolved_spec(agent_spec), "executor", None), "config", None)
+        ),
     )
 
     # Apply the per-harness startup command/args override from config

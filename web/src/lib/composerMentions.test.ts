@@ -14,6 +14,13 @@ describe("findRoomTokens", () => {
   it.each([
     ["@atlas please split it", [["agent", "@atlas", "atlas"]]],
     ["@Sentinel look", [["agent", "@sentinel", "sentinel"]]],
+    [
+      "@scout what do teams ask for in #discovery?",
+      [
+        ["agent", "@scout", "scout"],
+        ["thread", "#discovery", "discovery"],
+      ],
+    ],
     ["@PL:db-version use knex", [["agent", "@pl:db-version", "pl:db-version"]]],
     ["ping @mia@example.com", [["person", "@mia@example.com", "mia@example.com"]]],
     ["see #db-version", [["project", "#db-version", "db-version"]]],

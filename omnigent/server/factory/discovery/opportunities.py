@@ -38,7 +38,7 @@ from omnigent.server.factory import bets, definition
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.discovery import evidence, quotes, rubric
 from omnigent.server.factory.discovery.evidence import Linked, Meter
-from omnigent.server.factory.discovery.ledger import INJECTION_SUSPECT
+from omnigent.server.factory.discovery.ledger import INJECTION_SUSPECT, SUSPECT_AT, injection_score
 from omnigent.server.factory.discovery.rubric import Score
 from omnigent.stores.factory_store import now_s
 from omnigent.stores.factory_store.discovery import SignalFilter
@@ -451,6 +451,44 @@ def solution_named(statement: str) -> str | None:
     return None
 
 
+def check_need(statement: str) -> None:
+    """
+    An agent's statement is a need in job form that names no solution.
+
+    :raises CockpitError: 422 ``not_job_form`` / ``names_a_solution``.
+    """
+    if not _JOB_RE.match(statement):
+        raise CockpitError(
+            422,
+            "not_job_form",
+            'say the need in job form: "When I …, I want …, so I can …"',
+            field="statement",
+        )
+    why = solution_named(statement)
+    if why is not None:
+        raise CockpitError(422, "names_a_solution", why, field="statement")
+
+
+def check_agent_text(texts: Iterable[tuple[str, str | None]]) -> None:
+    """
+    An agent's words on an opportunity read like a person's, never like instructions.
+
+    Titles, statements and bet notes reach Atlas in its ready-to-plan notice, so a
+    signal's injected text must not pass through Scout's paraphrase of it.
+
+    :raises CockpitError: 422 ``text_refused`` (the field that reads like instructions).
+    """
+    for where, text in texts:
+        if text and injection_score(text)[0] >= SUSPECT_AT:
+            raise CockpitError(
+                422,
+                "text_refused",
+                f"{where} reads like instructions to an agent; say the need plainly, in your "
+                "own words, and cite the signals",
+                field=where,
+            )
+
+
 def _words(text: str) -> set[str]:
     return set(_WORD_RE.findall(text.casefold()))
 
@@ -617,7 +655,8 @@ def create(
     :raises CockpitError: 400 ``invalid_body``; 404 ``unknown_signal``; 422
         ``not_job_form`` / ``names_a_solution`` / ``one_solution`` /
         ``unknown_goal`` / ``unknown_segment`` / ``unknown_area`` /
-        ``injection_suspect`` / ``quote_unverified``.
+        ``injection_suspect`` / ``quote_unverified`` / ``text_refused`` (an agent's
+        text that reads like instructions).
     """
     from omnigent.server.factory.start import parse_body
 
@@ -627,16 +666,8 @@ def create(
     cited = check_signals(deps, factory_id, body.signals)
     alternatives = list(body.alternatives)
     if actor.kind == "agent":
-        if not _JOB_RE.match(body.statement):
-            raise CockpitError(
-                422,
-                "not_job_form",
-                'say the need in job form: "When I …, I want …, so I can …"',
-                field="statement",
-            )
-        why = solution_named(body.statement)
-        if why is not None:
-            raise CockpitError(422, "names_a_solution", why, field="statement")
+        check_agent_text(_agent_texts(body))
+        check_need(body.statement)
         alternatives = distinct_alternatives(body.alternatives)
         refs = [f"S-{n}" for n, _ in cited]
         quotes.check(deps, factory_id, _agent_texts(body), cited=refs)
@@ -720,6 +751,8 @@ __all__ = [
     "Facts",
     "NewOpportunity",
     "SignalRef",
+    "check_agent_text",
+    "check_need",
     "check_placement",
     "check_signals",
     "create",

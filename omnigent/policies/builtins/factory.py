@@ -42,6 +42,10 @@ Omnigent terminal) and denies:
   it, ``kubectl delete ns``) for anyone but env_keeper and the project lead.
   A sub-agent is also held to its parent's guardrails (stricter wins), so the
   project lead's fence must admit what its env_keeper runs.
+- for Scout, which reads users' text, every tool outside an allowlist: no
+  shell or terminal at all, no web or browser tool, no MCP server but
+  Omnigent's, and file writes only to its memory (``~/factory/*.md``). It
+  reads the outside world only through the server's logged source gateway.
 
 Line continuations are joined and heredoc bodies and single-quoted text are
 treated as data, so multi-line commands are checked as the shell runs them.
@@ -68,6 +72,7 @@ from omnigent.factory import (
     ROLE_PLANNER,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
+    ROLE_SCOUT,
     ROLES,
 )
 from omnigent.policies.builtins._shell import (
@@ -148,8 +153,62 @@ _TERMINAL_INPUT_TOOLS: frozenset[str] = frozenset({"sys_terminal_send"})
 GUARD_ROLES: frozenset[str] = ROLES
 
 # Roles that never push or open PRs: leads delegate, reviewers and the demo
-# agent comment, the planner only reads.
-_NO_PUSH_ROLES: frozenset[str] = frozenset({ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER})
+# agent comment, the planner and Scout only read.
+_NO_PUSH_ROLES: frozenset[str] = frozenset(
+    {ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER, ROLE_SCOUT}
+)
+
+# Scout reads users' text: it gets no outbound channel and reads only through the gateway.
+_NETWORK_HEADS: frozenset[str] = frozenset(
+    {
+        "curl",
+        "wget",
+        "gh",
+        "xh",
+        "httpie",
+        "aria2c",
+        "nc",
+        "ncat",
+        "netcat",
+        "socat",
+        "telnet",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "ftp",
+        "lynx",
+        "w3m",
+    }
+)
+_GIT_NETWORK_SUBCOMMANDS: frozenset[str] = frozenset(
+    {"clone", "fetch", "pull", "ls-remote", "submodule"}
+)
+# ``git remote update|show|prune`` and ``git archive --remote`` reach a remote too.
+_GIT_REMOTE_NETWORK: frozenset[str] = frozenset({"update", "show", "prune"})
+
+# Scout's tools are an allowlist (Claude Code's local file tools and the Omnigent
+# tools it needs); everything else is denied, whatever its arguments.
+_OMNIGENT_MCP_PREFIX = "mcp__omnigent__"
+_SCOUT_NATIVE_TOOLS: frozenset[str] = frozenset(
+    {"Read", "Glob", "Grep", "LS", "NotebookRead", "TodoWrite", "TodoRead", "ToolSearch", "Skill"}
+)
+_SCOUT_WRITE_TOOLS: frozenset[str] = frozenset(
+    {"Write", "Edit", "MultiEdit", "sys_os_write", "sys_os_edit"}
+)
+_SCOUT_OMNIGENT_TOOLS: frozenset[str] = frozenset(
+    {
+        "load_skill",
+        "read_skill_file",
+        "sys_os_read",
+        "sys_session_rename",
+        "sys_cancel_task",
+        "list_comments",
+        "update_comment",
+    }
+)
+_SCOUT_OMNIGENT_PREFIXES: tuple[str, ...] = ("sys_discovery_", "sys_factory_")
+_SCOUT_MEMORY_DIR = "factory"
 
 # Commands whose arguments are data, not commands (``echo git push`` is no push).
 _INERT_HEADS: frozenset[str] = frozenset(
@@ -475,6 +534,11 @@ _FACTORY_ENV_REASON = (
     "Setting `OMNIGENT_FACTORY_*` in a command (assignment, `env` or `export`) is blocked: "
     f"factory server knobs are {_HUMAN_ONLY_HINT}. Quoting one in prose? Put the text in a "
     "file and pass it with `--body-file` / `-F`."
+)
+_SCOUT_HINT = (
+    "Scout reads sources only through the server's logged gateway "
+    "(`sys_discovery_query`) and reads the product through `sys_discovery_read`; it has "
+    "no outbound channel, writes no code and files no PRs or issues"
 )
 _DEMO_HINT = (
     "it only records evidence against the preview. Post the demo with "
@@ -1129,7 +1193,10 @@ class _RoleGuard:
         :returns: A DENY reason, or ``None``.
         """
         if name == "gh":
-            return self._check_gh(args, gh_repos)
+            # Scout: the specific reason (a merge, an admin write) first, else no network.
+            return self._check_gh(args, gh_repos) or self._network_reason(name)
+        if name in _NETWORK_HEADS and (reason := self._network_reason(name)):
+            return reason
         if name == "git":
             return self._check_git(args)
         if name == "tilt":
@@ -1196,7 +1263,15 @@ class _RoleGuard:
             )
         if self.role == ROLE_DEMO:
             return f"The demo agent never `{what}`: {_DEMO_HINT}."
+        if self.role == ROLE_SCOUT:
+            return f"Scout never `{what}`: {_SCOUT_HINT}."
         return f"The planner never `{what}`: {_PLANNER_HINT}."
+
+    def _network_reason(self, what: str) -> str | None:
+        """DENY network commands for Scout (its reads go through the source gateway)."""
+        if self.role != ROLE_SCOUT:
+            return None
+        return f"`{what}` is blocked for Scout: {_SCOUT_HINT}."
 
     def _demo_pr_reason(self, what: str) -> str | None:
         """DENY every PR write but commenting for the demo agent."""
@@ -1510,6 +1585,13 @@ class _RoleGuard:
         configs, index = _git_global_options(args)
         sub = args[index] if index < len(args) else ""
         rest = args[index + 1 :]
+        networked = (
+            sub in _GIT_NETWORK_SUBCOMMANDS
+            or (sub == "remote" and bool(rest) and rest[0] in _GIT_REMOTE_NETWORK)
+            or (sub == "archive" and any(a.startswith("--remote") for a in rest))
+        )
+        if networked and (reason := self._network_reason(f"git {sub}")):
+            return reason
         reason = self._git_inline_config_reason(configs, sub)
         if reason:
             return reason
@@ -1811,6 +1893,48 @@ def _is_mcp_merge(event: _Json) -> bool:
     )
 
 
+def _scout_memory_path(path: object) -> bool:
+    """Whether *path* is a Markdown file directly in a ``factory`` directory, none hidden."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    parts = [p for p in re.split(r"[\\/]+", path.strip()) if p not in ("", ".")]
+    if len(parts) < 2 or any(p == ".." or p.startswith(".") for p in parts):
+        return False
+    return parts[-2] == _SCOUT_MEMORY_DIR and parts[-1].endswith(".md")
+
+
+def scout_tool_reason(event: _Json) -> str | None:
+    """
+    Scout's tool allowlist: a DENY reason for any tool call outside it.
+
+    :param event: A V0 policy event.
+    :returns: ``None`` for an allowed call (or no tool call), else what to do instead.
+    """
+    if event.get("type") != "tool_call":
+        return None
+    data = event.get("data")
+    name = data.get("name") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name:
+        return f"Scout calls only its allowed tools: {_SCOUT_HINT}."
+    args = data.get("arguments") if isinstance(data, dict) else None
+    bare = name[len(_OMNIGENT_MCP_PREFIX) :] if name.startswith(_OMNIGENT_MCP_PREFIX) else name
+    if bare in _SCOUT_WRITE_TOOLS:
+        target = args.get("file_path", args.get("path")) if isinstance(args, dict) else None
+        if _scout_memory_path(target):
+            return None
+        return (
+            f"Scout writes only its memory, ~/{_SCOUT_MEMORY_DIR}/scout.md (`{name}` "
+            f"elsewhere is blocked): {_SCOUT_HINT}."
+        )
+    if bare != name or bare.startswith("sys_") or bare in _SCOUT_OMNIGENT_TOOLS:
+        if bare in _SCOUT_OMNIGENT_TOOLS or bare.startswith(_SCOUT_OMNIGENT_PREFIXES):
+            return None
+        return f"`{name}` is blocked for Scout: {_SCOUT_HINT}."
+    if name in _SCOUT_NATIVE_TOOLS:
+        return None
+    return f"`{name}` is blocked for Scout (it has no shell, web or outside tool): {_SCOUT_HINT}."
+
+
 def _command_of(event: _Json) -> str | None:
     """
     Return the command a shell or terminal-input tool call will run.
@@ -1959,6 +2083,8 @@ def guard_evaluator(
         """
         if not isinstance(event, dict):
             return _ALLOW
+        if guard.role == ROLE_SCOUT and (reason := scout_tool_reason(event)):
+            return _decision(f"{prefix}{reason}")
         if _is_mcp_merge(event):
             return _decision(f"{prefix}GitHub MCP merges are blocked: {MERGE_GATE_HINT}.")
         if budgeted is not None and (reason := _dispatch_reason(event, budgeted)):
@@ -2065,7 +2191,7 @@ def factory_role_guard(
     (``task.unplanned``, ``loop.budget_violation``).
 
     :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
-        ``env_keeper``, ``reviewer``, ``demo`` or ``planner``.
+        ``env_keeper``, ``reviewer``, ``demo``, ``planner`` or ``scout``.
     :param write_repos: Repos PR writes and URL pushes may target outside a
         factory, e.g. ``["acme/app"]`` (none by default). Ignored for a
         factory member, whose *factory_repos* the server sets.
@@ -2155,9 +2281,10 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "in commands, GitHub admin writes, pushes outside push_ref_prefixes (bare pushes, "
         "HEAD, deletes, tags, protected branches), writes to repos outside write_repos (for "
         "a factory member: outside its factory projects' repos, set by the server), and "
-        "role-restricted actions (lead, reviewer, planner and demo pushes, demo PR writes "
-        "other than comments, planner PR and issue writes, env lifecycle including factory "
-        "previews outside env_keeper).",
+        "role-restricted actions (lead, reviewer, planner, demo and Scout pushes, demo PR "
+        "writes other than comments, planner PR and issue writes, every Scout tool outside "
+        "its allowlist (no shell, web, browser or outside MCP tool), env lifecycle including "
+        "factory previews outside env_keeper).",
         "params_schema": {
             "type": "object",
             "properties": {

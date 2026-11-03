@@ -26,6 +26,7 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
+    ROLE_SCOUT,
 )
 from omnigent.policies.builtins import BUILTIN_POLICY_MODULES
 from omnigent.policies.builtins._shell import SHELL_TOOLS
@@ -49,10 +50,14 @@ from omnigent.spec import load
 _HANDLER = "omnigent.policies.builtins.factory.factory_role_guard"
 _ALL_ROLES = sorted(GUARD_ROLES)
 _PUSHING_ROLES = [ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER]
-_NO_PUSH_ROLES = [ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER]
-_COMMENTING_ROLES = [r for r in _ALL_ROLES if r != ROLE_PLANNER]
+_NO_PUSH_ROLES = [ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER, ROLE_SCOUT]
+# Scout has no shell at all (its tools are an allowlist; see test_scout_guard.py), so
+# every command is denied for it; the other roles' commands are checked one by one.
+_SHELL_ROLES = [r for r in _ALL_ROLES if r != ROLE_SCOUT]
+_READ_ONLY_ROLES = [ROLE_PLANNER, ROLE_SCOUT]
+_COMMENTING_ROLES = [r for r in _ALL_ROLES if r not in _READ_ONLY_ROLES]
 _ENV_ROLES = [ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD]
-_NON_ENV_ROLES = [r for r in _ALL_ROLES if r not in _ENV_ROLES]
+_NON_ENV_ROLES = [r for r in _SHELL_ROLES if r not in _ENV_ROLES]
 _MERGE_URL = "https://github.com/sample-org/sample-app/pull/7"
 
 
@@ -292,9 +297,10 @@ _PR_COMMENTS = [
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
     _cases(_ALL_ROLES, _DENIED_FOR_ALL, "DENY")
-    + _cases(_ALL_ROLES, _ALLOWED_FOR_ALL, "ALLOW")
+    + _cases(_SHELL_ROLES, _ALLOWED_FOR_ALL, "ALLOW")
+    + _cases([ROLE_SCOUT], _ALLOWED_FOR_ALL, "DENY")
     + _cases(_COMMENTING_ROLES, _PR_COMMENTS, "ALLOW")
-    + _cases([ROLE_PLANNER], _PR_COMMENTS, "DENY"),
+    + _cases(_READ_ONLY_ROLES, _PR_COMMENTS, "DENY"),
 )
 def test_rules_for_every_role(role: str, command: str, expected: str) -> None:
     """
@@ -310,7 +316,7 @@ def test_rules_for_every_role(role: str, command: str, expected: str) -> None:
         assert isinstance(decision["reason"], str) and decision["reason"]
 
 
-@pytest.mark.parametrize("role", _ALL_ROLES)
+@pytest.mark.parametrize("role", _SHELL_ROLES)
 def test_raw_merge_reason_points_to_the_gate(role: str) -> None:
     """The ``gh pr merge`` DENY tells the agent exactly how merges happen."""
     decision = _decide(role, f"gh pr merge {_MERGE_URL} --squash")
@@ -429,8 +435,8 @@ def test_pushes_and_pr_creation_by_role(role: str, command: str, expected: str) 
 
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
-    _cases(_ALL_ROLES, _MERGE_GATE_RUNS, "DENY")
-    + _cases(_ALL_ROLES, _MERGE_GATE_DRY_RUNS, "ALLOW"),
+    _cases(_SHELL_ROLES, _MERGE_GATE_RUNS, "DENY")
+    + _cases(_SHELL_ROLES, _MERGE_GATE_DRY_RUNS, "ALLOW"),
 )
 def test_merge_gate_runs_only_as_a_dry_run(role: str, command: str, expected: str) -> None:
     """
@@ -703,10 +709,10 @@ _FACTORY_ENV_WRITES = [
     + _cases(_ALL_ROLES, _OFF_PREFIX_PUSHES, "DENY")
     + _cases(_ALL_ROLES, _FACTORY_ENV_WRITES, "DENY")
     + _cases(_ALL_ROLES, _PUSH_CONFIG_REDIRECTS, "DENY")
-    + _cases(_ALL_ROLES, _HARMLESS_GIT_CONFIG, "ALLOW")
+    + _cases(_SHELL_ROLES, _HARMLESS_GIT_CONFIG, "ALLOW")
     + _cases(_PUSHING_ROLES, _PREFIX_PUSHES, "ALLOW")
     + _cases(_NO_PUSH_ROLES, _PREFIX_PUSHES, "DENY")
-    + _cases(_ALL_ROLES, _FACTORY_ENV_READS, "ALLOW"),
+    + _cases(_SHELL_ROLES, _FACTORY_ENV_READS, "ALLOW"),
 )
 def test_tier0_push_allowlist_and_server_knobs(role: str, command: str, expected: str) -> None:
     """
@@ -1388,7 +1394,7 @@ def test_composes_with_blast_radius_on_one_spec(
     assert verdict == (action, policy)
 
 
-@pytest.mark.parametrize("role", _ALL_ROLES)
+@pytest.mark.parametrize("role", _SHELL_ROLES)
 def test_composed_gate_never_asks(tmp_path: Path, role: str) -> None:
     """Property: the spec-level gate (both policies) never yields ASK for any command."""
     gate = _spec_gate(tmp_path, role)
@@ -1593,7 +1599,7 @@ def test_enforce_denies_a_pl_sys_session_create(mode: str | None, tool: str) -> 
 
 def test_only_the_project_lead_is_held_to_the_dispatch_rules() -> None:
     event = _send("enforce", agent="ic", title="Fix it", args={"input": "x"})
-    for role in _ALL_ROLES:
+    for role in _SHELL_ROLES:  # Scout sends no session message at all
         result = factory_role_guard(role=role)(event, {})["result"]
         assert result == ("DENY" if role == ROLE_PROJECT_LEAD else "ALLOW"), role
 

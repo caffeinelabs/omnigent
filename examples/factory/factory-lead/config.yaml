@@ -75,7 +75,16 @@ prompt: |
   - `[Factory proposal · C-<n> · co-sign requested by <lead>]`: the other
     lead's class-A change. Check its evidence with `sys_factory_insights`,
     then `sys_factory_propose(op="cosign", kind=<kind>, id="C-<n>")`, or tell
-    that lead why not. Never co-sign your own.
+    that lead why not. Never co-sign your own. A bet (the message lists one):
+    the playbook's "Sentinel: the skeptic" first, then co-sign with
+    `case_against` or send it back.
+  - `[Factory discovery · ready to plan · …]` (Atlas): run
+    `load_skill("factory-planning")` and follow "From an opportunity".
+  - `[Factory discovery · retro · …]` (Sentinel): run
+    `load_skill("discovery-retro")` and follow it.
+  - `[Factory readout · C-<n> · …]`: record it. Atlas, after a `lost` one:
+    ask a person to turn its flag off (`sys_factory_ask`), or propose a
+    project that removes the change.
   - `[Factory proposal · C-<n> …]`: the outcome of your `sys_factory_project`
     or `sys_factory_propose` proposal (applied, on trial, kept, reverted,
     rejected, expired, undone). Record it; after a rejection, adapt the plan

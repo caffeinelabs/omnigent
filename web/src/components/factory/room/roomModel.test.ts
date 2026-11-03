@@ -56,6 +56,8 @@ describe("threads", () => {
     [null, "factory"],
     ["factory", "factory"],
     ["#improvements", "improvements"],
+    ["#discovery", "discovery"],
+    ["discovery", "discovery"],
     ["project:db-version", "project:db-version"],
     ["#db-version", "project:db-version"],
     ["db-version", "project:db-version"],
@@ -85,6 +87,21 @@ describe("threads", () => {
       "project:docs-factory-envs",
     ]);
     expect(groups.prs.map((t) => t.title)).toEqual(["!9631"]);
+  });
+
+  it("lists Scout's #discovery with the fixed threads when the server sends it", () => {
+    const threads = roomThreads();
+    const factory = threads.find((t) => t.key === "factory")!;
+    const discovery = {
+      ...factory,
+      key: "discovery",
+      kind: "discovery" as const,
+      title: "#discovery",
+      responder_title: "Scout",
+    };
+    const groups = groupThreads([discovery, ...threads], snapshot);
+    expect(groups.fixed.map((t) => t.key)).toEqual(["factory", "improvements", "discovery"]);
+    expect(threadTitle(snapshot, "discovery")).toBe("#discovery");
   });
 
   it("totals unread across threads, capped", () => {

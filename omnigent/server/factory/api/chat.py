@@ -38,6 +38,7 @@ from omnigent.factory import (
     CHAT_MESSAGE_MAX_CHARS,
     FIXED_THREADS,
     PROJECT_KIND_INTEGRATION,
+    THREAD_DISCOVERY,
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
 )
@@ -152,7 +153,8 @@ def thread_views(
     stats = {s.thread: s for s in store.chat_thread_stats(root.id)}
     reads = {r.thread: r.last_seq for r in store.list_chat_reads(root.id, _reader(user_id))}
     projects = store.list_projects(root.id)
-    keys: list[str] = list(FIXED_THREADS)
+    # ``#discovery`` resolves only while discovery runs; otherwise it is skipped below.
+    keys: list[str] = [*FIXED_THREADS, THREAD_DISCOVERY]
     keys += [f"{THREAD_PROJECT_PREFIX}{p.slug}" for p in projects]
     pr_keys = [k for k in stats if k.startswith(THREAD_PR_PREFIX)]
     pr_keys.sort(key=lambda k: -stats[k].last_seq)

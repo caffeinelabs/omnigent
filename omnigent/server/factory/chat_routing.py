@@ -7,12 +7,16 @@ the factory's routable members (:class:`Members`, built by
 ========================  ==============================================
 ``factory``               Atlas (the factory root)
 ``improvements``          Sentinel (the non-root lead), else Atlas
+``discovery``             Scout (the discovery seat), else Atlas
 ``project:<slug>``        that project's PL; Atlas while it has none
 ``pr:<id>``               the PL of the PR's project; Atlas while it has none
 ========================  ==============================================
 
-- ``@atlas``, ``@sentinel`` and ``@pl:<slug>`` pick the responders instead of
-  the thread's default (mention the default too to add to it).
+- ``@atlas``, ``@sentinel``, ``@scout`` and ``@pl:<slug>`` pick the responders
+  instead of the thread's default (mention the default too to add to it);
+  ``@scout`` routes only while discovery runs for the factory (and Scout,
+  which posts only in ``#discovery``, may answer such a message where it was
+  written); while Scout is over its daily budget Atlas answers instead.
 - ``@<person>`` only notifies; it never routes.
 - A message an agent wrote reaches other agents only through such a mention,
   never through a thread default, so agents talking in the Room never loop.
@@ -21,8 +25,8 @@ the factory's routable members (:class:`Members`, built by
   not be delivered (it is never queued for a resume).
 
 :func:`team_signal` says which of a person's messages discovery keeps as a
-hunch (the ``team`` source): ``hunch: …`` anywhere, and in ``#factory`` "I
-think … because …" and requests like "we need …".
+hunch (the ``team`` source): ``hunch: …`` anywhere, and in ``#factory`` and
+``#discovery`` "I think … because …" and requests like "we need …".
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from omnigent.factory import (
+    THREAD_DISCOVERY,
     THREAD_FACTORY,
     THREAD_IMPROVEMENTS,
     THREAD_PR_PREFIX,
@@ -52,6 +57,7 @@ VIA_FALLBACK: Final = "fallback"
 
 MENTION_ATLAS: Final = "@atlas"
 MENTION_SENTINEL: Final = "@sentinel"
+MENTION_SCOUT: Final = "@scout"
 MENTION_PL_PREFIX: Final = "@pl:"
 MAX_MENTIONS: Final = 20
 
@@ -60,9 +66,11 @@ _PR: Final = THREAD_PR_PREFIX[:-1]
 _SLUG = r"[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?"
 _EMAIL = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
 _MENTION_RE: Final = re.compile(
-    rf"(?<![\w@./-])@(atlas|sentinel|pl:{_SLUG}|{_EMAIL})(?![\w@-])", re.IGNORECASE
+    rf"(?<![\w@./-])@(atlas|sentinel|scout|pl:{_SLUG}|{_EMAIL})(?![\w@-])", re.IGNORECASE
 )
-_ONE_MENTION_RE: Final = re.compile(rf"^@?(atlas|sentinel|pl:{_SLUG}|{_EMAIL})$", re.IGNORECASE)
+_ONE_MENTION_RE: Final = re.compile(
+    rf"^@?(atlas|sentinel|scout|pl:{_SLUG}|{_EMAIL})$", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,9 @@ class Members:
     :param pls: Project slug -> its current PL (a slug without one is absent).
     :param pr_projects: PR thread key (``pr:<id>``) -> its project slug.
     :param pr_numbers: PR thread key -> PR number, for notes.
+    :param scout: The discovery seat, if one is seated and may be woken.
+    :param discovery: Whether discovery runs for the factory (``@scout`` routes only then).
+    :param scout_away: Why Scout cannot answer now (e.g. over today's budget), for the note.
     """
 
     atlas: Agent | None
@@ -102,6 +113,9 @@ class Members:
     pls: Mapping[str, Agent] = field(default_factory=dict)
     pr_projects: Mapping[str, str] = field(default_factory=dict)
     pr_numbers: Mapping[str, int] = field(default_factory=dict)
+    scout: Agent | None = None
+    discovery: bool = False
+    scout_away: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,8 +152,9 @@ class Route:
 
 def normalize_mention(value: object) -> str | None:
     """
-    :param value: e.g. ``"@PL:db-version"``, ``"sentinel"`` or ``"@mia@example.com"``.
-    :returns: ``"@pl:db-version"`` / ``"@sentinel"`` / ``"@mia@example.com"``, or ``None``.
+    :param value: e.g. ``"@PL:db-version"``, ``"sentinel"``, ``"Scout"`` or ``"@mia@example.com"``.
+    :returns: ``"@pl:db-version"`` / ``"@sentinel"`` / ``"@scout"`` / ``"@mia@example.com"``,
+        or ``None``.
     """
     if not isinstance(value, str):
         return None
@@ -167,8 +182,10 @@ def parse_mentions(text: str, extra: Iterable[object] = ()) -> list[str]:
 
 
 def is_agent_mention(mention: str) -> bool:
-    """:returns: Whether *mention* names an agent (``@atlas``, ``@sentinel``, ``@pl:<slug>``)."""
-    return mention in (MENTION_ATLAS, MENTION_SENTINEL) or mention.startswith(MENTION_PL_PREFIX)
+    """:returns: Whether *mention* names an agent (``@atlas``, ``@sentinel``, ``@scout``, a PL)."""
+    return mention in (MENTION_ATLAS, MENTION_SENTINEL, MENTION_SCOUT) or mention.startswith(
+        MENTION_PL_PREFIX
+    )
 
 
 def _pl_name(slug: str) -> str:
@@ -189,6 +206,8 @@ def _default(thread: str, members: Members) -> tuple[Agent | None, str, str | No
         if members.sentinel is None:
             return None, "Sentinel", "Sentinel is not up; Atlas will answer"
         return members.sentinel, members.sentinel.name, None
+    if kind == THREAD_DISCOVERY:
+        return _scout(members)
     if kind == _PROJECT:
         slug = thread[len(THREAD_PROJECT_PREFIX) :]
         pl = members.pls.get(slug)
@@ -213,9 +232,17 @@ def _mentioned(mention: str, members: Members) -> tuple[Agent | None, str, str |
         if members.sentinel is None:
             return None, "Sentinel", "Sentinel is not up; Atlas will answer"
         return members.sentinel, members.sentinel.name, None
+    if mention == MENTION_SCOUT:
+        return _scout(members)
     slug = mention[len(MENTION_PL_PREFIX) :]
     pl = members.pls.get(slug)
     return pl, _pl_name(slug), None if pl else f"{_pl_name(slug)} not up yet; Atlas has it"
+
+
+def _scout(members: Members) -> tuple[Agent | None, str, str | None]:
+    if members.scout is None:
+        return None, "Scout", members.scout_away or "Scout is not seated; Atlas will answer"
+    return members.scout, members.scout.name, None
 
 
 def _back(agent: Agent | None, atlas: Agent | None) -> str:
@@ -245,6 +272,8 @@ def routes(
         return Route(people=people)
     wanted: list[tuple[Agent | None, str, str | None, str]] = []
     for mention in mentions:
+        if mention == MENTION_SCOUT and not members.discovery:
+            continue  # No discovery here: "@scout" is plain text.
         if is_agent_mention(mention):
             wanted.append((*_mentioned(mention, members), VIA_MENTION))
     if not wanted and author_kind == "human":
@@ -293,7 +322,9 @@ _THINK_RE: Final = re.compile(r"^\s*i\s+think\b.+\bbecause\b", re.IGNORECASE | r
 _REQUEST_RE: Final = re.compile(
     r"^\s*we\s+(?:really\s+)?(?:need|should\s+(?:have|add|build))\b", re.IGNORECASE
 )
-_LEADING_MENTIONS_RE: Final = re.compile(rf"^(?:\s*@(?:atlas|sentinel|pl:{_SLUG})\b[,:]?)+", re.I)
+_LEADING_MENTIONS_RE: Final = re.compile(
+    rf"^(?:\s*@(?:atlas|sentinel|scout|pl:{_SLUG})\b[,:]?)+", re.I
+)
 
 
 def team_signal(thread: str, body: str) -> tuple[str, str] | None:
@@ -304,14 +335,14 @@ def team_signal(thread: str, body: str) -> tuple[str, str] | None:
     ``hunch: …`` counts there.
 
     :returns: ``("hunch", text)`` for ``hunch: …`` (anywhere) or "I think …
-        because …" in ``#factory``; ``("request", text)`` for "we need …" and
-        "we should have|add|build …" in ``#factory``; ``None`` otherwise.
+        because …" in ``#factory`` or ``#discovery``; ``("request", text)`` for "we
+        need …" and "we should have|add|build …" there; ``None`` otherwise.
     """
     text = _LEADING_MENTIONS_RE.sub("", body or "").strip()
     match = _HUNCH_RE.match(text)
     if match is not None:
         return "hunch", match.group(1).strip()
-    if thread_kind(thread) != THREAD_FACTORY:
+    if thread_kind(thread) not in (THREAD_FACTORY, THREAD_DISCOVERY):
         return None
     if _THINK_RE.match(text):
         return "hunch", text
@@ -322,6 +353,7 @@ def team_signal(thread: str, body: str) -> tuple[str, str] | None:
 
 __all__ = [
     "MAX_MENTIONS",
+    "MENTION_SCOUT",
     "STATE_DEAD",
     "STATE_DONE",
     "STATE_GONE",

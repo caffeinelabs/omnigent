@@ -39,6 +39,7 @@ from omnigent.harnesses.claude_native.bridge import (
     _occupying_surface,
     augment_claude_args,
     count_hook_events,
+    disallowed_tools_from_config,
     display_cost_approval_popup,
     ensure_claude_workspace_trusted,
     inject_interrupt,
@@ -3343,6 +3344,43 @@ def test_augment_claude_args_merges_user_disallowed_tools(tmp_path: Path) -> Non
     assert len(flag_indices) == 1
     disallowed = args[flag_indices[0] + 1].split(",")
     assert disallowed == ["Bash", "Edit"]
+
+
+def test_augment_claude_args_adds_a_bundles_disallowed_tools(tmp_path: Path) -> None:
+    """
+    A bundle's ``executor.config.disallowed_tools`` switches Claude tools off.
+
+    They merge into the user's ``--disallowedTools`` (one flag, nothing lost,
+    no repeats); fails if the option is dropped or replaces the user's list.
+    """
+    args = augment_claude_args(
+        ("--disallowedTools", "Bash,WebFetch"),
+        bridge_dir=tmp_path,
+        python_executable="/venv/bin/python",
+        disallowed_tools=("WebSearch", "WebFetch"),
+    )
+
+    flag_indices = [i for i, arg in enumerate(args) if arg == "--disallowedTools"]
+    assert len(flag_indices) == 1
+    assert args[flag_indices[0] + 1].split(",") == ["Bash", "WebFetch", "WebSearch"]
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({"disallowed_tools": "WebSearch,WebFetch"}, ("WebSearch", "WebFetch")),
+        ({"disallowed_tools": " WebSearch , WebSearch "}, ("WebSearch",)),
+        ({"disallowed_tools": ["WebFetch"]}, ("WebFetch",)),
+        # Only plain tool names: a flag or a list in disguise is dropped.
+        ({"disallowed_tools": "--allowedTools,Bash(rm:*),Write"}, ("Write",)),
+        ({"disallowed_tools": ""}, ()),
+        ({}, ()),
+        (None, ()),
+    ],
+)
+def test_disallowed_tools_from_config(config: object, expected: tuple[str, ...]) -> None:
+    """``executor.config.disallowed_tools`` reads as plain Claude tool names only."""
+    assert disallowed_tools_from_config(config) == expected
 
 
 def test_augment_claude_args_injects_plugin_dir_for_bundle_with_skills(

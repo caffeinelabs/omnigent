@@ -60,9 +60,24 @@ class FakeCreates:
             if self.fail_next:
                 self.fail_next -= 1
                 return httpx.Response(500, json={"error": {"code": "boom", "message": "boom"}})
+            if request.method == "PATCH":
+                # A model switch (``PATCH /v1/sessions/{id}``); "default" clears it.
+                session_id = request.url.path.rsplit("/", 1)[-1]
+                model = body.get("model_override")
+                self.world.store.update_conversation(
+                    session_id,
+                    model_override=None if model == "default" else model,
+                    _unset_model_override=model == "default",
+                )
+                return httpx.Response(200, json={"id": session_id})
             conv = self.world.store.create_conversation(
                 kind="default", title=body["title"], agent_id=body["agent_id"]
             )
+            if body.get("model_override"):
+                self.world.store.update_conversation(
+                    conv.id, model_override=body["model_override"]
+                )
+            self.calls[-1]["created_id"] = conv.id
             self.world.store.set_labels(conv.id, body["labels"])
             if self.permissions is not None:
                 # The create route grants the caller (the factory's creator) ownership.
