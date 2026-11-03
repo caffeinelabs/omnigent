@@ -842,6 +842,52 @@ export interface WhyView {
   split_from?: string | null;
 }
 
+/** Who asked for a project: a person in the cockpit, or the agent whose proposal created it. */
+export interface RequestedByView {
+  kind: "human" | "agent";
+  name: string;
+  /** The proposal that created it, e.g. `C-12`. */
+  proposal?: string | null;
+}
+
+export type ProjectHealth = "on_track" | "at_risk" | "off_track";
+
+/** The project lead's latest structured update (`sys_factory_set(update=…)`). */
+export interface LeadUpdateView {
+  health: ProjectHealth;
+  done?: string | null;
+  next?: string | null;
+  blocker?: string | null;
+  /** Epoch seconds it was posted. */
+  at: number;
+  /** The lead's handle, else its session id. */
+  by?: string | null;
+}
+
+/**
+ * A project's health: the lead's word unless the facts say worse (or its
+ * update is stale), computed by the server from checks, budget and members.
+ */
+export interface ProjectHealthView {
+  health: ProjectHealth;
+  /** `lead`: its update stands; `facts`: the computed health overrides it. */
+  source: "lead" | "facts";
+  computed: ProjectHealth;
+  /** Every fact in words, e.g. `checks green`, `budget at 42 %`. */
+  facts: string[];
+  /** The facts that make it worse than on track. */
+  reasons: string[];
+  /** The lead's update says what the facts say (null: no update). */
+  agrees: boolean | null;
+  /** The lead's update is older than three hours. */
+  stale: boolean;
+  /**
+   * The budget the spend fact is measured against: the team spec's, else the
+   * charter's project budget (null: neither sets one).
+   */
+  budget_usd?: number | null;
+}
+
 /**
  * Why a queued project has no working PL yet. `starting`: its PL session comes
  * up (sandbox, runner, brief) or is being created; `queued`: nothing starts it
@@ -936,6 +982,12 @@ export interface ProjectView {
   why?: WhyView | null;
   /** The project's team spec next to its live team (newer servers). */
   team_spec?: TeamSpecView | null;
+  /** Who asked for it (newer servers). */
+  requested_by?: RequestedByView | null;
+  /** The project lead's latest structured update (newer servers). */
+  update?: LeadUpdateView | null;
+  /** Health from facts, overriding an optimistic lead (newer servers). */
+  health?: ProjectHealthView | null;
 }
 
 // ── Decisions and events ───────────────────────────────────────
@@ -1554,6 +1606,10 @@ export interface CharterPatchResponse {
   changed: boolean;
   /** The PL's CHARTER UPDATE mail, or null when the project has no PL yet. */
   mail_id: string | null;
+  /** The charter version the change was recorded as, e.g. `C-14` (newer servers). */
+  proposal?: string | null;
+  /** When the version's Undo closes (epoch seconds). */
+  undo_until?: number | null;
 }
 
 /** `POST …/projects/{slug}/start`: how a missing PL starts. */

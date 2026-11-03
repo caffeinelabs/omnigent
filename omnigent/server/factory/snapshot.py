@@ -62,6 +62,7 @@ from omnigent.server.factory import (
     definition,
     detectors,
     identity,
+    lead_update,
     loops,
     product_profile,
     schemas,
@@ -1207,6 +1208,35 @@ def _project_view(
     }
 
 
+def _health_views(
+    project_views: list[dict[str, Any]],
+    rows: Mapping[str, FactoryProject],
+    pr_views: Sequence[Mapping[str, Any]],
+    member_views: Mapping[str, Mapping[str, Any]],
+    project_pl: Mapping[str, str | None],
+    now: float,
+) -> None:
+    """Each live project's lead update and its health computed from facts (in place)."""
+    for view in project_views:
+        slug = view["slug"]
+        row = rows.get(slug)
+        pl = project_pl.get(slug)
+        charter = normalize_charter(row.charter) if row is not None else {}
+        budget = (charter.get("budgets") or {}).get("project_usd")
+        try:
+            view["update"], view["health"] = lead_update.views(
+                view,
+                row.lead_update if row is not None else None,
+                [p for p in pr_views if p.get("project_slug") == slug],
+                [m for m in member_views.values() if m.get("project") == slug],
+                budget_usd=budget,
+                now=now,
+                handle=(member_views.get(pl) or {}).get("handle") if pl else None,
+            )
+        except Exception:  # noqa: BLE001 - a card renders without its health
+            _logger.warning("factory snapshot: no health for %s", slug, exc_info=True)
+
+
 def _team_spec(
     project: FactoryProject, pl: Conversation | None, loaded: _Loaded
 ) -> dict[str, Any] | None:
@@ -1238,6 +1268,7 @@ def _lifecycle(project: FactoryProject) -> dict[str, Any]:
         "human_owner": charter.get("human_owner"),
         "def_version": project.def_version,
         "why": _lenient(schemas.WhyView, charter.get("why")),
+        "requested_by": _lenient(schemas.RequestedByView, charter.get("requested_by")),
     }
 
 
@@ -1413,6 +1444,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         view["tasks_summary"] = task_summaries.get(view["slug"])
         view["loops_summary"] = loop_summaries.get(view["slug"])
         view["active_task"] = active.get(view["slug"])
+    _health_views(project_views, by_slug, pr_views, views, project_pl, now)
     for pr, view in zip(loaded.prs, pr_views, strict=True):
         view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")
         view["loops"] = loop_chips.get(norm_id(pr.id))

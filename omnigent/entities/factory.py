@@ -44,6 +44,8 @@ class FactoryProject:
     :param closed_at: When it left ``active``.
     :param def_version: Factory definition version in force at creation.
     :param version_id: ``factory_versions`` row of the platform that created it.
+    :param lead_update: The project lead's latest structured update
+        ``{health, done, next, blocker, at, by}``, or ``None``.
     :param workspace_id: Tenant partition key.
     """
 
@@ -69,6 +71,7 @@ class FactoryProject:
     closed_at: int | None = None
     def_version: int | None = None
     version_id: str | None = None
+    lead_update: dict[str, Any] | None = None
     workspace_id: int = 0
 
     def to_dict(self) -> dict[str, Any]:

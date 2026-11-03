@@ -62,11 +62,12 @@ function clock(ms: number): string {
   });
 }
 
+// Text-safe tones (>= 4.5:1 on their tint in both themes).
 const SEVERITY_PILL: Record<EventView["severity"], string> = {
-  info: "bg-muted text-muted-foreground",
-  notice: "bg-session-active/10 text-session-active",
-  warning: "bg-warning/15 text-warning",
-  critical: "bg-destructive/10 text-destructive",
+  info: "bg-muted text-foreground/80",
+  notice: "bg-status-blue/15 text-status-blue-fg",
+  warning: "bg-status-yellow/15 text-status-yellow-fg",
+  critical: "bg-status-red/15 text-status-red-fg",
 };
 
 function DeliveryState({ delivery }: { delivery: Delivery | null }) {
@@ -354,7 +355,7 @@ export function ActivityList({
   return (
     <section
       data-testid="activity-list"
-      aria-label="Activity"
+      aria-label={fixedProject ? `Activity of ${fixedProject}` : "Activity"}
       className="flex min-w-0 flex-col gap-2"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">

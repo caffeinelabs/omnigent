@@ -223,6 +223,9 @@ class SysFactorySetTool(Tool):
             "on its own sub-agents. A project lead also claims its project's "
             "pipeline stage on itself with `stage` at each transition; the cockpit "
             "shows the claim next to the stage the server derives from GitHub. "
+            "A project lead posts its structured update on itself with `update` "
+            "({health, done, next, blocker}); the cockpit shows it next to the "
+            "health the server computes from facts, which wins when they disagree. "
             "Pass only the fields you want to change."
         )
 
@@ -261,6 +264,25 @@ class SysFactorySetTool(Tool):
                         "description": (
                             "Project lead only, on itself: the stage your project is in."
                         ),
+                    },
+                    "update": {
+                        "type": "object",
+                        "description": (
+                            "Project lead only, on itself: your project's update. "
+                            "health is on_track, at_risk or off_track; done, next and "
+                            "blocker are one line each (at most 280 characters)."
+                        ),
+                        "properties": {
+                            "health": {
+                                "type": "string",
+                                "enum": ["on_track", "at_risk", "off_track"],
+                            },
+                            "done": {"type": "string"},
+                            "next": {"type": "string"},
+                            "blocker": {"type": "string"},
+                        },
+                        "required": ["health"],
+                        "additionalProperties": False,
                     },
                 },
                 "required": [],

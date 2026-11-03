@@ -316,6 +316,7 @@ const STEER_TO_SETTINGS: Readonly<Record<Exclude<SteerSection, "versions">, stri
 /** Debug's views back to the classic pages. */
 const DEBUG_TO_CLASSIC: Readonly<Record<DebugView, string>> = {
   fleet: "agents",
+  projects: "projects",
   timeline: "timeline",
   activity: "activity",
   graph: "graph",

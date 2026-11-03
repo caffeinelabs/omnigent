@@ -2,7 +2,9 @@
  * "Edit charter" (project page, card ⋯): edit the goal, definition of done,
  * scope, "Preview & demo" with its demo focus, IC budget, priority and
  * constraints; review the diff; then PATCH it. The PL receives a CHARTER
- * UPDATE with the same diff, and its reply clears the pending chip.
+ * UPDATE with the same diff, and its reply clears the pending chip. The
+ * server records the change as a charter version; a page that shows versions
+ * confirms it with their Undo (`onSaved`).
  */
 
 import { useMemo, useState } from "react";
@@ -19,7 +21,12 @@ import {
 } from "@/components/ui/dialog";
 import { showToast } from "@/components/ui/toast";
 import { factoryQueryKey } from "@/hooks/useFactory";
-import { FactoryApiError, type ProjectView, patchFactoryProject } from "@/lib/factoryApi";
+import {
+  type CharterPatchResponse,
+  FactoryApiError,
+  type ProjectView,
+  patchFactoryProject,
+} from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { ProjectFields } from "../start/ProjectFields";
 import {
@@ -42,6 +49,8 @@ export interface EditCharterDialogProps {
   project: ProjectView;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Saved: the page confirms it (with the version's Undo) instead of the plain toast. */
+  onSaved?: (response: CharterPatchResponse) => void;
 }
 
 /** Lines with keys that stay unique when a line repeats (`a`, `a#2`). */
@@ -96,6 +105,7 @@ function EditCharterBody({
   factoryId,
   project,
   onOpenChange,
+  onSaved,
 }: Omit<EditCharterDialogProps, "open">) {
   const queryClient = useQueryClient();
   const controls = useFactoryControls(factoryId);
@@ -123,15 +133,19 @@ function EditCharterBody({
     try {
       const res = await patchFactoryProject(factoryId, project.slug, patch);
       void queryClient.invalidateQueries({ queryKey: factoryQueryKey(factoryId) });
-      if (!res.changed) {
-        showToast("Nothing changed in the charter");
-      } else if (res.mail_id) {
+      if (res.changed && res.mail_id) {
         controls.track({
           action: "charter_update",
           target: `project:${project.slug}`,
           project: project.slug,
           eventId: null,
         });
+      }
+      if (onSaved) {
+        onSaved(res);
+      } else if (!res.changed) {
+        showToast("Nothing changed in the charter");
+      } else if (res.mail_id) {
         showToast(`Charter updated · ${project.pl?.title ?? "the PL"} notified`);
       } else {
         showToast("Charter saved · its PL gets it when it starts");
@@ -239,6 +253,7 @@ export function EditCharterDialog({
   project,
   open,
   onOpenChange,
+  onSaved,
 }: EditCharterDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -255,7 +270,12 @@ export function EditCharterDialog({
           goal.focus();
         }}
       >
-        <EditCharterBody factoryId={factoryId} project={project} onOpenChange={onOpenChange} />
+        <EditCharterBody
+          factoryId={factoryId}
+          project={project}
+          onOpenChange={onOpenChange}
+          onSaved={onSaved}
+        />
       </DialogContent>
     </Dialog>
   );

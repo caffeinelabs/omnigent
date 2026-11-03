@@ -1,6 +1,7 @@
 /**
  * Debug (`/debug/<view>`): operator depth, one level down from the five
- * places. Today's views are kept as they are: the fleet table, the Timeline,
+ * places. Today's views are kept as they are: the fleet table, the projects
+ * table, the Timeline,
  * Activity, the Graph (work, bus, flow), Incidents and findings (and one
  * incident at `/debug/incidents/<ref>`), Insights, and an agent's eight tabs
  * (`/debug/agent/<session id>`). It is reached from the avatar menu, ⌘K and
@@ -13,6 +14,7 @@ import { ActivityHeatmap } from "@/components/factory/overview/ActivityHeatmap";
 import { LiveFeed } from "@/components/factory/overview/LiveFeed";
 import { DEBUG_VIEWS, type DebugView, debugPageHref } from "@/components/factory/factoryRoutes";
 import { EmptyState } from "@/components/factory/project/projectParts";
+import { ProjectsTable } from "@/components/factory/projects/ProjectsTable";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { FOCUS_RING } from "@/components/factory/ui/statusTokens";
 import { Link } from "@/lib/routing";
@@ -27,6 +29,7 @@ import { TimelinePage } from "./TimelinePage";
 
 export const DEBUG_LABEL: Record<DebugView, string> = {
   fleet: "Fleet table",
+  projects: "Projects table",
   timeline: "Timeline",
   activity: "Activity",
   graph: "Graph",
@@ -56,6 +59,12 @@ function ActivityView() {
       />
     </div>
   );
+}
+
+/** Debug › Projects table: every project in one dense table (the classic default view). */
+function ProjectsTableView() {
+  const { snapshot, nowS } = useFactoryShell();
+  return <ProjectsTable snapshot={snapshot} nowS={nowS} variant="full" />;
 }
 
 /** Debug › Agent depth without an agent: pick one. */
@@ -116,6 +125,8 @@ function DebugBody({ view, sub }: { view: DebugView; sub: string | null }) {
   switch (view) {
     case "fleet":
       return <AgentsPage />;
+    case "projects":
+      return <ProjectsTableView />;
     case "timeline":
       return <TimelinePage />;
     case "activity":

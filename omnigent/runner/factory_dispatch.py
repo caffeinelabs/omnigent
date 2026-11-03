@@ -571,6 +571,16 @@ async def _set_member(
                 message="a project lead claims its stage on itself; omit session_id",
             )
         patch["stage"] = stage
+    update = args.get("update")
+    if update is not None:
+        if not isinstance(update, dict):
+            return _error(f"{tool} 'update' must be an object {{health, done, next, blocker}}")
+        if target != caller:
+            return _error(
+                "not_your_project",
+                message="a project lead posts its update on itself; omit session_id",
+            )
+        patch["update"] = update
     if not patch:
         return _error(f"{tool} requires at least one field to change")
     return await _passthrough(

@@ -237,7 +237,12 @@ def load_facts(deps: FactoryDeps, factory_id: str, window: Window) -> Facts:
     )
     facts.events = store.find_events(factory_id, list(_EVENT_KINDS), since_ms, limit=_EVENT_LIMIT)
     facts.chat = [m for m in store.list_chat(factory_id, limit=5000) if m.created_at >= since]
-    facts.proposals = store.list_proposals(factory_id, limit=500)
+    # A person's charter edit is recorded as an applied proposal; it was never one to decide.
+    facts.proposals = [
+        p
+        for p in store.list_proposals(factory_id, limit=500)
+        if not (p.result or {}).get("charter_edit")
+    ]
     facts.spans = store.list_spans(
         factory_id, kinds=list(_SPAN_KINDS), since_ms=since_ms, limit=_SPAN_LIMIT
     )

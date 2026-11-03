@@ -80,7 +80,7 @@ export function TeamHistory({ rows, current, nowS, loading, names, onRestore }: 
                   </p>
                 </div>
                 {row.current && !row.undoneBy ? (
-                  <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                  <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground/80">
                     current
                   </span>
                 ) : restore ? (

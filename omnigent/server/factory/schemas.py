@@ -939,6 +939,63 @@ class WhyView(_View):
     split_from: str | None = None
 
 
+class RequestedByView(_View):
+    """
+    Who asked for a project, recorded by the server when it was created: a
+    person from the cockpit, or the author of the proposal that created it.
+
+    :param proposal: That proposal, e.g. ``"C-12"``.
+    """
+
+    kind: Literal["human", "agent"]
+    name: str
+    proposal: str | None = None
+
+
+ProjectHealth = Literal["on_track", "at_risk", "off_track"]
+
+
+class LeadUpdateView(_View):
+    """
+    The project lead's latest structured update (``sys_factory_set(update=…)``).
+
+    :param at: Epoch seconds it was posted.
+    :param by: The lead's handle, else its session id.
+    """
+
+    health: ProjectHealth
+    done: str | None = None
+    next: str | None = None
+    blocker: str | None = None
+    at: int
+    by: str | None = None
+
+
+class ProjectHealthView(_View):
+    """
+    A project's health: the lead's word unless the facts say worse, or it is stale.
+
+    :param health: What the cockpit shows.
+    :param source: ``lead`` (its update stands) or ``facts`` (computed, overriding it).
+    :param computed: The health the facts alone give.
+    :param facts: Every fact in plain words, e.g. ``"checks green"``, ``"budget at 42 %"``.
+    :param reasons: The facts that make it worse than on track.
+    :param agrees: The lead's update says what the facts say (``None``: no update).
+    :param stale: The lead's update is older than three hours.
+    :param budget_usd: The budget the spend fact is measured against: the team
+        spec's, else the charter's project budget (``None``: neither sets one).
+    """
+
+    health: ProjectHealth
+    source: Literal["lead", "facts"]
+    computed: ProjectHealth
+    facts: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    agrees: bool | None = None
+    stale: bool = False
+    budget_usd: float | None = None
+
+
 class ProvisioningView(_View):
     """
     The PL sandbox's provisioning step while the project is queued.
@@ -1103,6 +1160,9 @@ class ProjectView(_View):
     def_version: int | None = None
     why: WhyView | None = None
     team_spec: TeamSpecView | None = None
+    requested_by: RequestedByView | None = None
+    update: LeadUpdateView | None = None
+    health: ProjectHealthView | None = None
 
 
 # ── Decisions and events ───────────────────────────────────────

@@ -160,3 +160,16 @@ def test_session_path_encodes_the_id_as_one_segment() -> None:
     assert _session_path("/v1/sessions", "conv_1", "/child_sessions") == (
         "/v1/sessions/conv_1/child_sessions"
     )
+
+
+async def test_set_passes_a_leads_update_through_on_itself() -> None:
+    server = FakeServer().on("PATCH", f"/v1/factory/sessions/{LEAD}", body={})
+    update = {"health": "at_risk", "done": "T-3 merged", "blocker": "D-4 waits for a person"}
+
+    await _call(server, "sys_factory_set", {"update": update})
+    other = await _call(server, "sys_factory_set", {"session_id": PEER, "update": update})
+    shape = await _call(server, "sys_factory_set", {"update": "on track"})
+
+    assert server.requests[0].body == {"from_session_id": LEAD, "update": update}
+    assert other["error"] == "not_your_project" and "error" in shape
+    assert len(server.requests) == 1

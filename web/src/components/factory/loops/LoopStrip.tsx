@@ -412,9 +412,11 @@ export function LoopStrip({
     kind: InterventionKind;
     target: InterventionTarget;
   } | null>(null);
+  // Without a title the strip sits in a section that names it: no second "Loops" landmark.
+  const Box = title ? "section" : "div";
   return (
-    <section
-      aria-label={title ?? "Loops"}
+    <Box
+      aria-label={title ?? undefined}
       data-testid={testId}
       className="flex min-w-0 flex-col gap-2"
     >
@@ -441,6 +443,6 @@ export function LoopStrip({
         targets={acting ? [acting.target] : []}
         onOpenChange={(open) => !open && setActing(null)}
       />
-    </section>
+    </Box>
   );
 }

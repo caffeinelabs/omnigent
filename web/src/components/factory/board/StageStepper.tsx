@@ -109,7 +109,7 @@ export function StageStepper({
               state === "current"
                 ? "font-medium text-foreground"
                 : "text-muted-foreground @max-md:invisible",
-              state === "todo" && "text-muted-foreground/70",
+              state === "todo" && "text-muted-foreground",
             )}
           >
             {STAGE_SHORT_LABEL[step as FactoryStage]}

@@ -452,10 +452,11 @@ export function DecisionCard({
   const waited = nowS - decision.created_at;
   const late = open && waited > DECISION_RED_AFTER_S;
   const serverAsked = decision.source !== "agent";
+  // Blocking text uses the amber text token (text-warning is too light on white); its icon keeps it.
   const tone = serverAsked
     ? "text-destructive"
     : decision.blocking
-      ? "text-warning"
+      ? "text-status-yellow-fg"
       : "text-muted-foreground";
 
   // Withdrawn or expired: one quiet line.
@@ -518,7 +519,7 @@ export function DecisionCard({
         {serverAsked ? (
           <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
         ) : decision.blocking ? (
-          <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+          <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0 text-warning" />
         ) : (
           <MessageSquareIcon aria-hidden className="size-3.5 shrink-0" />
         )}
