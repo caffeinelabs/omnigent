@@ -34,8 +34,9 @@ asked for, so it needs no second approval, and Undo stays open.
 Applying the proposal stores the row (:func:`link_created`): the ask
 verbatim (the Room message the proposal answers), who asked, the plan and
 the projects; each new project's charter gets an ``initiative`` line, so its
-lead knows its part. Undoing the proposal takes that back. Acceptance runs
-live in :mod:`.acceptance`.
+lead knows its part, and a project with no home feature yet gets this one
+(``factory_projects.feature``, :mod:`.features`). Undoing the proposal takes
+the plan back. Acceptance runs live in :mod:`.acceptance`.
 
 The views are pure and live in :mod:`.initiative_view` (re-exported here):
 they read one viewer's filtered snapshot, so a project the viewer cannot see
@@ -637,7 +638,11 @@ def _stamp(
     if flag.get("key"):
         stamp["flag"] = flag["key"]
     charter["initiative"] = stamp
-    stored = deps.factory_store.update_project(project.id, charter=normalize_charter(charter))
+    fields: dict[str, Any] = {"charter": normalize_charter(charter)}
+    if not project.feature:
+        # Its home feature: the first initiative that plans it keeps it (features.homes).
+        fields["feature"] = row.ref
+    stored = deps.factory_store.update_project(project.id, **fields)
     return stored or project
 
 

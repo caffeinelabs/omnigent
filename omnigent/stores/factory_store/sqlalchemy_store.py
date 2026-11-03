@@ -245,6 +245,7 @@ def _project(row: SqlFactoryProject) -> FactoryProject:
         def_version=row.def_version,
         version_id=row.version_id,
         lead_update=load_json(row.lead_update),
+        feature=row.feature,
         workspace_id=row.workspace_id,
     )
 

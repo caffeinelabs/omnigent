@@ -960,6 +960,34 @@ events, issues and an unknown PR store `pr:9630`. Every key the server
 writes is stored as it is, so old rows read back through `normalize()` with
 no migration.
 
+**Each project's home feature** is `factory_projects.feature` (`I-n`, or
+NULL while its feature is implicit; `features.py`): the initiative that
+planned it, pays for it and accepts it. Applying a projects proposal that
+starts or extends an initiative writes it; the reconcile loop backfills rows
+that have none from the initiatives' `plan.projects` (the one that added it
+first) and then from the initiative its creating proposal
+(`charter.why.proposal`) started. Any other initiative that lists the
+project gets an "also serves" link, never a second parent.
+
+**Node pages** (`GET …/factories/{fid}/n/{ref}`, `nodes.py`) project the
+factory onto the levels one node at a time: the node, its breadcrumb (folded
+implicit ancestors flagged), its state (the worst among its active
+children; the status line is the state for now), progress (acceptance
+steps passing on the base env for a feature, task weight for a project),
+its children in order columns (siblings layered by their dependencies;
+Later holds an initiative's later waves, ghosts the projects an open
+proposal would add), 60 a page (`children_page` is the next cursor; past 60
+they are sorted by state), grandchildren as state counts, the levels below
+it (only levels with a node), its results and its thread. Implicit parents
+are keyed by their origin (`need:from-C-12`, `feature:from-C-12`,
+`feature:by-<who>`, `goal:no-goal` once goals exist) and fold into their only
+child; a level the definition hides now is left out and its nodes' children
+hang one level up; integration and self projects sit in the factory tree
+under Environments. One projection per factory (and set of projects a
+viewer cannot read) is memoized for 5 s and dropped on any recorded write.
+Cockpit v3 reads these pages instead of its sample when
+`OMNIGENT_FACTORY_NODE_API=1` (preflight `node_api`).
+
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to
 carry: `repo` (the repo whose projects run it; unset: every project's),

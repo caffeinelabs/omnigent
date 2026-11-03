@@ -20,13 +20,14 @@ import copy
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from omnigent.db.db_models import current_workspace_id, uuid_to_bytes
 from omnigent.db.enum_codecs import (
@@ -105,9 +106,13 @@ PROJECT_FIELDS = frozenset(
         "def_version",
         "version_id",
         "lead_update",
+        "feature",
     }
 )
 """Fields ``upsert_project`` / ``update_project`` accept."""
+
+FEATURE_REF_RE: Final = re.compile(r"^I-[1-9][0-9]{0,8}$")
+"""A project's home feature (``factory_projects.feature``): an initiative's ``I-<n>``."""
 
 PR_FIELDS = frozenset(
     {
@@ -482,6 +487,9 @@ def validate_project_fields(fields: Mapping[str, Any]) -> None:
         check_name(FACTORY_PROJECT_STAGE, fields["stage"], "factory_projects.stage")
     if "status" in fields:
         check_name(FACTORY_PROJECT_STATUS, fields["status"], "factory_projects.status")
+    feature = fields.get("feature")
+    if feature is not None and not (isinstance(feature, str) and FEATURE_REF_RE.match(feature)):
+        raise ValueError(f"factory_projects.feature is an I-<n> ref, not {feature!r}")
 
 
 def validate_pr_fields(fields: Mapping[str, Any]) -> None:
