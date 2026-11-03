@@ -79,6 +79,8 @@ export interface SearchHit {
   /** A task's PR, when the viewer sees it. */
   pr_id?: string | null;
   source_kind?: string | null;
+  /** A signal's excerpt is untrusted user text: shown, never followed. */
+  untrusted?: boolean;
 }
 
 export interface SearchResponse {
@@ -157,12 +159,27 @@ export async function undoOpportunityAct(
   );
 }
 
+/**
+ * What pausing or resuming a source answers. A pause is a definition change
+ * anyone with edit rights applies at once; its Undo pins the version before
+ * it (`undo.pin`, until `undo.until`), which needs no owner. Resuming is
+ * owners' (class B).
+ */
+export interface SourcePauseResponse {
+  /** False when the source was already in that state. */
+  changed?: boolean;
+  state?: string;
+  def_version?: number | null;
+  /** The definition version to pin to take the pause back, and until when (epoch seconds). */
+  undo?: { pin: number; until: number } | null;
+}
+
 /** `POST …/sources/{id}/pause|resume`: stop a source's reads at once, or start them again. */
 export async function setSourcePaused(
   factoryId: string,
   source: string,
   paused: boolean,
-): Promise<void> {
+): Promise<SourcePauseResponse> {
   const verb = paused ? "pause" : "resume";
-  await readJson(await sendJson(factoryPath(factoryId, `/sources/${enc(source)}/${verb}`), {}));
+  return readJson(await sendJson(factoryPath(factoryId, `/sources/${enc(source)}/${verb}`), {}));
 }

@@ -22,6 +22,8 @@ interface PaletteStory {
   discovery?: boolean;
   search?: "answer" | "pending";
   viewer?: boolean;
+  /** An operator (not an owner) is looking. */
+  operator?: boolean;
   theme?: "light" | "dark";
   phone?: boolean;
 }
@@ -36,7 +38,9 @@ function Clean({ children }: { children: ReactNode }) {
 }
 
 function story(options: PaletteStory = {}): Story {
-  const snapshot = teamSnapshot("standard", { viewer: options.viewer ? "viewer" : undefined });
+  const snapshot = teamSnapshot("standard", {
+    viewer: options.viewer ? "viewer" : options.operator ? "operator" : undefined,
+  });
   const play: Story["play"] = async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     await body.findByTestId("cockpit-topbar");
@@ -105,8 +109,12 @@ export const Results = story({ query: "export" });
 export const ResultsDark = story({ query: "export", theme: "dark" });
 export const ResultsMobile = story({ query: "export", phone: true });
 
-/** A definition field by its old name: `models.ic` finds the builders' model. */
+/** A definition field by its old name: `models.ic` finds the builders' model, the old name first. */
 export const SettingByName = story({ query: "models.ic" });
+export const SettingByNameMobile = story({ query: "models.ic", phone: true });
+
+/** Discovery off: a goal is the strategy's, so it is still found, and opens in Steer. */
+export const GoalDiscoveryOff = story({ query: "G-1", discovery: false });
 
 /** An id typed in full opens that object first. */
 export const ById = story({ query: "O-7" });
@@ -124,6 +132,19 @@ export const VerbStaged = story({ query: "swap rex to claude · opus", enter: tr
 /** Discovery's verbs: a hunch with weight 0.1. */
 export const VerbHunch = story({ query: "hunch: people share drafts before publishing (sample)" });
 
+/** An operator pauses a source (Undo pins the version before), but resuming one is owners'. */
+export const VerbResumeOperator = story({ query: "resume source", operator: true });
+export const VerbResumeOperatorDark = story({
+  query: "resume source",
+  operator: true,
+  theme: "dark",
+});
+export const VerbPauseOperatorMobile = story({
+  query: "pause source",
+  operator: true,
+  phone: true,
+});
+
 // ── Nothing matches ────────────────────────────────────────────
 
 /** The only row is Ask Atlas, which posts to #factory. */
@@ -131,8 +152,21 @@ export const NoMatch = story({ query: "why is the queue slow (sample)" });
 export const NoMatchDark = story({ query: "why is the queue slow (sample)", theme: "dark" });
 export const NoMatchMobile = story({ query: "why is the queue slow (sample)", phone: true });
 
-/** A viewer: no verbs to stage or post, so nothing matches says so. */
+/** A viewer: no verbs to stage or post, so nothing matches says so (outside the listbox's options). */
 export const ViewerNoMatch = story({ query: "swap rex to claude", viewer: true });
+export const ViewerNoMatchDark = story({
+  query: "swap rex to claude",
+  viewer: true,
+  theme: "dark",
+});
+export const ViewerNoMatchMobile = story({
+  query: "swap rex to claude",
+  viewer: true,
+  phone: true,
+});
+
+/** An unknown slash command says so, the same way. */
+export const SlashUnknown = story({ query: "/nosuchcommand" });
 
 // ── Keys ───────────────────────────────────────────────────────
 

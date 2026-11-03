@@ -35,7 +35,7 @@ import {
   jumpItems,
 } from "./paletteModel";
 import type { SlashCommand } from "./slashCommands";
-import { SlashRows, useSlashRunner } from "./SlashRows";
+import { PaletteNote, SlashRows, slashError, useSlashRunner } from "./SlashRows";
 
 const KIND_ICON: Record<JumpKind, LucideIcon> = {
   page: LayoutDashboardIcon,
@@ -150,6 +150,10 @@ export function FactoryCommandPalette({
               </>
             )}
           </CommandList>
+          <PaletteNote
+            note={slash ? slashError(query, snapshot) : null}
+            testId="factory-palette-error"
+          />
           <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
             ↵ open · type / for commands · esc closes
           </p>

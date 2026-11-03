@@ -23,9 +23,13 @@ from omnigent.entities.factory import (
 from omnigent.entities.factory_discovery import FactoryOpportunity, FactorySignal
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import definition, snapshot
+from omnigent.server.factory import search as search_module
 from omnigent.server.factory.definition_blocks import DISCOVERY_ENV
 from omnigent.server.factory.search import (
     PER_KIND,
+    PER_KIND_SETTINGS,
+    Q_INPUT_MAX,
+    Q_MAX,
     SCORE_REF,
     SCORE_TITLE,
     Query,
@@ -34,6 +38,8 @@ from omnigent.server.factory.search import (
     room_threads,
     score,
     search,
+    setting_paths,
+    wants_pr_threads,
 )
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld
@@ -169,7 +175,7 @@ DOC = {
     },
     "rules": [{"id": "R-3", "role": "ic", "project": "*", "text": "Run the unit tests (sample)"}],
 }
-PATHS = [*definition.schema_paths(), "rules"]
+PATHS = setting_paths()
 
 
 def _inputs(discovery: bool = True, **extra: Any) -> SearchInputs:
@@ -297,12 +303,25 @@ def test_models_ic_finds_the_builder_model_it_moved_to() -> None:
 
 
 def test_settings_are_found_by_field_name_and_by_words() -> None:
-    by_path = search(_inputs(), "discovery.rubric.off_focus_factor")["results"][0]
-    assert by_path["path"] == "discovery.rubric.off_focus_factor"
-    words = [h["path"] for h in search(_inputs(), "merge policy")["results"]]
-    assert words == ["product.delivery.merge_policy"]
     budget = search(_inputs(), "budgets.factory_usd_per_day")["results"][0]
+    assert budget["path"] == "budgets.factory_usd_per_day"
     assert budget["detail"] == "budgets"
+    words = [h["path"] for h in search(_inputs(), "usd per day")["results"]]
+    assert "budgets.factory_usd_per_day" in words
+
+
+def test_blocks_edited_whole_are_not_listed_field_by_field() -> None:
+    paths = setting_paths()
+    # The product profile, strategy, discovery and briefs have their own editors.
+    assert not any(p.startswith(("product.", "strategy.", "discovery.", "briefs.")) for p in paths)
+    assert {"role_defaults.ic.model", "budgets.factory_usd_per_day", "rules"} <= set(paths)
+    assert set(paths) <= {*definition.schema_paths(), "rules"}
+    assert search(_inputs(), "merge policy")["results"] == []
+    # A family of settings fits whole, so the cut never drops the ones Steer edits.
+    family = [p for p in paths if p.startswith("role_defaults.")]
+    assert PER_KIND < len(family) <= PER_KIND_SETTINGS
+    hits = search(_inputs(), "role_defaults")["results"]
+    assert sorted(h["path"] for h in hits if h["kind"] == "setting") == sorted(family)
 
 
 def test_members_match_by_vendor_model_and_state() -> None:
@@ -369,6 +388,22 @@ def test_closed_work_goes_after_open_work() -> None:
     assert opportunities == ["O-7", "O-8"]
     parked = next(h for h in result["results"] if h["ref"] == "O-8")
     assert parked["status"] == "parked"
+
+
+def test_signal_text_comes_marked_untrusted() -> None:
+    hit = search(_inputs(), "S-1180")["results"][0]
+    assert hit["kind"] == "signal" and hit["untrusted"] is True
+    assert all("untrusted" not in h for h in search(_inputs(), "O-7")["results"])
+
+
+def test_only_a_query_a_pr_thread_could_match_counts_the_rooms_threads() -> None:
+    def wants(q: str) -> bool:
+        parsed = Query.parse(q)
+        assert parsed is not None
+        return wants_pr_threads(parsed)
+
+    assert wants("!9631") and wants("9631") and wants("room") and wants("thread 96")
+    assert not wants("custom domain") and not wants("#csv-export") and not wants("O-7")
 
 
 def test_withdrawn_and_expired_signals_are_never_found() -> None:
@@ -506,9 +541,29 @@ async def test_unknown_factories_and_non_readers_are_404(cockpit: Cockpit, user:
 
 
 async def test_the_route_bounds_its_query_and_limit(cockpit: Cockpit) -> None:
-    assert (await _search(cockpit, "x" * 201)).status_code == 422
+    long = await _search(cockpit, "x" * 500)
+    assert long.status_code == 200, long.text
+    assert long.json()["q"] == "x" * Q_MAX
+    assert (await _search(cockpit, "x" * (Q_INPUT_MAX + 1))).status_code == 422
     assert (await _search(cockpit, "a", limit=101)).status_code == 422
     blank = (await _search(cockpit, "")).json()
     assert blank == {"q": "", "discovery": True, "results": [], "total": 0}
     few = (await _search(cockpit, "a", limit=3)).json()
     assert len(few["results"]) == 3 and few["total"] > 3
+
+
+async def test_tasks_are_scanned_newest_first_and_t_n_always_resolves(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(cockpit)
+    for key in ("first", "second", "third"):
+        cockpit.store.upsert_task(
+            cockpit.fid, "api-version", key, title=f"Shared word {key} (sample)"
+        )
+    monkeypatch.setattr(search_module, "TASK_SCAN", 2)
+
+    found = (await _search(cockpit, "shared word")).json()["results"]
+    exact = (await _search(cockpit, "T-1")).json()["results"]
+
+    assert [h["ref"] for h in found if h["kind"] == "task"] == ["T-3", "T-2"]
+    assert exact[0]["kind"] == "task" and exact[0]["ref"] == "T-1"

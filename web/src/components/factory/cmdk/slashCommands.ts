@@ -162,6 +162,8 @@ export interface VerbContext {
     post: boolean;
     /** Steer: plan, research, pause a source. */
     control: boolean;
+    /** Owners' changes: resume a paused source (class B). */
+    owner: boolean;
     /** Stage team changes (everyone but a viewer). */
     team: boolean;
   };
@@ -468,8 +470,12 @@ function discoveryVerbs(query: string, ctx: VerbContext): PaletteVerb[] {
     ];
   }
   const source = SOURCE.exec(text);
-  if (source && ctx.can.control) {
-    const pause = source[1]!.toLowerCase() === "pause";
+  const pause = source?.[1]?.toLowerCase() === "pause";
+  if (source && !pause && !ctx.can.owner) {
+    // Resuming a paused source is owners' (class B); an Undo right after a pause is not.
+    return [verb("source:resume-owners", "Owners can resume a source", null, { kind: "none" })];
+  }
+  if (source && (pause ? ctx.can.control : ctx.can.owner)) {
     const typed = source[2]!.trim().toLowerCase();
     return ctx.sources
       .filter((s) => (pause ? s.state !== "paused" : s.state === "paused"))
@@ -534,6 +540,16 @@ export function idleVerbs(ctx: VerbContext): PaletteVerb[] {
 
 const VERB_WORD =
   /^(?:swap|add|raise|set|change|lower|hunch|ask|plan|research|pause|resume|i think)\b/i;
+
+/**
+ * Whether `query` is a discovery verb followed by free text (a hunch, a
+ * question for Scout, a research question): the palette does not search it.
+ */
+export function isFreeTextVerb(query: string): boolean {
+  const text = query.trim();
+  const rest = HUNCH.exec(text)?.[1] ?? ASK_SCOUT.exec(text)?.[1] ?? RESEARCH.exec(text)?.[2];
+  return Boolean(rest?.trim());
+}
 
 /** Whether `query` starts like a verb (a viewer is told who can run it). */
 export function looksLikeVerb(query: string): boolean {

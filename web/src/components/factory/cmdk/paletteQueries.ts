@@ -13,6 +13,8 @@ import { useDebounced } from "../team/teamQueries";
 export const SEARCH_DEBOUNCE_MS = 150;
 /** A search answer stays fresh this long (reopening the palette reuses it). */
 export const SEARCH_STALE_MS = 10_000;
+/** The server reads this much of a query (`search.py` `Q_MAX`); the rest is not sent. */
+export const SEARCH_MAX_CHARS = 200;
 
 export const factorySearchKey = (factoryId: string, q: string) =>
   ["factory-search", factoryId, q] as const;
@@ -33,10 +35,11 @@ export function useFactorySearch(
   enabled = true,
 ): { data: SearchResponse | undefined; current: boolean; missing: boolean; loading: boolean } {
   const debounced = useDebounced(query.trim(), SEARCH_DEBOUNCE_MS);
+  const q = debounced.slice(0, SEARCH_MAX_CHARS);
   const result = useQuery<SearchResponse>({
-    queryKey: factorySearchKey(factoryId, debounced),
-    queryFn: ({ signal }) => fetchFactorySearch(factoryId, debounced, signal),
-    enabled: enabled && Boolean(factoryId) && debounced.length > 0,
+    queryKey: factorySearchKey(factoryId, q),
+    queryFn: ({ signal }) => fetchFactorySearch(factoryId, q, signal),
+    enabled: enabled && Boolean(factoryId) && q.length > 0,
     staleTime: SEARCH_STALE_MS,
     retry: false,
   });

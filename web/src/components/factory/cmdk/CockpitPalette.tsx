@@ -53,7 +53,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { factoryNowQueryKey } from "@/hooks/useFactory";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
-import type { FactorySnapshot } from "@/lib/factoryApi";
+import { type FactorySnapshot, pinFactoryDefinition } from "@/lib/factoryApi";
 import {
   addHunch,
   planOpportunity,
@@ -70,7 +70,7 @@ import { waitingOnViewer } from "../agents/fleetModel";
 import { teamMember, teamRows } from "../agents/teamsModel";
 import { discoveryRuns, usersNeed } from "../home/homeModel";
 import { useFactoryAsks, useTopOpportunities } from "../home/homeQueries";
-import { useFactoryDefinition } from "../insights/learnQueries";
+import { useFactoryDefinition, useInvalidateLearn } from "../insights/learnQueries";
 import { roomQueryKey, useRoomThreads } from "../room/roomQueries";
 import { useViewerCan } from "../shell/viewerCan";
 import { useTeamCatalog } from "../team/teamQueries";
@@ -95,11 +95,12 @@ import {
   askAtlasVerb,
   FACTORY_THREAD,
   idleVerbs,
+  isFreeTextVerb,
   looksLikeVerb,
   paletteVerbs,
   swapTarget,
 } from "./slashCommands";
-import { SlashRows, useSlashRunner } from "./SlashRows";
+import { PaletteNote, SlashRows, slashError, useSlashRunner } from "./SlashRows";
 
 const KIND_ICON: Record<PaletteKind, LucideIcon> = {
   need: InboxIcon,
@@ -203,7 +204,8 @@ function PaletteBody({
   const slash = query.trimStart().startsWith("/");
   const typed = query.trim().length > 0 && !slash;
   const top = useTopOpportunities(fid, discoveryOn && !typed).data;
-  const search = useFactorySearch(fid, query, typed);
+  // A hunch or a question for Scout is free text: nothing to search for.
+  const search = useFactorySearch(fid, query, typed && !(discoveryOn && isFreeTextVerb(query)));
 
   const live = useMemo(() => {
     const waitingOnMe = waitingOnViewer(snapshot.decisions, snapshot.viewer);
@@ -225,6 +227,7 @@ function PaletteBody({
     can: {
       post: can.post,
       control: can.control,
+      owner: can.settings,
       team: snapshot.viewer?.role !== "viewer",
     },
   };
@@ -262,6 +265,7 @@ function PaletteBody({
 
   const refreshDiscovery = () =>
     void queryClient.invalidateQueries({ queryKey: factoryNowQueryKey(fid) });
+  const invalidateDefinition = useInvalidateLearn(fid);
   const failed = (what: string) => (error: unknown) =>
     toast.show({ message: `Could not ${what}: ${errorText(error)}` });
 
@@ -355,15 +359,28 @@ function PaletteBody({
       case "source": {
         close();
         const { source, label, paused } = action;
-        const flip = (to: boolean) => setSourcePaused(fid, source, to);
-        flip(paused).then(
-          () => {
-            refreshDiscovery();
+        const refreshSources = () => {
+          refreshDiscovery();
+          invalidateDefinition();
+        };
+        setSourcePaused(fid, source, paused).then(
+          (res) => {
+            refreshSources();
+            if (res.changed === false) {
+              toast.show({ message: `${label} was already ${paused ? "paused" : "running"}.` });
+              return;
+            }
+            // A pause's Undo pins the version before it (anyone who paused may);
+            // resuming is owners'. Only a server that sends no handle is undone by resume.
+            const handle = res.undo;
+            const undo: () => Promise<unknown> = handle
+              ? () => pinFactoryDefinition(fid, handle.pin)
+              : () => setSourcePaused(fid, source, !paused);
             toast.show({
               message: paused
                 ? `Paused ${label}. Its reads stopped at once.`
                 : `Resumed ${label}. It reads again.`,
-              undo: () => flip(!paused).then(refreshDiscovery, failed(`undo on ${label}`)),
+              undo: () => undo().then(refreshSources, failed(`undo on ${label}`)),
             });
           },
           (error: unknown) =>
@@ -424,18 +441,19 @@ function PaletteBody({
                 )}
               </CommandGroup>
             ))}
-            {sections.length === 0 && !search.loading && typed && (
-              <p
-                data-testid="factory-palette-empty"
-                className="px-3 py-6 text-center text-sm text-muted-foreground"
-              >
-                Nothing matches “{query.trim()}”.
-                {readOnlyVerb && " Ask an operator to change this."}
-              </p>
-            )}
           </>
         )}
       </CommandList>
+      <PaletteNote
+        note={
+          slash
+            ? slashError(query, snapshot)
+            : sections.length === 0 && !search.loading && typed
+              ? `Nothing matches “${query.trim()}”.${readOnlyVerb ? " Ask an operator to change this." : ""}`
+              : null
+        }
+        testId={slash ? "factory-palette-error" : "factory-palette-empty"}
+      />
       {/* Key hints are hidden on phones; the searching line shows everywhere. */}
       {(searching || !phone) && (
         <div

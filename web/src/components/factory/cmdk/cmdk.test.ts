@@ -164,7 +164,7 @@ function context(overrides: Partial<VerbContext> = {}): VerbContext {
     ],
     catalog: teamCatalog(),
     perAsk: 2,
-    can: { post: true, control: true, team: true },
+    can: { post: true, control: true, owner: true, team: true },
     ...overrides,
   };
 }
@@ -200,6 +200,10 @@ describe("hitItems", () => {
     expect(href(hit("signal", "S-1180", "x"))).toBe("/discovery/signals?peek=S-1180");
     expect(href(hit("source", "repo-issues", "x"))).toBe("/discovery?peek=source%3Arepo-issues");
     expect(href(hit("goal", "G-1", "x"))).toBe("/discovery?goal=G-1");
+    // The strategy stands without Scout: a goal opens in Steer while discovery is off.
+    expect(hitTarget(TFID, hit("goal", "G-1", "x"), { discoveryOn: false })).toEqual({
+      href: `/factory/${TFID}/steer/definition`,
+    });
     expect(href(hit("project", "#csv-export", "x", { slug: "csv-export" }))).toBe(
       "/projects/csv-export",
     );
@@ -250,12 +254,12 @@ describe("hitItems", () => {
     expect(items[0]).toMatchObject({
       group: "settings",
       title: "Models · Implementers",
-      detail: "Cadence, previews and models · role_defaults.ic.model (was models.ic)",
+      detail: "models.ic → role_defaults.ic.model · Cadence, previews and models",
       target: { href: `/factory/${TFID}/steer/definition` },
     });
   });
 
-  it("hides discovery's kinds while discovery is off", () => {
+  it("hides discovery's kinds while discovery is off, and keeps the strategy's goals", () => {
     const hits = [
       hit("opportunity", "O-7", "Own domain (sample)"),
       hit("signal", "S-1", "a quote (sample)"),
@@ -263,7 +267,9 @@ describe("hitItems", () => {
       hit("goal", "G-1", "A goal (sample)"),
       hit("project", "#csv-export", "CSV export (sample)", { slug: "csv-export" }),
     ];
-    expect(hitItems(TFID, hits, { discoveryOn: false }).map((i) => i.group)).toEqual(["projects"]);
+    const off = hitItems(TFID, hits, { discoveryOn: false });
+    expect(off.map((i) => i.group)).toEqual(["goals", "projects"]);
+    expect(off[0]!.target).toEqual({ href: `/factory/${TFID}/steer/definition` });
     expect(hitItems(TFID, hits, { discoveryOn: true })).toHaveLength(5);
   });
 });
@@ -398,7 +404,7 @@ describe("palette verbs", () => {
   });
 
   it("a viewer stages nothing and asks nothing", () => {
-    const ctx = context({ can: { post: false, control: false, team: false } });
+    const ctx = context({ can: { post: false, control: false, owner: false, team: false } });
     expect(paletteVerbs("swap rex to claude", ctx)).toEqual([]);
     expect(paletteVerbs("hunch: people want X (sample)", ctx)).toEqual([]);
     expect(askAtlasVerb("anything", ctx)).toBeNull();
@@ -424,7 +430,14 @@ describe("palette verbs", () => {
       { kind: "source", source: "web", label: "Web and market (sample)", paused: false },
     ]);
     const off = context({ discoveryOn: false });
-    for (const q of ["hunch: x", "ask scout: x", "plan O-7", "research O-7: x", "pause source"]) {
+    for (const q of [
+      "hunch: x",
+      "ask scout: x",
+      "plan O-7",
+      "research O-7: x",
+      "pause source",
+      "resume source",
+    ]) {
       expect(paletteVerbs(q, off)).toEqual([]);
     }
     expect(idleVerbs(off).map((v) => v.title)).toEqual(["swap … to …", "Toggle theme"]);
@@ -433,6 +446,20 @@ describe("palette verbs", () => {
       "ask scout: …",
       "swap … to …",
       "Toggle theme",
+    ]);
+  });
+
+  it("an operator pauses a source; resuming one is owners'", () => {
+    const operator = context({ can: { post: true, control: true, owner: false, team: true } });
+    expect(actions(paletteVerbs("pause source", operator))).toEqual([
+      { kind: "source", source: "repo-issues", label: "Repo issues (sample)", paused: true },
+    ]);
+    const resume = paletteVerbs("resume source we", operator);
+    expect(resume.map((v) => v.title)).toEqual(["Owners can resume a source"]);
+    expect(actions(resume)).toEqual([{ kind: "none" }]);
+    // Owners resume; nobody else is offered a verb the server refuses.
+    expect(actions(paletteVerbs("resume source we", context()))).toEqual([
+      { kind: "source", source: "web", label: "Web and market (sample)", paused: false },
     ]);
   });
 

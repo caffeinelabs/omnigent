@@ -6,7 +6,12 @@
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { isMacPlatform } from "@/lib/hotkeys";
 
-/** The key list, in the order people reach for them. */
+/**
+ * The key list, in the order people reach for them. Each is bound somewhere:
+ * ⌘K, `/`, the `g` chords, `?` and `r` by `useFactoryPaletteHotkey`; `e` by
+ * the project page's team (`useEditKey` in `TeamSection`); `u` by the toast
+ * that offers Undo.
+ */
 export function cockpitKeyList(mac = isMacPlatform()): [string, string][] {
   return [
     [`${mac ? "⌘K" : "Ctrl K"} or /`, "Search or run a command"],

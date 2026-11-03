@@ -6,7 +6,8 @@ the hits of ``q`` in what they may read, best first, built by
 model and state), source, definition field name, definition version and Room
 thread. Discovery's opportunities, signals and sources answer only while
 discovery runs for the factory. A blank ``q`` finds nothing (the palette
-shows Needs you and its verbs instead).
+shows Needs you and its verbs instead); a long one is read up to ``Q_MAX``
+characters, and only a query past ``Q_INPUT_MAX`` is refused (422).
 """
 
 from __future__ import annotations
@@ -16,7 +17,12 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 
 from omnigent.server.factory.api.agents import fleet_context
-from omnigent.server.factory.search import LIMIT_DEFAULT, LIMIT_MAX, Q_MAX, search_for_viewer
+from omnigent.server.factory.search import (
+    LIMIT_DEFAULT,
+    LIMIT_MAX,
+    Q_INPUT_MAX,
+    search_for_viewer,
+)
 
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
@@ -25,7 +31,7 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 async def search_factory(
     request: Request,
     factory_id: str,
-    q: str = Query("", max_length=Q_MAX),
+    q: str = Query("", max_length=Q_INPUT_MAX),
     limit: int = Query(LIMIT_DEFAULT, ge=1, le=LIMIT_MAX),
 ) -> dict[str, Any]:
     """The hits of ``q`` in what the caller may read: ``{q, discovery, results, total}``."""

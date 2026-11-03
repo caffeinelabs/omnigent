@@ -4,7 +4,9 @@ The palette types and the server finds, so the client does not hold the whole
 factory in memory: every id (``O-``, ``S-``, ``G-``, ``C-``, ``D-``, ``INC-``,
 ``F-``, ``T-``, ``R-``, ``!`` PRs, ``#`` projects, ``v`` versions), titles,
 members (with vendor, model and state), sources, the definition's field names
-(and their old names, ``models.ic``), definition versions and Room threads.
+(and their old names, ``models.ic``; the blocks edited whole, such as the
+product profile, are not listed field by field), definition versions and
+Room threads. Signal hits carry ``untrusted: True``, as discovery's reads do.
 
 What a viewer sees is what the other reads show them: the snapshot cut to
 the members they may read (projects, PRs, decisions, agents), issues by the
@@ -30,11 +32,12 @@ from omnigent.factory import (
     FIXED_THREADS,
     PROPOSAL_OPEN_STATUSES,
     TASK_CLOSED_STATES,
+    TASK_STATES,
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
 )
 from omnigent.server.factory import definition, issues
-from omnigent.server.factory.definition_blocks import LEGACY_MODELS
+from omnigent.server.factory.definition_blocks import BLOCKS, LEGACY_MODELS, discovery_server_on
 from omnigent.server.factory.snapshot import filter_snapshot
 
 if TYPE_CHECKING:
@@ -49,12 +52,24 @@ if TYPE_CHECKING:
 
 Q_MAX: Final = 200
 """The longest query read (longer ones are cut)."""
+Q_INPUT_MAX: Final = 2000
+"""The longest query the route accepts; it reads the first :data:`Q_MAX` characters."""
 LIMIT_DEFAULT: Final = 40
 LIMIT_MAX: Final = 100
 PER_KIND: Final = 8
 """At most this many hits of one kind, so one kind (signals) never floods the list."""
+PER_KIND_SETTINGS: Final = 16
+"""Settings come from a fixed allowlist; a family of them (``role_defaults``) fits whole."""
+SETTING_BLOCKS_SKIPPED: Final = frozenset(BLOCKS) - {"role_defaults"}
+"""
+Blocks edited as a whole (the product profile, strategy, discovery, briefs),
+not field by field in Steer: their paths are not listed as settings.
+``role_defaults`` stays, since Steer edits its models (``models.ic``).
+"""
 PROPOSAL_SCAN: Final = 500
 ISSUE_SCAN: Final = 500
+TASK_SCAN: Final = 500
+"""Task titles are searched in the newest this many open and closed tasks; ``T-n`` always is."""
 VERSION_SCAN: Final = 50
 SIGNAL_SCAN: Final = 2000
 """Signal text matches look at the newest this many signals; an exact ``S-n`` always resolves."""
@@ -534,6 +549,8 @@ def _signals(query: Query, rows: Sequence[FactorySignal]) -> Iterable[_Hit]:
                 _join(row.source, row.kind or "unlabelled", "flagged" if row.flags else None),
                 found,
                 i,
+                # The same envelope as discovery's signal reads: shown, never followed.
+                {"untrusted": True},
             )
 
 
@@ -649,7 +666,8 @@ def search(inputs: SearchInputs, raw_query: str | None, limit: int = LIMIT_DEFAU
     kept: list[_Hit] = []
     per_kind: dict[str, int] = {}
     for hit in hits:
-        if per_kind.get(hit.kind, 0) >= PER_KIND:
+        cap = PER_KIND_SETTINGS if hit.kind == "setting" else PER_KIND
+        if per_kind.get(hit.kind, 0) >= cap:
             continue
         per_kind[hit.kind] = per_kind.get(hit.kind, 0) + 1
         kept.append(hit)
@@ -680,6 +698,49 @@ def _hex(row_id: str) -> str:
     return row_id.replace("-", "").lower()
 
 
+def setting_paths() -> list[str]:
+    """The definition paths listed as settings (not the blocks edited whole), and ``rules``."""
+    return [
+        *(
+            p
+            for p in definition.schema_paths()
+            if p.split(".", 1)[0] not in SETTING_BLOCKS_SKIPPED
+        ),
+        "rules",
+    ]
+
+
+_PR_THREAD_WORDS: Final = ("room", "thread")
+_PR_REF_WORD = re.compile(r"!?\d*")
+
+
+def wants_pr_threads(query: Query) -> bool:
+    """
+    Whether a PR's Room thread (titled ``!<number>``, found by "room" or
+    "thread") could match *query*: only then are the Room's threads counted.
+    """
+    return all(
+        _PR_REF_WORD.fullmatch(word) or any(word in w for w in _PR_THREAD_WORDS)
+        for word in query.words
+    )
+
+
+def _tasks_for(store: Any, factory_id: str, query: Query) -> list[FactoryTask]:
+    """The newest :data:`TASK_SCAN` open and closed tasks, and ``T-n`` when typed in full."""
+    open_states = [s for s in TASK_STATES if s not in TASK_CLOSED_STATES]
+    rows = {
+        t.id: t
+        for states in (open_states, sorted(TASK_CLOSED_STATES))
+        for t in store.list_tasks(factory_id, states=states, newest=TASK_SCAN)
+    }
+    exact = re.fullmatch(r"t-(\d+)", query.text)
+    if exact:
+        row = store.get_task_by_number(factory_id, int(exact.group(1)))
+        if row is not None:
+            rows[row.id] = row
+    return list(rows.values())
+
+
 def load_inputs(ctx: FleetContext, body: Mapping[str, Any], query: Query) -> SearchInputs:
     """Read what one search needs (synchronous: run it in a worker thread)."""
     from omnigent.server.factory.discovery.opportunities import effective_doc
@@ -687,7 +748,8 @@ def load_inputs(ctx: FleetContext, body: Mapping[str, Any], query: Query) -> Sea
     deps, factory_id = ctx.deps, ctx.root.id
     store = deps.factory_store
     doc, pinned = effective_doc(deps, factory_id)
-    discovery = definition.discovery_enabled(deps, factory_id)
+    # ``definition.discovery_enabled``, from the definition already read.
+    discovery = discovery_server_on() and (doc.get("discovery") or {}).get("enabled") is True
     visible = {p["slug"] for p in body["projects"]}
     issue_rows = [
         row
@@ -700,20 +762,21 @@ def load_inputs(ctx: FleetContext, body: Mapping[str, Any], query: Query) -> Sea
             readable=ctx.readable,
         )
     ]
-    stats = store.chat_thread_stats(factory_id)
+    # Counting every thread's messages is costly: only for a query a PR thread could match.
+    stats = store.chat_thread_stats(factory_id) if wants_pr_threads(query) else []
     inputs = SearchInputs(
         body=body,
         doc=doc,
         discovery=discovery,
         proposals=store.list_proposals(factory_id, limit=PROPOSAL_SCAN),
         issues=issue_rows,
-        tasks=[t for t in store.list_tasks(factory_id) if t.project_slug in visible],
+        tasks=[t for t in _tasks_for(store, factory_id, query) if t.project_slug in visible],
         versions=store.list_definitions(factory_id, limit=VERSION_SCAN),
         pinned=pinned,
         threads=room_threads(
             body, (s.thread for s in stats if s.thread.startswith(THREAD_PR_PREFIX))
         ),
-        paths=[*definition.schema_paths(), "rules"],
+        paths=setting_paths(),
     )
     if discovery:
         inputs.opportunities = store.list_opportunities(factory_id)
@@ -745,6 +808,8 @@ __all__ = [
     "LIMIT_DEFAULT",
     "LIMIT_MAX",
     "PER_KIND",
+    "PER_KIND_SETTINGS",
+    "Q_INPUT_MAX",
     "Q_MAX",
     "Query",
     "SearchInputs",
@@ -755,4 +820,6 @@ __all__ = [
     "score",
     "search",
     "search_for_viewer",
+    "setting_paths",
+    "wants_pr_threads",
 ]

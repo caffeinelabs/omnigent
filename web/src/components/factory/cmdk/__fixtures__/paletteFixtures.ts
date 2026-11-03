@@ -43,13 +43,6 @@ const DISCOVERY: Candidate[] = [
     score: 0,
   },
   {
-    kind: "goal",
-    ref: "G-1",
-    title: "More new users get a working result on day one (sample)",
-    detail: "G-1",
-    score: 0,
-  },
-  {
     kind: "source",
     ref: "web",
     title: "The open web (sample)",
@@ -59,14 +52,24 @@ const DISCOVERY: Candidate[] = [
   },
 ];
 
+/** The strategy's goals: found with discovery on or off (`search.py` keeps them). */
+const GOALS: Candidate[] = [
+  {
+    kind: "goal",
+    ref: "G-1",
+    title: "More new users get a working result on day one (sample)",
+    detail: "G-1",
+    score: 0,
+  },
+];
+
+/** Setting paths as the server lists them: blocks edited whole (product, strategy …) are not. */
 const PATHS = [
   "budgets.factory_usd_per_day",
   "budgets.project_usd",
   "loops.review.rounds",
   "role_defaults.ic.model",
   "role_defaults.reviewer.model",
-  "discovery.rubric.off_focus_factor",
-  "product.delivery.merge_policy",
 ];
 const OLD_NAMES: Record<string, string> = {
   "role_defaults.ic.model": "models.ic",
@@ -144,6 +147,7 @@ function candidates(snapshot: FactorySnapshot, discovery: boolean): Candidate[] 
       thread: "factory",
     },
   );
+  out.push(...GOALS);
   return discovery ? [...out, ...DISCOVERY] : out;
 }
 
@@ -160,7 +164,11 @@ export function sampleSearch(
       ? all
           .map(({ keywords, ...hit }) => {
             const exactAlias = hit.alias != null && hit.alias.toLowerCase() === query.text;
-            return { ...hit, score: exactAlias ? 6 : scoreMatch(query, { ...hit, keywords }) };
+            return {
+              ...hit,
+              score: exactAlias ? 6 : scoreMatch(query, { ...hit, keywords }),
+              ...(hit.kind === "signal" ? { untrusted: true } : {}),
+            };
           })
           .filter((hit) => hit.score > 0)
           .sort((a, b) => b.score - a.score)

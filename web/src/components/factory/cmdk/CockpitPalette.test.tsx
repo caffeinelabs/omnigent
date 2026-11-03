@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import axe from "axe-core";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DefinitionResponse, FactorySnapshot } from "@/lib/factoryApi";
+import type { DefinitionResponse, FactorySnapshot, SourceDef } from "@/lib/factoryApi";
 import type { SearchResponse } from "@/lib/factoryPaletteApi";
 import { definitionResponse } from "../insights/__fixtures__/learnFixtures";
 import { TEAM_SLUG, teamCatalog, teamSnapshot } from "../team/__fixtures__/teamFixtures";
@@ -41,7 +41,20 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function definition(discovery: boolean): DefinitionResponse {
+const SOURCE: SourceDef = {
+  id: "repo-issues",
+  label: "Repo issues (sample)",
+  kind: "repo",
+  params: {},
+  roles: ["scout"],
+  privacy: { level: "public", redact: [], quote_max: 280, keep_days: 365 },
+  consent: "public",
+  budget: { calls_per_day: 100 },
+  interval_min: 60,
+  state: "active",
+};
+
+function definition(discovery: boolean, sources: SourceDef[] = []): DefinitionResponse {
   const base = definitionResponse();
   return {
     ...base,
@@ -52,6 +65,7 @@ function definition(discovery: boolean): DefinitionResponse {
         ...base.effective.discovery!,
         enabled: discovery,
         budgets: { usd_per_day: 10, per_ask: 2 },
+        sources,
       },
     },
   };
@@ -339,6 +353,30 @@ describe("the new cockpit's palette", () => {
     });
   });
 
+  it("pauses a source, and its Undo pins the version before the pause instead of resuming", async () => {
+    serve();
+    routes[`GET ${BASE}/definition`] = () => json(definition(true, [SOURCE]));
+    routes[`POST ${BASE}/sources/repo-issues/pause`] = () =>
+      json({ changed: true, state: "paused", def_version: 13, undo: { pin: 12, until: 2e9 } });
+    routes[`POST ${BASE}/definition/pin`] = () => json({ def_version: 12, changed: true });
+    renderPalette();
+    await screen.findByText("Pick the first file format (sample)");
+
+    await type("pause source");
+    fireEvent.click(await screen.findByText("Pause source Repo issues (sample)"));
+
+    const toast = await screen.findByTestId("factory-toast");
+    expect(toast).toHaveTextContent("Paused Repo issues (sample). Its reads stopped at once.");
+    fireEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === `${BASE}/definition/pin`)?.body).toEqual({
+        version: 12,
+      }),
+    );
+    // Resuming is owners' (class B): the Undo never calls it.
+    expect(calls.some((c) => c.path.endsWith("/resume"))).toBe(false);
+  });
+
   it("is a combobox over a listbox with no axe violations, empty and typed", async () => {
     serve();
     renderPalette();
@@ -356,6 +394,48 @@ describe("the new cockpit's palette", () => {
     await waitFor(() => expect(input).toHaveAttribute("aria-activedescendant"));
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     expect((await axe.run(palette, options)).violations.map((v) => v.id)).toEqual([]);
+  });
+
+  it("says nothing matches outside the listbox's options, with no axe violations", async () => {
+    serve();
+    renderPalette(teamSnapshot("standard", { viewer: "viewer" }));
+    await screen.findByText("Pick the first file format (sample)");
+    const options: axe.RunOptions = {
+      rules: { "color-contrast": { enabled: false }, region: { enabled: false } },
+    };
+    const palette = screen.getByTestId("factory-palette");
+
+    await type("swap rex to claude");
+    const empty = await screen.findByTestId("factory-palette-empty");
+    // Said in a live region below the listbox, which holds only options and groups.
+    expect(screen.getByRole("listbox")).not.toContainElement(empty);
+    const note = screen.getByTestId("factory-palette-status");
+    expect(note).toHaveAttribute("aria-live", "polite");
+    expect(note).toContainElement(empty);
+    expect((await axe.run(palette, options)).violations.map((v) => v.id)).toEqual([]);
+
+    await type("/nosuchcommand");
+    expect(await screen.findByTestId("factory-palette-error")).toHaveTextContent(
+      "Unknown command /nosuchcommand",
+    );
+    expect((await axe.run(palette, options)).violations.map((v) => v.id)).toEqual([]);
+  });
+
+  it("does not search a hunch or a question for Scout, and sends at most 200 characters", async () => {
+    serve();
+    renderPalette();
+    await screen.findByText("Pick the first file format (sample)");
+
+    await type("hunch: people share drafts first (sample)");
+    await screen.findByText("Add hunch: “people share drafts first (sample)”");
+    await type(`${"long ".repeat(60)}(sample)`);
+    await waitFor(() => expect(calls.some((c) => c.path.startsWith(`${BASE}/search`))).toBe(true));
+
+    const searched = calls
+      .filter((c) => c.path.startsWith(`${BASE}/search`))
+      .map((c) => new URL(c.path, "http://x").searchParams.get("q") ?? "");
+    expect(searched.some((q) => q.startsWith("hunch"))).toBe(false);
+    expect(searched.every((q) => q.length <= 200)).toBe(true);
   });
 
   it("debounces the search while someone types", async () => {

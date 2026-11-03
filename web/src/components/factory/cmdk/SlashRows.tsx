@@ -94,7 +94,35 @@ export function useSlashRunner(
   };
 }
 
-/** The rows for a query that starts with `/`: the command to run, suggestions, or why not. */
+/**
+ * Why a `/` query runs nothing (an unknown command, a missing target), or
+ * null. The palette says it below its list ({@link PaletteNote}): a listbox
+ * holds only options and groups.
+ */
+export function slashError(query: string, snapshot: FactorySnapshot): string | null {
+  const parsed = parseSlashCommand(query, snapshot);
+  if (parsed.ok || matchingCommands(query).length > 0) return null;
+  return parsed.error;
+}
+
+/**
+ * A line under the palette's list ("Nothing matches …", an unknown command),
+ * in a polite live region so a screen reader hears it, and outside the
+ * listbox, which may hold only options and groups.
+ */
+export function PaletteNote({ note, testId }: { note: string | null; testId: string }) {
+  return (
+    <div role="status" aria-live="polite" data-testid="factory-palette-status">
+      {note && (
+        <p data-testid={testId} className="px-3 py-6 text-center text-sm text-muted-foreground">
+          {note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The rows for a query that starts with `/`: the command to run, or suggestions. */
 export function SlashRows({
   query,
   snapshot,
@@ -145,14 +173,6 @@ export function SlashRows({
             </CommandItem>
           ))}
         </CommandGroup>
-      )}
-      {!parsed.ok && suggestions.length === 0 && (
-        <p
-          data-testid="factory-palette-error"
-          className="px-3 py-6 text-center text-sm text-muted-foreground"
-        >
-          {parsed.error}
-        </p>
       )}
     </>
   );

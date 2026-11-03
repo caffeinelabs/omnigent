@@ -294,12 +294,15 @@ export const PALETTE_GROUP_LABEL: Record<PaletteGroup, string> = {
   debug: "Debug",
 };
 
-/** Groups that exist only while discovery runs for the factory. */
+/**
+ * Groups that exist only while discovery runs for the factory (the server's
+ * `DISCOVERY_KINDS`). Goals are the strategy's and stay: without discovery
+ * they open in Steer.
+ */
 export const DISCOVERY_GROUPS: ReadonlySet<PaletteGroup> = new Set([
   "opportunities",
   "signals",
   "sources",
-  "goals",
 ]);
 
 const KIND_GROUP: Record<SearchHitKind, PaletteGroup> = {
@@ -430,9 +433,14 @@ function peek(path: string, value: string): string {
 
 /**
  * Where one server hit opens in the new cockpit, or null when this cockpit
- * has no place for it yet (a setting no Steer section edits).
+ * has no place for it yet (a setting no Steer section edits). A goal opens
+ * on Discovery while discovery runs, else in Steer, where the definition is.
  */
-export function hitTarget(factoryId: string, hit: SearchHit): PaletteTarget | null {
+export function hitTarget(
+  factoryId: string,
+  hit: SearchHit,
+  { discoveryOn = true }: { discoveryOn?: boolean } = {},
+): PaletteTarget | null {
   const ref = hit.ref ?? "";
   switch (hit.kind) {
     case "opportunity":
@@ -442,7 +450,9 @@ export function hitTarget(factoryId: string, hit: SearchHit): PaletteTarget | nu
     case "source":
       return { href: peek(discoveryPageHref(factoryId), `source:${ref}`) };
     case "goal":
-      return { href: `${discoveryPageHref(factoryId)}?goal=${encodeURIComponent(ref)}` };
+      return discoveryOn
+        ? { href: `${discoveryPageHref(factoryId)}?goal=${encodeURIComponent(ref)}` }
+        : { href: steerPageHref(factoryId, "definition") };
     case "project":
       return hit.slug ? { href: projectPageHref(factoryId, hit.slug) } : null;
     case "pr":
@@ -491,14 +501,16 @@ export function hitItems(
   for (const hit of hits) {
     const group = KIND_GROUP[hit.kind];
     if (!group || (!discoveryOn && DISCOVERY_GROUPS.has(group))) continue;
-    const target = hitTarget(factoryId, hit);
+    const target = hitTarget(factoryId, hit, { discoveryOn });
     if (!target) continue;
     let { title, detail } = hit;
     if (hit.kind === "setting") {
-      const setting = settingTarget(hit.path ?? hit.ref ?? "")!;
+      const path = hit.path ?? hit.ref ?? "";
+      const setting = settingTarget(path)!;
       title = setting.title;
-      const was = hit.alias ? ` (was ${hit.alias})` : "";
-      detail = `${STEER_SECTION_LABEL[setting.section]} · ${hit.path ?? hit.ref}${was}`;
+      const section = STEER_SECTION_LABEL[setting.section];
+      // The old name the query matched leads, so a cut detail still shows it.
+      detail = hit.alias ? `${hit.alias} → ${path} · ${section}` : `${section} · ${path}`;
     }
     out.push({
       key: `hit:${hit.kind}:${hit.ref ?? hit.id ?? hit.title}`,

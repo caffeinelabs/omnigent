@@ -454,6 +454,16 @@ def test_task_upsert_numbers_and_updates(store: FactoryStore) -> None:
     assert store.update_task(uuid.uuid4().hex, state="done") is None
 
 
+def test_list_tasks_newest_bounds_the_scan(store: FactoryStore) -> None:
+    for key in ("one", "two", "three"):
+        store.upsert_task(FID, "db-version", key)
+    store.upsert_task(FID, "db-version", "one", state="done")
+
+    assert [t.ref for t in store.list_tasks(FID, newest=2)] == ["T-2", "T-3"]
+    assert [t.ref for t in store.list_tasks(FID, states=["done"], newest=2)] == ["T-1"]
+    assert [t.ref for t in store.list_tasks(FID, newest=10)] == ["T-1", "T-2", "T-3"]
+
+
 def test_tasks_closed_in_a_window_are_counted(store: FactoryStore) -> None:
     for key, state, closed_at in (
         ("before", "done", 999),

@@ -1237,8 +1237,12 @@ class FactoryStore(DiscoveryStore, ABC):
         *,
         project_slug: str | None = None,
         states: Sequence[str] | None = None,
+        newest: int | None = None,
     ) -> builtins.list[FactoryTask]:
-        """:returns: Tasks ordered by number. Consumer: R3-09 graph computations and APIs."""
+        """
+        :param newest: Only the newest this many (highest numbers), for a bounded scan.
+        :returns: Tasks ordered by number. Consumer: R3-09 graph computations and APIs.
+        """
 
     def count_tasks_closed(
         self, factory_id: str, since: int, until: int, *, states: Sequence[str] = ("done",)
@@ -2574,6 +2578,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
         *,
         project_slug: str | None = None,
         states: Sequence[str] | None = None,
+        newest: int | None = None,
     ) -> builtins.list[FactoryTask]:
         fid = norm_id(factory_id)
         with self._lock:
@@ -2584,7 +2589,8 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
                 and (project_slug is None or r.project_slug == project_slug)
                 and (states is None or r.state in states)
             ]
-        return sorted(rows, key=lambda r: r.number)
+        rows.sort(key=lambda r: r.number)
+        return rows[-newest:] if newest is not None and newest > 0 else rows
 
     def update_task(self, task_id: str, **fields: Any) -> FactoryTask | None:
         check_fields(fields, TASK_FIELDS, "update_task")
