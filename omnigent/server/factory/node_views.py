@@ -222,6 +222,7 @@ class ClosedAlarmView(_View):
     was: str
     cause: str
     real_ask: str | None = None
+    real_ask_verb: str | None = None
     ref: str | None = None
 
 

@@ -851,7 +851,7 @@ def unmet_dependencies(project: FactoryProject, facts: Facts) -> list[tuple[Fact
     out: list[tuple[FactoryProject, str]] = []
     for slug in depends_on:
         target = resolve_alias(slug, facts.projects)
-        if target is None or dependency_met(target, facts.prs_of(target.slug), mode):
+        if target is None or dependency_met(target, facts.prs_of(target.slug), mode, facts.tasks):
             continue
         out.append((target, mode))
     return out
@@ -1003,7 +1003,9 @@ def _task_dependency_waits(task: FactoryTask, facts: Facts, *, explain: bool = T
         text = str(dep)
         if text.startswith("project:"):
             target = facts.projects.get(text.removeprefix("project:"))
-            if target is None or dependency_met(target, facts.prs_of(target.slug), "merged"):
+            if target is None or dependency_met(
+                target, facts.prs_of(target.slug), "merged", facts.tasks
+            ):
                 continue
             out.append(
                 _dependency_wait(target, facts, task=task.ref, mode="merged", explain=explain)

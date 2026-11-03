@@ -56,6 +56,7 @@ level names from its definition.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import html
 import logging
@@ -395,6 +396,7 @@ def load_facts(
         kinds=["turn"],
         since_ms=int((clock - TURNS_LOOKBACK_S) * 1000),
         limit=5000,
+        newest_first=True,
     )
     return NodeFacts(
         factory_id=norm_id(fid),
@@ -545,6 +547,7 @@ class Tree:
             targets=facts.targets,
         )
         self.closed_alarms = alarms.visible(facts.closed_alarms, self.hidden)
+        self._quiet = self._held_alarms()
         self._build()
         self._hide_levels()
         self._index()
@@ -896,15 +899,20 @@ class Tree:
             start = view.get("start") if isinstance(view.get("start"), Mapping) else None
             computed = waits.project_waits(project, self.wfacts, start=start) if project.id else []
             own = [w for w in computed if w.task is None]
+        own = [w for w in own if not self._quiet_wait(w)]
         self._own[_project_ref(project.slug)] = own
         return own
+
+    def _quiet_wait(self, wait: waits.Wait) -> bool:
+        """A wait on an alarm the server closes by itself (:meth:`_held_alarms`)."""
+        return bool(wait.decision_id) and _bare(wait.decision_id) in self._quiet
 
     def _task_waits(self, task: FactoryTask) -> list[waits.Wait]:
         """
         The task's waits, most decisive first. A task being built does not
         wait on its project's dependencies (its builder works regardless).
         """
-        found = waits.task_waits(task, self.wfacts)
+        found = [w for w in waits.task_waits(task, self.wfacts) if not self._quiet_wait(w)]
         if task.state in _BUILDING:
             found = [w for w in found if w.kind not in ("dependency", "capacity")]
         ranked = sorted(enumerate(found), key=lambda p: (waits.KINDS.index(p[1].kind), p[0]))
@@ -1184,11 +1192,20 @@ class Tree:
         self._areas()
 
     def _closed_alarms(self) -> None:
-        """Alarms the server closed today, under Health, each with its cause."""
-        for alarm in self.closed_alarms:
+        """Alarms the server closed today, under Health, each with its cause and real ask."""
+        open_by_ref = {d.ref: d for d in self.facts.decisions if d.status == "open"}
+        for i, alarm in enumerate(self.closed_alarms):
+            if alarm.real_ask and not alarm.real_ask_verb and alarm.real_ask in open_by_ref:
+                decision = open_by_ref[alarm.real_ask]
+                proposal = node_status.decision_proposal(decision, self._proposals)
+                alarm = dataclasses.replace(
+                    alarm, real_ask_verb=node_status.ask_verb(decision, proposal)
+                )
+                self.closed_alarms[i] = alarm
             if alarm.ref in self.nodes:
                 continue
-            real = f" The real ask is {alarm.real_ask}." if alarm.real_ask else ""
+            verb = f" ({alarm.real_ask_verb})" if alarm.real_ask_verb else ""
+            real = f" The real ask is {alarm.real_ask}{verb}." if alarm.real_ask else ""
             self._add(
                 _N(
                     alarm.ref,
@@ -1310,29 +1327,40 @@ class Tree:
         self._tasks_by_key = {(t.project_slug, t.key): t for t in self.facts.tasks}
         self._tasks_by_number = {t.number: t for t in self.facts.tasks}
         self._tasks_by_id = {norm_id(t.id): t for t in self.facts.tasks}
-        loops = {norm_id(lp.decision_id): lp for lp in self.facts.loops if lp.decision_id}
         for decision in self.facts.decisions:
-            if decision.status != "open" or self._held_alarm(decision, loops):
+            if decision.status != "open" or norm_id(decision.id) in self._quiet:
                 continue
             ref = self._decision_target(decision)
             if ref is not None:
                 self.decisions_at.setdefault(ref, []).append(decision)
                 self.decision_node[decision.id] = ref
 
-    def _held_alarm(self, decision: FactoryDecision, loops: Mapping[str, FactoryLoop]) -> bool:
+    def _held_alarms(self) -> frozenset[str]:
         """
-        A stall alarm on a task held on purpose is noise, never an ask: the
-        stall clock waits on a held task and the server closes the alarm with
-        that cause (the hold's own decision is the real ask).
+        The open stall alarms the server closes by itself (bare decision ids):
+        a no-progress stall of a task held on purpose runs again (the stall
+        clock waits on a held task) and the server answers its alarm with that
+        cause, the hold's own decision being the real ask. Until then it is no
+        ask. A wall stall, an exhausted or a thrashing loop stays an alarm.
         """
-        if decision.source not in alarms.ALARM_SOURCES:
-            return False
-        loop = loops.get(norm_id(decision.id))
-        task = self._tasks_by_id.get(norm_id(loop.task_id)) if loop and loop.task_id else None
-        if task is None or not task.hold:
-            return False
-        held = waits.explicit_hold(task, self.wfacts)
-        return held is not None and held.on_purpose
+        tasks = {norm_id(t.id): t for t in self.facts.tasks}
+        riding: dict[str, list[FactoryLoop]] = {}
+        for loop in self.facts.loops:
+            if loop.decision_id and loop.state in waits.BAD_LOOP_STATES:
+                riding.setdefault(norm_id(loop.decision_id), []).append(loop)
+        return frozenset(
+            decision_id
+            for decision_id, rows in riding.items()
+            if all(self._held_and_resumes(loop, tasks) for loop in rows)
+        )
+
+    def _held_and_resumes(self, loop: FactoryLoop, tasks: Mapping[str, FactoryTask]) -> bool:
+        """*loop*'s task is held on purpose and the hold ends its stall."""
+        from omnigent.server.factory.loops import resumes_when_held
+
+        task = tasks.get(norm_id(loop.task_id)) if loop.task_id else None
+        held = waits.explicit_hold(task, self.wfacts) if task is not None and task.hold else None
+        return held is not None and held.on_purpose and resumes_when_held(loop, self.facts.now)
 
     def _decision_target(self, decision: FactoryDecision) -> str | None:
         """The node a decision is about (``api.md`` §5): its subject, else its project."""
@@ -1690,11 +1718,16 @@ class Tree:
         return self._cached("deployed", "", make)
 
     def _change_in_base(self, node: _N) -> bool:
+        """A merge into the base env's own repo and branch, which the deployed commit holds."""
         deployed = self._deployed()
-        branch = (self.facts.base_env or {}).get("branch")
+        base = self.facts.base_env or {}
+        branch, repo = base.get("branch"), str(base.get("repo") or "").lower()
         if deployed is None or not node.merged_at:
             return False
         if branch and node.base and node.base != branch:
+            return False
+        pr = self.pr_rows.get(node.row_id or "")
+        if repo and pr is not None and pr.repo.lower() != repo:
             return False
         return contains(deployed, merged_sha=node.merged_sha, merged_at=node.merged_at)
 
@@ -2010,33 +2043,56 @@ class Tree:
     # ── Money, time and what can be tried ──────────────────────
 
     def _burn_by_project(self) -> dict[str, float]:
-        """Project slug -> its spend in the last hour, from turn spans (cost at open and close)."""
+        """
+        Project slug -> its spend in the last hour, from turn spans: the cost at
+        a turn's open and close, prorated to the hour; a turn still open counts
+        up to its session's cost now (the snapshot's member).
+        """
 
         def make() -> dict[str, float]:
             now_ms = int(self.facts.now * 1000)
             start = now_ms - BURN_WINDOW_S * 1000
+            spent_now = {
+                sid: float(cost)
+                for m in self.facts.members
+                if (sid := _bare(m.get("session_id")))
+                and isinstance(cost := m.get("cost_usd"), int | float)
+            }
             out: dict[str, float] = {}
             for span in self.facts.turns:
                 attrs = span.attrs or {}
                 begin, end = attrs.get("cost_start"), attrs.get("cost_end")
                 slug = span.project_slug
-                if not slug or slug in self.hidden or span.ended_at is None:
+                if not slug or slug in self.hidden or not isinstance(begin, int | float):
                     continue
-                if not isinstance(begin, int | float) or not isinstance(end, int | float):
+                closed = span.ended_at
+                if closed is None:
+                    end = spent_now.get(_bare(span.session_id) or "")
+                    closed = now_ms
+                if not isinstance(end, int | float):
                     continue
-                inside = min(span.ended_at, now_ms) - max(span.started_at, start)
+                inside = min(closed, now_ms) - max(span.started_at, start)
                 if inside <= 0 or end <= begin:
                     continue
-                length = max(1, span.ended_at - span.started_at)
+                length = max(1, closed - span.started_at)
                 out[slug] = out.get(slug, 0.0) + (end - begin) * min(1.0, inside / length)
             return out
 
         return self._cached("burns", "", make)
 
     def burn(self, node: _N) -> float | None:
-        """Spend per hour now: the last hour's turns, summed over the subtree's projects."""
+        """
+        Spend per hour now: the last hour's turns, summed over the subtree's
+        projects. The root shows the factory's own rate (the snapshot's, as its
+        cost is): it also counts the leads and agents that work for no project,
+        so it is more than its features' sum. Hidden from a viewer, it is the
+        sum of what they may read.
+        """
         if node.ref == node_refs.PRODUCT:
-            return round(float(self.facts.burn), 2) if self.facts.burn else None
+            if self.facts.burn is not None:
+                return round(float(self.facts.burn), 2) if self.facts.burn else None
+            seen = sum(self._burn_by_project().values())
+            return round(seen, 2) if seen >= 0.01 else None
         burns = self._burn_by_project()
         if not burns:
             return None
@@ -2053,17 +2109,20 @@ class Tree:
         return round(found, 2) if found >= 0.01 else None
 
     def budget(self, node: _N) -> float | None:
-        """A node's cap: its own, else the sum of its children's caps."""
+        """
+        A node's cap: its own, else the sum of its children's caps when every
+        child it counts the cost of has one (a part-capped sum would compare
+        all the cost against some of the caps).
+        """
         if node.budget:
             return float(node.budget)
         if node.level not in ("feature", "need", "goal") or node.implicit:
             return None
-        found = [
-            b
-            for k in self.real_children(node.ref)
-            if not k.later and (b := self.budget(k)) is not None
-        ]
-        return round(sum(found), 2) if found else None
+        kids = [k for k in self.real_children(node.ref) if not k.later and not k.ghost]
+        found = [self.budget(k) for k in kids]
+        if not found or any(b is None for b in found):
+            return None
+        return round(sum(b for b in found if b is not None), 2)
 
     def project_weight(self, node: _N) -> float:
         """A project's weight: its tasks' estimates, else its siblings' median, else 60 min."""
@@ -2506,12 +2565,12 @@ class Tree:
             out["closed_alarms"] = [a.to_json() for a in self.closed_alarms]
         return out
 
-    def _smoke(self, env: Mapping[str, Any]) -> dict[str, Any]:
-        """Whether the base env answers: the server's probe when it ran, else the env's word."""
+    def _smoke(self) -> dict[str, Any] | None:
+        """Whether the base env answers, when the server's probe ran (else no smoke at all)."""
         probe = ((self.facts.base_env or {}).get("env") or {}).get("probe") or {}
         health = probe.get("health")
         if not health or health == "unknown":
-            return {"ok": env.get("state") == "ready"}
+            return None
         out: dict[str, Any] = {"ok": health == "ok"}
         checks = [
             f"{key} {code}"
@@ -2537,7 +2596,8 @@ class Tree:
                 out["deployed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(deployed.at))
         if env.get("state"):
             out["state"] = str(env["state"])
-            out["smoke"] = self._smoke(env)
+        if smoke := self._smoke():
+            out["smoke"] = smoke
         urls = env.get("urls") or {}
         for key, name in (("app", "app_url"), ("api", "api_url")):
             if urls.get(key):
@@ -2832,7 +2892,7 @@ async def tree_for(
     raw: RawSnapshot,
     readable: Iterable[str],
     *,
-    targets: frozenset[tuple[str, str]] = frozenset(),
+    app_state: Any = None,
 ) -> Tree:
     """
     The factory as a viewer who may read the sessions *readable* sees it, built
@@ -2840,8 +2900,9 @@ async def tree_for(
     members, team chips, cost and burn, the base env) and from the store rows
     of the projects they may read; reused for :data:`FACTS_TTL_S`.
 
-    :param targets: The auto-merge targets the server merges into now (a ready
-        PR into one waits on the server, not a person).
+    :param app_state: The server's state, read on a rebuild for the auto-merge
+        targets the server merges into now (a ready PR into one waits on the
+        server, not a person); ``None``: a person merges every PR.
     """
     from omnigent.server.factory.snapshot import filter_snapshot
 
@@ -2859,6 +2920,7 @@ async def tree_for(
 
         def build() -> Tree:
             body = filter_snapshot(raw, sessions)
+            targets = waits.auto_targets(app_state, deps, root.id)
             facts = load_facts(
                 deps, root, body, readable=sessions, leads=raw.project_pl, targets=targets
             )

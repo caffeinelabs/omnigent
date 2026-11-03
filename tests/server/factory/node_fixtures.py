@@ -40,6 +40,7 @@ from omnigent.entities.factory import (
     FactorySpan,
     FactoryTask,
 )
+from omnigent.server.factory import waits
 from omnigent.server.factory.alarms import ClosedAlarm
 from omnigent.server.factory.definition_blocks import StructureDef
 from omnigent.server.factory.nodes import NodeFacts
@@ -112,7 +113,6 @@ def _view(
     cost: float | None = None,
     pl: str | None = None,
     team: list[tuple[str, bool]] | None = None,
-    waiting_on: list[dict[str, Any]] | None = None,
     status: str = "active",
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
@@ -124,7 +124,7 @@ def _view(
             {"session_id": hex_id(900 + i), "title": title, "running": running}
             for i, (title, running) in enumerate(team or [])
         ],
-        "waiting_on": list(waiting_on or []),
+        "waiting_on": [],
     }
     if pl:
         out["pl"] = {"session_id": hex_id(800), "title": pl}
@@ -303,49 +303,15 @@ def factory_1340() -> NodeFacts:
             cost=25.13,
             pl="Juno",
             team=[("Juno", False), ("Luz", False), ("Mae", False)],
-            waiting_on=[
-                {
-                    "kind": "hold",
-                    "ref": "D-45",
-                    "label": "T-16 held: waiting on D-45 (Approve C-16, needs an operator)",
-                    "who": "an operator",
-                    "person": True,
-                    "since": AT_0746,
-                    "task": "T-16",
-                    "decision_id": hex_id(545),
-                }
-            ],
         ),
         "connectors-core": _view("connectors-core", stage="merged", cost=14.2, status="done"),
         "skill-discovery": _view("skill-discovery", stage="merged", cost=11.8, status="done"),
-        "assistant-panel-ux": _view(
-            "assistant-panel-ux",
-            stage="queued",
-            pl="Ori",
-            waiting_on=[
-                {
-                    "kind": "dependency",
-                    "ref": "assistant-core",
-                    "label": "waiting on assistant-core",
-                    "who": "the project lead",
-                    "person": False,
-                }
-            ],
-        ),
+        "assistant-panel-ux": _view("assistant-panel-ux", stage="queued", pl="Ori"),
         "build-tier-drafts-3": _view(
             "build-tier-drafts-3",
             stage="ready",
             cost=38.4,
             pl="Nova",
-            waiting_on=[
-                {
-                    "kind": "merge",
-                    "ref": "PR #9856",
-                    "label": "waiting for a person to merge PR #9856 into main",
-                    "who": "a person",
-                    "person": True,
-                }
-            ],
         ),
         **{
             slug: _view(slug, stage="merged", cost=cost, status="done")
@@ -608,63 +574,95 @@ def factory_1340() -> NodeFacts:
             "running": False,
         },
     ]
-    return NodeFacts(
-        factory_id=FID,
-        product="Sample app (sample)",
-        repo=REPO,
-        base=BASE,
-        structure=structure(),
-        definition_version=14,
-        initiatives=[initiative],
-        proposals=proposals,
-        projects=projects,
-        views=views,
-        tasks=tasks,
-        prs=prs,
-        decisions=decisions,
-        members=members,
-        asks={
-            SHORTLIST_MESSAGE: (
-                "Your shortlist pick: env badge copy, / to chat, status page, request id.",
-                "ana",
-            )
-        },
-        base_env={
-            "repo": REPO,
-            "branch": BASE,
-            "head_sha": DEPLOYED_SHA,
-            "moved_at": HEAD_AT,
-            "env": {
-                "reported": {
-                    "state": "ready",
-                    "at": AT_1322 + 300,
-                    "urls": {"app": "https://app.sample.test", "api": "https://api.sample.test"},
-                    "deployed": {"sha": DEPLOYED_SHA[:7]},
-                }
+    return snapshot_waits(
+        NodeFacts(
+            factory_id=FID,
+            product="Sample app (sample)",
+            repo=REPO,
+            base=BASE,
+            structure=structure(),
+            definition_version=14,
+            initiatives=[initiative],
+            proposals=proposals,
+            projects=projects,
+            views=views,
+            tasks=tasks,
+            prs=prs,
+            decisions=decisions,
+            members=members,
+            asks={
+                SHORTLIST_MESSAGE: (
+                    "Your shortlist pick: env badge copy, / to chat, status page, request id.",
+                    "ana",
+                )
             },
-            "env_project": "base-env",
-            "deployed": {"sha": DEPLOYED_SHA, "at": AT_1322 + 300, "head_at": HEAD_AT},
-        },
-        cost=444.0,
-        burn=9.37,
-        now=NOW,
-        turns=[
-            FactorySpan(
-                id=hex_id(7001),
-                factory_id=FID,
-                trace_key="state:juno",
-                kind="turn",
-                name="working",
-                started_at=(NOW - 2400) * 1000,
-                ended_at=(NOW - 600) * 1000,
-                outcome="ok",
-                project_slug="assistant-core",
-                session_id=hex_id(802),
-                attrs={"segment": "working", "cost_start": 22.63, "cost_end": 25.13},
-            )
-        ],
-        closed_alarms=closed_alarms(),
+            base_env={
+                "repo": REPO,
+                "branch": BASE,
+                "head_sha": DEPLOYED_SHA,
+                "moved_at": HEAD_AT,
+                "env": {
+                    "reported": {
+                        "state": "ready",
+                        "at": AT_1322 + 300,
+                        "urls": {
+                            "app": "https://app.sample.test",
+                            "api": "https://api.sample.test",
+                        },
+                        "deployed": {"sha": DEPLOYED_SHA[:7]},
+                    }
+                },
+                "env_project": "base-env",
+                "deployed": {"sha": DEPLOYED_SHA, "at": AT_1322 + 300, "head_at": HEAD_AT},
+            },
+            cost=444.0,
+            burn=9.37,
+            now=NOW,
+            turns=[
+                FactorySpan(
+                    id=hex_id(7001),
+                    factory_id=FID,
+                    trace_key="state:juno",
+                    kind="turn",
+                    name="working",
+                    started_at=(NOW - 2400) * 1000,
+                    ended_at=(NOW - 600) * 1000,
+                    outcome="ok",
+                    project_slug="assistant-core",
+                    session_id=hex_id(802),
+                    attrs={"segment": "working", "cost_start": 22.63, "cost_end": 25.13},
+                )
+            ],
+            closed_alarms=closed_alarms(),
+        )
     )
+
+
+def snapshot_waits(facts: NodeFacts) -> NodeFacts:
+    """
+    Each project view's ``waiting_on`` as the snapshot builds it, from the
+    facts (:func:`.waits.project_waits`, the view's ``start`` included): call
+    again after changing the rows a test reads.
+    """
+    found = waits.Facts(
+        projects={p.slug: p for p in facts.projects},
+        prs=facts.prs,
+        decisions=facts.decisions,
+        proposals=facts.proposals,
+        tasks=[t for t in facts.tasks if t.state in waits.OPEN_TASK_STATES],
+        loops=facts.loops,
+        leads=facts.leads,
+        now=facts.now,
+        targets=facts.targets,
+    )
+    views: dict[str, Mapping[str, Any]] = {}
+    for slug, view in facts.views.items():
+        row = found.projects.get(slug)
+        start = view.get("start") if isinstance(view.get("start"), Mapping) else None
+        listed = waits.project_waits(row, found, start=start) if row is not None else []
+        views[slug] = {**view, "waiting_on": [w.to_json() for w in listed]}
+    facts.views = views
+    return facts
 
 
 def closed_alarms() -> list[ClosedAlarm]:
@@ -823,5 +821,6 @@ __all__ = [
     "factory_1340",
     "hex_id",
     "scale_factory",
+    "snapshot_waits",
     "structure",
 ]

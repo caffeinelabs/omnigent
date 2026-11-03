@@ -16,8 +16,13 @@ person who must act (``api.md`` §3.3). :class:`Paths` computes it over a built
    then by dependents, then by earliest column. A waiting task in the First
    column never hides an ask that holds more.
 3. A node's own open decision (or one on a proposed child) ends the path when
-   no child's path ends at a person.
-4. It stops at 6 shown segments, a cycle, a person or the server.
+   no child's path ends at a person. A path that ends at a person always wins
+   over one that ends at the server, at moving work or elsewhere.
+4. A project that has not started and that nothing holds ends at who starts
+   it (the snapshot's ``start``: the server, or Atlas).
+5. It stops at a cycle, a person or the server. A line shows at most 6
+   segments: a longer path keeps its first steps and its end (the person),
+   with an elision between.
 
 The header's line is the whole path with the label it earns ("Not started for
 7 h:", "Held on purpose:", "Top blocker:", "Not moving:"), what else it holds
@@ -39,13 +44,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.server.factory import node_refs, waits
+from omnigent.server.factory.charter import SPAWN_SERVER, spawn_owner
 
 if TYPE_CHECKING:
-    from omnigent.entities.factory import FactoryDecision, FactoryPr
+    from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProposal
     from omnigent.server.factory.nodes import _N, Tree
 
 SHOWN_MAX: Final = 6
-"""Shown segments at most; a longer path ends "cut"."""
+"""Shown segments at most; a longer path keeps its first steps and its end."""
 ENDS: Final = frozenset({"person", "server", "moving", "cycle", "cut"})
 """Path ends a status line names as they are; any other end reads ``other``."""
 BLOCKED: Final = frozenset({"needs", "waiting", "paused", "broken"})
@@ -54,6 +60,16 @@ _LABEL_MAX: Final = 90
 _TEXT_MAX: Final = 240
 _VERB_MAX: Final = 60
 _MERGES_NAMED: Final = 3
+ELIDED: Final = "…"
+"""The label of the segment that stands for the steps a cut line leaves out."""
+_START_STEPS: Final[dict[str, str]] = {
+    "server": "the server starts it within a minute",
+    "creating": "the server is creating its lead",
+    "lead": "waits for Atlas to start it",
+    "connect": "waits for its agent to connect",
+}
+"""A queued project's start phase (``ProjectStartView.phase``) in a line's words."""
+_SERVER_STARTS: Final = frozenset({"server", "creating", "connect"})
 _STATE_WORDS: Final[dict[str, str]] = {
     "done": "done",
     "moving": "moving",
@@ -174,6 +190,8 @@ class Step:
 
     :param hold: A hold its lead (or a person) put on; ``on_purpose`` when the
         stall clock trusts it.
+    :param why: The sentence the numbered "why" says for a step with no ref.
+    :param elided: The steps a cut line leaves out (the elision segment).
     """
 
     sep: str
@@ -183,6 +201,8 @@ class Step:
     hold: bool = False
     on_purpose: bool = False
     ask: Ask | None = None
+    why: str | None = None
+    elided: int = 0
 
 
 @dataclass(frozen=True)
@@ -207,6 +227,7 @@ class Paths:
 
     tree: Tree
     _memo: dict[str, Path] = field(default_factory=dict)
+    _busy: set[str] = field(default_factory=set)
     _weights: dict[str, float] | None = None
     _asks: dict[str, Ask] = field(default_factory=dict)
     _groups: dict[tuple[str, str], list[FactoryPr]] | None = None
@@ -226,16 +247,9 @@ class Paths:
             return found
         t = self.tree
         now = t.facts.now
-        subject = (decision.subject or "").strip()
-        parsed = node_refs.parse(node_refs.normalize(subject) or "")
-        proposal = t.proposals_by_ref.get(parsed.text) if parsed is not None else None
-        if proposal is not None and decision.source == "proposal":
-            kind = "rule " if proposal.kind != "projects" else ""
-            verb = f"Apply {kind}{proposal.ref}"
-            what = proposal.ref
-        else:
-            verb = f"Answer {decision.ref}"
-            what = None
+        proposal = decision_proposal(decision, t.proposals_by_ref)
+        verb = ask_verb(decision, proposal)
+        what = proposal.ref if proposal is not None and decision.source == "proposal" else None
         expires = None
         if proposal is not None and proposal.kind == "projects":
             from omnigent.server.factory.proposals import PROPOSAL_EXPIRY_S, expiry_start
@@ -324,40 +338,99 @@ class Paths:
     # ── The path ───────────────────────────────────────────────
 
     def path(self, ref: str) -> Path:
-        """:returns: The blocker path of the node *ref* names (memoized; cycles end "cycle")."""
+        """
+        :returns: The blocker path of the node *ref* names. A path that comes
+            back to a node still being computed ends "cycle"; such a path is
+            not kept (the node may end elsewhere when asked first), every
+            other one is.
+        """
         found = self._memo.get(ref)
         if found is not None:
             return found
-        self._memo[ref] = Path(end="cycle")
-        found = self._compute(self.tree.nodes[ref])
-        self._memo[ref] = found
+        if ref in self._busy:
+            return Path(end="cycle")
+        self._busy.add(ref)
+        try:
+            found = self._compute(self.tree.nodes[ref])
+        finally:
+            self._busy.discard(ref)
+        if found.end != "cycle":
+            self._memo[ref] = found
         return found
 
     def _compute(self, node: _N) -> Path:
-        t = self.tree
-        state = t.state(node.ref)
+        state = self.tree.state(node.ref)
         if state in ("done", "later", "ghost", "paused"):
             return Path(end=state, at=node.ref)
-        own = self.own_waits(node)
-        if own:
-            steps, hop, end, ask = self._wait_steps(node, own[0])
-            if hop is not None:
-                sub = self.path(hop)
-                return Path((*steps, *sub.steps), sub.end, sub.ask, sub.at or hop)
-            if end is not None:
-                return Path(steps, end, ask, None if end == "person" else node.ref)
-        if node.level == "change":
-            merge = self._change_merge(node)
-            if merge is not None:
-                return merge
+        own = self._own_path(node)
+        if own is not None and own.end == "person":
+            return own
+        merge = self._change_merge(node) if node.level == "change" else None
+        if merge is not None and merge.end == "person":
+            return merge
         child = self.blocking_child(node)
-        mine = self.own_ask(node)
         sub = self.path(child.ref) if child is not None else None
-        if mine is not None and (sub is None or sub.end != "person"):
+        down = (
+            Path((Step("›", ref=child.ref), *sub.steps), sub.end, sub.ask, sub.at)
+            if child is not None and sub is not None
+            else None
+        )
+        if down is not None and down.end == "person":
+            return down
+        mine = self.own_ask(node)
+        if mine is not None:
             return Path((Step("→", ask=mine),), "person", mine)
-        if child is None or sub is None:
-            return Path(end=state, at=node.ref)
-        return Path((Step("›", ref=child.ref), *sub.steps), sub.end, sub.ask, sub.at)
+        for found in (own, merge, down, self._start_path(node)):
+            if found is not None:
+                return found
+        return Path(end=state, at=node.ref)
+
+    def _own_path(self, node: _N) -> Path | None:
+        """The path of the node's first own wait, when it ends or hops somewhere."""
+        own = self.own_waits(node)
+        if not own:
+            return None
+        steps, hop, end, ask = self._wait_steps(node, own[0])
+        if hop is not None:
+            sub = self.path(hop)
+            return Path((*steps, *sub.steps), sub.end, sub.ask, sub.at or hop)
+        if end is not None:
+            return Path(steps, end, ask, None if end == "person" else node.ref)
+        return None
+
+    def _start_path(self, node: _N) -> Path | None:
+        """
+        A project that has not started and that nothing holds ends at who starts
+        it: the snapshot's ``start`` (the server's next pass, Atlas, a starting
+        sandbox), else who its charter says spawns its lead.
+        """
+        t = self.tree
+        if node.level != "project" or node.own != "notstarted":
+            return None
+        view = t.facts.views.get(node.order or "") or {}
+        start = view.get("start") if isinstance(view.get("start"), Mapping) else None
+        phase = str(start.get("phase") or "") if start is not None else ""
+        if start is None:
+            row = t.project_rows.get(node.order or "")
+            phase = "server" if row is not None and spawn_owner(row) == SPAWN_SERVER else "lead"
+        if phase == "pod_cap":
+            cap = start.get("pod_cap") if start is not None else None
+            label = (
+                f"waits for a free machine (all {cap} in use)"
+                if cap
+                else "waits for a free machine"
+            )
+            end = "other"
+        elif phase in _START_STEPS:
+            label, end = _START_STEPS[phase], "server" if phase in _SERVER_STARTS else "other"
+        else:
+            words = str((start or {}).get("label") or "").strip()
+            label, end = (
+                (f"starting: {words[:1].lower()}{words[1:]}" if words else "starting"),
+                "server",
+            )
+        step = Step("→", label=clip(label, _LABEL_MAX), why=f"Nothing holds it: {label}.")
+        return Path((step,), end, at=node.ref)
 
     def _change_merge(self, node: _N) -> Path | None:
         """A ready PR waits on its merge: a person's (one ask per base), or the server's."""
@@ -403,8 +476,12 @@ class Paths:
             if target is not None and target != node.ref:
                 step = Step("→", label="held for", ref=target, hold=True)
                 return (step,), target, None, None
-            words = named or hold.get("note") or hold.get("on") or "on purpose"
-            step = Step("→", label=clip(f"held: {words}", _LABEL_MAX), hold=True, on_purpose=True)
+            if named:
+                who = f", waiting on {wait.who}" if wait.who and not wait.person else ""
+                label = f"held for {named}{who}"
+            else:
+                label = f"held: {hold.get('note') or hold.get('on') or 'on purpose'}"
+            step = Step("→", label=clip(label, _LABEL_MAX), hold=True, on_purpose=wait.on_purpose)
             return (step,), None, "other", None
         if wait.kind in ("decision", "proposal") and decision is not None:
             ask = self.decision_ask(decision)
@@ -414,7 +491,8 @@ class Paths:
             return (Step("→", label="stalled"), Step("→", ask=ask)), None, "person", ask
         if wait.kind == "merge":
             if not wait.person:
-                return (Step("→", label=clip(wait.label, _LABEL_MAX)),), None, "server", None
+                label = clip(_waits_words(wait.label), _LABEL_MAX)
+                return (Step("→", label=label),), None, "server", None
             pr = self._merge_pr(wait)
             if pr is not None:
                 ask = self.merge_ask(pr)
@@ -427,8 +505,10 @@ class Paths:
                 return (step,), target, None, None
             return (Step("→", label="waits on another project"),), None, "other", None
         if wait.kind == "capacity":
-            return (Step("→", label="waits for a free machine"),), None, "other", None
-        return (Step("→", label=clip(wait.label, _LABEL_MAX)),), None, "other", None
+            label = _waits_words(wait.label) or "waits for a free machine"
+            return (Step("→", label=clip(label, _LABEL_MAX)),), None, "other", None
+        label = _waits_words(_unprefixed(wait.label, node.ref)) or wait.kind
+        return (Step("→", label=clip(label, _LABEL_MAX)),), None, "other", None
 
     def _merge_pr(self, wait: waits.Wait) -> FactoryPr | None:
         number = waits.ref_number(wait.ref)
@@ -525,7 +605,9 @@ class Paths:
                 continue
             out.append(step)
         if len(out) > SHOWN_MAX:
-            return out[:SHOWN_MAX], True
+            head = out[: SHOWN_MAX - 2]
+            elided = len(out) - len(head) - 1
+            return [*head, Step("→", label=ELIDED, elided=elided), out[-1]], True
         return out, False
 
     def name(self, ref: str) -> str:
@@ -642,9 +724,9 @@ class Paths:
         shown, cut = self.shown(node, path)
         if not shown:
             return None
-        end = "cut" if cut else path.end if path.end in ENDS else "other"
-        if path.end == "person" and path.ask is not None and not cut:
+        if path.end == "person" and path.ask is not None:
             return self._person_line(node, path, shown, compact=compact)
+        end = "cut" if cut else path.end if path.end in ENDS else "other"
         return self._waiting_line(node, path, shown, end, compact=compact)
 
     def _person_line(
@@ -725,6 +807,7 @@ class Paths:
             if moving is not None and moving.ref != path.at:
                 tail = f"{tail} ({self.name(moving.ref)}: {self.activity(moving)})"
         first = shown[0]
+        since = self.not_started_for(node)
         if compact and first.ref and first.label and first.sep == "→":
             segment = {"sep": "→", "label": "", "ref": first.ref, "title": self.name(first.ref)}
             out: dict[str, Any] = {
@@ -734,9 +817,13 @@ class Paths:
                 "ends": end,
             }
         else:
+            # A hop reads "Waiting: waits on …"; nothing to hop to reads how long it has waited.
+            label = "Waiting:"
+            if since and not first.ref and not first.hold:
+                label = "Not started:" if compact else f"Not started for {since}:"
             out = {
                 "kind": "waiting",
-                "label": "Waiting:",
+                "label": label,
                 "segments": [self.segment(s) for s in shown],
                 "ends": end,
             }
@@ -794,6 +881,13 @@ class Paths:
                 )
                 prev = target
                 continue
+            if step.elided:
+                more = "step" if step.elided == 1 else "steps"
+                items.append({"html": f"… {step.elided} more {more} along the same chain …"})
+                continue
+            if step.why:
+                items.append({"html": esc(step.why)})
+                continue
             items.append({"html": f"{esc(self.name(prev.ref))} is {esc(step.label)}."})
         if path.end != "person" and path.at and path.at != node.ref and path.at in t.nodes:
             at = t.nodes[path.at]
@@ -827,13 +921,47 @@ def _link(ref: str, text: str) -> str:
     return f'<a data-ref="{_attr(ref)}">{esc(text)}</a>'
 
 
+def _unprefixed(label: str, ref: str) -> str:
+    """A wait's label without the ``T-16 held: `` it starts with (the line names the node)."""
+    head = f"{ref} held: "
+    return label[len(head) :] if label.startswith(head) else label
+
+
+def _waits_words(label: str) -> str:
+    """``waiting for a free machine (…)`` as a line says it: ``waits for a free machine (…)``."""
+    text = " ".join(str(label or "").split())
+    for word in ("waiting on ", "waiting for "):
+        if text.startswith(word):
+            return f"waits {word.split(' ', 1)[1]}{text[len(word) :]}"
+    return text
+
+
+def decision_proposal(
+    decision: FactoryDecision, proposals: Mapping[str, FactoryProposal]
+) -> FactoryProposal | None:
+    """:returns: The proposal a decision's subject names (``proposal:C-16``), if listed."""
+    parsed = node_refs.parse(node_refs.normalize((decision.subject or "").strip()) or "")
+    return proposals.get(parsed.text) if parsed is not None else None
+
+
+def ask_verb(decision: FactoryDecision, proposal: FactoryProposal | None = None) -> str:
+    """:returns: What a person does to answer *decision*: ``Apply C-16``, else ``Answer D-45``."""
+    if proposal is not None and decision.source == "proposal":
+        kind = "rule " if proposal.kind != "projects" else ""
+        return clip(f"Apply {kind}{proposal.ref}", _VERB_MAX)
+    return clip(f"Answer {decision.ref}", _VERB_MAX)
+
+
 __all__ = [
     "BLOCKED",
+    "ELIDED",
     "SHOWN_MAX",
     "Ask",
     "Path",
     "Paths",
     "Step",
     "age",
+    "ask_verb",
+    "decision_proposal",
     "duration",
 ]

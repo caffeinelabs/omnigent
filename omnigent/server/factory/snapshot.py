@@ -1442,7 +1442,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     for project in projects:
         pl = pick_pl(project, project.slug, loaded.members)
         waiting = (
-            unmet_dependencies(project, by_slug, loaded.prs)
+            unmet_dependencies(project, by_slug, loaded.prs, open_tasks)
             if pl is None and project.status == "active"
             else []
         )

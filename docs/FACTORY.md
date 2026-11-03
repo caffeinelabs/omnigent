@@ -395,8 +395,11 @@ applied proposals call with the acting person, agent or the server.
   a PL the server runs; a lead recovering a server-owned project without a PL
   takes its spawn over.
 - **Dependencies** (`server/factory/gating.py`). A project waits on its
-  `depends_on` (`project.held`) until each dependency's PR merged
-  (`depends_mode=merged`) or is ready for human merge (`ready`); release runs
+  `depends_on` (`project.held`) until each dependency's PRs merged with none
+  open and none of its tasks still open (`depends_mode=merged`: a first merge
+  does not finish a project that still works) or one is ready for human
+  merge (`ready`); the same rule holds a task's `project:<slug>` dependency
+  and is what the waits and the node pages report; release runs
   on `stage.changed`, `pr.merged`, `pr.ready`, `base.moved` and a minute sweep
   (`project.released`, then the spawn). The sweep also finishes a spawn a
   restart cut off, once.
@@ -1011,7 +1014,13 @@ paths that end at a person first, by the weight they hold (the estimates of
 the tasks they hold plus the projects that wait on where the ask sits), then
 dependents, then the earliest column. A node's own open decision, or one on
 a child it was proposed to get, ends the path when no child's ends at a
-person. It stops at 6 shown segments, a cycle, a person or the server.
+person; a path that ends at a person always wins over one that ends at the
+server or at moving work. A project that has not started and that nothing
+holds ends at who starts it (the snapshot's `start`: "the server starts it
+within a minute", "waits for Atlas to start it", "starting: pulling the
+image", or the capacity wait with how full the machines are). It stops at a
+cycle, a person or the server; a line shows at most 6 segments, keeping the
+first steps, an elision (`…`) and the end, so the person and their ask stay.
 Ready PRs a person merges into one base are one ask (`merge:<base>`,
 answered on the code host). The header's line carries its label ("Not
 started for 7 h:", "Held on purpose:", "Top blocker:" while other work
@@ -1020,8 +1029,10 @@ moves, "Not moving:"), what else the path holds (`also_holds`), a numbered
 (`status_compact`) is only the end of the path. Steps into implicit parents
 and, from a root, into levels above its home are left out of what shows.
 
-**Roll-ups** add burn (the last hour's spend from `turn` spans), a budget
-(the node's own cap, else the sum of its children's caps), an ETA only when
+**Roll-ups** add burn (the last hour's spend from `turn` spans, a turn still
+open counting up to its session's cost now; the root shows the factory's own
+rate, which also pays for work no project owns), a budget (the node's own
+cap, else the sum of its children's caps when every child has one), an ETA only when
 every unfinished task's kind has at least five observed durations (a
 project's remaining critical path; a feature's slowest project per column,
 summed), feature progress from acceptance on the base env with build
@@ -1033,17 +1044,24 @@ commit the env runs contains its merge (`base.contains`): the base watcher
 records that commit on the root (`omnigent.factory.base_env.<key>`, served
 as `factory.base.deployed`) when the integration project's env reports
 ready, placed in the base's history (when the watcher saw it become the
-head); a merge into that base is in every head the watcher saw after it
-landed.
+head); a merge into that repo and base is in every head the watcher saw
+after it landed. A deployed commit not yet placed holds only itself until
+its next move or report places it. The base env's smoke shows only when the
+server's probe ran.
 
 **Alarms closed with a cause.** A stall, claim or done-check alarm the
-server answers or expires records why (`cause`), the ask a person really
-owes (`real_ask`), the node it was about and what it asked on its closing
-event (`server_decisions.closed_data`). A stall that ran again because its
-task is now held on purpose is answered with "T-16 is held on purpose for
-C-16; a held task is not stalled" and the hold's decision as the real ask,
-and the lead is told nothing; an open one on such a task is no ask on the
-node pages even before the tick closes it. The factory tree's Health lists
+server answers, or expires with a cause, records why (`cause`), the ask a
+person really owes (`real_ask`, with what it has them do), the node it was
+about and what it asked on its closing event
+(`server_decisions.closed_data`); a loop that runs again expires its alarm
+with "T-16 runs again: …". An expiry with no cause, or a claim's "Keep
+waiting?" that a newer alarm replaced (`superseded_by`), is not a closed
+alarm. A no-progress stall that ran again because its task is now held on
+purpose is answered with "T-16 is held on purpose for C-16; a held task is
+not stalled" and the hold's decision as the real ask, and the lead is told
+nothing; an open one on such a task is no ask on the node pages even before
+the tick closes it. A wall stall, an exhausted or a thrashing loop stays an
+alarm whatever holds its task. The factory tree's Health lists
 today's closed alarms as items (`D-n`) with `closed_alarms` on its page, the
 node each was about carries an "alarm closed" chip, and the root's roll-up
 counts them (`alarms_closed`).

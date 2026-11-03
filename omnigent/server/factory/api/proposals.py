@@ -113,7 +113,9 @@ def _project_row(
         "depends_on": charter.get("depends_on", []),
         "depends_mode": charter.get("depends_mode"),
         "depends_why": charter.get("depends_why") or {},
-        "waiting_on": gating.unmet_dependencies(project, by_slug, prs)
+        "waiting_on": gating.unmet_dependencies(
+            project, by_slug, prs, facts.tasks if facts is not None else ()
+        )
         if project.status == "active"
         else [],
         "waits": [w.to_json() for w in waits.project_waits(project, facts)]

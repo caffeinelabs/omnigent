@@ -514,7 +514,8 @@ async def _escalate(
     previous = current.decision_id
     if current.kind == "claim" and previous and norm_id(previous) != norm_id(decision.id):
         # A wait that stalled, then ended refuted: its "Keep waiting?" no longer applies.
-        await server_decisions.expire_decision(app_state, previous)
+        # It was escalated, not closed: the new alarm is still open.
+        await server_decisions.expire_decision(app_state, previous, superseded_by=decision.ref)
     if deduped:
         return
     await events.emit(
@@ -626,16 +627,30 @@ async def _settle(app_state: Any, deps: FactoryDeps, loop_id: str) -> None:
     if loop.state == "running" and facts.task is not None:
         held = await asyncio.to_thread(held_on_purpose, app_state, deps, facts.task)
         if held is not None:
-            cause, real_ask = held
             await server_decisions.close_by_server(
-                app_state, decision.id, why=cause, real_ask=real_ask, about=about
+                app_state,
+                decision.id,
+                why=held.cause,
+                real_ask=held.real_ask,
+                real_ask_verb=held.verb,
+                about=about,
             )
             return
-    expired = await server_decisions.expire_decision(app_state, decision.id, about=about)
+    expired = await server_decisions.expire_decision(
+        app_state, decision.id, why=settled_cause(loop, about), about=about
+    )
     if expired is None or loop.state != "running":
         return
     if facts.pl is not None:
         control.send_text(app_state, facts.pl.id, resumed_text(facts, expired.ref), kind="info")
+
+
+def settled_cause(loop: FactoryLoop, about: str | None) -> str:
+    """:returns: Why a loop's alarm closed as it left its bad state (``T-16 runs again: …``)."""
+    what = about or "the loop"
+    reason = (loop.last_reason or "").strip()
+    head = f"{what} runs again" if loop.state == "running" else f"{what} {loop.state}"
+    return f"{head}: {reason}" if reason else head
 
 
 def alarm_subject(facts: LoopFacts) -> str | None:
@@ -645,16 +660,29 @@ def alarm_subject(facts: LoopFacts) -> str | None:
     return facts.loop.project_slug or None
 
 
-def held_on_purpose(
-    app_state: Any, deps: FactoryDeps, task: FactoryTask
-) -> tuple[str, str | None] | None:
+@dataclass(frozen=True)
+class HeldOnPurpose:
     """
-    ``(cause, real ask)`` when *task* is held on purpose now, else ``None`` (synchronous).
+    Why a stalled task's alarm is noise: it is held on purpose.
+
+    :param cause: ``T-16 is held on purpose for C-16; a held task is not stalled``.
+    :param real_ask: The decision the hold waits on (``D-45``), when a person answers one.
+    :param verb: What that decision has them do (``Apply C-16``).
+    """
+
+    cause: str
+    real_ask: str | None = None
+    verb: str | None = None
+
+
+def held_on_purpose(app_state: Any, deps: FactoryDeps, task: FactoryTask) -> HeldOnPurpose | None:
+    """
+    Why *task* is held on purpose now, else ``None`` (synchronous).
 
     The real ask is the decision the hold waits on (``D-45`` for a hold on
     ``C-16``), when a person must answer one.
     """
-    from omnigent.server.factory import waits
+    from omnigent.server.factory import node_status, waits
 
     hold = task.hold if isinstance(task.hold, dict) else None
     if not hold:
@@ -672,7 +700,11 @@ def held_on_purpose(
     what = f" for {named}" if named else ""
     cause = f"{task.ref} is held on purpose{what}; a held task is not stalled"
     decision = facts.decision_by_id(found.decision_id) if found.decision_id else None
-    return cause, decision.ref if decision is not None else None
+    if decision is None:
+        return HeldOnPurpose(cause)
+    proposals = {p.ref: p for p in facts.proposals}
+    proposal = node_status.decision_proposal(decision, proposals)
+    return HeldOnPurpose(cause, decision.ref, node_status.ask_verb(decision, proposal))
 
 
 def _still_shared(deps: FactoryDeps, loop: FactoryLoop, decision_id: str) -> bool:
@@ -1419,6 +1451,7 @@ __all__ = [
     "SOURCE_DONE_CHECK",
     "SOURCE_LOOP",
     "BudgetAnswer",
+    "HeldOnPurpose",
     "LoopAnswer",
     "LoopFacts",
     "alarm_subject",
@@ -1436,6 +1469,7 @@ __all__ = [
     "reconcile",
     "resumed_text",
     "settle",
+    "settled_cause",
     "stale_loop_decisions",
     "stall_context",
     "violation",

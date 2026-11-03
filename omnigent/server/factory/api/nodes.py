@@ -27,7 +27,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from omnigent.server.auth import LEVEL_EDIT
-from omnigent.server.factory import node_views, nodes, people, waits
+from omnigent.server.factory import node_views, nodes, people
 from omnigent.server.factory.api.agents import fleet_context
 from omnigent.server.factory.api.chat import UNREAD_CAP, _reader
 
@@ -48,8 +48,9 @@ async def get_node(
 ) -> dict[str, Any] | JSONResponse:
     """One node page: the node, breadcrumb, state, roll-up and its children (60 a page)."""
     ctx = await fleet_context(request, factory_id)
-    targets = await asyncio.to_thread(waits.auto_targets, request.app.state, ctx.deps, ctx.root.id)
-    tree = await nodes.tree_for(ctx.deps, ctx.root, ctx.raw, ctx.readable, targets=targets)
+    tree = await nodes.tree_for(
+        ctx.deps, ctx.root, ctx.raw, ctx.readable, app_state=request.app.state
+    )
     level = await asyncio.to_thread(people.viewer_level, ctx.deps, ctx.root.id, ctx.user_id)
     try:
         page = tree.page(ref, cursor=children_page, can_edit=level >= LEVEL_EDIT)

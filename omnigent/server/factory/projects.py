@@ -345,11 +345,12 @@ async def start_project(
     """Spawn *project*'s PL now (server or lead), or hold it on its dependencies."""
     deps = factory_deps(app_state)
     store = deps.factory_store
-    rows, prs = await asyncio.gather(
+    rows, prs, work = await asyncio.gather(
         asyncio.to_thread(store.list_projects, root.id),
         asyncio.to_thread(store.list_prs, root.id),
+        asyncio.to_thread(gating.open_tasks, store, root.id),
     )
-    unmet = gating.unmet_dependencies(project, {p.slug: p for p in rows}, prs)
+    unmet = gating.unmet_dependencies(project, {p.slug: p for p in rows}, prs, work)
     if unmet:
         await gating.hold(app_state, root, project, unmet, data={"proposal": proposal_ref})
         return Started("held", waiting_on=tuple(unmet))

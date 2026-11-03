@@ -548,6 +548,9 @@ async def test_a_head_deployed_before_the_watcher_saw_it_is_placed_on_its_move(
     await _env_ready(w, sha("c")[:7])
     early = _deployed(w)
     assert early is not None and (early.sha, early.head_at) == (sha("c")[:7], None)
+    # Not placed yet: only the deployed commit itself is in it, not a merge before its report.
+    assert not base.contains(early, merged_sha=None, merged_at=early.at - 5)
+    assert base.contains(early, merged_sha=sha("c"), merged_at=early.at - 5)
     # A report that is not ready records nothing new.
     await _env_ready(w, sha("d")[:7], state="deploying")
     assert _deployed(w) == early
@@ -559,6 +562,7 @@ async def test_a_head_deployed_before_the_watcher_saw_it_is_placed_on_its_move(
 
     assert head is not None and placed is not None
     assert (placed.sha, placed.at, placed.head_at) == (sha("c"), early.at, head.moved_at)
+    assert base.contains(placed, merged_sha=None, merged_at=early.at - 5)
 
 
 async def test_a_deployed_head_is_placed_from_the_moves_the_watcher_recorded(

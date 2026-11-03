@@ -2,13 +2,16 @@
 Alarms the server closed by itself, each with its cause (the factory tree's Health).
 
 A stall, claim or done-check alarm (a ``loop`` or ``done_check`` decision) that
-the server answered or expired is noise the factory handled: its node closed
-(the task finished, the PR merged, the project shipped), it ran again, or its
-task was held on purpose all along. :mod:`.server_decisions` records the cause
-on the closing event (``cause``, ``real_ask``, ``about``, ``was``);
-:func:`read` turns those events into :class:`ClosedAlarm` rows, newest first,
-one per decision. Older events without those keys still read: the cause comes
-from the event's reason or summary, what it asked and its project from the row.
+the server answered, or expired with a cause, is noise the factory handled: its
+node closed (the task finished, the PR merged, the project shipped), it ran
+again, or its task was held on purpose all along. :mod:`.server_decisions`
+records the cause on the closing event (``cause``, ``real_ask``,
+``real_ask_verb``, ``about``, ``was``); :func:`read` turns those events into
+:class:`ClosedAlarm` rows, newest first, one per decision. An expiry counts
+only with its recorded cause: one a newer alarm replaced (``superseded_by``)
+was escalated, not closed, and one with no cause says nothing. An answer by
+the server from before the cause was recorded still reads: the cause comes
+from its reason, what it asked and its project from the row.
 """
 
 from __future__ import annotations
@@ -29,7 +32,9 @@ ALARM_SOURCES: Final = frozenset({"loop", "done_check"})
 WINDOW_S: Final = 24 * 3600
 """How far back closed alarms are listed (Health shows today's)."""
 KINDS: Final = ("decision.answered", "decision.expired")
-_EVENTS_MAX: Final = 500
+_EVENTS_PAGE: Final = 500
+_EVENTS_MAX: Final = 8000
+"""Decision events read at most (a busy factory's day of answers and expiries)."""
 _WAS_MAX: Final = 200
 
 
@@ -43,6 +48,7 @@ class ClosedAlarm:
     :param cause: Why it closed, e.g. ``T-16 is held on purpose for C-16; …``.
     :param at: When it closed (epoch seconds).
     :param real_ask: The ask a person owes instead, e.g. ``D-45``.
+    :param real_ask_verb: What that ask has a person do, e.g. ``Apply C-16``.
     :param about: The node it was about (a ref: ``T-16``, a project slug).
     :param project: The project it was about, for viewer filtering.
     """
@@ -54,21 +60,26 @@ class ClosedAlarm:
     real_ask: str | None = None
     about: str | None = None
     project: str | None = None
+    real_ask_verb: str | None = None
 
     def to_json(self) -> dict[str, Any]:
-        """:returns: The ``closed_alarms`` item (``{id, was, cause, real_ask?, ref?}``)."""
+        """:returns: The ``closed_alarms`` item (``{id, was, cause, real_ask?, …, ref?}``)."""
         out: dict[str, Any] = {"id": self.ref, "was": self.was, "cause": self.cause}
         if self.real_ask:
             out["real_ask"] = self.real_ask
+            if self.real_ask_verb:
+                out["real_ask_verb"] = self.real_ask_verb
         if self.about:
             out["ref"] = self.about
         return out
 
 
-def _from_server(event: FactoryEvent) -> bool:
+def _closed_by_server(event: FactoryEvent) -> bool:
+    """An answer by the server, or an expiry with its cause (not one a newer alarm replaced)."""
     data = event.data or {}
     if event.kind == "decision.expired":
-        return True
+        cause = data.get("cause")
+        return isinstance(cause, str) and bool(cause.strip()) and not data.get("superseded_by")
     return data.get("by_kind") == "server"
 
 
@@ -107,7 +118,7 @@ def read(
         data = event.data or {}
         if event.kind not in KINDS or data.get("source") not in ALARM_SOURCES:
             continue
-        if not _from_server(event):
+        if not _closed_by_server(event):
             continue
         ref = _ref_of(event)
         if ref is None or ref in found:
@@ -130,26 +141,32 @@ def read(
             real_ask=str(data["real_ask"]) if data.get("real_ask") else None,
             about=about_ref or project or None,
             project=project or None,
+            real_ask_verb=str(data["real_ask_verb"]) if data.get("real_ask_verb") else None,
         )
     return list(found.values())
 
 
 def load(store: FactoryStore, factory_id: str, now: float) -> list[ClosedAlarm]:
-    """The alarms the server closed in the last :data:`WINDOW_S` (synchronous)."""
-    events = store.find_events(
-        factory_id,
-        list(KINDS),
-        int((now - WINDOW_S) * 1000),
-        newest_first=True,
-        limit=_EVENTS_MAX,
-    )
+    """
+    The alarms the server closed in the last :data:`WINDOW_S` (synchronous).
+
+    Every decision answers and expires: the read grows until it covers the
+    window (other decisions' events must not push today's alarms out).
+    """
+    since = int((now - WINDOW_S) * 1000)
+    limit = _EVENTS_PAGE
+    while True:
+        events = store.find_events(factory_id, list(KINDS), since, newest_first=True, limit=limit)
+        if len(events) < limit or limit >= _EVENTS_MAX:
+            break
+        limit = min(limit * 4, _EVENTS_MAX)
     events = [e for e in events if (e.data or {}).get("source") in ALARM_SOURCES]
     if not events:
         return []
     rows: dict[str, FactoryDecision] | None = None
     if any(not (e.data or {}).get("was") for e in events):
         listed = store.list_decisions(
-            factory_id=factory_id, status=["answered", "expired"], limit=_EVENTS_MAX
+            factory_id=factory_id, status=["answered", "expired"], limit=_EVENTS_PAGE
         )
         rows = {norm_id(d.id): d for d in listed}
     return read(events, rows)

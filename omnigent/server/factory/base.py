@@ -257,14 +257,18 @@ def contains(
     """
     Whether the base env runs a merge into its base: the deployed commit is
     the merge, or the watcher saw the deployed commit become the head after
-    the merge landed (a linear base holds every earlier merge). Without an
-    observed move it falls back to the env's first report at that commit.
+    the merge landed (a linear base holds every earlier merge). A deployed
+    commit the watcher never saw become the head is placed on its next move
+    or report; until then only the merge itself counts (when the env first
+    reported says nothing about which merges its build had).
     """
     if deployed is None or not merged_at:
         return False
     if same_commit(deployed.sha, merged_sha):
         return True
-    return int(merged_at) <= int(deployed.head_at or deployed.at)
+    if deployed.head_at is None:
+        return False
+    return int(merged_at) <= int(deployed.head_at)
 
 
 def _base_moves(

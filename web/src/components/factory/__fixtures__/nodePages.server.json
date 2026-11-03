@@ -504,7 +504,6 @@
           }
         ]
       },
-      "budget": 300.0,
       "burn": 2.5,
       "cost": 51.13,
       "grandchildren": {
@@ -635,7 +634,6 @@
       "readouts": "not measured"
     },
     "rollup": {
-      "budget": 300.0,
       "burn": 2.5,
       "cost": 51.13,
       "in_base_env": {
@@ -1199,7 +1197,6 @@
       "ghosts": [],
       "items": [
         {
-          "budget": 300.0,
           "burn": 2.5,
           "cost": 51.13,
           "grandchildren": {
@@ -1374,7 +1371,6 @@
     ],
     "more_chips": 0,
     "node": {
-      "budget": 300.0,
       "burn": 2.5,
       "cost": 51.13,
       "evidence": {
@@ -1491,7 +1487,6 @@
       "readouts": "not measured"
     },
     "rollup": {
-      "budget": 300.0,
       "burn": 2.5,
       "cost": 51.13,
       "in_base_env": {
@@ -3719,7 +3714,7 @@
           "ref": "D-48",
           "state": "done",
           "status_compact": {
-            "detail": "closed by the server: T-16 is held on purpose for C-16; a held task is not stalled. The real ask is D-45.",
+            "detail": "closed by the server: T-16 is held on purpose for C-16; a held task is not stalled. The real ask is D-45 (Apply C-16).",
             "ends": "other",
             "kind": "done",
             "label": "Done",
@@ -3767,6 +3762,7 @@
           "cause": "T-16 is held on purpose for C-16; a held task is not stalled",
           "id": "D-48",
           "real_ask": "D-45",
+          "real_ask_verb": "Apply C-16",
           "ref": "T-16",
           "was": "T-16 Debit each turn: implement 1/3 stalled - what next?"
         }
@@ -4201,7 +4197,6 @@
       "ghosts": [],
       "items": [
         {
-          "budget": 300.0,
           "burn": 2.5,
           "cost": 51.13,
           "glyph": "ASK",
@@ -4502,9 +4497,6 @@
         "name": "Base env",
         "ref": "base-env",
         "sha": "817480d",
-        "smoke": {
-          "ok": true
-        },
         "state": "ready"
       },
       "glyph": "◆",

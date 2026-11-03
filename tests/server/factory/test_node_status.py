@@ -25,13 +25,16 @@ from omnigent.server.factory.node_views import validate_page
 from omnigent.server.factory.nodes import Tree, assert_levels
 from tests.server.factory.node_fixtures import (
     AT_1325,
+    DEPLOYED_SHA,
     FID,
     HEAD_AT,
     NOW,
+    REPO,
     SHORTLIST,
     factory_1340,
     hex_id,
     scale_factory,
+    snapshot_waits,
 )
 
 HELD = "T-16 → held for C-16 → needs you: Apply C-16 (D-45)"
@@ -40,6 +43,11 @@ HELD = "T-16 → held for C-16 → needs you: Apply C-16 (D-45)"
 @pytest.fixture()
 def tree() -> Tree:
     return assert_levels(Tree(factory_1340()))
+
+
+def build(facts: Any) -> Tree:
+    """The tree of *facts* after a test changed its rows: the snapshot's waits read again."""
+    return assert_levels(Tree(snapshot_waits(facts)))
 
 
 def _page(tree: Tree, ref: str) -> dict[str, Any]:
@@ -223,7 +231,7 @@ def test_a_hold_on_another_task_hops_there() -> None:
     )
     facts.tasks = [_hold(t, "T-19", "task") if t.ref == "T-16" else t for t in facts.tasks]
     facts.tasks = [*facts.tasks, ledger]
-    tree = assert_levels(Tree(facts))
+    tree = build(facts)
 
     line = _page(tree, "T-16")["status"]
 
@@ -243,10 +251,7 @@ def _after_d45(facts: Any) -> Any:
         dataclasses.replace(t, state="running", hold=None) if t.ref == "T-16" else t
         for t in facts.tasks
     ]
-    views = dict(facts.views)
-    views["assistant-core"] = {**views["assistant-core"], "waiting_on": []}
-    facts.views = views
-    return facts
+    return snapshot_waits(facts)
 
 
 def test_after_d45_the_feature_ends_at_d49_and_the_root_at_the_merges() -> None:
@@ -269,20 +274,218 @@ def test_after_d45_the_feature_ends_at_d49_and_the_root_at_the_merges() -> None:
 
 
 def test_a_dependency_cycle_ends_the_path() -> None:
+    """Core and the panel wait on each other and nothing else holds either: "cycle"."""
     facts = factory_1340()
-    views = dict(facts.views)
-    loop = {"kind": "dependency", "who": "a lead", "person": False, "label": "waiting"}
-    views["assistant-core"] = {
-        **views["assistant-core"],
-        "waiting_on": [{**loop, "ref": "assistant-panel-ux"}],
+    facts.decisions = [d for d in facts.decisions if d.ref != "D-45"]
+    facts.proposals = [p for p in facts.proposals if p.ref != "C-16"]
+    facts.tasks = [dataclasses.replace(t, hold=None) for t in facts.tasks]
+    facts.projects = [
+        dataclasses.replace(p, charter={**p.charter, "depends_on": ["assistant-panel-ux"]})
+        if p.slug == "assistant-core"
+        else p
+        for p in facts.projects
+    ]
+    tree = build(facts)
+
+    panel = _page(tree, "assistant-panel-ux")["status"]
+    core = _page(tree, "assistant-core")["status"]
+
+    assert (panel["ends"], core["ends"]) == ("cycle", "cycle")
+    assert [s.get("ref") for s in panel["segments"]] == ["assistant-core", "assistant-panel-ux"]
+    assert [s.get("ref") for s in core["segments"]] == ["assistant-panel-ux", "assistant-core"]
+
+
+def _project_like(facts: Any, slug: str, **charter: Any) -> Any:
+    """A queued project like the panel (created at the same time), with its own view."""
+    panel = next(p for p in facts.projects if p.slug == "assistant-panel-ux")
+    n = 1100 + len(facts.projects)
+    row = dataclasses.replace(panel, id=hex_id(n), slug=slug, title=slug, charter=dict(charter))
+    facts.projects = [*facts.projects, row]
+    facts.views = {**facts.views, slug: {**facts.views["assistant-panel-ux"], "slug": slug}}
+    return row
+
+
+def test_the_panel_waits_because_the_gate_holds_it_on_unfinished_work() -> None:
+    """
+    #9876 merged and nothing is open, but T-16 is: the snapshot's own waits
+    (``waits.project_waits``) keep the panel on assistant-core, as gating does.
+    """
+    from omnigent.server.factory import gating
+
+    facts = factory_1340()
+    [wait] = facts.views["assistant-panel-ux"]["waiting_on"]
+    core = next(p for p in facts.projects if p.slug == "assistant-core")
+
+    assert (wait["kind"], wait["ref"]) == ("dependency", "assistant-core")
+    assert not gating.dependency_met(core, facts.prs, "merged", facts.tasks)
+    # Without its open task the first merge would have met it.
+    assert gating.dependency_met(core, facts.prs, "merged", [])
+
+
+def test_a_project_nothing_holds_ends_at_who_starts_it() -> None:
+    facts = factory_1340()
+    _project_like(facts, "lonely-a")
+    _project_like(facts, "lonely-b", spawn_owner="server")
+    _project_like(facts, "lonely-c")
+    _project_like(facts, "lonely-d")
+    since = facts.views["assistant-panel-ux"].get("since")
+    facts.views["lonely-a"] = {
+        **facts.views["lonely-a"],
+        "start": {"state": "queued", "phase": "lead", "label": "x", "since": since},
     }
-    facts.views = views
-    tree = assert_levels(Tree(facts))
+    facts.views["lonely-c"] = {
+        **facts.views["lonely-c"],
+        "start": {"state": "starting", "phase": "image", "label": "Pulling the image"},
+    }
+    facts.views["lonely-d"] = {
+        **facts.views["lonely-d"],
+        "start": {"state": "queued", "phase": "pod_cap", "pod_cap": 12, "ahead": 3},
+    }
+    tree = build(facts)
 
-    line = _page(tree, "assistant-panel-ux")["status"]
+    lines = {slug: _page(tree, slug)["status"] for slug in ("lonely-a", "lonely-b", "lonely-c")}
 
-    assert line["ends"] == "cycle"
-    assert [s.get("ref") for s in line["segments"]] == ["assistant-core", "assistant-panel-ux"]
+    assert full(lines["lonely-a"]) == "Not started for 7 h: waits for Atlas to start it"
+    assert lines["lonely-a"]["ends"] == "other"
+    assert full(lines["lonely-b"]) == "Not started for 7 h: the server starts it within a minute"
+    assert lines["lonely-b"]["ends"] == "server"
+    assert full(lines["lonely-c"]) == "Not started for 7 h: starting: pulling the image"
+    assert lines["lonely-c"]["why"][-1]["html"] == "Nothing holds it: starting: pulling the image."
+    # A start that waits for a machine is the capacity wait, with how full and how many ahead.
+    line = _page(tree, "lonely-d")["status"]
+    assert full(line) == (
+        "Not started for 7 h: waits for a free machine (all 12 machines in use, 3 ahead)"
+    )
+    tile = tree.status(tree.nodes["lonely-b"], compact=True)
+    assert compact(tile) == "Not started: the server starts it within a minute"
+
+
+def test_a_node_s_own_ask_ends_its_path_when_its_waits_end_elsewhere() -> None:
+    """After D-45 the panel waits on moving work; its own blocking ask still ends the line."""
+    facts = _after_d45(factory_1340())
+    ask = FactoryDecision(
+        id=hex_id(560),
+        factory_id=FID,
+        number=60,
+        question="Reopen the closed panel spike?",
+        source="pr_closed",
+        blocking=True,
+        project_slug="assistant-panel-ux",
+        created_at=NOW - 600,
+        updated_at=NOW - 600,
+    )
+    facts.decisions = [*facts.decisions, ask]
+    tree = build(facts)
+
+    page = _page(tree, "assistant-panel-ux")
+
+    assert page["node"]["state"] == "needs"
+    assert page["node"]["needs"] == {"open": 1, "blocking": 1}
+    assert (page["status"]["ends"], page["status"]["decision"]["id"]) == ("person", "D-60")
+    assert full(page["status"]) == "Needs you: Answer D-60"
+
+
+def test_a_long_path_keeps_its_first_steps_and_the_person() -> None:
+    """Seven queued projects ahead of assistant-core: the line is cut, the ask stays."""
+    facts = factory_1340()
+    chain = [f"chain-{i}" for i in range(1, 8)]
+    for here, after in zip(chain, [*chain[1:], "assistant-core"], strict=True):
+        _project_like(facts, here, depends_on=[after])
+    tree = build(facts)
+
+    page = _page(tree, "chain-1")
+    line = page["status"]
+
+    assert (line["ends"], line["decision"]["id"]) == ("person", "D-45")
+    assert line["label"] == "Not started for 7 h:"
+    assert len(line["segments"]) == node_status.SHOWN_MAX
+    assert [s.get("ref") for s in line["segments"][:4]] == chain[1:5]
+    assert line["segments"][4] == {"sep": "→", "label": node_status.ELIDED}
+    assert line["segments"][-1]["person"] is True
+    assert "more steps along the same chain" in line["why"][5]["html"]
+    tile = tree.status(tree.nodes["chain-1"], compact=True)
+    assert (tile["ends"], tile["decision"]["id"]) == ("person", "D-45")
+    assert compact(tile) == "Waits on chain-2 · held for C-16"
+
+
+def _task_ask(number: int, task: str) -> FactoryDecision:
+    return FactoryDecision(
+        id=hex_id(500 + number),
+        factory_id=FID,
+        number=number,
+        question=f"Which way for {task}?",
+        source="agent",
+        blocking=True,
+        subject=f"task:{task}",
+        created_at=NOW - 600,
+        updated_at=NOW - 600,
+    )
+
+
+def test_the_ask_that_holds_more_weight_is_the_one_shown() -> None:
+    """Two holds in one project, tied on dependents and column: the heavier ask wins."""
+    facts = factory_1340()
+    facts.decisions = [d for d in facts.decisions if d.ref != "D-45"]
+    facts.proposals = [p for p in facts.proposals if p.ref != "C-16"]
+    heavy = dataclasses.replace(
+        facts.tasks[1],
+        id=hex_id(219),
+        number=19,
+        key="ledger",
+        title="Credit ledger",
+        estimate_min=240,
+        session_ids=[],
+    )
+    facts.tasks = [
+        *(_hold(t, "D-62", "decision") if t.ref == "T-16" else t for t in facts.tasks),
+        _hold(heavy, "D-61", "decision"),
+    ]
+    facts.decisions = [*facts.decisions, _task_ask(61, "T-19"), _task_ask(62, "T-16")]
+    tree = build(facts)
+    paths = tree.paths
+
+    assert tree.nodes["T-16"].col == tree.nodes["T-19"].col
+    assert paths.weight(paths.path("T-19").ask) > paths.weight(paths.path("T-16").ask)
+    line = _page(tree, "assistant-core")["status"]
+    # T-16 comes first among the children: only the weight puts T-19 ahead.
+    assert full(line) == "Not moving: T-19 → held for D-61 → needs you: Answer D-61"
+
+
+def test_a_ready_pr_into_an_auto_merge_target_waits_on_the_server() -> None:
+    facts = factory_1340()
+    facts.targets = frozenset({(REPO.lower(), "main")})
+    facts.prs = [
+        dataclasses.replace(p, head_ref=f"factory/{p.project_slug}/part-{p.number}")
+        if p.state == "open"
+        else p
+        for p in facts.prs
+    ]
+    tree = build(facts)
+
+    change = _page(tree, "PR-9856")["status"]
+    project = _page(tree, "build-tier-drafts-3")["status"]
+
+    assert (change["ends"], full(change)) == (
+        "server",
+        "Waiting: waits for the server to merge it",
+    )
+    assert project["ends"] == "server"
+    assert full(project) == "Waiting: waits on the server to merge PR #9856"
+
+
+def test_a_hold_on_a_proposal_being_co_signed_says_who_must_act() -> None:
+    facts = factory_1340()
+    facts.decisions = [d for d in facts.decisions if d.ref != "D-45"]
+    facts.proposals = [
+        dataclasses.replace(p, status="awaiting_cosign") if p.ref == "C-16" else p
+        for p in facts.proposals
+    ]
+    tree = build(facts)
+
+    line = _page(tree, "T-16")["status"]
+
+    assert line["ends"] == "other"
+    assert full(line) == "Waiting: held for C-16, waiting on the other lead"
 
 
 def _hold(task: FactoryTask, on: str, kind: str) -> FactoryTask:
@@ -350,12 +553,59 @@ def test_cost_against_budget_and_burn(tree: Tree) -> None:
     product = _page(tree, "product")["rollup"]
 
     assert (core["cost"], core["budget"], core["burn"]) == (25.13, 150.0, 2.5)
-    # The feature's cap is its projects' caps; its burn is theirs.
-    assert (feature["rollup"]["cost"], feature["rollup"]["budget"]) == (51.13, 300.0)
+    # Two of its projects have no cap: $26 of its cost has none to compare with.
+    assert feature["rollup"]["cost"] == 51.13 and "budget" not in feature["rollup"]
     assert feature["rollup"]["burn"] == 2.5
     assert _kid(feature, "assistant-core")["burn"] == 2.5
+    # The root's rate is the factory's own (it also pays for work no project owns).
     assert product["burn"] == 9.37
     assert "eta" not in core and "eta" not in feature["rollup"]  # nothing observed yet
+
+
+def test_a_feature_s_cap_is_its_projects_caps_when_each_has_one() -> None:
+    facts = factory_1340()
+    facts.projects = [
+        dataclasses.replace(p, charter={**p.charter, "budgets": {"project_usd": 50}})
+        if p.slug in ("connectors-core", "skill-discovery")
+        else p
+        for p in facts.projects
+    ]
+    feature = _page(build(facts), "I-1")["rollup"]
+
+    assert (feature["cost"], feature["budget"]) == (51.13, 400.0)
+
+
+def test_burn_counts_a_turn_still_open() -> None:
+    """A 40-minute turn that has not closed spends now: up to its session's cost so far."""
+    from omnigent.entities.factory import FactorySpan
+
+    facts = factory_1340()
+    builder = hex_id(702)
+    facts.members = [
+        {**m, "cost_usd": 3.0} if m.get("session_id") == builder else m for m in facts.members
+    ]
+    facts.turns = [
+        *facts.turns,
+        FactorySpan(
+            id=hex_id(7002),
+            factory_id=FID,
+            trace_key="state:luz",
+            kind="turn",
+            name="working",
+            started_at=(NOW - 2400) * 1000,
+            ended_at=None,
+            outcome="open",
+            project_slug="assistant-core",
+            session_id=builder,
+            attrs={"segment": "working", "cost_start": 1.66},
+        ),
+    ]
+    tree = build(facts)
+
+    assert _page(tree, "assistant-core")["rollup"]["burn"] == 3.84  # 2.50 + (3.00 - 1.66)
+    # Hidden from a viewer, the root's rate is the sum of what they may read.
+    facts.burn = None
+    assert _page(build(facts), "product")["rollup"]["burn"] == 3.84
 
 
 def test_feature_progress_is_acceptance_on_the_base_env_then_build(tree: Tree) -> None:
@@ -422,13 +672,12 @@ def test_results_and_the_base_env_on_the_root(tree: Tree) -> None:
         "sha": "817480d",
         "deployed_at": "2026-11-03T13:27:00Z",
         "state": "ready",
-        "smoke": {"ok": True},
         "app_url": "https://app.sample.test",
         "api_url": "https://api.sample.test",
         "ref": "base-env",
     }
     assert _page(tree, "skill-discovery")["status"]["detail"] == "#9881 merged · in base env"
-    # The server's probe, when it ran, says whether it answers.
+    # No smoke check ran, so none shows; the server's probe, when it ran, says whether it answers.
     facts = factory_1340()
     probe = {"health": "ok", "app": {"code": 200}, "api": {"code": 200}}
     facts.base_env = {**facts.base_env, "env": {**facts.base_env["env"], "probe": probe}}
@@ -462,12 +711,57 @@ def test_a_merge_after_the_deployed_head_is_not_yet_in_the_base_env() -> None:
     product = _page(tree, "product")
     assert (product["results"]["merged"], product["results"]["in_base_env"]) == (9, 7)
     assert "in_base_env" not in product["rollup"]
-    # Without an observed move the env's first report at that commit bounds it.
-    facts.base_env = {**facts.base_env, "deployed": None}
-    tree = assert_levels(Tree(facts))
-    assert _page(tree, "PR-9876")["node"]["in_base_env"] is True
-    assert "in_base_env" not in _page(tree, "PR-9890")["node"]
     assert AT_1325 < HEAD_AT < HEAD_AT + 200
+
+
+def test_a_deployed_commit_the_watcher_never_saw_holds_only_itself() -> None:
+    """
+    The env reported ready at a commit the watcher never saw become the head:
+    a merge that landed while it built (before it reported) is not counted as
+    in it; only the merge that is the deployed commit is.
+    """
+    facts = factory_1340()
+    reported = facts.base_env["env"]["reported"]["at"]
+    building = dataclasses.replace(
+        facts.prs[1],
+        id=hex_id(9892),
+        number=9892,
+        task_id=None,
+        merged_at=reported - 60,
+        merged_sha="9892000" + "0" * 33,
+    )
+    itself = dataclasses.replace(
+        facts.prs[1],
+        id=hex_id(9893),
+        number=9893,
+        task_id=None,
+        merged_at=reported - 120,
+        merged_sha=DEPLOYED_SHA,
+    )
+    facts.prs = [*facts.prs, building, itself]
+    facts.base_env = {**facts.base_env, "deployed": None}
+    tree = build(facts)
+
+    assert "in_base_env" not in _page(tree, "PR-9892")["node"]
+    assert "in_base_env" not in _page(tree, "PR-9876")["node"]
+    assert _page(tree, "PR-9893")["node"]["in_base_env"] is True
+    assert _page(tree, "connectors-core")["status"]["detail"].endswith("not yet in base env")
+    # Placed (the watcher saw it become the head at 13:25:30), every earlier merge is in it.
+    facts.base_env = {
+        **facts.base_env,
+        "deployed": {"sha": DEPLOYED_SHA, "at": reported, "head_at": HEAD_AT},
+    }
+    assert _page(build(facts), "PR-9876")["node"]["in_base_env"] is True
+
+
+def test_a_merge_into_the_same_branch_of_another_repo_is_not_in_the_base_env() -> None:
+    facts = factory_1340()
+    other = dataclasses.replace(
+        facts.prs[1], id=hex_id(9894), number=9894, task_id=None, repo="sample-org/other-app"
+    )
+    facts.prs = [*facts.prs, other]
+
+    assert "in_base_env" not in _page(build(facts), "PR-9894")["node"]
 
 
 # ── S7: alarms closed with a cause ─────────────────────────────
@@ -497,6 +791,7 @@ def test_the_closed_alarms_sit_under_health_with_their_causes(tree: Tree) -> Non
             "was": "T-16 Debit each turn: implement 1/3 stalled - what next?",
             "cause": "T-16 is held on purpose for C-16; a held task is not stalled",
             "real_ask": "D-45",
+            "real_ask_verb": "Apply C-16",
             "ref": "T-16",
         },
     ]
@@ -504,7 +799,7 @@ def test_the_closed_alarms_sit_under_health_with_their_causes(tree: Tree) -> Non
     assert [c["ref"] for c in alarm["breadcrumb"]] == ["fx", "fx:health"]
     assert alarm["status"]["detail"] == (
         "closed by the server: T-16 is held on purpose for C-16; a held task is not stalled."
-        " The real ask is D-45."
+        " The real ask is D-45 (Apply C-16)."
     )
     assert health["status"]["detail"] == "3 alarms closed by the server today, each with its cause"
     # Each alarm is one chip on the node it was about.
@@ -524,9 +819,8 @@ def test_the_closed_alarms_sit_under_health_with_their_causes(tree: Tree) -> Non
     )
 
 
-def test_an_open_stall_alarm_on_a_task_held_on_purpose_is_no_ask() -> None:
-    """Before the tick closes it, D-48 colours nothing and is counted nowhere."""
-    facts = factory_1340()
+def _stall_alarm(facts: Any, stall: str) -> FactoryDecision:
+    """D-48 open on T-16's implement loop, stalled for no progress (``idle``) or its wall."""
     facts.closed_alarms = []
     alarm = FactoryDecision(
         id=hex_id(548),
@@ -550,9 +844,19 @@ def test_an_open_stall_alarm_on_a_task_held_on_purpose_is_no_ask() -> None:
             task_id=hex_id(216),
             state="stalled",
             decision_id=alarm.id,
+            spec={"wall_h": 6},
+            spent={"stall": {"kind": stall}},
+            started_at=NOW - 3 * 3600,
         )
     ]
-    tree = assert_levels(Tree(facts))
+    return alarm
+
+
+def test_an_open_stall_alarm_on_a_task_held_on_purpose_is_no_ask() -> None:
+    """Before the tick closes it, D-48 colours nothing and is counted nowhere."""
+    facts = factory_1340()
+    _stall_alarm(facts, "idle")
+    tree = build(facts)
 
     core = _page(tree, "assistant-core")
     assert core["node"]["needs"] == {"open": 1, "blocking": 1}
@@ -560,8 +864,22 @@ def test_an_open_stall_alarm_on_a_task_held_on_purpose_is_no_ask() -> None:
     assert full(core["status"]) == f"Not moving: {HELD}"
     # A stall on a task that is not held is a real ask.
     facts.tasks = [dataclasses.replace(t, hold=None) for t in facts.tasks]
-    core = _page(assert_levels(Tree(facts)), "assistant-core")
+    core = _page(build(facts), "assistant-core")
     assert core["node"]["needs"] == {"open": 2, "blocking": 2}
+
+
+def test_a_wall_stall_on_a_held_task_stays_an_alarm() -> None:
+    """A hold does not give a wall stall its time back: the server will not close it."""
+    facts = factory_1340()
+    _stall_alarm(facts, "wall")
+    tree = build(facts)
+
+    core = _page(tree, "assistant-core")
+
+    assert core["node"]["needs"] == {"open": 2, "blocking": 2}
+    assert "D-48" in [d.ref for d in tree.decisions_at["assistant-core"]]
+    # The ask T-16's hold waits on still holds the most: the line ends there.
+    assert full(core["status"]) == f"Not moving: {HELD}"
 
 
 def test_alarms_read_back_from_the_closing_events() -> None:
@@ -587,7 +905,22 @@ def test_alarms_read_back_from_the_closing_events() -> None:
                 {"source": "loop", "by_kind": "server", "reason": "PR #9881 merged"},
                 "D-46 closed by the server: PR #9881 merged",
             ),
-            event(47, "decision.expired", {"source": "loop"}, "D-47 expired: the loop runs again"),
+            event(
+                47,
+                "decision.expired",
+                {"source": "loop", "cause": "T-18 runs again: progress resumed"},
+                "D-47 expired: T-18 runs again: progress resumed",
+            ),
+            # An expiry with no cause, and a "Keep waiting?" a newer alarm replaced.
+            event(
+                51, "decision.expired", {"source": "loop"}, "D-51 expired: the situation cleared"
+            ),
+            event(
+                52,
+                "decision.expired",
+                {"source": "loop", "superseded_by": "D-53"},
+                "D-52 expired: replaced by D-53",
+            ),
             event(
                 48,
                 "decision.answered",
@@ -607,7 +940,7 @@ def test_alarms_read_back_from_the_closing_events() -> None:
 
     assert [(a.ref, a.cause, a.real_ask, a.about) for a in found] == [
         ("D-48", "T-16 is held on purpose for C-16; a held task is not stalled", "D-45", "T-16"),
-        ("D-47", "the loop runs again", None, "skill-discovery"),
+        ("D-47", "T-18 runs again: progress resumed", None, "skill-discovery"),
         ("D-46", "PR #9881 merged", None, "skill-discovery"),
     ]
     assert alarms.visible(found, {"skill-discovery"}) == []

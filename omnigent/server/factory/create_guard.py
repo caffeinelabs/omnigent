@@ -252,14 +252,16 @@ def _check_room(
 def _server_holds(deps: FactoryDeps, factory_id: str, slug: str) -> bool:
     """Whether *slug* is a server-spawned project held on its dependencies."""
     from omnigent.server.factory.charter import SPAWN_SERVER, spawn_owner
-    from omnigent.server.factory.gating import unmet_dependencies
+    from omnigent.server.factory.gating import open_tasks, unmet_dependencies
 
     store = deps.factory_store
     rows = {p.slug: p for p in store.list_projects(factory_id)}
     row = rows.get(slug)
     if row is None or spawn_owner(row) != SPAWN_SERVER:
         return False
-    return bool(unmet_dependencies(row, rows, store.list_prs(factory_id)))
+    return bool(
+        unmet_dependencies(row, rows, store.list_prs(factory_id), open_tasks(store, factory_id))
+    )
 
 
 def _check_values(labels: Mapping[str, str]) -> None:

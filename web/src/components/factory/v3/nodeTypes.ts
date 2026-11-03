@@ -249,6 +249,8 @@ export interface ClosedAlarm {
   was: string;
   cause: string;
   real_ask?: string;
+  /** What the real ask has a person do ("Apply C-16"). */
+  real_ask_verb?: string;
   /** The node it was about. */
   ref?: string;
 }

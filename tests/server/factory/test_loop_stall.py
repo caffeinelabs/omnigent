@@ -914,7 +914,11 @@ async def test_a_stall_then_held_on_purpose_is_closed_with_its_cause_and_the_rea
     closed = cockpit.store.get_decision(asked.id)
     assert closed is not None and (closed.status, closed.answered_by) == ("answered", "server")
     cause = f"T-1 is held on purpose for C-{proposal.number}; a held task is not stalled"
-    assert closed.answer_text == f"Closed by the server: {cause}. The real ask is {decision.ref}."
+    verb = f"Apply C-{proposal.number}"
+    assert (
+        closed.answer_text
+        == f"Closed by the server: {cause}. The real ask is {decision.ref} ({verb})."
+    )
     [event] = [
         e for e in cockpit.events("decision.answered") if e.data.get("decision_id") == asked.id
     ]
@@ -923,6 +927,7 @@ async def test_a_stall_then_held_on_purpose_is_closed_with_its_cause_and_the_rea
         decision.ref,
         "T-1",
     )
+    assert event.data["real_ask_verb"] == verb
     assert event.data["was"] == asked.question
     # Health reads it back; the lead hears nothing (the hold stands).
     found = alarms.load(cockpit.store, cockpit.fid, time.time())

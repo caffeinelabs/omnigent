@@ -350,17 +350,21 @@ def observed_weights(deps: FactoryDeps, factory_id: str) -> dict[str, float]:
 
 
 def project_dep_met(
-    slug: str, projects: Mapping[str, FactoryProject], prs: Sequence[FactoryPr]
+    slug: str,
+    projects: Mapping[str, FactoryProject],
+    prs: Sequence[FactoryPr],
+    tasks: Sequence[FactoryTask] = (),
 ) -> bool:
     """
     Whether ``project:<slug>`` is met, as project gating counts a ``merged`` dependency.
 
-    A project merged into another stands for the one that absorbed it.
+    A project merged into another stands for the one that absorbed it; one
+    with an open task (of *tasks*) is not there yet.
     """
     from omnigent.server.factory import gating
 
     target = gating.resolve_alias(slug, projects)
-    return target is not None and gating.dependency_met(target, prs, DEPENDS_MERGED)
+    return target is not None and gating.dependency_met(target, prs, DEPENDS_MERGED, tasks)
 
 
 def _paths(value: Any) -> list[str]:
@@ -496,6 +500,9 @@ class FactoryData:
     decisions: dict[str, FactoryDecision | None]
     observed: dict[str, float]
     hubs: dict[str, list[str]] = field(default_factory=dict)
+    others: list[FactoryTask] = field(default_factory=list)
+    """Other projects' open tasks, when only one project's tasks were read (a
+    ``project:<slug>`` dependency is not met while its project still works)."""
 
     def project_ctx(self, deps: FactoryDeps, slug: str) -> ProjectCtx:
         """:returns: The context of one project (paused state read from labels)."""
@@ -507,7 +514,10 @@ class FactoryData:
             for dep in task.deps or ():
                 if dep.startswith(PROJECT_DEP_PREFIX):
                     external[dep] = project_dep_met(
-                        dep.removeprefix(PROJECT_DEP_PREFIX), self.projects, self.prs
+                        dep.removeprefix(PROJECT_DEP_PREFIX),
+                        self.projects,
+                        self.prs,
+                        [*self.tasks, *self.others],
                     )
                 elif dep.startswith(DECISION_DEP_PREFIX):
                     ref = dep.removeprefix(DECISION_DEP_PREFIX)
@@ -546,6 +556,8 @@ def load_factory(
     :param full: Also read observed durations and planner hub files (not
         needed to re-derive states).
     """
+    from omnigent.server.factory import gating
+
     store = deps.factory_store
     tasks = store.list_tasks(factory_id, project_slug=slug)
     refs = {
@@ -560,6 +572,15 @@ def load_factory(
         decisions[ref] = (
             store.get_decision_by_number(factory_id, int(match.group(1))) if match else None
         )
+    others: list[FactoryTask] = []
+    if slug is not None and any(
+        dep.startswith(PROJECT_DEP_PREFIX) for t in tasks for dep in t.deps or ()
+    ):
+        others = [
+            t
+            for t in store.list_tasks(factory_id, states=list(gating.OPEN_TASK_STATES))
+            if t.project_slug != slug
+        ]
     return FactoryData(
         factory_id=factory_id,
         projects={p.slug: p for p in store.list_projects(factory_id)},
@@ -568,6 +589,7 @@ def load_factory(
         decisions=decisions,
         observed=observed_weights(deps, factory_id) if tasks and full else {},
         hubs=hub_files(deps, factory_id) if tasks and full else {},
+        others=others,
     )
 
 
