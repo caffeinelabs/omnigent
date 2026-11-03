@@ -1573,6 +1573,8 @@ export interface Preflight {
   tier2?: Tier2StatusView | null;
   /** People may switch to the new cockpit (`OMNIGENT_FACTORY_COCKPIT_V2`); each opts in. */
   cockpit_v2?: boolean;
+  /** The server serves the work-levels node API (`GET …/n/{ref}`); cockpit v3 reads it. */
+  node_api?: boolean;
 }
 
 // ── Requests ───────────────────────────────────────────────────

@@ -8,7 +8,8 @@
  * are sent to their pages by the shell.
  *
  * The new cockpit's places (Discovery, Teams, Steer) and Debug live here too;
- * the shell sends each cockpit's addresses to the other's pages.
+ * the shell sends each cockpit's addresses to the other's pages. Cockpit v3's
+ * node pages are `n/<ref>` and `n/<ref>/<level>`.
  */
 
 import { CompassIcon } from "lucide-react";
@@ -38,6 +39,7 @@ import { SteerPage } from "./SteerPage";
 import { TimelinePage } from "./TimelinePage";
 import { AgentRoute, HomeRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
 import { InitiativePage } from "./InitiativePage";
+import { NodeRoute } from "./NodeRoute";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
 function ActivityPage() {
@@ -111,6 +113,8 @@ export function FactoryPage() {
         <Route path="debug/:view" element={<DebugPage />} />
         <Route path="debug/incidents/:ref" element={<DebugPage />} />
         <Route path="debug/agent/:sid" element={<DebugPage />} />
+        <Route path="n/:ref" element={<NodeRoute />} />
+        <Route path="n/:ref/:level" element={<NodeRoute />} />
         <Route path="*" element={<UnknownPage />} />
       </Routes>
     </FactoryLayout>

@@ -317,10 +317,12 @@ function YouMenu({
   factoryId,
   userId,
   onClassic,
+  onV2,
 }: {
   factoryId: string;
   userId: string | null;
   onClassic: () => void;
+  onV2?: () => void;
 }) {
   const navigate = useNavigate();
   const { setTheme } = useTheme();
@@ -361,6 +363,12 @@ function YouMenu({
           {mode === "dark" ? "Light theme" : "Dark theme"}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        {onV2 && (
+          <DropdownMenuItem onSelect={onV2} data-testid="cockpit-you-v2">
+            <UndoIcon />
+            Back to cockpit v2
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={onClassic} data-testid="cockpit-you-classic">
           <UndoIcon />
           Back to the classic cockpit
@@ -414,6 +422,8 @@ export interface FactoryTopBarProps {
   onShare: () => void;
   onAddProject: () => void;
   onClassic: () => void;
+  /** Cockpit v3 is on: offer the way back to v2. */
+  onV2?: () => void;
 }
 
 export function FactoryTopBar({
@@ -430,6 +440,7 @@ export function FactoryTopBar({
   onShare,
   onAddProject,
   onClassic,
+  onV2,
 }: FactoryTopBarProps) {
   const fid = snapshot.factory.id;
   const mac = isMacPlatform();
@@ -506,7 +517,12 @@ export function FactoryTopBar({
         )}
       </button>
       <ThemeButton />
-      <YouMenu factoryId={fid} userId={snapshot.viewer?.user_id ?? null} onClassic={onClassic} />
+      <YouMenu
+        factoryId={fid}
+        userId={snapshot.viewer?.user_id ?? null}
+        onClassic={onClassic}
+        onV2={onV2}
+      />
     </header>
   );
 }
