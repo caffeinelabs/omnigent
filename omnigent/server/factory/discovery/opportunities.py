@@ -7,7 +7,9 @@ derived today; people can only park, kill or merge it (:mod:`.levers`).
 Status, in the order it is decided:
 
 - ``merged`` once merged into another (it redirects there);
-- ``kept`` / ``dropped`` after a readout decision (readouts write ``result``);
+- ``kept`` / ``dropped`` after a readout decision (readouts write ``result``;
+  "iterate" closes the measured bet instead, and the opportunity falls back
+  to what its evidence says);
 - ``dropped`` once killed, until its evidence rises a level above the level
   at the kill (re-proposal is blocked until then);
 - ``parked`` while snoozed, or moved under a non-goal the strategy still lists;
@@ -77,6 +79,8 @@ CLOSED: Final = frozenset({"merged", "dropped", "kept"})
 OPEN_PROPOSALS: Final = frozenset({"pending", "awaiting_cosign"})
 APPLIED_PROPOSALS: Final = frozenset({"applied", "kept"})
 SHIPPED_PROJECTS: Final = frozenset({"merged", "done"})
+SHIPPED_STAGES: Final = frozenset({"merged", "done"})
+"""A project still listed as active whose derived stage is one of these has shipped."""
 LIFECYCLE: Final = ("idea", "validated", "proposed", "building", "shipped", "measured")
 _SIGNALS_CHUNK: Final = 500
 _JOB_RE: Final = re.compile(r"^\s*when\b.+\b(want|need)\b.+\bso\b", re.IGNORECASE | re.DOTALL)
@@ -250,6 +254,19 @@ def _parked(row: FactoryOpportunity, strategy: Mapping[str, Any], now: int) -> s
     return None
 
 
+def project_shipped(project: FactoryProject) -> bool:
+    """:returns: Whether *project*'s work is out: closed as merged or done, or every PR merged."""
+    if project.status == "cancelled":
+        return False
+    return project.status in SHIPPED_PROJECTS or project.stage in SHIPPED_STAGES
+
+
+def iterated(result: Mapping[str, Any] | None) -> frozenset[str]:
+    """:returns: The bets (``C-n``) an "iterate" after their readout closed."""
+    found = (result or {}).get("iterated")
+    return frozenset(str(ref) for ref in found) if isinstance(found, list) else frozenset()
+
+
 def kill_holds(row: FactoryOpportunity, meter: Meter) -> bool:
     """:returns: Whether a kill still holds (its evidence has not risen a level since)."""
     kill = row.kill or {}
@@ -282,13 +299,18 @@ def derive_status(
     parked = _parked(row, strategy, now)
     if parked is not None:
         return "parked", parked
-    if result.get("measured_at"):
+    closed = iterated(result)
+    if closed:
+        # Iterating closes the measured bet: its proposal and projects no longer speak for it.
+        proposals = [p for p in proposals if p.ref not in closed]
+        projects = [p for p in projects if _bet_of(p) not in closed]
+    if result.get("measured_at") and result.get("decision") != "iterate":
         return "measured", "a readout is in"
     live = [p for p in projects if p.status != "cancelled"]
     if live:
-        if all(p.status in SHIPPED_PROJECTS for p in live):
+        if all(project_shipped(p) for p in live):
             return "shipped", f"{len(live)} project{'s' if len(live) != 1 else ''} merged"
-        open_slugs = ", ".join(f"#{p.slug}" for p in live if p.status not in SHIPPED_PROJECTS)
+        open_slugs = ", ".join(f"#{p.slug}" for p in live if not project_shipped(p))
         return "building", f"building {open_slugs}"
     waiting = [p for p in proposals if p.status in OPEN_PROPOSALS]
     if waiting:
@@ -298,6 +320,11 @@ def derive_status(
     if evidence.at_least(meter.level, minimum) and meter.accounts >= accounts:
         return "validated", f"{meter.level} evidence from {meter.accounts} accounts"
     return "idea", f"{meter.level} evidence; validated needs {minimum}"
+
+
+def _bet_of(project: FactoryProject) -> str | None:
+    why = (project.charter or {}).get("why")
+    return str(why.get("proposal")) if isinstance(why, Mapping) and why.get("proposal") else None
 
 
 def _linked(facts: Facts, number: int) -> list[Linked]:
@@ -702,12 +729,14 @@ __all__ = [
     "evaluate",
     "evaluate_all",
     "evaluate_one",
+    "iterated",
     "kill_holds",
     "load_facts",
     "lookup",
     "not_found",
     "parse_ref",
     "parse_signal",
+    "project_shipped",
     "record_decline",
     "snapshot",
     "snapshot_all",

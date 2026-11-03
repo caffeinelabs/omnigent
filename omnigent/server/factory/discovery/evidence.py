@@ -24,8 +24,11 @@ proven    a won test or readout                                       1.0
   ``counter_share_down`` of the supporting weight.
 - **Some inputs never count**: ``simulation`` signals, signals flagged as a
   possible injection, and people's votes and pins.
-- **A lost readout** drops the level to weak; a won one makes it proven
-  (only the server's own readouts carry a verdict).
+- **A lost readout** drops the level to weak; a won one raises it to what its
+  method can show (``meta.reaches``: a signal trend shows moderate at most, a
+  person's verdict weak, a controlled test proven; proven when it does not
+  say). Only the server's own readouts carry a verdict, and a readout counts
+  only through its verdict, never as one more account.
 """
 
 from __future__ import annotations
@@ -204,7 +207,7 @@ def measure(linked: Sequence[Linked], rubric: Mapping[str, Any] | None, *, now: 
     hunches = 0
     support: list[FactorySignal] = []
     against: list[FactorySignal] = []
-    verdicts: list[tuple[int, str]] = []
+    verdicts: list[tuple[int, int, str, str]] = []
     seen: list[int] = []
     for item in linked:
         signal = item.signal
@@ -213,9 +216,13 @@ def measure(linked: Sequence[Linked], rubric: Mapping[str, Any] | None, *, now: 
             continue
         seen.append(signal.seen_at)
         if signal.kind == "test_result" and signal.source_kind in VERDICT_SOURCE_KINDS:
-            verdict = str((signal.meta or {}).get("verdict") or "")
+            meta = signal.meta or {}
+            verdict = str(meta.get("verdict") or "")
+            reaches = str(meta.get("reaches") or "proven")
             if verdict in ("won", "lost") and not item.counter:
-                verdicts.append((signal.seen_at, verdict))
+                verdicts.append((signal.seen_at, signal.number, verdict, reaches))
+            # A readout counts through its verdict only: it is no user's voice.
+            continue
         if signal.kind in CONVICTION_KINDS:
             hunches += 0 if item.counter else 1
             continue
@@ -253,11 +260,12 @@ def measure(linked: Sequence[Linked], rubric: Mapping[str, Any] | None, *, now: 
             level = LEVELS[max(level_index("hunch"), level_index(level) - 1)]
             gap = "counter-evidence lowers it one level"
     if verdicts:
-        latest = max(verdicts)[1]
-        if latest == "won":
-            level = "proven"
-            gap = None
-        elif level_index(level) > level_index("weak"):
+        _at, _number, latest, reaches = max(verdicts)
+        ceiling = reaches if reaches in LEVELS else "proven"
+        if latest == "won" and level_index(ceiling) > level_index(level):
+            level = ceiling
+            gap = None if ceiling == "proven" else f"a won readout ({reaches} at most)"
+        elif latest == "lost" and level_index(level) > level_index("weak"):
             level = "weak"
             gap = "a lost readout"
     ladder = r["ladder"]

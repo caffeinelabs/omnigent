@@ -133,7 +133,7 @@ class ProposeIn(_Body):
     rationale: str | None = Field(None, max_length=2000)
     evidence: list[definition.EvidenceId] = Field(default_factory=list, max_length=MAX_EVIDENCE)
     expected_effect: EffectIn | None = None
-    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
+    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_LIMIT)
     thread: str | None = Field(None, max_length=THREAD_MAX_LEN)
     dedupe_key: str | None = Field(None, max_length=96)
 
@@ -144,7 +144,7 @@ class DefinitionEditIn(_Body):
     changes: list[dict[str, Any]] = Field(min_length=1, max_length=MAX_CHANGES)
     note: str | None = Field(None, max_length=2000)
     trial: bool = False
-    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
+    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_LIMIT)
     expected_effect: EffectIn | None = None
     base_version: int | None = Field(None, ge=1)
     when: Literal["after_current", "now"] = "after_current"
@@ -284,7 +284,15 @@ def diff_paths(diff: Sequence[Mapping[str, Any]] | Mapping[str, Any]) -> list[st
 
 def is_trialable(row: FactoryProposal) -> bool:
     """Whether approving *row* runs it as a trial (strategy and profile changes never do)."""
-    return definition.trialable(diff_paths({**(row.before or {}), **(row.after or {})}))[0]
+    paths = diff_paths({**(row.before or {}), **(row.after or {})})
+    return definition.trialable(paths, factory_id=row.factory_id)[0]
+
+
+def trial_label(row: FactoryProposal) -> str:
+    """:returns: How long approving *row* trials it, in words (``48h``, ``14 days``)."""
+    hours = int((row.result or {}).get("trial_h") or definition.TRIAL_H_DEFAULT)
+    paths = diff_paths({**(row.before or {}), **(row.after or {})})
+    return definition.trial_text(hours, definition.guard_set(paths, factory_id=row.factory_id))
 
 
 def agent_seat(caller: AgentCaller) -> str:
@@ -341,11 +349,11 @@ def _applied_title(row: FactoryProposal, applied: Sequence[Mapping[str, Any]]) -
 
 
 def _effect(body: EffectIn | None) -> dict[str, Any] | None:
-    from omnigent.server.factory.telemetry.metrics import CATALOG
+    from omnigent.server.factory.telemetry.metrics import CATALOG, known
 
     if body is None:
         return None
-    if body.metric not in CATALOG:
+    if not known(body.metric):
         raise CockpitError(
             400,
             "unknown_metric",
@@ -761,7 +769,7 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
-    trialable = definition.trialable(diff_paths(diff))[0]
+    trialable = definition.trialable(diff_paths(diff), factory_id=root.id)[0]
     if effect is None and trialable:
         raise CockpitError(
             400,
@@ -776,7 +784,17 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     if klass == "A" and (role != ROLE_LEAD or peer is None):
         klass = "B"
         warnings.append("no peer lead to co-sign: owners decide")
-    trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
+    paths = diff_paths(diff)
+    asked = body.trial_h
+    low, default, high = definition.trial_window_h(paths, factory_id=root.id)
+    if asked is not None and not low <= asked <= high:
+        # An agent's tool bounds trial_h to a delivery window: a discovery trial takes its own.
+        warnings.append(
+            f"trial_h: a trial on {definition.guard_set(paths, factory_id=root.id)} guards runs "
+            f"{low}-{high} h; it runs {default} h"
+        )
+        asked = None
+    trial_h = definition.trial_hours(paths, asked, factory_id=root.id)
     row, deduped = await asyncio.to_thread(
         lambda: store.create_proposal(
             root.id,
@@ -898,7 +916,7 @@ def trial_warnings(
     from omnigent.server.factory import evaluate
 
     paths = diff_paths(diff)
-    if not definition.trialable(paths)[0]:
+    if not definition.trialable(paths, factory_id=factory_id)[0]:
         return []
     found = evaluate.overlapping_trial(deps, factory_id, paths)
     if found is None:
@@ -999,12 +1017,15 @@ def _decision_context(row: FactoryProposal, lines: Sequence[str]) -> str:
         + (f" by {effect['delta']}" if effect.get("delta") is not None else ""),
     ]
     if row.kind != "code" and is_trialable(row):
-        trial_h = (row.result or {}).get("trial_h", definition.TRIAL_H_DEFAULT)
+        label = trial_label(row)
+        length = f"{label[:-1]} h" if label.endswith("h") else label
         parts.append(
-            f"*Approving runs it as a {trial_h} h trial; guard metrics decide keep or revert.*"
+            f"*Approving runs it as a {length} trial; guard metrics decide keep or revert.*"
         )
     elif row.kind != "code":
-        hit = definition.not_trialable(diff_paths({**(row.before or {}), **(row.after or {})}))
+        hit = definition.not_trialable(
+            diff_paths({**(row.before or {}), **(row.after or {})}), factory_id=row.factory_id
+        )
         why = definition.untrialable_text(hit)
         parts.append(
             f"*Approving applies it as a new version, not a trial: {why}."
@@ -1019,9 +1040,10 @@ async def _open_decision(
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
     target = f"{SUBJECT_PREFIX}{row.id}"
-    trial_h = (row.result or {}).get("trial_h", definition.TRIAL_H_DEFAULT)
     label = (
-        f"Approve · trial {trial_h}h" if row.kind != "code" and is_trialable(row) else "Approve"
+        f"Approve · trial {trial_label(row)}"
+        if row.kind != "code" and is_trialable(row)
+        else "Approve"
     )
     decision, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_decision(
@@ -1194,11 +1216,17 @@ async def _apply(
         raise CockpitError(400, "no_change", f"{ref}: the definition already has these values")
     now = now_s()
     trial_h = int((row.result or {}).get("trial_h") or definition.TRIAL_H_DEFAULT)
+    stamped: dict[str, Any] = {}
+    if trial:
+        # The guards that judge it are fixed when it starts (evaluate_trial reads them).
+        guards = definition.guard_set(diff_paths(applied), factory_id=root.id)
+        stamped["result"] = {**(row.result or {}), "guards": guards}
     row = await _update(
         deps,
         row,
         expect,
         **_applied_title(row, applied),
+        **stamped,
         status="trial" if trial else "applied",
         cosigned_by=cosigned_by,
         decided_by=actor.id,
@@ -1658,7 +1686,7 @@ async def human_edit(
 
         await asyncio.to_thread(evaluate.check_trial, deps, root.id, diff_paths(diff))
     kind = "rules" if all(c.path == "rules" for c in changes) else "tuning"
-    trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
+    trial_h = definition.trial_hours(diff_paths(diff), body.trial_h, factory_id=root.id)
     row, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_proposal(
             root.id,

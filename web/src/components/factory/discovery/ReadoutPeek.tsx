@@ -1,37 +1,70 @@
 /**
  * A readout in the side panel: the predicted band and the actual dot, the
  * metric and how it was measured, the guardrails, the verdict by its fixed
- * rule, and the decision. A person keeps or drops the bet; going against the
+ * rule, and the decision. A person decides a written readout with the
+ * server's options (keep, drop, iterate, extend); going against the
  * recommendation needs a named reviewer and a reason, both kept on the
- * readout.
+ * readout. A readout measured by a person's verdict waits for "did it help?"
+ * with a reason; a decision can be reopened (the server says until when).
  */
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { decideReadout } from "@/lib/factoryDiscoveryApi";
+import { decideReadout, reopenReadout } from "@/lib/factoryDiscoveryApi";
 import { cn } from "@/lib/utils";
 import { signedText } from "../cards/betModel";
 import { Peek } from "../ui/Peek";
 import { RangeBar } from "../ui/RangeBar";
 import { useFactoryToast } from "../ui/Toast";
 import { MEANING, READOUT_MARK, READOUT_WORD } from "../ui/statusTokens";
-import type { ReadoutView } from "./discoveryModel";
+import type { ReadoutAnswer, ReadoutDecision, ReadoutOption, ReadoutView } from "./discoveryModel";
 import { useRefreshDiscovery } from "./discoveryQueries";
 
+/** The fixed rules, for a server that sends no why-line of its own. */
 const VERDICT_RULE: Record<string, string> = {
-  won: "moved the promised way by at least the low end of the predicted range, with guardrails held",
-  flat: "moved less than the low end of the predicted range",
-  lost: "moved the wrong way, or a guardrail broke",
+  won: "moved the promised way by at least the smallest predicted change, with guardrails held",
+  flat: "moved less than the smallest predicted change (a small move the wrong way is noise)",
+  lost: "moved the wrong way by at least that much, or a guardrail broke",
   inconclusive: "too little data, or a data check failed",
 };
 
 /** The decision the recommendation points to (`roll out` → keep). */
 export function recommendedDecision(recommendation: string | null): "keep" | "drop" | null {
-  const r = (recommendation ?? "").toLowerCase();
+  const r = (recommendation ?? "").toLowerCase().replace(/_/g, " ");
   if (r.includes("keep") || r.includes("roll out")) return "keep";
   if (r.includes("roll back") || r.includes("drop")) return "drop";
   return null;
+}
+
+const DECISION_WORD: Record<ReadoutDecision, string> = {
+  keep: "Kept",
+  drop: "Dropped",
+  iterate: "Iterating on",
+  extend: "Extended",
+};
+
+const ANSWERS: { answer: ReadoutAnswer; label: string }[] = [
+  { answer: "helped", label: "It helped" },
+  { answer: "no_change", label: "No change" },
+  { answer: "hurt", label: "It hurt" },
+];
+
+/** What a person may decide: the server's options, else keep or drop by the recommendation. */
+export function decisionChoices(readout: ReadoutView): ReadoutOption[] {
+  if (readout.options.length) return readout.options;
+  const recommended = recommendedDecision(readout.recommendation);
+  return (["keep", "drop"] as const).map((d) => ({
+    decision: d,
+    label: d === "keep" ? "Keep it" : "Drop it",
+    recommended: recommended === d,
+    against: recommended != null && recommended !== d,
+  }));
+}
+
+function guardrailWord(g: ReadoutView["guardrails"][number]): string {
+  if (!g.measured) return "not measured";
+  return g.held ? "held" : "broken";
 }
 
 export function ReadoutPeek({
@@ -52,11 +85,19 @@ export function ReadoutPeek({
 }) {
   const toast = useFactoryToast();
   const refresh = useRefreshDiscovery(factoryId);
-  const [choice, setChoice] = useState<"keep" | "drop" | null>(null);
+  const [choice, setChoice] = useState<ReadoutDecision | null>(null);
+  const [verdict, setVerdict] = useState<ReadoutAnswer | null>(null);
   const [reviewer, setReviewer] = useState("");
   const [reason, setReason] = useState("");
-  const recommended = recommendedDecision(readout?.recommendation ?? null);
-  const against = choice != null && recommended != null && choice !== recommended;
+  const choices = readout ? decisionChoices(readout) : [];
+  const against = choices.find((o) => o.decision === choice)?.against ?? false;
+  // A readout from a server without statuses decides like a written one.
+  const written = readout?.status ? readout.status === "written" : !readout?.decision;
+  const awaiting = readout?.status === "awaiting_answer";
+  const failed = (what: string, error: unknown) =>
+    toast.show({
+      message: `Could not ${what}: ${error instanceof Error ? error.message : String(error)}`,
+    });
   const send = async () => {
     if (!readout || !choice) return;
     try {
@@ -67,13 +108,31 @@ export function ReadoutPeek({
       });
       refresh();
       setChoice(null);
-      toast.show({
-        message: `${choice === "keep" ? "Kept" : "Dropped"} ${readout.proposal ?? readout.id}.`,
-      });
+      toast.show({ message: `${DECISION_WORD[choice]} ${readout.proposal ?? readout.id}.` });
     } catch (error) {
-      toast.show({
-        message: `Could not decide: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      failed("decide", error);
+    }
+  };
+  const answer = async () => {
+    if (!readout || !verdict || !reason.trim()) return;
+    try {
+      await decideReadout(factoryId, readout.id, { answer: verdict, reason: reason.trim() });
+      refresh();
+      setVerdict(null);
+      setReason("");
+      toast.show({ message: `Answered for ${readout.proposal ?? readout.id}.` });
+    } catch (error) {
+      failed("answer", error);
+    }
+  };
+  const reopen = async () => {
+    if (!readout) return;
+    try {
+      await reopenReadout(factoryId, readout.id);
+      refresh();
+      toast.show({ message: `Reopened ${readout.proposal ?? readout.id}: decide it again.` });
+    } catch (error) {
+      failed("reopen", error);
     }
   };
   return (
@@ -150,22 +209,36 @@ export function ReadoutPeek({
             <dd>
               {readout.guardrails.length === 0
                 ? "none set"
-                : readout.guardrails
-                    .map((g) => `${g.name}: ${g.held ? "held" : "broken"}`)
-                    .join(" · ")}
+                : readout.guardrails.map((g) => `${g.name}: ${guardrailWord(g)}`).join(" · ")}
             </dd>
             {readout.verdict && (
               <>
                 <dt className="text-muted-foreground">Verdict</dt>
                 <dd>
-                  {READOUT_WORD[readout.verdict]}: {VERDICT_RULE[readout.verdict]}
+                  {READOUT_WORD[readout.verdict]}: {readout.why ?? VERDICT_RULE[readout.verdict]}
                 </dd>
               </>
             )}
             {readout.recommendation && (
               <>
                 <dt className="text-muted-foreground">Recommends</dt>
-                <dd>{readout.recommendation}</dd>
+                <dd>{readout.recommendation.replace(/_/g, " ")}</dd>
+              </>
+            )}
+            {readout.waiting && (
+              <>
+                <dt className="text-muted-foreground">Waits</dt>
+                <dd data-testid="readout-waiting">{readout.waiting}</dd>
+              </>
+            )}
+            {readout.answer?.answer && (
+              <>
+                <dt className="text-muted-foreground">Answer</dt>
+                <dd>
+                  {readout.answer.answer.replace(/_/g, " ")}
+                  {readout.answer.by ? ` by ${readout.answer.by}` : ""}
+                  {readout.answer.reason ? `: ${readout.answer.reason}` : ""}
+                </dd>
               </>
             )}
             <dt className="text-muted-foreground">Decision</dt>
@@ -183,24 +256,68 @@ export function ReadoutPeek({
               </>
             )}
           </dl>
-          {!readout.decision && canAct && (
+          {awaiting && canAct && (
+            <section
+              data-testid="readout-answer"
+              className="flex flex-col gap-2 rounded-lg border border-border p-3"
+            >
+              <h3 className="font-semibold">Did it help?</h3>
+              <p className="text-muted-foreground">
+                This bet is measured by a person&apos;s verdict: answer with a reason.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {ANSWERS.map((a) => (
+                  <Button
+                    key={a.answer}
+                    type="button"
+                    size="sm"
+                    variant={verdict === a.answer ? "default" : "outline"}
+                    aria-pressed={verdict === a.answer}
+                    onClick={() => setVerdict(a.answer)}
+                  >
+                    {a.label}
+                  </Button>
+                ))}
+              </div>
+              {verdict && (
+                <Input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Why (required)"
+                  aria-label="Reason"
+                />
+              )}
+              {verdict && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="w-fit"
+                  disabled={!reason.trim()}
+                  onClick={() => void answer()}
+                >
+                  Send the answer
+                </Button>
+              )}
+            </section>
+          )}
+          {written && !readout.decision && canAct && (
             <section
               data-testid="readout-decide"
               className="flex flex-col gap-2 rounded-lg border border-border p-3"
             >
-              <h3 className="font-semibold">Keep or drop it?</h3>
-              <div className="flex gap-1.5">
-                {(["keep", "drop"] as const).map((d) => (
+              <h3 className="font-semibold">What now?</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {choices.map((o) => (
                   <Button
-                    key={d}
+                    key={o.decision}
                     type="button"
                     size="sm"
-                    variant={choice === d ? "default" : "outline"}
-                    aria-pressed={choice === d}
-                    onClick={() => setChoice(d)}
+                    variant={choice === o.decision ? "default" : "outline"}
+                    aria-pressed={choice === o.decision}
+                    onClick={() => setChoice(o.decision)}
                   >
-                    {d === "keep" ? "Keep" : "Drop"}
-                    {recommended === d ? " (recommended)" : ""}
+                    {o.label}
+                    {o.recommended ? " (recommended)" : ""}
                   </Button>
                 ))}
               </div>
@@ -234,10 +351,22 @@ export function ReadoutPeek({
                   disabled={against && (!reviewer.trim() || !reason.trim())}
                   onClick={() => void send()}
                 >
-                  {choice === "keep" ? "Keep it" : "Drop it"}
+                  {choices.find((o) => o.decision === choice)?.label ?? choice}
                 </Button>
               )}
             </section>
+          )}
+          {readout.status === "decided" && canAct && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-fit"
+              data-testid="readout-reopen"
+              onClick={() => void reopen()}
+            >
+              Reopen the decision
+            </Button>
           )}
         </div>
       )}

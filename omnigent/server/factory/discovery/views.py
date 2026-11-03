@@ -284,7 +284,13 @@ def why_chain(e: Evaluated) -> list[dict[str, Any]]:
             else "none yet"
         )
     )
-    measured = (e.row.result or {}).get("measured_at")
+    result = e.row.result or {}
+    measured = result.get("measured_at")
+    readout = (
+        f"day {result.get('day')} · {result.get('verdict')}"
+        if measured and result.get("verdict")
+        else "in"
+    )
     return [
         {"kind": "evidence", "label": evidence_label, "missing": meter.level == "none"},
         {"kind": "opportunity", "ref": e.row.ref, "label": e.row.title, "missing": False},
@@ -304,8 +310,8 @@ def why_chain(e: Evaluated) -> list[dict[str, Any]]:
         },
         {
             "kind": "readout",
-            "ref": None,
-            "label": "in" if measured else "not yet · day 7 and 28 after release",
+            "ref": result.get("readout") if measured else None,
+            "label": readout if measured else "not yet · day 7 and 28 after release",
             "missing": not measured,
         },
     ]

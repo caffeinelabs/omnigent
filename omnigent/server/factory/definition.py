@@ -91,6 +91,14 @@ RULE_ROLES: Final = (*sorted({*ROLES, "ic_codex"}), "*")
 TRIAL_H_DEFAULT: Final = 48
 TRIAL_H_MIN: Final = 24
 TRIAL_H_MAX: Final = 168
+DISCOVERY_TRIAL_H: Final = (7 * 24, 14 * 24, 56 * 24)
+"""A trial of discovery's method: ``(min, default, max)`` hours (7 to 56 days, 14 by default)."""
+TRIAL_H_LIMIT: Final = DISCOVERY_TRIAL_H[2]
+"""The longest trial a body may ask for (:func:`trial_hours` checks it per guard set)."""
+GUARDS_DELIVERY: Final = "delivery"
+GUARDS_DISCOVERY: Final = "discovery"
+DISCOVERY_OFF: Final = "discovery off for this factory"
+"""Why discovery's method does not trial in a factory with ``discovery.enabled`` off."""
 UNDO_WINDOW_S: Final = 600
 """Re-pinning the parent of a version this young is an Undo (the version gets ``undone_by``)."""
 LABEL_ENGINE_MODE: Final = f"{LABEL_PREFIX}engine_mode"
@@ -1723,18 +1731,117 @@ def trial_blocks(paths: Iterable[str]) -> list[str]:
     return sorted({b for p in paths if (b := trial_block(str(p))) is not None})
 
 
-def not_trialable(paths: Iterable[str]) -> dict[str, str]:
+def discovery_method(path: str) -> bool:
+    """Whether *path* is discovery's method (the rubric, thresholds, Scout's brief)."""
+    path = canonical_path(str(path))
+    return any(blocks.under(path, prefix) for prefix in blocks.DISCOVERY_TRIALS)
+
+
+def _method_trials(factory_id: str | None) -> bool:
+    """
+    Whether discovery's method trials on its own guards: the server runs discovery
+    and the factory, when one is named, has it on.
+    """
+    if not blocks.discovery_server_on():
+        return False
+    return factory_id is None or discovery_enabled(None, factory_id)
+
+
+def guard_set(paths: Iterable[str], *, factory_id: str | None = None) -> str:
+    """
+    :returns: Which guards judge a trial on *paths*: ``discovery`` when every
+        path is discovery's method on a server that runs discovery (and in
+        *factory_id*, when given, with discovery on), else ``delivery``.
+    """
+    paths = [str(p) for p in paths]
+    if paths and _method_trials(factory_id) and all(discovery_method(p) for p in paths):
+        return GUARDS_DISCOVERY
+    return GUARDS_DELIVERY
+
+
+def not_trialable_table(factory_id: str | None = None) -> dict[str, str]:
+    """:returns: ``{prefix: reason}`` of the paths that never trial (in *factory_id*)."""
+    if not blocks.discovery_server_on():
+        return dict(blocks.NOT_TRIALABLE)
+    if not _method_trials(factory_id):
+        # Its guards would measure nothing: the method applies as a version.
+        return {
+            p: DISCOVERY_OFF if r == blocks.NEEDS_DISCOVERY_GUARDS else r
+            for p, r in blocks.NOT_TRIALABLE.items()
+        }
+    out = {p: r for p, r in blocks.NOT_TRIALABLE.items() if p not in blocks.DISCOVERY_TRIALS}
+    out["discovery"] = blocks.DISCOVERY_SETTING
+    return out
+
+
+def not_trialable(paths: Iterable[str], *, factory_id: str | None = None) -> dict[str, str]:
     """
     :returns: ``{prefix: reason}`` of :data:`.definition_blocks.NOT_TRIALABLE`
         for each of *paths* that never runs as a trial (``{}`` when none does).
+        On a server that runs discovery, discovery's method trials on its own
+        guards (in *factory_id*, when given, only with discovery on), so it may
+        not share a trial with other paths.
     """
+    table = not_trialable_table(factory_id)
+    method_trials = _method_trials(factory_id)
     out: dict[str, str] = {}
+    method = other = False
     for path in paths:
         path = canonical_path(str(path))
-        for prefix, reason in blocks.NOT_TRIALABLE.items():
-            if blocks.under(path, prefix):
-                out[prefix] = reason
-    return {p: out[p] for p in blocks.NOT_TRIALABLE if p in out}
+        if method_trials and discovery_method(path):
+            method = True
+            continue
+        hit = [prefix for prefix in table if blocks.under(path, prefix)]
+        for prefix in hit:
+            out[prefix] = table[prefix]
+        other = other or not hit
+    if method and other:
+        out["discovery"] = blocks.MIXED_GUARDS
+    return {p: out[p] for p in table if p in out}
+
+
+def trial_window_h(paths: Iterable[str], *, factory_id: str | None = None) -> tuple[int, int, int]:
+    """:returns: ``(min, default, max)`` hours of a trial on *paths* (by its guard set)."""
+    if guard_set(paths, factory_id=factory_id) == GUARDS_DISCOVERY:
+        return DISCOVERY_TRIAL_H
+    return TRIAL_H_MIN, TRIAL_H_DEFAULT, TRIAL_H_MAX
+
+
+def trial_hours(
+    paths: Iterable[str], requested: int | None, *, factory_id: str | None = None
+) -> int:
+    """
+    :returns: The trial's length in hours: *requested*, or the default of its guard set.
+    :raises CockpitError: 422 ``invalid_trial_window`` outside the guard set's window.
+    """
+    paths = list(paths)
+    low, default, high = trial_window_h(paths, factory_id=factory_id)
+    if requested is None:
+        return default
+    if not low <= requested <= high:
+        guards = guard_set(paths, factory_id=factory_id)
+        if guards == GUARDS_DISCOVERY:
+            span = f"{low // 24}-{high // 24} days (default {trial_text(default, guards)})"
+        else:
+            span = f"{low}-{high} h (default {default} h)"
+        raise _error(
+            422,
+            "invalid_trial_window",
+            f"a trial on {guards} guards runs {span}",
+            field="trial_h",
+            min=low,
+            max=high,
+            default=default,
+        )
+    return requested
+
+
+def trial_text(hours: int, guards: str = GUARDS_DELIVERY) -> str:
+    """:returns: A trial's length in words: days for discovery's windows, else hours."""
+    if guards == GUARDS_DISCOVERY and hours % 24 == 0:
+        days = hours // 24
+        return f"{days} day{'s' if days != 1 else ''}"
+    return f"{hours}h"
 
 
 _UNTRIALABLE_NAMES: Final = {
@@ -1747,8 +1854,19 @@ _UNTRIALABLE_NAMES: Final = {
 }
 _UNTRIALABLE_WHY: Final = {
     blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
+    blocks.DISCOVERY_SETTING: (
+        "are settings, not discovery's method (the rubric, thresholds and Scout's brief "
+        "trial on discovery guards)"
+    ),
+    blocks.MIXED_GUARDS: (
+        "to its method trial on discovery guards and cannot share a trial with other changes"
+    ),
     blocks.NEEDS_DISCOVERY_GUARDS: (
         "are judged on discovery guards, which this server does not measure yet"
+    ),
+    DISCOVERY_OFF: (
+        "are judged on discovery guards, which measure nothing while this factory's "
+        "discovery is off"
     ),
     blocks.TOO_FEW_PRS: (
         "would rarely reach the 3 merged PRs a trial needs (one team merges about one a day)"
@@ -1769,17 +1887,19 @@ def untrialable_text(hit: Mapping[str, str]) -> str:
     return "; ".join(parts)
 
 
-def trialable(paths: Iterable[str]) -> tuple[bool, str | None]:
+def trialable(paths: Iterable[str], *, factory_id: str | None = None) -> tuple[bool, str | None]:
     """
-    Whether a change of *paths* may run as a trial.
+    Whether a change of *paths* may run as a trial (in *factory_id*, when given).
 
     :returns: ``(False, reason)`` when it touches a path a trial would judge on
         the wrong metrics (strategy, the product profile, discovery, Scout's
         brief): it applies as a version.
     """
-    hit = not_trialable(paths)
+    hit = not_trialable(paths, factory_id=factory_id)
     if not hit:
         return True, None
+    if blocks.MIXED_GUARDS in hit.values():
+        return False, f"{untrialable_text(hit)}: split them, or apply them as a version"
     return False, f"{untrialable_text(hit)}: they apply as a version"
 
 
@@ -1832,6 +1952,10 @@ __all__ = [
     "ALLOWED_PATHS",
     "BOUNDS",
     "CLASS_MAP",
+    "DISCOVERY_OFF",
+    "DISCOVERY_TRIAL_H",
+    "GUARDS_DELIVERY",
+    "GUARDS_DISCOVERY",
     "LIST_PATHS",
     "OWNER_ONLY_PREFIXES",
     "QUIET_BLOCKS",
@@ -1839,6 +1963,7 @@ __all__ = [
     "TIER0",
     "TIER0_REASONS",
     "TRIAL_H_DEFAULT",
+    "TRIAL_H_LIMIT",
     "TRIAL_H_MAX",
     "TRIAL_H_MIN",
     "UNDO_WINDOW_S",
@@ -1856,11 +1981,13 @@ __all__ = [
     "diff",
     "diff_lines",
     "discovery_enabled",
+    "discovery_method",
     "effective",
     "engine_mode",
     "env_defaults",
     "goal_floor",
     "goal_seq",
+    "guard_set",
     "heartbeat_default",
     "install",
     "int_value",
@@ -1870,6 +1997,7 @@ __all__ = [
     "mail_limits",
     "moved_paths",
     "not_trialable",
+    "not_trialable_table",
     "owner_only",
     "parse_change",
     "pin",
@@ -1885,6 +2013,9 @@ __all__ = [
     "tier0",
     "trial_block",
     "trial_blocks",
+    "trial_hours",
+    "trial_text",
+    "trial_window_h",
     "trialable",
     "untrialable_text",
     "value",

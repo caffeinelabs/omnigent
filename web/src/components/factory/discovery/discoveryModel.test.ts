@@ -18,6 +18,7 @@ import {
   chainCells,
   chainOf,
   filterRows,
+  findReadout,
   flowModel,
   hunchOutcome,
   hunchWeight,
@@ -28,6 +29,7 @@ import {
   mapPoints,
   mayWithdrawHunch,
   parseOpportunityDetail,
+  parseLedger,
   parseOpportunityList,
   parseReadouts,
   parseSignals,
@@ -89,6 +91,31 @@ describe("readers", () => {
       minPerLevel: 5,
       discovered: { won: 4, total: 6 },
       requested: { shipped: 9, measured: 1 },
+    });
+  });
+
+  it("reads the prediction ledger in the shape A7 serves it", () => {
+    const ledger = parseLedger({
+      readouts: 6,
+      inside: { n: 4, of: 6, share: 0.6667 },
+      win_rate_by_level: {
+        moderate: { value: 0.6, n: 5, enough: true },
+        weak: { value: 1, n: 1, enough: false },
+      },
+      min_per_level: 5,
+      by_origin: { discovered: { value: 0.5, n: 4 } },
+      requested: { shipped: 3, measured: 0 },
+    });
+    expect(ledger).toEqual({
+      readouts: 6,
+      inside: 4,
+      byLevel: [
+        { level: "moderate", n: 5, won: 3 },
+        { level: "weak", n: 1, won: 1 },
+      ],
+      minPerLevel: 5,
+      discovered: { won: 2, total: 4 },
+      requested: { shipped: 3, measured: 0 },
     });
   });
 
@@ -154,6 +181,36 @@ describe("readers", () => {
     const [flat] = parseReadouts([{ ref: "R-2", low: 1, high: 4, actual: 0.2, verdict: "flat" }])!;
     expect(flat).toMatchObject({ id: "R-2", inside: false, verdict: "flat" });
     expect(parseReadouts({})).toBeNull();
+  });
+
+  it("reads what A7 serves: status, options, why, waiting and unmeasured guardrails", () => {
+    const [kept, toDecide, toAnswer, waiting] = parseReadouts(sampleReadouts({ more: true }))!;
+    expect(kept).toMatchObject({ key: "C-20-d7", status: "decided", options: [] });
+    expect(kept!.guardrails).toEqual([
+      { name: "support tickets per 1,000 accounts (sample)", held: true, measured: true },
+    ]);
+    expect(toDecide).toMatchObject({
+      status: "written",
+      recommendation: "iterate",
+      actual: -8,
+      inside: false,
+      why: expect.stringContaining("(guardrails not measured)"),
+    });
+    expect(toDecide!.options.map((o) => [o.decision, o.recommended, o.against])).toEqual([
+      ["iterate", true, false],
+      ["drop", false, false],
+      ["keep", false, true],
+      ["extend", false, true],
+    ]);
+    expect(toDecide!.guardrails[0]).toMatchObject({ measured: false });
+    expect(toAnswer).toMatchObject({ status: "awaiting_answer", method: "human_verdict" });
+    expect(waiting!.waiting).toBe(
+      "3 signals from the window are not sorted into an opportunity yet",
+    );
+    const all = parseReadouts(sampleReadouts({ more: true }))!;
+    expect(findReadout(all, "C-21-d28")?.id).toBe("R-2");
+    expect(findReadout(all, "R-3")?.key).toBe("C-22-d7");
+    expect(findReadout(all, "C-99-d7")).toBeNull();
   });
 });
 

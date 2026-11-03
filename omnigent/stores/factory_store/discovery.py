@@ -32,12 +32,18 @@ from omnigent.db.enum_codecs import (
     FACTORY_FORCE,
     FACTORY_INTENSITY,
     FACTORY_PRIVACY,
+    FACTORY_READOUT_DECISION,
+    FACTORY_READOUT_METHOD,
+    FACTORY_READOUT_RECOMMENDATION,
+    FACTORY_READOUT_STATUS,
+    FACTORY_READOUT_VERDICT,
     FACTORY_SAY_DO,
     FACTORY_SIGNAL_KIND,
     FACTORY_SOURCE_KIND,
 )
 from omnigent.entities.factory_discovery import (
     FactoryOpportunity,
+    FactoryReadout,
     FactoryScoreSnapshot,
     FactorySignal,
     FactorySignalLink,
@@ -116,6 +122,38 @@ SOURCE_STATE_FIELDS: Final = frozenset(
 SNAPSHOT_FIELDS: Final = frozenset(
     {"opportunity", "at", "reason", "def_version", "rank", "band", "level", "inputs", "parts"}
 )
+READOUT_FIELDS: Final = frozenset(
+    {
+        "status",
+        "opportunity",
+        "method",
+        "plan_version",
+        "released_at",
+        "due_at",
+        "written_at",
+        "verdict",
+        "recommendation",
+        "decision",
+        "decided_by",
+        "decided_at",
+        "signal",
+        "decision_id",
+        "plan",
+        "result",
+        "answer",
+        "review",
+        "stamp",
+    }
+)
+"""What :meth:`DiscoveryStore.add_readout` / ``update_readout`` accept."""
+READOUT_JSON: Final = frozenset({"plan", "result", "answer", "review", "stamp"})
+READOUT_ENUMS: Final[dict[str, dict[str, int]]] = {
+    "status": FACTORY_READOUT_STATUS,
+    "method": FACTORY_READOUT_METHOD,
+    "verdict": FACTORY_READOUT_VERDICT,
+    "recommendation": FACTORY_READOUT_RECOMMENDATION,
+    "decision": FACTORY_READOUT_DECISION,
+}
 TEXT_LIMITS: Final[dict[str, int]] = {
     "source": 32,
     "pointer": 500,
@@ -132,6 +170,7 @@ TEXT_LIMITS: Final[dict[str, int]] = {
     "detach_reason": 200,
     "last_error": 300,
     "reason": 32,
+    "decided_by": 128,
 }
 _ENUMS: Final[dict[str, dict[str, int]]] = {
     "source_kind": FACTORY_SOURCE_KIND,
@@ -169,6 +208,9 @@ EMPTY_JSON: Final[dict[str, Any]] = {
     "votes": {},
     "declines": [],
     "data": {},
+    "plan": {},
+    "result": {},
+    "stamp": {},
 }
 """JSON columns stored as ``NULL`` when empty and read back as these."""
 
@@ -203,6 +245,14 @@ def check_enums(fields: Mapping[str, Any]) -> None:
         value = fields.get(name)
         if value is not None and value not in table:
             raise ValueError(f"unknown {name} value: {value!r}")
+
+
+def check_readout_enums(fields: Mapping[str, Any]) -> None:
+    """:raises ValueError: On an unknown readout enum name (``None`` passes)."""
+    for name, table in READOUT_ENUMS.items():
+        value = fields.get(name)
+        if value is not None and value not in table:
+            raise ValueError(f"unknown readout {name} value: {value!r}")
 
 
 def clip(fields: Mapping[str, Any]) -> dict[str, Any]:
@@ -439,6 +489,56 @@ class DiscoveryStore(ABC):
     ) -> builtins.list[FactoryScoreSnapshot]:
         """:returns: Snapshots (of *reason*, when given), newest first."""
 
+    # ── Readouts ────────────────────────────────────────────────
+
+    @abstractmethod
+    def add_readout(
+        self, factory_id: str, *, proposal: int, day: int, **fields: Any
+    ) -> tuple[FactoryReadout, bool]:
+        """
+        Store one bet's readout for one day (``factory_readouts``).
+
+        A readout already stored for ``(proposal, day)`` is returned as it is.
+
+        :param fields: Of :data:`READOUT_FIELDS`; ``status``, ``method``,
+            ``released_at`` and ``due_at`` are required.
+        :returns: ``(row, existed)``.
+        :raises TypeError: On an unknown field. :raises ValueError: On an unknown enum name.
+        """
+
+    @abstractmethod
+    def get_readout(self, factory_id: str, readout_id: str) -> FactoryReadout | None:
+        """:returns: The factory's readout *readout_id*."""
+
+    @abstractmethod
+    def list_readouts(
+        self,
+        factory_id: str,
+        *,
+        proposal: int | None = None,
+        opportunity: int | None = None,
+        statuses: Sequence[str] | None = None,
+        due_before: int | None = None,
+        limit: int = 500,
+    ) -> builtins.list[FactoryReadout]:
+        """:returns: The factory's readouts, by bet then day."""
+
+    @abstractmethod
+    def update_readout(
+        self,
+        factory_id: str,
+        readout_id: str,
+        *,
+        expect_status: str | Sequence[str] | None = None,
+        **fields: Any,
+    ) -> FactoryReadout | None:
+        """
+        Update a readout (compare-and-set on its status when *expect_status* is given).
+
+        :returns: The updated row, or ``None`` when it does not exist or its
+            status is no longer *expect_status*.
+        """
+
     # ── Feedback a person took back ─────────────────────────────
 
     @abstractmethod
@@ -484,6 +584,7 @@ class _Tables:
     opportunities: dict[tuple[int, str, int], FactoryOpportunity] = field(default_factory=dict)
     snapshots: dict[tuple[int, str], FactoryScoreSnapshot] = field(default_factory=dict)
     sources: dict[tuple[int, str, str], FactorySourceState] = field(default_factory=dict)
+    readouts: dict[tuple[int, str], FactoryReadout] = field(default_factory=dict)
 
 
 def _copy(row: Any) -> Any:
@@ -853,6 +954,108 @@ class InMemoryDiscoveryStore:
         rows.sort(key=lambda r: (r.at, r.id), reverse=True)
         return rows[:limit]
 
+    # ── Readouts ────────────────────────────────────────────────
+
+    def add_readout(
+        self, factory_id: str, *, proposal: int, day: int, **fields: Any
+    ) -> tuple[FactoryReadout, bool]:
+        check_fields(fields, READOUT_FIELDS, "add_readout")
+        check_readout_enums(fields)
+        fid = norm_id(factory_id)
+        ws = current_workspace_id()
+        values = _json_defaults(clip(fields))
+        if values.get("decision_id") is not None:
+            values["decision_id"] = norm_id(values["decision_id"])
+        tables = self._tables()
+        with self._lock:
+            for row in tables.readouts.values():
+                if (
+                    row.workspace_id == ws
+                    and row.factory_id == fid
+                    and (row.proposal, row.day) == (proposal, day)
+                ):
+                    return _copy(row), True
+            now = now_s()
+            row = FactoryReadout(
+                id=uuid.uuid4().hex,
+                factory_id=fid,
+                proposal=proposal,
+                day=day,
+                created_at=now,
+                updated_at=now,
+                workspace_id=ws,
+                **values,
+            )
+            tables.readouts[(ws, row.id)] = row
+            return _copy(row), False
+
+    def get_readout(self, factory_id: str, readout_id: str) -> FactoryReadout | None:
+        try:
+            key = (current_workspace_id(), norm_id(readout_id))
+        except ValueError:
+            return None
+        with self._lock:
+            row = self._tables().readouts.get(key)
+            if row is None or row.factory_id != norm_id(factory_id):
+                return None
+            return _copy(row)
+
+    def list_readouts(
+        self,
+        factory_id: str,
+        *,
+        proposal: int | None = None,
+        opportunity: int | None = None,
+        statuses: Sequence[str] | None = None,
+        due_before: int | None = None,
+        limit: int = 500,
+    ) -> builtins.list[FactoryReadout]:
+        fid = norm_id(factory_id)
+        ws = current_workspace_id()
+        wanted = set(statuses) if statuses is not None else None
+        with self._lock:
+            rows = [
+                _copy(r)
+                for k, r in self._tables().readouts.items()
+                if k[0] == ws
+                and r.factory_id == fid
+                and (proposal is None or r.proposal == proposal)
+                and (opportunity is None or r.opportunity == opportunity)
+                and (wanted is None or r.status in wanted)
+                and (due_before is None or r.due_at <= due_before)
+            ]
+        rows.sort(key=lambda r: (r.proposal, r.day))
+        return rows[:limit]
+
+    def update_readout(
+        self,
+        factory_id: str,
+        readout_id: str,
+        *,
+        expect_status: str | Sequence[str] | None = None,
+        **fields: Any,
+    ) -> FactoryReadout | None:
+        check_fields(fields, READOUT_FIELDS, "update_readout")
+        check_readout_enums(fields)
+        expected = {expect_status} if isinstance(expect_status, str) else set(expect_status or ())
+        values = _json_defaults(clip(fields))
+        if values.get("decision_id") is not None:
+            values["decision_id"] = norm_id(values["decision_id"])
+        try:
+            key = (current_workspace_id(), norm_id(readout_id))
+        except ValueError:
+            return None
+        tables = self._tables()
+        with self._lock:
+            row = tables.readouts.get(key)
+            if row is None or row.factory_id != norm_id(factory_id):
+                return None
+            if expected and row.status not in expected:
+                return None
+            row = replace(row, **values, updated_at=now_s())
+            tables.readouts[key] = row
+            return _copy(row)
+
     def retract_feedback(self, factory_id: str, ids: Sequence[str]) -> int:
         fid = norm_id(factory_id)
         ws = current_workspace_id()
@@ -922,6 +1125,9 @@ __all__ = [
     "LABEL_FIELDS",
     "OPPORTUNITY_FIELDS",
     "OPPORTUNITY_JSON",
+    "READOUT_ENUMS",
+    "READOUT_FIELDS",
+    "READOUT_JSON",
     "SIGNAL_FIELDS",
     "SIGNAL_JSON",
     "SNAPSHOT_FIELDS",
@@ -933,6 +1139,7 @@ __all__ = [
     "SignalFilter",
     "check_enums",
     "check_fields",
+    "check_readout_enums",
     "clip",
     "is_unsorted",
     "pointer_key",

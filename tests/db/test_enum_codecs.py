@@ -117,6 +117,31 @@ _CODECS = [
     (ec.FACTORY_SAY_DO, ec.encode_factory_say_do, ec.decode_factory_say_do),
     (ec.FACTORY_INTENSITY, ec.encode_factory_intensity, ec.decode_factory_intensity),
     (ec.FACTORY_FORCE, ec.encode_factory_force, ec.decode_factory_force),
+    (
+        ec.FACTORY_READOUT_STATUS,
+        ec.encode_factory_readout_status,
+        ec.decode_factory_readout_status,
+    ),
+    (
+        ec.FACTORY_READOUT_METHOD,
+        ec.encode_factory_readout_method,
+        ec.decode_factory_readout_method,
+    ),
+    (
+        ec.FACTORY_READOUT_VERDICT,
+        ec.encode_factory_readout_verdict,
+        ec.decode_factory_readout_verdict,
+    ),
+    (
+        ec.FACTORY_READOUT_RECOMMENDATION,
+        ec.encode_factory_readout_recommendation,
+        ec.decode_factory_readout_recommendation,
+    ),
+    (
+        ec.FACTORY_READOUT_DECISION,
+        ec.encode_factory_readout_decision,
+        ec.decode_factory_readout_decision,
+    ),
 ]
 
 
@@ -225,6 +250,7 @@ def test_shipped_codes_are_stable() -> None:
         "loop": 7,
         "access_request": 8,
         "done_check": 9,
+        "readout": 10,
     }
     assert ec.FACTORY_DECISION_STATUS == {"open": 1, "answered": 2, "withdrawn": 3, "expired": 4}
     assert ec.FACTORY_EVENT_SEVERITY == {"info": 0, "notice": 1, "warning": 2, "critical": 3}
@@ -249,3 +275,25 @@ def test_shipped_codes_are_stable() -> None:
     assert ec.FACTORY_SAY_DO == {"say": 1, "do": 2}
     assert ec.FACTORY_INTENSITY == {"blocker": 1, "workaround": 2, "annoyance": 3, "nice": 4}
     assert ec.FACTORY_FORCE == {"push": 1, "pull": 2, "anxiety": 3, "habit": 4}
+    assert ec.FACTORY_READOUT_STATUS == {
+        "scheduled": 1,
+        "awaiting_answer": 2,
+        "written": 3,
+        "decided": 4,
+        "cancelled": 5,
+    }
+    assert ec.FACTORY_READOUT_METHOD == {
+        "controlled": 1,
+        "before_after": 2,
+        "adoption": 3,
+        "signal_trend": 4,
+        "human_verdict": 5,
+    }
+    assert ec.FACTORY_READOUT_VERDICT == {"won": 1, "flat": 2, "lost": 3, "inconclusive": 4}
+    assert ec.FACTORY_READOUT_RECOMMENDATION == {
+        "keep": 1,
+        "iterate": 2,
+        "roll_back": 3,
+        "extend": 4,
+    }
+    assert ec.FACTORY_READOUT_DECISION == {"keep": 1, "drop": 2, "iterate": 3, "extend": 4}

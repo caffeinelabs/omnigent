@@ -13,8 +13,8 @@ same facts.
 **Kinds.** ``decision`` (a question an agent or the server asked), ``merge``
 (ready pull requests), ``bet`` (a projects proposal that carries a bet),
 ``source``, ``profile`` and ``goal`` (definition proposals that change the
-discovery sources, the product profile or the goals), ``readout`` (deciding a
-measured bet; nothing produces one until readouts land), ``broken``
+discovery sources, the product profile or the goals), ``readout`` (keeping or
+dropping a measured bet, or answering "did it help?"), ``broken``
 (something stopped that only a person can restart or close) and ``proposal``
 (any other proposal a person approves).
 
@@ -773,6 +773,19 @@ def _decision_draft(decision: Mapping[str, Any], ctx: _Ctx, in_steer: list[str])
             cost_text = cost_text if blocking else "it expires on its own"
         if author:
             meta.append(author)
+    elif source == "readout":
+        kind = "readout"
+        title = _cap(question)
+        subject = str(decision.get("subject") or subject)
+        option_href = next((o.href for o in options if o.href), None)
+        action = _answer_action(
+            options, AskAction(kind="open", label="Open the readout", href=option_href or href)
+        )
+        if any(o.id == "answer" for o in options):
+            # "Did C-n help?": a person's verdict is the measurement itself.
+            cost_text = "the readout waits for your verdict; until then the bet is not measured"
+        else:
+            cost_text = "a measured bet waits for keep or drop; what it taught waits with it"
     elif source == "relaunch_failed":
         kind = "broken"
         # The question opens with the stopped agent's quoted title (the server asks).

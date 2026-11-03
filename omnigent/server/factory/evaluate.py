@@ -21,8 +21,15 @@ block of :mod:`.definition_blocks` that already has one running is refused
 with 409 ``trial_overlap``, since two trials on one block confound each
 other's guards (today's settings and rules trial side by side, as before).
 Strategy and product profile changes never run as a trial (422
-``not_trialable``): they are judged on outcomes and apply as a version. Nor
-do discovery and Scout's brief until the discovery guards exist.
+``not_trialable``): they are judged on outcomes and apply as a version.
+
+The guard set follows the paths a change touches (:func:`.definition.guard_set`).
+Discovery's method (the rubric, thresholds, Scout's brief) trials only on a
+server that runs discovery, on :data:`.telemetry.metrics.DISCOVERY_GUARDS`:
+quote failures and privacy events stay at 0, accepted bets fall at most
+10 pp, cost per accepted bet rises at most 20 %. Its window is 7 to 56 days
+(14 by default) and n counts decided bets (at least :data:`MIN_DECIDED_BETS`);
+a window in which nobody decided a bet is idle.
 
 An idle trial (no merged PR, finished task or sub-agent run in its window, see
 :mod:`.idle`) proves nothing either way. Instead of ending inconclusive it is
@@ -61,6 +68,8 @@ _logger = logging.getLogger(__name__)
 
 MIN_MERGED: Final = 3
 MIN_BEAT_HOURS: Final = 24
+MIN_DECIDED_BETS: Final = 3
+"""A discovery trial's n: bets people decided in its window."""
 OUTCOME_KEPT: Final = "kept"
 OUTCOME_REVERTED: Final = "reverted"
 OUTCOME_INCONCLUSIVE: Final = "inconclusive"
@@ -121,6 +130,8 @@ def _regressed(rule: str, limit: float, base: float | None, trial: float | None)
         return trial > base + limit
     if rule == "pct_rise":
         return base > 0 and trial > base * (1 + limit)
+    if rule == "abs_max":
+        return trial > limit
     return None
 
 
@@ -130,6 +141,7 @@ def _allowed(rule: str, limit: float) -> str:
         "pp_rise": f"≤ baseline + {limit * 100:g} pp",
         "abs_rise": f"≤ baseline + {limit:g}",
         "pct_rise": f"≤ +{limit * 100:g} %",
+        "abs_max": f"≤ {limit:g}",
     }.get(rule, rule)
 
 
@@ -145,16 +157,24 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
     span = max(3600, end - applied)
     trial = metrics.Window(applied, min(end, now) if min(end, now) > applied else applied + 1)
     baseline = metrics.Window(applied - span, applied)
-    names = list(metrics.GUARDS)
+    # The guard set stamped when the trial started; a trial from before the stamp recomputes it.
+    stamped = (row.result or {}).get("guards")
+    if stamped not in (definition.GUARDS_DELIVERY, definition.GUARDS_DISCOVERY):
+        stamped = definition.guard_set((row.after or {}).keys())
+    discovery = stamped == definition.GUARDS_DISCOVERY
+    table = metrics.DISCOVERY_GUARDS if discovery else metrics.GUARDS
+    count = "bet_acceptance" if discovery else "throughput"
+    names = list(table)
     effect = row.expected_effect or {}
-    target_metric = effect.get("metric") if effect.get("metric") in metrics.CATALOG else None
+    target_metric = effect.get("metric") if metrics.known(str(effect.get("metric"))) else None
     if target_metric and target_metric not in names:
         names.append(target_metric)
-    names.append("throughput")
+    if count not in names:
+        names.append(count)
     now_values = metrics.compute(deps, row.factory_id, names, window=trial, use_cache=False)
     base_values = metrics.compute(deps, row.factory_id, names, window=baseline, use_cache=False)
     guards: list[Guard] = []
-    for name, (rule, limit) in metrics.GUARDS.items():
+    for name, (rule, limit) in table.items():
         b, t = metrics.headline(base_values[name]), metrics.headline(now_values[name])
         verdict = _regressed(rule, limit, b, t)
         guards.append(
@@ -178,7 +198,10 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
             met = t >= b + delta if effect.get("direction") == "up" else t <= b - delta
             met = met and t != b
         target.update(baseline=b, trial=t, direction=effect.get("direction"), met=met)
-    if _cadence_only(row):
+    if discovery:
+        n = int(now_values[count].get("n") or 0)
+        min_n = MIN_DECIDED_BETS
+    elif _cadence_only(row):
         beats = [
             e
             for e in deps.factory_store.find_events(
@@ -203,13 +226,19 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
         if not target.get("met"):
             why.append("target not met" if target_metric else "no target metric")
         outcome, reason = OUTCOME_INCONCLUSIVE, "; ".join(why) or "unclear"
-    activity = idle.window_activity(
-        deps,
-        row.factory_id,
-        trial.since,
-        trial.until,
-        merged_prs=int(now_values["throughput"].get("n") or 0),
-    )
+    if discovery:
+        # No bet decided in the window: nothing to judge the method on yet.
+        activity_dict: dict[str, int] = {"decided_bets": n}
+        is_idle = n == 0
+    else:
+        found = idle.window_activity(
+            deps,
+            row.factory_id,
+            trial.since,
+            trial.until,
+            merged_prs=int(now_values["throughput"].get("n") or 0),
+        )
+        activity_dict, is_idle = found.to_dict(), found.idle
     return Evaluation(
         outcome=outcome,
         reason=reason,
@@ -220,8 +249,8 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
         trial_window=(trial.since, trial.until),
         baseline_window=(baseline.since, baseline.until),
         evaluated_at=now,
-        activity=activity.to_dict(),
-        idle=activity.idle,
+        activity=activity_dict,
+        idle=is_idle,
     )
 
 
@@ -307,9 +336,11 @@ def check_trial(
         holds one of its blocks.
     """
     paths = list(paths)
-    ok, message = definition.trialable(paths)
+    ok, message = definition.trialable(paths, factory_id=factory_id)
     if not ok:
-        why = "; ".join(dict.fromkeys(definition.not_trialable(paths).values()))
+        why = "; ".join(
+            dict.fromkeys(definition.not_trialable(paths, factory_id=factory_id).values())
+        )
         raise not_trialable_error(message or definition.blocks.NOT_TRIALABLE_REASON, why)
     found = overlapping_trial(deps, factory_id, paths, exclude_id=exclude_id)
     if found is not None:
@@ -464,7 +495,11 @@ async def _extend(
     except ProposalStateConflict:
         return None
     again = "" if count == 1 else " again"
-    why = "no merged PRs since it started — the factory was idle"
+    why = (
+        "nobody decided a bet since it started: nothing to judge discovery's method on"
+        if "decided_bets" in ev.activity
+        else "no merged PRs since it started — the factory was idle"
+    )
     await events.emit(
         app_state,
         row.factory_id,
@@ -599,6 +634,7 @@ __all__ = [
     "KEEP_DEFAULT_REASON",
     "MAX_EXTENSIONS",
     "MIN_BEAT_HOURS",
+    "MIN_DECIDED_BETS",
     "MIN_MERGED",
     "NOT_TRIALABLE",
     "OUTCOME_EXTENDED",

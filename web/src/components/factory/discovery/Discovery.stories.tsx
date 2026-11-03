@@ -191,3 +191,60 @@ export const SourcePeekMobile = phone(discovery("", {}, { search: "?peek=source:
 
 /** A readout: the band and the actual, guardrails, verdict and decision. */
 export const ReadoutPeek = discovery("impact", {}, { search: "?peek=readout:R-1" });
+
+/** A written readout to decide with the server's options, named by its key as a Needs-you link does. */
+export const ReadoutPeekToDecide = discovery(
+  "impact",
+  { moreReadouts: true },
+  { search: "?peek=readout:C-21-d28" },
+);
+
+export const ReadoutPeekToDecideDark = discovery(
+  "impact",
+  { moreReadouts: true },
+  { theme: "dark", search: "?peek=readout:C-21-d28" },
+);
+
+export const ReadoutPeekToDecideMobile = phone(
+  discovery("impact", { moreReadouts: true }, { search: "?peek=readout:C-21-d28" }),
+);
+
+/** Going against the recommendation: a named reviewer and a reason. */
+export const ReadoutPeekAgainst: Story = {
+  ...discovery("impact", { moreReadouts: true }, { search: "?peek=readout:C-21-d28" }),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const decide = within(await body.findByTestId("readout-decide"));
+    await userEvent.click(decide.getByRole("button", { name: "Keep it" }));
+  },
+};
+
+/** "Did it help?": a readout measured by a person's verdict waits for an answer. */
+export const ReadoutPeekAnswer = discovery(
+  "impact",
+  { moreReadouts: true },
+  { search: "?peek=readout:R-3" },
+);
+
+export const ReadoutPeekAnswerDark = discovery(
+  "impact",
+  { moreReadouts: true },
+  { theme: "dark", search: "?peek=readout:R-3" },
+);
+
+export const ReadoutPeekAnswerMobile = phone(
+  discovery("impact", { moreReadouts: true }, { theme: "dark", search: "?peek=readout:R-3" }),
+);
+
+/** A due readout that waits for its window to be read and sorted. */
+export const ReadoutPeekWaiting = discovery(
+  "impact",
+  { moreReadouts: true },
+  { search: "?peek=readout:R-4" },
+);
+
+export const ReadoutPeekWaitingDark = discovery(
+  "impact",
+  { moreReadouts: true },
+  { theme: "dark", search: "?peek=readout:R-4" },
+);

@@ -451,6 +451,66 @@ describe("Discovery on", () => {
     await waitFor(() => expect(decodeURIComponent(location)).toContain("peek=readout:R-1"));
   });
 
+  it("decides a written readout with the server's options; against it needs a reviewer", async () => {
+    serve({
+      routes: { moreReadouts: true },
+      overrides: { [`POST ${SNAPSHOT}/readouts/R-2/decide`]: () => json({ id: "R-2" }) },
+    });
+    // A Needs-you link names the readout by its key.
+    renderAt("/discovery/impact?peek=readout:C-21-d28");
+    const peek = await screen.findByTestId("readout-peek-R-2");
+    expect(peek).toHaveTextContent("support load (sample): not measured");
+    expect(peek).toHaveTextContent("(guardrails not measured)");
+    const decide = within(screen.getByTestId("readout-decide"));
+    fireEvent.click(decide.getByRole("button", { name: "Keep it" }));
+    expect(decide.getByText(/goes against the recommendation/)).toBeInTheDocument();
+    expect(decide.getAllByRole("button", { name: "Keep it" }).at(-1)).toBeDisabled();
+    fireEvent.click(decide.getByRole("button", { name: "Iterate (recommended)" }));
+    fireEvent.click(decide.getAllByRole("button", { name: "Iterate" }).at(-1)!);
+    await waitFor(() =>
+      expect(sent("POST", "/readouts/R-2/decide")).toEqual([{ decision: "iterate" }]),
+    );
+  });
+
+  it("asks a person whether a bet helped, with a reason", async () => {
+    serve({
+      routes: { moreReadouts: true },
+      overrides: { [`POST ${SNAPSHOT}/readouts/R-3/decide`]: () => json({ id: "R-3" }) },
+    });
+    renderAt("/discovery/impact?peek=readout:R-3");
+    const answer = within(await screen.findByTestId("readout-answer"));
+    expect(screen.queryByTestId("readout-decide")).toBeNull();
+    fireEvent.click(answer.getByRole("button", { name: "It helped" }));
+    const send = answer.getByRole("button", { name: "Send the answer" });
+    expect(send).toBeDisabled();
+    fireEvent.change(answer.getByLabelText("Reason"), {
+      target: { value: "three teams name one now (sample)" },
+    });
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(sent("POST", "/readouts/R-3/decide")).toEqual([
+        { answer: "helped", reason: "three teams name one now (sample)" },
+      ]),
+    );
+  });
+
+  it("says why a due readout still waits, and reopens a decision", async () => {
+    serve({
+      routes: { moreReadouts: true },
+      overrides: { [`POST ${SNAPSHOT}/readouts/R-1/reopen`]: () => json({ id: "R-1" }) },
+    });
+    const first = renderAt("/discovery/impact?peek=readout:R-4");
+    expect(await screen.findByTestId("readout-waiting")).toHaveTextContent(
+      "3 signals from the window are not sorted into an opportunity yet",
+    );
+    expect(screen.queryByTestId("readout-decide")).toBeNull();
+    first.unmount();
+
+    renderAt("/discovery/impact?peek=readout:R-1");
+    fireEvent.click(await screen.findByTestId("readout-reopen"));
+    await waitFor(() => expect(sent("POST", "/readouts/R-1/reopen")).toEqual([{}]));
+  });
+
   it("says when a panel's id is not in this factory", async () => {
     serve();
     renderAt("/discovery?peek=O-99");

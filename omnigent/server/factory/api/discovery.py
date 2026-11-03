@@ -5,7 +5,8 @@ write carries the human-origin check and needs EDIT (some levers need an
 owner). Everything answers ``404 discovery_off`` unless the server env
 ``OMNIGENT_FACTORY_DISCOVERY`` and the factory's ``discovery.enabled`` are on.
 
-- ``GET /discovery``: chain counts, coverage, Scout, budget, sources, goals;
+- ``GET /discovery``: chain counts, coverage, Scout, budget, sources, goals,
+  readouts and the prediction ledger;
 - ``GET /opportunities`` (``?band=&status=&goal=&segment=&source=&q=&limit=``),
   ``GET /opportunities/{O-n}``;
 - ``PATCH /opportunities/{O-n}`` ``{op: vote|pin|park|unpark|kill|revive|merge|
@@ -32,7 +33,7 @@ from fastapi.responses import JSONResponse
 from omnigent.server.factory import control
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.control import CockpitError
-from omnigent.server.factory.discovery import levers, opportunities, require_on, views
+from omnigent.server.factory.discovery import levers, opportunities, readouts, require_on, views
 from omnigent.server.factory.discovery.ledger import (
     CONVICTION_KINDS,
     INJECTION_SUSPECT,
@@ -80,7 +81,8 @@ async def get_discovery(request: Request, factory_id: str) -> dict[str, Any] | J
             facts = opportunities.load_facts(deps, root.id)
             doc, version = opportunities.effective_doc(deps, root.id)
             items = opportunities.evaluate_all(facts, doc)
-            return views.summary(deps, root.id, facts, items, doc=doc, def_version=version)
+            out = views.summary(deps, root.id, facts, items, doc=doc, def_version=version)
+            return {**out, **readouts.summary_fields(deps, root.id, now=facts.now)}
 
         return await asyncio.to_thread(read)
 

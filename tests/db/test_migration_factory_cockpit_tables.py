@@ -162,7 +162,7 @@ def test_revision_chains_off_the_previous_head() -> None:
         ("factory_projects", "priority", 4),
         ("factory_prs", "state", 4),
         ("factory_decisions", "status", 5),
-        ("factory_decisions", "source", 10),
+        ("factory_decisions", "source", 11),
         ("factory_events", "severity", 4),
         ("factory_demos", "status", 5),
     ],

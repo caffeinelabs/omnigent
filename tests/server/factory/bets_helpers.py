@@ -38,11 +38,11 @@ _BET: dict[str, Any] = {
     "goal": "G-1",
     "hypothesis": "Measuring the first-week funnel shows where new users stop (S-3, S-9).",
     "outcome": "The team sees where new users stop in week one (sample)",
-    "metric": "signal_trend:G-1",
+    "metric": "first_week_success",
     "expected": {"direction": "up", "low": 1, "high": 4, "unit": "pp"},
     "guardrails": ["no new prompts for users (sample)"],
     "flag": {"key": "funnel-events"},
-    "measurement": {"method": "signal_trend", "readout_days": [28, 7]},
+    "measurement": {"method": "human_verdict", "readout_days": [28, 7]},
     "kill": {"state": "no readable funnel after two weeks (sample)", "date": "28 days"},
     "cost": {"agent_usd": 40, "human_review_min": 20, "risk": "low"},
 }

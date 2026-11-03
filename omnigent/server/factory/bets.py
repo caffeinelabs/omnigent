@@ -15,7 +15,9 @@ What the server checks when a bet is filed:
 - the plan is complete: metric, expected range, measurement with readout
   days, a kill rule and a flag (or why there is none);
 - the metric can be measured: a goal's metric binding, or a method the server
-  runs without one (``signal_trend``, ``human_verdict``);
+  runs without one (``signal_trend``, ``human_verdict``); a signal trend
+  counts the accounts still asking about the opportunity, so its metric is
+  ``signal_trend:O-n`` and it predicts a drop;
 - quoted user words in agent text match a stored excerpt of a cited signal
   (a hook the discovery ledger fills; until it does every quote is refused);
 - charter fields carry no user quotes: the outcome, metric, kill date and unit
@@ -521,10 +523,13 @@ def check(
         raise CockpitError(
             422,
             "metric_not_measurable",
-            f"{parsed.metric!r} is no metric binding a source measures; use the method "
-            "signal_trend or human_verdict until one does",
+            f"{parsed.metric!r} is no metric binding a source measures; until one does, use "
+            "human_verdict, or signal_trend with metric 'signal_trend:O-<n>' and a predicted "
+            "drop",
             field="bet.metric",
         )
+    if parsed.measurement.method == "signal_trend":
+        _check_signal_trend(parsed, ref)
     check_charter_quotes(
         [
             ("bet.outcome", parsed.outcome),
@@ -561,6 +566,32 @@ def check(
     if parsed.flag.none is not None:
         warnings.append("no_flag: the readout uses a weaker method until the product has flags")
     return Checked(opportunity=ref, bet=stored, owner=owner, warnings=warnings)
+
+
+def _check_signal_trend(bet: BetIn, ref: str | None) -> None:
+    """A signal trend counts the accounts still asking about the opportunity: a drop of it."""
+    why = "a signal trend counts the accounts still asking about an opportunity"
+    if ref is None:
+        raise CockpitError(
+            422,
+            "metric_not_measurable",
+            f"{why}: set opportunity=O-<n>, or use the method human_verdict",
+            field="opportunity",
+        )
+    if bet.metric != f"signal_trend:{ref}":
+        raise CockpitError(
+            422,
+            "metric_not_measurable",
+            f"{why}: its metric is 'signal_trend:{ref}'; a goal's metric needs its binding",
+            field="bet.metric",
+        )
+    if bet.expected.direction != "down":
+        raise CockpitError(
+            422,
+            "metric_not_measurable",
+            f"{why}; predict a drop (direction 'down', low and high below 0)",
+            field="bet.expected",
+        )
 
 
 def _check_kind(

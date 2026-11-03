@@ -122,6 +122,7 @@ def test_round3_codes_are_pinned() -> None:
     assert ec.FACTORY_DECISION_SOURCE["loop"] == 7
     assert ec.FACTORY_DECISION_SOURCE["access_request"] == 8
     assert ec.FACTORY_DECISION_SOURCE["done_check"] == 9
+    assert ec.FACTORY_DECISION_SOURCE["readout"] == 10
     assert ec.FACTORY_PROJECT_STATUS == {"active": 1, "cancelled": 2, "merged": 3, "done": 4}
     assert ec.FACTORY_PERSON_ROLE == {"viewer": 1, "operator": 2, "owner": 3}
     assert ec.FACTORY_PROPOSAL_STATUS["awaiting_cosign"] == 11

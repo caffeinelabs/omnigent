@@ -19,6 +19,7 @@ from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select, upd
 from omnigent.db.db_models import (
     SqlFactoryFeedback,
     SqlFactoryOpportunity,
+    SqlFactoryReadout,
     SqlFactoryScoreSnapshot,
     SqlFactorySignal,
     SqlFactorySignalLink,
@@ -30,6 +31,11 @@ from omnigent.db.enum_codecs import (
     decode_factory_force,
     decode_factory_intensity,
     decode_factory_privacy,
+    decode_factory_readout_decision,
+    decode_factory_readout_method,
+    decode_factory_readout_recommendation,
+    decode_factory_readout_status,
+    decode_factory_readout_verdict,
     decode_factory_say_do,
     decode_factory_signal_kind,
     decode_factory_source_kind,
@@ -37,12 +43,18 @@ from omnigent.db.enum_codecs import (
     encode_factory_force,
     encode_factory_intensity,
     encode_factory_privacy,
+    encode_factory_readout_decision,
+    encode_factory_readout_method,
+    encode_factory_readout_recommendation,
+    encode_factory_readout_status,
+    encode_factory_readout_verdict,
     encode_factory_say_do,
     encode_factory_signal_kind,
     encode_factory_source_kind,
 )
 from omnigent.entities.factory_discovery import (
     FactoryOpportunity,
+    FactoryReadout,
     FactoryScoreSnapshot,
     FactorySignal,
     FactorySignalLink,
@@ -54,6 +66,8 @@ from omnigent.stores.factory_store.discovery import (
     LABEL_FIELDS,
     OPPORTUNITY_FIELDS,
     OPPORTUNITY_JSON,
+    READOUT_FIELDS,
+    READOUT_JSON,
     SIGNAL_FIELDS,
     SIGNAL_JSON,
     SNAPSHOT_FIELDS,
@@ -63,6 +77,7 @@ from omnigent.stores.factory_store.discovery import (
     SignalFilter,
     check_enums,
     check_fields,
+    check_readout_enums,
     clip,
     norm_id,
     now_s,
@@ -111,6 +126,29 @@ def _columns(fields: Mapping[str, Any], json_keys: frozenset[str]) -> dict[str, 
         elif key in _ENCODERS:
             out[key] = None if value is None else _ENCODERS[key](value)
         elif key == "query_event":
+            out[key] = norm_id(value) if value is not None else None
+        else:
+            out[key] = value
+    return out
+
+
+_READOUT_ENCODERS: Final[dict[str, Callable[[str], int]]] = {
+    "status": encode_factory_readout_status,
+    "method": encode_factory_readout_method,
+    "verdict": encode_factory_readout_verdict,
+    "recommendation": encode_factory_readout_recommendation,
+    "decision": encode_factory_readout_decision,
+}
+
+
+def _readout_columns(fields: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in clip(fields).items():
+        if key in READOUT_JSON:
+            out[key] = _dump(value, key)
+        elif key in _READOUT_ENCODERS:
+            out[key] = None if value is None else _READOUT_ENCODERS[key](value)
+        elif key == "decision_id":
             out[key] = norm_id(value) if value is not None else None
         else:
             out[key] = value
@@ -238,6 +276,37 @@ def _source_state(row: SqlFactorySourceState) -> FactorySourceState:
         calls_today=row.calls_today,
         signals_total=row.signals_total,
         data=_load(row.data, "data"),
+        updated_at=row.updated_at,
+        workspace_id=row.workspace_id,
+    )
+
+
+def _readout(row: SqlFactoryReadout) -> FactoryReadout:
+    return FactoryReadout(
+        id=row.id,
+        factory_id=row.factory_id,
+        proposal=row.proposal,
+        day=row.day,
+        status=decode_factory_readout_status(row.status),
+        opportunity=row.opportunity,
+        method=decode_factory_readout_method(row.method),
+        plan_version=row.plan_version,
+        released_at=row.released_at,
+        due_at=row.due_at,
+        written_at=row.written_at,
+        verdict=_opt(decode_factory_readout_verdict, row.verdict),
+        recommendation=_opt(decode_factory_readout_recommendation, row.recommendation),
+        decision=_opt(decode_factory_readout_decision, row.decision),
+        decided_by=row.decided_by,
+        decided_at=row.decided_at,
+        signal=row.signal,
+        decision_id=row.decision_id,
+        plan=_load(row.plan, "plan"),
+        result=_load(row.result, "result"),
+        answer=_load(row.answer, "answer"),
+        review=_load(row.review, "review"),
+        stamp=_load(row.stamp, "stamp"),
+        created_at=row.created_at,
         updated_at=row.updated_at,
         workspace_id=row.workspace_id,
     )
@@ -701,6 +770,116 @@ class SqlDiscoveryStore:
         stmt = stmt.order_by(model.at.desc(), model.id.desc()).limit(limit)
         with self._session("list_factory_score_snapshots") as session:
             return [_snapshot(r) for r in session.execute(stmt).scalars()]
+
+    # ── Readouts ────────────────────────────────────────────────
+
+    def add_readout(
+        self, factory_id: str, *, proposal: int, day: int, **fields: Any
+    ) -> tuple[FactoryReadout, bool]:
+        check_fields(fields, READOUT_FIELDS, "add_readout")
+        check_readout_enums(fields)
+        fid = norm_id(factory_id)
+        columns = _readout_columns(fields)
+        model = SqlFactoryReadout
+
+        def write(session: Session) -> tuple[FactoryReadout, bool]:
+            existing = session.execute(
+                select(model).where(
+                    model.workspace_id == current_workspace_id(),
+                    model.factory_id == fid,
+                    model.proposal == proposal,
+                    model.day == day,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return _readout(existing), True
+            now = now_s()
+            row = model(
+                id=uuid.uuid4().hex,
+                factory_id=fid,
+                proposal=proposal,
+                day=day,
+                created_at=now,
+                updated_at=now,
+                **columns,
+            )
+            session.add(row)
+            session.flush()
+            return _readout(row), False
+
+        return self._write("store_factory_readout", write)
+
+    def get_readout(self, factory_id: str, readout_id: str) -> FactoryReadout | None:
+        try:
+            key = (current_workspace_id(), norm_id(readout_id))
+        except ValueError:
+            return None
+        with self._session("get_factory_readout") as session:
+            row = session.get(SqlFactoryReadout, key)
+            if row is None or row.factory_id != norm_id(factory_id):
+                return None
+            return _readout(row)
+
+    def list_readouts(
+        self,
+        factory_id: str,
+        *,
+        proposal: int | None = None,
+        opportunity: int | None = None,
+        statuses: Sequence[str] | None = None,
+        due_before: int | None = None,
+        limit: int = 500,
+    ) -> builtins.list[FactoryReadout]:
+        model = SqlFactoryReadout
+        stmt = select(model).where(
+            model.workspace_id == current_workspace_id(),
+            model.factory_id == norm_id(factory_id),
+        )
+        if proposal is not None:
+            stmt = stmt.where(model.proposal == proposal)
+        if opportunity is not None:
+            stmt = stmt.where(model.opportunity == opportunity)
+        if statuses is not None:
+            stmt = stmt.where(
+                model.status.in_([encode_factory_readout_status(s) for s in statuses])
+            )
+        if due_before is not None:
+            stmt = stmt.where(model.due_at <= due_before)
+        stmt = stmt.order_by(model.proposal, model.day).limit(limit)
+        with self._session("list_factory_readouts") as session:
+            return [_readout(r) for r in session.execute(stmt).scalars()]
+
+    def update_readout(
+        self,
+        factory_id: str,
+        readout_id: str,
+        *,
+        expect_status: str | Sequence[str] | None = None,
+        **fields: Any,
+    ) -> FactoryReadout | None:
+        check_fields(fields, READOUT_FIELDS, "update_readout")
+        check_readout_enums(fields)
+        columns = _readout_columns(fields)
+        expected = [expect_status] if isinstance(expect_status, str) else list(expect_status or ())
+        codes = {encode_factory_readout_status(s) for s in expected}
+        try:
+            key = (current_workspace_id(), norm_id(readout_id))
+        except ValueError:
+            return None
+        fid = norm_id(factory_id)
+
+        def write(session: Session) -> FactoryReadout | None:
+            row = session.get(SqlFactoryReadout, key, with_for_update=bool(codes))
+            if row is None or row.factory_id != fid:
+                return None
+            if codes and row.status not in codes:
+                return None
+            for name, value in columns.items():
+                setattr(row, name, value)
+            row.updated_at = now_s()
+            return _readout(row)
+
+        return self._write("update_factory_readout", write)
 
     # ── Feedback a person took back ─────────────────────────────
 

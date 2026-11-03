@@ -155,6 +155,7 @@ FACTORY_DECISION_SOURCE: dict[str, int] = {
     "loop": 7,
     "access_request": 8,
     "done_check": 9,
+    "readout": 10,
 }
 
 FACTORY_DECISION_STATUS: dict[str, int] = {
@@ -423,6 +424,45 @@ FACTORY_FORCE: dict[str, int] = {
     "habit": 4,
 }
 
+# ── Readouts (factory_readouts) ─────────────────────────────────
+
+FACTORY_READOUT_STATUS: dict[str, int] = {
+    "scheduled": 1,
+    "awaiting_answer": 2,
+    "written": 3,
+    "decided": 4,
+    "cancelled": 5,
+}
+
+FACTORY_READOUT_METHOD: dict[str, int] = {
+    "controlled": 1,
+    "before_after": 2,
+    "adoption": 3,
+    "signal_trend": 4,
+    "human_verdict": 5,
+}
+
+FACTORY_READOUT_VERDICT: dict[str, int] = {
+    "won": 1,
+    "flat": 2,
+    "lost": 3,
+    "inconclusive": 4,
+}
+
+FACTORY_READOUT_RECOMMENDATION: dict[str, int] = {
+    "keep": 1,
+    "iterate": 2,
+    "roll_back": 3,
+    "extend": 4,
+}
+
+FACTORY_READOUT_DECISION: dict[str, int] = {
+    "keep": 1,
+    "drop": 2,
+    "iterate": 3,
+    "extend": 4,
+}
+
 
 def _assert_item_type_codes_cover_data_classes() -> None:
     """
@@ -490,6 +530,11 @@ for _factory_table in (
     FACTORY_SAY_DO,
     FACTORY_INTENSITY,
     FACTORY_FORCE,
+    FACTORY_READOUT_STATUS,
+    FACTORY_READOUT_METHOD,
+    FACTORY_READOUT_VERDICT,
+    FACTORY_READOUT_RECOMMENDATION,
+    FACTORY_READOUT_DECISION,
 ):
     _CODE_TO_NAME[id(_factory_table)] = _invert(_factory_table)
 
@@ -990,3 +1035,53 @@ def encode_factory_force(name: str) -> int:
 def decode_factory_force(code: int) -> str:
     """Decode a stored ``factory_signals.force`` code to its name."""
     return _decode(FACTORY_FORCE, code, field="factory_signals.force")
+
+
+def encode_factory_readout_status(name: str) -> int:
+    """Encode a ``factory_readouts.status`` name to its stable code."""
+    return _encode(FACTORY_READOUT_STATUS, name, field="factory_readouts.status")
+
+
+def decode_factory_readout_status(code: int) -> str:
+    """Decode a stored ``factory_readouts.status`` code to its name."""
+    return _decode(FACTORY_READOUT_STATUS, code, field="factory_readouts.status")
+
+
+def encode_factory_readout_method(name: str) -> int:
+    """Encode a ``factory_readouts.method`` name to its stable code."""
+    return _encode(FACTORY_READOUT_METHOD, name, field="factory_readouts.method")
+
+
+def decode_factory_readout_method(code: int) -> str:
+    """Decode a stored ``factory_readouts.method`` code to its name."""
+    return _decode(FACTORY_READOUT_METHOD, code, field="factory_readouts.method")
+
+
+def encode_factory_readout_verdict(name: str) -> int:
+    """Encode a ``factory_readouts.verdict`` name to its stable code."""
+    return _encode(FACTORY_READOUT_VERDICT, name, field="factory_readouts.verdict")
+
+
+def decode_factory_readout_verdict(code: int) -> str:
+    """Decode a stored ``factory_readouts.verdict`` code to its name."""
+    return _decode(FACTORY_READOUT_VERDICT, code, field="factory_readouts.verdict")
+
+
+def encode_factory_readout_recommendation(name: str) -> int:
+    """Encode a ``factory_readouts.recommendation`` name to its stable code."""
+    return _encode(FACTORY_READOUT_RECOMMENDATION, name, field="factory_readouts.recommendation")
+
+
+def decode_factory_readout_recommendation(code: int) -> str:
+    """Decode a stored ``factory_readouts.recommendation`` code to its name."""
+    return _decode(FACTORY_READOUT_RECOMMENDATION, code, field="factory_readouts.recommendation")
+
+
+def encode_factory_readout_decision(name: str) -> int:
+    """Encode a ``factory_readouts.decision`` name to its stable code."""
+    return _encode(FACTORY_READOUT_DECISION, name, field="factory_readouts.decision")
+
+
+def decode_factory_readout_decision(code: int) -> str:
+    """Decode a stored ``factory_readouts.decision`` code to its name."""
+    return _decode(FACTORY_READOUT_DECISION, code, field="factory_readouts.decision")

@@ -15,6 +15,7 @@ decoded values, and ``to_dict()`` gives a JSON-ready copy.
 - :class:`FactoryScoreSnapshot`: the inputs and outputs of one score at a
   decision point, for later backtests.
 - :class:`FactorySourceState`: a source's cursor, health and today's usage.
+- :class:`FactoryReadout`: one bet's measured result on one readout day.
 """
 
 from __future__ import annotations
@@ -252,8 +253,89 @@ class FactorySourceState:
         return _plain(self)
 
 
+@dataclass(frozen=True)
+class FactoryReadout:
+    """
+    One bet's result on one readout day (``factory_readouts``), shown as ``C-31 · day 28``.
+
+    The server writes it from the plan frozen into the bet's charters; only
+    the server measures, and fixed rules set the verdict.
+
+    :param proposal: The bet's ``C-n`` number.
+    :param opportunity: The opportunity's ``O-n`` number, or ``None`` (an enabler).
+    :param day: Days after the release this readout measures.
+    :param status: ``scheduled`` / ``awaiting_answer`` (a person's "did this
+        help?") / ``written`` / ``decided`` / ``cancelled``.
+    :param method: ``signal_trend``, ``human_verdict`` (MVP), ``before_after``,
+        ``adoption``, ``controlled`` (later).
+    :param released_at: When the release was detected (readout days count from it).
+    :param due_at: When this readout is written.
+    :param verdict: ``won`` / ``flat`` / ``lost`` / ``inconclusive`` once written.
+    :param recommendation: ``keep`` / ``iterate`` / ``roll_back`` / ``extend``.
+    :param decision: A person's ``keep`` / ``drop`` / ``iterate`` / ``extend``.
+    :param signal: The ``test_result`` signal (``S-n``) written back to the opportunity.
+    :param decision_id: The "Needs you" decision that asks for the decision or answer.
+    :param plan: The frozen plan it measured (metric, expected, guardrails, kill,
+        measurement, plan version, when and by whom it was frozen).
+    :param result: What the server measured: ``baseline``, ``after``, ``effect``,
+        ``unit``, ``n``, ``min_n``, ``guardrails[]``, ``data_checks[]``,
+        ``predicted_vs_actual``, ``why``.
+    :param answer: A person's "did this help?" ``{answer, reason, by, at}``.
+    :param review: How it was decided ``{reason, reviewer, against_recommendation, via}``.
+    :param stamp: The bet as filed, for the prediction ledger: ``evidence_level``,
+        ``def_version`` (the rubric that ranked it), ``sources``, ``origin``, ``kind``.
+    """
+
+    id: str
+    factory_id: str
+    proposal: int
+    day: int
+    status: str = "scheduled"
+    opportunity: int | None = None
+    method: str = "signal_trend"
+    plan_version: int = 1
+    released_at: int = 0
+    due_at: int = 0
+    written_at: int | None = None
+    verdict: str | None = None
+    recommendation: str | None = None
+    decision: str | None = None
+    decided_by: str | None = None
+    decided_at: int | None = None
+    signal: int | None = None
+    decision_id: str | None = None
+    plan: dict[str, Any] = field(default_factory=dict)
+    result: dict[str, Any] = field(default_factory=dict)
+    answer: dict[str, Any] | None = None
+    review: dict[str, Any] | None = None
+    stamp: dict[str, Any] = field(default_factory=dict)
+    created_at: int = 0
+    updated_at: int = 0
+    workspace_id: int = 0
+
+    @property
+    def bet(self) -> str:
+        """:returns: e.g. ``"C-31"``."""
+        return f"C-{self.proposal}"
+
+    @property
+    def ref(self) -> str:
+        """:returns: e.g. ``"C-31 · day 28"``."""
+        return f"C-{self.proposal} · day {self.day}"
+
+    @property
+    def key(self) -> str:
+        """:returns: e.g. ``"C-31-d28"``: the readout's id in a URL."""
+        return f"C-{self.proposal}-d{self.day}"
+
+    def to_dict(self) -> dict[str, Any]:
+        """:returns: A JSON-ready copy of the row."""
+        return _plain(self)
+
+
 __all__ = [
     "FactoryOpportunity",
+    "FactoryReadout",
     "FactoryScoreSnapshot",
     "FactorySignal",
     "FactorySignalLink",

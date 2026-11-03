@@ -152,13 +152,24 @@ export async function testSource(factoryId: string, id: string): Promise<unknown
   return readJson(await send(`${base(factoryId)}/sources/${encodeURIComponent(id)}/test`, {}));
 }
 
-/** `POST …/readouts/{id}/decide` (plan A7): keep or drop; against the recommendation needs a reviewer and a reason. */
+/**
+ * `POST …/readouts/{id}/decide`: keep, drop, iterate or extend a written
+ * readout (against the recommendation needs an owner, a reviewer and a
+ * reason), or answer "did it help?" with a reason.
+ */
 export async function decideReadout(
   factoryId: string,
   id: string,
-  request: { decision: "keep" | "drop"; reason?: string; reviewer?: string },
+  request:
+    | { decision: "keep" | "drop" | "iterate" | "extend"; reason?: string; reviewer?: string }
+    | { answer: "helped" | "no_change" | "hurt"; reason: string },
 ): Promise<unknown> {
   return readJson(
     await send(`${base(factoryId)}/readouts/${encodeURIComponent(id)}/decide`, request),
   );
+}
+
+/** `POST …/readouts/{id}/reopen`: take a keep, drop or iterate back (10 minutes; owners later). */
+export async function reopenReadout(factoryId: string, id: string): Promise<unknown> {
+  return readJson(await send(`${base(factoryId)}/readouts/${encodeURIComponent(id)}/reopen`, {}));
 }

@@ -1872,7 +1872,7 @@ class SqlFactoryDecision(OmnigentBase):
 
     __table_args__ = (
         CheckConstraint(
-            "source IN (1, 2, 3, 4, 5, 6, 7, 8, 9)", name="ck_factory_decisions_source"
+            "source IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)", name="ck_factory_decisions_source"
         ),
         CheckConstraint("status IN (1, 2, 3, 4)", name="ck_factory_decisions_status"),
         CheckConstraint("blocking IN (0, 1)", name="ck_factory_decisions_blocking"),
@@ -2748,3 +2748,69 @@ class SqlFactorySourceState(OmnigentBase):
     signals_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     data: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SqlFactoryReadout(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_readouts``: one bet's result on one readout day.
+
+    One row per bet (``proposal``, the ``C-n`` number) per readout day. The
+    server writes it from the plan frozen into the bet's charters; only the
+    server measures, and fixed rules set the verdict.
+
+    :param status: Code of FACTORY_READOUT_STATUS.
+    :param method: Code of FACTORY_READOUT_METHOD.
+    :param verdict: Code of FACTORY_READOUT_VERDICT, once written.
+    :param recommendation: Code of FACTORY_READOUT_RECOMMENDATION, once written.
+    :param decision: Code of FACTORY_READOUT_DECISION, once a person decided.
+    :param signal: The ``test_result`` signal written back (``S-n``).
+    :param plan: JSON: the frozen plan it measured.
+    :param result: JSON: what the server measured (effect, n, guardrails, checks).
+    :param answer: JSON: a person's "did this help?" answer.
+    :param review: JSON: the decision's reason, reviewer and whether it went
+        against the recommendation.
+    :param stamp: JSON: the bet as filed (evidence level, rubric version, sources, origin).
+    """
+
+    __tablename__ = "factory_readouts"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    proposal: Mapped[int] = mapped_column(Integer, nullable=False)
+    day: Mapped[int] = mapped_column(Integer, nullable=False)
+    opportunity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    method: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    released_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    written_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verdict: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    recommendation: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    decision: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    signal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    plan: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    result: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    answer: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    review: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    stamp: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN (1, 2, 3, 4, 5)", name="ck_factory_readouts_status"),
+        CheckConstraint("method IN (1, 2, 3, 4, 5)", name="ck_factory_readouts_method"),
+        CheckConstraint("verdict IN (1, 2, 3, 4)", name="ck_factory_readouts_verdict"),
+        CheckConstraint(
+            "recommendation IN (1, 2, 3, 4)", name="ck_factory_readouts_recommendation"
+        ),
+        CheckConstraint("decision IN (1, 2, 3, 4)", name="ck_factory_readouts_decision"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "proposal", "day", name="uq_factory_readouts_day"
+        ),
+        Index("ix_factory_readouts_due", "workspace_id", "factory_id", "status", "due_at"),
+    )
