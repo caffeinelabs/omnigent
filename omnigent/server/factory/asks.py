@@ -1323,7 +1323,8 @@ def _fyi_project(row: Mapping[str, Any]) -> str | None:
 def fyi_why(row: Mapping[str, Any]) -> str:
     """
     Why a proposal applied at once, in words: ``"for alice: their answer to
-    D-42"``, ``"autonomy: standard"``, ``"asked for by alice"`` or ``"a minor change"``.
+    D-42"``, ``"autonomy: standard"``, ``"no objection in 15 min"`` (the grace
+    period), ``"asked for by alice"`` or ``"a minor change"``.
     """
     result = row.get("result") or {}
     authority = result.get("authority")
@@ -1332,6 +1333,10 @@ def fyi_why(row: Mapping[str, Any]) -> str:
         return f"for {_person(str(who))}: their answer to {authority['decision']}"
     if result.get("level"):
         return f"autonomy: {result['level']}"
+    if result.get("grace"):
+        from omnigent.server.factory.proposals import GRACE_TEXT
+
+        return GRACE_TEXT
     if row.get("on_behalf_of"):
         return f"asked for by {_person(str(row['on_behalf_of']))}"
     return "a minor change it may make on its own"

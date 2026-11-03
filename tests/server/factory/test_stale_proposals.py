@@ -46,6 +46,13 @@ def _close_project(cockpit: Cockpit, slug: str, status: str = "cancelled") -> No
     cockpit.store.update_project(row.id, status=status)
 
 
+def _finish_project(cockpit: Cockpit, slug: str, stage: str = "merged") -> None:
+    """Merged and done are stages: the server keeps such a project ``active``."""
+    row = cockpit.store.get_project(cockpit.fid, slug)
+    assert row is not None
+    cockpit.store.update_project(row.id, stage=stage)
+
+
 async def _asks(cockpit: Cockpit) -> dict[str, Any]:
     snapshot.reset_cache()
     resp = await cockpit.client.get(
@@ -55,13 +62,23 @@ async def _asks(cockpit: Cockpit) -> dict[str, Any]:
     return resp.json()
 
 
-@pytest.mark.parametrize("status", ["cancelled", "done", "merged"])
+@pytest.mark.parametrize(
+    ("word", "code", "reopenable"),
+    [
+        ("cancelled", "project_closed", False),
+        ("merged", "project_done", True),
+        ("done", "project_done", True),
+    ],
+)
 async def test_a_proposal_for_a_closed_project_closes_itself(
-    cockpit: Cockpit, status: str
+    cockpit: Cockpit, word: str, code: str, reopenable: bool
 ) -> None:
     ref = await _pending(cockpit, _goal())
     assert any(a["id"] == ref for a in (await _asks(cockpit))["asks"])
-    _close_project(cockpit, "api-version", status)
+    if word == "cancelled":
+        _close_project(cockpit, "api-version", word)
+    else:
+        _finish_project(cockpit, "api-version", word)
 
     closed = await proposals.close_stale(cockpit.app.state, cockpit.fid)
 
@@ -69,16 +86,40 @@ async def test_a_proposal_for_a_closed_project_closes_itself(
     row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
     assert row is not None and row.status == "withdrawn" and row.decided_by == "server"
     info = (row.result or {})["closed"]
-    assert (info["by"], info["code"], info["from"]) == ("server", "project_closed", "pending")
-    assert info["reason"] == f"project 'api-version' is {status}"
+    assert (info["by"], info["code"], info["from"]) == ("server", code, "pending")
+    assert info["reason"] == f"project 'api-version' is {word}"
+    assert info["reopenable"] is reopenable
     decision = cockpit.store.get_decision(row.decision_id)
     assert decision is not None and decision.status == "withdrawn"
     assert not any(a["id"] == ref for a in (await _asks(cockpit))["asks"])
     [event] = cockpit.events("proposal.withdrawn")
-    assert event.summary.startswith(f"{ref} closed itself: project 'api-version' is {status}")
+    assert event.summary.startswith(f"{ref} closed itself: project 'api-version' is {word}")
     assert event.data["by_kind"] == "server"
     [mail] = cockpit.mailer.texts_to(cockpit.world.id("lead_a"))[-1:]
     assert mail.startswith(f"[Factory proposal · {ref} closed: project 'api-version' is")
+
+
+async def test_a_project_finished_before_filing_does_not_close_it(cockpit: Cockpit) -> None:
+    # A follow-up for a project that had merged already is what the lead meant.
+    _finish_project(cockpit, "api-version", "merged")
+    ref = await _pending(cockpit, _goal())
+
+    assert await proposals.close_stale(cockpit.app.state, cockpit.fid) == []
+    row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
+    assert row is not None and row.based_on["api-version"]["stage"] == "merged"
+
+
+async def test_a_row_from_before_stages_were_recorded_is_left_alone(cockpit: Cockpit) -> None:
+    ref = await _pending(cockpit, _goal())
+    row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
+    assert row is not None
+    old = {
+        slug: {k: v for k, v in fp.items() if k != "stage"} for slug, fp in row.based_on.items()
+    }
+    cockpit.store.update_proposal(row.id, based_on=old)
+    _finish_project(cockpit, "api-version", "merged")
+
+    assert await proposals.close_stale(cockpit.app.state, cockpit.fid) == []
 
 
 async def test_a_changed_charter_or_a_taken_slug_closes_it(cockpit: Cockpit) -> None:
@@ -122,7 +163,7 @@ async def test_a_person_can_reopen_it(cockpit: Cockpit) -> None:
     ref = await _pending(cockpit, _goal())
     first = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
     assert first is not None
-    _close_project(cockpit, "api-version")
+    _finish_project(cockpit, "api-version", "merged")
     await proposals.close_stale(cockpit.app.state, cockpit.fid)
 
     resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/{ref}/reopen")
@@ -152,3 +193,31 @@ async def test_only_a_proposal_that_closed_itself_reopens(cockpit: Cockpit) -> N
 
     assert (resp.status_code, error_code(resp)) == (409, "not_closed"), resp.text
     assert nobody.status_code in (403, 404)
+
+
+async def test_a_reason_apply_would_refuse_again_does_not_reopen(cockpit: Cockpit) -> None:
+    ref = await _pending(cockpit, _goal())
+    _close_project(cockpit, "api-version")
+    await proposals.close_stale(cockpit.app.state, cockpit.fid)
+
+    resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/{ref}/reopen")
+
+    assert (resp.status_code, error_code(resp)) == (409, "not_reopenable"), resp.text
+    assert "propose the work again" in resp.json()["error"]["message"]
+    [event] = cockpit.events("proposal.withdrawn")
+    assert event.summary.endswith("propose again if still needed")
+
+
+async def test_a_reopened_grace_proposal_waits_for_a_person(cockpit: Cockpit) -> None:
+    ref = await _pending(cockpit, _goal())
+    row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
+    assert row is not None
+    # Filed under grace autonomy: its timer ran out while it was closed.
+    cockpit.store.update_proposal(row.id, result={"grace_until": 1})
+    _finish_project(cockpit, "api-version", "merged")
+    await proposals.close_stale(cockpit.app.state, cockpit.fid)
+
+    resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/{ref}/reopen")
+
+    assert resp.status_code == 200, resp.text
+    assert "grace_until" not in resp.json()["proposal"]["result"]

@@ -893,13 +893,39 @@ AUTO_MERGE_KEY: Final = "auto_merge_targets"
 server from before the targets drops only them (it still reads the product block)."""
 
 
+LEVEL_KEY: Final = "autonomy_level"
+"""Where a version stores a set ``autonomy.level``: its own top-level key, so a server
+from before the level drops only it on a rollback (it reads ``careful``, the safe
+direction) and still reads ``autonomy.projects`` as the owners set it."""
+
+
 def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with legacy blocks moved: an owner-set ``models.<kind>``
-        becomes ``role_defaults.<kind>.model`` unless that is already set, and
-        the stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery``.
+        becomes ``role_defaults.<kind>.model`` unless that is already set, the
+        stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery`` and
+        :data:`LEVEL_KEY` back into ``autonomy.level``.
     """
-    return _upgrade_models(_lower_targets(stored))
+    return _upgrade_models(_lower_level(_lower_targets(stored)))
+
+
+def _lower_level(stored: dict[str, Any]) -> dict[str, Any]:
+    if LEVEL_KEY not in stored:
+        return stored
+    out = {k: v for k, v in stored.items() if k != LEVEL_KEY}
+    found = out.get("autonomy")
+    out["autonomy"] = {**(found if isinstance(found, Mapping) else {}), "level": stored[LEVEL_KEY]}
+    return out
+
+
+def _lift_level(stored: dict[str, Any]) -> dict[str, Any]:
+    found = stored.get("autonomy")
+    if not isinstance(found, Mapping) or "level" not in found:
+        return stored
+    out = dict(stored)
+    out["autonomy"] = {k: v for k, v in found.items() if k != "level"}
+    out[LEVEL_KEY] = found["level"]
+    return out
 
 
 def _lower_targets(stored: dict[str, Any]) -> dict[str, Any]:
@@ -958,11 +984,12 @@ def downgrade(stored: Mapping[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with ``role_defaults`` written as the legacy ``models``
         block when all it sets is the model alias of ``ic``, ``reviewer`` or
-        ``planner``, and ``product.delivery.auto_merge`` under
-        :data:`AUTO_MERGE_KEY` (:func:`upgrade` reads both back), so a server
-        from before them still reads the version. Anything else stays as it is.
+        ``planner``, ``product.delivery.auto_merge`` under
+        :data:`AUTO_MERGE_KEY` and ``autonomy.level`` under :data:`LEVEL_KEY`
+        (:func:`upgrade` reads them back), so a server from before them still
+        reads the version. Anything else stays as it is.
     """
-    return _lift_targets(_downgrade_models(stored))
+    return _lift_level(_lift_targets(_downgrade_models(stored)))
 
 
 def _downgrade_models(stored: Mapping[str, Any]) -> dict[str, Any]:
@@ -1242,6 +1269,7 @@ __all__ = [
     "GOAL_ID_RE",
     "KEEP_DAYS",
     "LEGACY_MODELS",
+    "LEVEL_KEY",
     "LISTS",
     "MIXED_GUARDS",
     "NEEDS_DISCOVERY_GUARDS",

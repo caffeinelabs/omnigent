@@ -11,16 +11,26 @@ cover named in a warning):
 
 - the decision is an agent's question, answered by a person (not the eval
   harness, not the server) in the last :data:`ANSWER_WINDOW_S`;
-- the proposal comes from the agent the answer was given to: the asker, the
-  session it was delivered to, or the top-level lead above either;
-- only the ops the answer authorised: creates and updates of the decision's
-  project, of the asker's project, and of projects the chosen option or the
-  answer's text names; a split, merge or cancel never rides on an answer (no
-  Undo brings them back);
-- only within the class the person may approve: an owner-class op (money,
-  another repo or base) needs an owner's answer, any other an operator's;
-- one proposal per answer: once one carried it out (applied or undone), the
-  next waits.
+- the proposal comes from an agent the answer was given to: the asker, the
+  session it was delivered to, the top-level lead above either, or the
+  factory's own lead (it gets an info copy of every answer);
+- only the changes the answer authorised, field by field:
+
+  - the chosen option names a project (its label, description or
+    ``project:<slug>`` target): a create of it, or an update of any of its
+    fields but money and its owner;
+  - the decision's project, the asker's project, or one the answer's free text
+    names: only routine upkeep (:data:`ANSWER_SCOPE_FIELDS`: scope paths,
+    constraints, DoD, priority, dependencies …); a goal or outcome rewrite
+    waits;
+  - a name the person negated ("do not touch api") names nothing;
+  - never: a split, merge or cancel (no Undo brings them back), money, another
+    repo or base, a project's owner (:data:`OWN_APPROVAL_FIELDS`), or a bet;
+
+- the person may approve project changes (an operator or owner);
+- one proposal per answer: the first that claims it (pending, applied or
+  undone) carries it out, and any later one waits, also when two arrive at
+  once (:func:`claimed_by` runs after the claim is stored).
 
 The audit is the same a person's own click leaves: the proposal's
 ``on_behalf_of`` is the person, ``result.authority`` holds who answered, when,
@@ -37,7 +47,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import LABEL_PROJECT
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
+from omnigent.server.auth import LEVEL_EDIT
+from omnigent.server.factory import autonomy
 from omnigent.server.factory.actor import decision_ref, project_thread
 from omnigent.server.factory.control import clip, human_name, same_id
 from omnigent.stores.factory_store import now_s
@@ -57,6 +68,21 @@ NOT_A_PERSON: Final = frozenset({"server", "eval-auto", ""})
 _ROLE_SUFFIX_RE: Final = re.compile(r"\s+\((?:viewer|operator|owner|creator)\)$")
 CARRIED_OPS: Final = frozenset({"create", "update"})
 """Ops an answer can carry: the ones an Undo takes back."""
+ANSWER_SCOPE_FIELDS: Final = autonomy.ROUTINE_UPDATE_FIELDS | autonomy.DEPENDS_FIELDS
+"""Fields an answer carries for a project its chosen option does not name (the
+decision's or the asker's project, or one its free text names): routine upkeep."""
+OWN_APPROVAL_FIELDS: Final = frozenset({"budgets", "human_owner"})
+"""Fields no answer carries: money and who owns a project need their own approval."""
+CLAIM_STATUSES: Final = ("pending", "applied", "undone")
+"""A proposal in these that holds ``result.authority`` has carried out (or is carrying
+out) that answer; one that was refused, rejected or withdrawn gives it back."""
+_NEGATION_RE: Final = re.compile(
+    r"\b(?:not|never|no|nor|without|except|excluding|avoid|skip|[a-z]+n't|dont|cant|wont)\b"
+)
+"""A word that negates a slug named shortly after it ("do not touch api")."""
+_NEGATION_WORDS: Final = 4
+"""How many words before a slug a negation reaches (within its sentence)."""
+_CLAUSE_END_RE: Final = re.compile(r"[.;!?\n]")
 
 
 def is_decision_ref(value: str | None) -> bool:
@@ -74,14 +100,12 @@ class Authority:
     :param covered: Indexes of the changes the answer covers.
     :param extra: One line per change it does not cover, saying why.
     :param spent_by: The proposal that already carried the answer out.
-    :param owner: The person may approve owner-class ops.
     """
 
     ref: str
     decision: FactoryDecision | None = None
     user_id: str | None = None
     name: str = "human"
-    owner: bool = False
     option: str | None = None
     refused: str | None = None
     covered: list[int] = field(default_factory=list)
@@ -185,10 +209,19 @@ def _project_of(deps: FactoryDeps, session_id: str | None) -> str | None:
     return top.labels.get(LABEL_PROJECT) or None
 
 
-def _given_to(deps: FactoryDeps, decision: FactoryDecision, event: Any, caller_id: str) -> bool:
-    """Whether the answer went to *caller_id*: the asker, the recipient, or the lead above."""
+def _given_to(
+    deps: FactoryDeps, decision: FactoryDecision, event: Any, caller: AgentCaller
+) -> bool:
+    """
+    Whether the answer went to *caller*: the asker, the recipient, the lead
+    above either, or the factory's own lead (it gets an info copy of every
+    answer and plans every project of the factory).
+    """
     from omnigent.server.factory.membership import root_conversation
 
+    caller_id = caller.session.id
+    if same_id(caller_id, caller.factory_id) and same_id(decision.factory_id, caller.factory_id):
+        return True
     to_id = getattr(event, "to_id", None) if event is not None else None
     for sid in (decision.asked_by_session_id, to_id):
         if not sid:
@@ -203,49 +236,100 @@ def _given_to(deps: FactoryDeps, decision: FactoryDecision, event: Any, caller_i
     return False
 
 
+def _negated(blob: str, start: int) -> bool:
+    """Whether a negation word comes shortly before *start* in the same sentence."""
+    before = _CLAUSE_END_RE.split(blob[:start])[-1]
+    words = before.replace("\u2019", "'").split()[-_NEGATION_WORDS:]
+    return any(_NEGATION_RE.fullmatch(w.strip(",:()\"'")) for w in words)
+
+
 def named_slugs(texts: Iterable[str | None], known: Iterable[str]) -> set[str]:
     """
-    :param texts: The option's label, description and target, and the answer's text.
+    :param texts: The option's label, description and target, or the answer's text.
     :param known: Project slugs (existing ones and the proposal's new ones).
-    :returns: The slugs the texts name as whole words, e.g. ``{"api-version"}``.
+    :returns: The slugs the texts name as whole words, e.g. ``{"api-version"}``;
+        a slug every mention of which a person negated ("do not touch
+        api-version") is left out.
     """
     blob = "\n".join(t for t in texts if t).lower()
     if not blob:
         return set()
-    return {
-        slug
-        for slug in known
-        if re.search(rf"(?<![a-z0-9-]){re.escape(slug.lower())}(?![a-z0-9-])", blob)
-    }
+    out: set[str] = set()
+    for slug in known:
+        pattern = rf"(?<![a-z0-9-]){re.escape(slug.lower())}(?![a-z0-9-])"
+        if any(not _negated(blob, m.start()) for m in re.finditer(pattern, blob)):
+            out.add(slug)
+    return out
+
+
+def claimed_by(
+    deps: FactoryDeps, factory_id: str, ref: str, *, before: int | None = None
+) -> str | None:
+    """
+    :param ref: The answer, e.g. ``"D-42"``.
+    :param before: Only proposals filed before ``C-<before>`` (the one asking).
+    :returns: The proposal that carried out (or is carrying out) answer *ref*,
+        the earliest first, e.g. ``"C-16"``, else ``None``.
+    """
+    from omnigent.server.factory.actor import proposal_ref
+
+    found: list[int] = []
+    for row in deps.factory_store.list_proposals(
+        factory_id, status=list(CLAIM_STATUSES), kind="projects", limit=500
+    ):
+        if before is not None and row.number >= before:
+            continue
+        authority = (row.result or {}).get("authority")
+        if isinstance(authority, Mapping) and authority.get("decision") == ref:
+            found.append(row.number)
+    return proposal_ref(min(found)) if found else None
 
 
 def spent_by(deps: FactoryDeps, factory_id: str, ref: str) -> str | None:
-    """:returns: The proposal that already carried out answer *ref* (applied or undone)."""
-    from omnigent.server.factory.actor import proposal_ref
-
-    for row in deps.factory_store.list_proposals(
-        factory_id, status=["applied", "undone"], kind="projects", limit=200
-    ):
-        authority = (row.result or {}).get("authority")
-        if isinstance(authority, Mapping) and authority.get("decision") == ref:
-            return proposal_ref(row.number)
-    return None
+    """:returns: The proposal that already carried out answer *ref* (see :func:`claimed_by`)."""
+    return claimed_by(deps, factory_id, ref)
 
 
 # ── What the answer covers ─────────────────────────────────────
 
 
-def _cover(change: Change, scope: set[str], named: set[str], authority: Authority) -> str | None:
-    """:returns: Why *change* is not covered, or ``None`` when the answer covers it."""
+def _cover(
+    change: Change, scope: set[str], option_named: set[str], text_named: set[str]
+) -> str | None:
+    """
+    :param scope: The decision's and the asker's projects.
+    :param option_named: Projects the chosen option names.
+    :param text_named: Projects the answer's free text names.
+    :returns: Why *change* is not covered, or ``None`` when the answer covers it.
+    """
     what = change.summary()
     if change.op not in CARRIED_OPS:
-        return f"{what} (a split, merge or cancel waits for its own approval)"
-    slug = change.slug if change.op == "update" else change.creates[0].slug
-    allowed = scope | named if change.op == "update" else named
-    if slug not in allowed:
-        return f"{what} (the answer does not name {slug})"
-    if change.op_class == "owner" and not authority.owner:
-        return f"{what} (needs an owner; {authority.name} answered as an operator)"
+        return f"{what}: a split, merge or cancel needs its own approval"
+    if change.op == "create":
+        slug = change.creates[0].slug
+        if change.op_class == "owner":
+            return (
+                f"{what}: a project with a budget, or on another repo or base, "
+                "needs its own owner approval"
+            )
+        if slug in option_named:
+            return None
+        return f"{what}: a new project needs the chosen option to name {slug}"
+    slug = change.slug or ""
+    fields = set(change.patch.model_fields_set) if change.patch is not None else set()
+    if change.op_class == "owner" or "budgets" in fields:
+        return f"{what}: money needs its own owner approval"
+    if own := sorted(fields & OWN_APPROVAL_FIELDS):
+        return f"{what}: {', '.join(own)} needs its own approval"
+    if slug in option_named:
+        return None
+    if slug not in scope | text_named:
+        return f"{what}: the answer does not name {slug}"
+    if outside := sorted(fields - ANSWER_SCOPE_FIELDS):
+        return (
+            f"{what}: {', '.join(outside)} of {slug} needs its own approval "
+            f"(the chosen option does not name {slug})"
+        )
     return None
 
 
@@ -288,27 +372,28 @@ def authority_for(
         return authority
     authority.user_id = user_id
     authority.name = human_name(user_id)
-    authority.owner = level >= LEVEL_MANAGE
     option = _option(decision)
     authority.option = str(option.get("label") or option.get("id")) if option else None
-    if not _given_to(deps, decision, event, caller.session.id):
+    if not _given_to(deps, decision, event, caller):
         authority.refused = "the answer was given to another agent"
         return authority
     authority.spent_by = spent_by(deps, root.id, label)
     scope = {
         s for s in (decision.project_slug, _project_of(deps, decision.asked_by_session_id)) if s
     }
-    texts: list[str | None] = [decision.answer_text]
-    if option is not None:
-        texts += [str(option.get(k) or "") for k in ("label", "description", "target")]
-        target = str(option.get("target") or "")
-        if target.startswith("project:"):
-            scope.add(target.removeprefix("project:").strip())
     known = {p.slug for p in deps.factory_store.list_projects(root.id)}
     known |= {p.slug for c in plan.changes for p in c.creates}
-    named = named_slugs(texts, known)
+    option_named: set[str] = set()
+    if option is not None:
+        option_named = named_slugs(
+            [str(option.get(k) or "") for k in ("label", "description", "target")], known
+        )
+        target = str(option.get("target") or "")
+        if target.startswith("project:"):
+            option_named.add(target.removeprefix("project:").strip())
+    text_named = named_slugs([decision.answer_text], known)
     for change in plan.changes:
-        why = _cover(change, scope, named, authority)
+        why = _cover(change, scope, option_named, text_named)
         if why is None:
             authority.covered.append(change.index)
         else:
@@ -322,13 +407,17 @@ def covers_all(authority: Authority | None, changes: Sequence[Change]) -> bool:
 
 
 __all__ = [
+    "ANSWER_SCOPE_FIELDS",
     "ANSWER_WINDOW_S",
     "CARRIED_OPS",
+    "CLAIM_STATUSES",
     "DECISION_REF_RE",
     "NOT_A_PERSON",
+    "OWN_APPROVAL_FIELDS",
     "Authority",
     "answerer",
     "authority_for",
+    "claimed_by",
     "covers_all",
     "is_decision_ref",
     "named_slugs",

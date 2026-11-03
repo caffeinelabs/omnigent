@@ -165,7 +165,9 @@ def withdraw_text(decision: FactoryDecision, by: str, reason: str | None) -> str
 
 CARRY_OUT_HINT: Final = (
     'If acting on it changes a project, file it with sys_factory_project(reply_to="{ref}"): '
-    "the creates and updates this answer names apply at once on the person's behalf."
+    "routine upkeep of the project it concerns (scope paths, constraints, DoD, priority, "
+    "dependencies) and what the chosen option names apply at once on the person's behalf; "
+    "anything more waits for a person."
 )
 """The line a lead or project lead gets under a person's answer (see :mod:`.answer_authority`)."""
 

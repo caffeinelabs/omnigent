@@ -54,6 +54,8 @@ from omnigent.factory import (
     PROPOSAL_OPEN_STATUSES,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
+    STAGE_DONE,
+    STAGE_MERGED,
     THREAD_FACTORY,
     THREAD_MAX_LEN,
 )
@@ -98,6 +100,8 @@ MAX_CHANGES: Final = 12
 PROPOSAL_EXPIRY_S: Final = 72 * 3600
 UNDO_WINDOW_S: Final = 600
 GRACE_S: Final = 900
+GRACE_TEXT: Final = f"no objection in {GRACE_S // 60} min"
+"""Why a proposal the server applied after the grace period applied (Room line, FYI)."""
 REQUEST_WINDOW_S: Final = 24 * 3600
 ANALYSIS_MAX_BYTES: Final = 256 * 1024
 OPTION_APPLY: Final = "apply"
@@ -842,7 +846,11 @@ def validate(
     warnings += _scope_warnings(ctx, changes)
     warnings += _preview_warning(ctx, changes)
     based_on = {
-        slug: {"updated_at": ctx.rows[slug].updated_at, "hash": fingerprint(ctx.rows[slug])}
+        slug: {
+            "updated_at": ctx.rows[slug].updated_at,
+            "hash": fingerprint(ctx.rows[slug]),
+            "stage": ctx.rows[slug].stage,
+        }
         for slug in sorted(touched)
     }
     return Plan(changes, warnings, based_on)
@@ -1258,22 +1266,20 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
         if ask is None and answer_authority.is_decision_ref(body.reply_to)
         else None
     )
+    if authority is not None and (body.bet is not None or body.opportunity):
+        # A bet keeps its own rules (the peer lead's case against, its autonomy mode).
+        authority.extra.append("the bet or opportunity it plans needs its own approval")
     carried = answer_authority.covers_all(authority, plan.changes)
     asker = (
         ask.user_id if ask is not None else (authority.user_id if carried and authority else None)
     )
-    checked = await _check_bet(app_state, caller, root, body, plan, requested=asker is not None)
-    if carried and checked.owner and authority is not None and not authority.owner:
-        # The bet itself needs an owner (a hunch): an operator's answer does not carry it.
-        authority.extra.append(
-            f"the bet (needs an owner; {authority.name} answered as an operator)"
-        )
-        carried, asker = False, None
+    checked = await _check_bet(app_state, caller, root, body, plan, requested=ask is not None)
     thread = body.thread or (ask.thread if ask is not None else None)
     if thread is None and authority is not None:
         thread = authority.thread
-    # A bet a lead files on its own waits for the other lead's case against first.
-    own_bet = checked.bet is not None and asker is None
+    # A bet a lead files on its own waits for the other lead's case against first;
+    # only a person's request in the Room makes it theirs (an answer never carries one).
+    own_bet = checked.bet is not None and ask is None
     mode = await asyncio.to_thread(autonomy.factory_autonomy, deps, root)
     if own_bet:
         mode = await asyncio.to_thread(bets.autonomy_mode, deps, root.id) or mode
@@ -1289,10 +1295,10 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     ]
     if checked.owner:
         classes.append("owner")
-    verdict = autonomy.decide(classes, requested=asker is not None, mode=mode, level=level)
-    if carried:
-        # Never a second approval of what the person decided, whatever the mode.
-        verdict = autonomy.Verdict("auto", info_line=True)
+    # What it needs without the answer (also when another proposal already carried it out).
+    unanswered = autonomy.decide(classes, requested=ask is not None, mode=mode, level=level)
+    # Never a second approval of what the person decided, whatever the mode.
+    verdict = autonomy.Verdict("auto", info_line=True) if carried else unanswered
     peer = await asyncio.to_thread(_peer, deps, root.id, caller) if checked.bet else None
     waits = own_bet and peer is not None
     warnings = [*plan.warnings, *checked.warnings]
@@ -1307,6 +1313,9 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     if verdict.grace:
         # A bet's grace starts once it is co-signed and a person can see it.
         result = {"grace_on_cosign": True} if waits else {"grace_until": now + GRACE_S}
+    if audit is not None:
+        # The claim on the answer, stored with the row (see answer_authority.claimed_by).
+        result = {**(result or {}), "authority": audit}
     reply_chat = (body.reply_to or "").removeprefix(_CHAT_PREFIX)
     row, deduped = await asyncio.to_thread(
         lambda: store.create_proposal(
@@ -1335,6 +1344,31 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     )
     if deduped:
         return _reply(row, deduped=True, decision=await _decision_ref(deps, row))
+    if audit is not None and authority is not None:
+        # One proposal per answer, also when two arrive at once: the earliest claim wins.
+        earlier = await asyncio.to_thread(
+            functools.partial(
+                answer_authority.claimed_by, deps, root.id, authority.ref, before=row.number
+            )
+        )
+        if earlier is not None:
+            authority.spent_by = earlier
+            asker, audit, verdict = None, None, unanswered
+            warnings = [*warnings, *filter(None, [authority.warning()])]
+            approval = verdict.approval
+            result = {"grace_until": now + GRACE_S} if verdict.grace else None
+            row = (
+                await asyncio.to_thread(
+                    lambda: store.update_proposal(
+                        row.id,
+                        approval=approval,
+                        on_behalf_of=None,
+                        warnings=warnings,
+                        result=result,
+                    )
+                )
+                or row
+            )
     ref = proposal_ref(row.number)
     actor = Actor.agent(caller.session.id, role, title=caller.title, on_behalf_of=asker)
     await events.emit(
@@ -1401,11 +1435,18 @@ def level_class(
     fields (a dependency change only with a reason); a create is
     ``create_joined`` when it joins an initiative a person already started
     (*joined*). Owner and structural ops keep their class.
+
+    :param has_reason: The proposal says why (its ``rationale`` or ``reason``).
+        Each ``depends_on`` item carries its own reason (``depends_why``:
+        :func:`validate` refuses an agent's dependency without one), so only a
+        ``depends_mode`` change needs this.
     """
     if change.op_class in ("owner", "structural"):
         return change.op_class
     if change.op == "update" and change.patch is not None:
-        return autonomy.update_class(change.patch.model_fields_set, has_reason=has_reason)
+        sent = change.patch.model_fields_set
+        explained = has_reason or "depends_mode" not in sent
+        return autonomy.update_class(sent, has_reason=explained)
     if change.op == "create" and change.creates and change.creates[0].slug in (joined or {}):
         return "create_joined"
     return change.op_class
@@ -1931,6 +1972,7 @@ async def apply_now(
     edited: bool = False,
     authority: Mapping[str, Any] | None = None,
     by_level: str | None = None,
+    by_grace: bool = False,
 ) -> dict[str, Any]:
     """
     Apply a validated proposal: mark it applied (compare-and-set), then run the cores.
@@ -1942,6 +1984,7 @@ async def apply_now(
     :param authority: The answer it carries out (``result.authority``,
         :meth:`.answer_authority.Authority.audit`).
     :param by_level: The autonomy level that let it apply at once (``result.level``).
+    :param by_grace: Nobody objected within the grace period (``result.grace``).
     :returns: ``{created, updated, cancelled, split, merged, spawning, lead, held}``.
     :raises CockpitError: 409 ``proposal_not_pending`` when it was decided meanwhile.
     """
@@ -1991,6 +2034,8 @@ async def apply_now(
         result["authority"] = dict(authority)
     if by_level:
         result["level"] = by_level
+    if by_grace:
+        result["grace"] = True
     created: list[FactoryProject] = []
     started: set[str] = set()
     rows = await asyncio.to_thread(store.list_projects, root.id)
@@ -2073,6 +2118,8 @@ def applied_summary(ref: str, actor: Actor, result: Mapping[str, Any]) -> str:
         return f"{ref} applied at once for {name}: {answer}{undo}{tail}"
     if result.get("level"):
         return f"{ref} applied at once (autonomy: {result['level']}){undo}{tail}"
+    if result.get("grace"):
+        return f"{ref} applied: {GRACE_TEXT}{undo}{tail}"
     return f"{ref} applied by {projects.actor_name(actor)}{tail}"
 
 
@@ -2731,14 +2778,20 @@ STALE_CODES: Final = frozenset(
     {
         "unknown_project",
         "project_closed",
+        "project_done",
         "slug_exists",
         "unknown_dependency",
         "not_your_project",
         "stale_proposal",
     }
 )
-"""Refusals that stay true: a closed or gone project, a taken slug, a changed charter.
-A full factory (``over_caps``), a cycle or unmapped PRs can still clear: those wait."""
+"""Refusals that stay true: a closed, finished or gone project, a taken slug, a changed
+charter. A full factory (``over_caps``), a cycle or unmapped PRs can still clear: those wait."""
+REOPENABLE_CODES: Final = frozenset({"project_done", "unknown_dependency"})
+"""Reasons a person can still apply the proposal despite (a finished project takes a
+follow-up; a missing dependency can be created): only these offer Reopen. For the rest
+Apply would refuse it again, so the work is proposed again instead."""
+DONE_STAGES: Final = (STAGE_MERGED, STAGE_DONE)
 CLOSED_BY: Final = "server"
 
 
@@ -2762,6 +2815,8 @@ def stale_reason(
         if exc.code in STALE_CODES:
             found = (exc.code, exc.message)
     if found is None:
+        found = _finished_since(deps, root, row.based_on or {})
+    if found is None:
         try:
             check_based_on(deps, root, row.based_on or {})
         except CockpitError as exc:
@@ -2770,6 +2825,24 @@ def stale_reason(
     if found is not None and isinstance(reopened, Mapping) and reopened.get("code") == found[0]:
         return None
     return found
+
+
+def _finished_since(
+    deps: FactoryDeps, root: Conversation, based_on: Mapping[str, Any]
+) -> tuple[str, str] | None:
+    """
+    ``project_done`` when a project the proposal touches merged or finished after
+    it was filed (its stage then is in ``based_on``; rows from before that are skipped).
+    A project stays ``active`` once merged or done, so validation never refuses it.
+    """
+    for slug, ref in based_on.items():
+        then = ref.get("stage") if isinstance(ref, Mapping) else None
+        if not isinstance(then, str) or then in DONE_STAGES:
+            continue
+        row = deps.factory_store.get_project(root.id, slug)
+        if row is not None and row.stage in DONE_STAGES:
+            return "project_done", f"project {slug!r} is {row.stage}"
+    return None
 
 
 def closed_itself_text(ref: str, reason: str) -> str:
@@ -2814,7 +2887,14 @@ async def close_stale(app_state: Any, factory_id: str, *, now: int | None = None
         if found is None:
             continue
         code, reason = found
-        info = {"by": CLOSED_BY, "code": code, "reason": reason, "at": now, "from": row.status}
+        info = {
+            "by": CLOSED_BY,
+            "code": code,
+            "reason": reason,
+            "at": now,
+            "from": row.status,
+            "reopenable": code in REOPENABLE_CODES,
+        }
         try:
             row = (
                 await asyncio.to_thread(
@@ -2839,7 +2919,14 @@ async def close_stale(app_state: Any, factory_id: str, *, now: int | None = None
             "proposal.withdrawn",
             severity="info",
             subject=f"{_SUBJECT_PREFIX}{label}",
-            summary=f"{label} closed itself: {control.clip(reason, 200)} · a person can reopen it",
+            summary=(
+                f"{label} closed itself: {control.clip(reason, 200)} · "
+                + (
+                    "a person can reopen it"
+                    if info["reopenable"]
+                    else "propose again if still needed"
+                )
+            ),
             data={
                 "proposal_id": row.id,
                 "by": CLOSED_BY,
@@ -2857,11 +2944,13 @@ async def reopen(app_state: Any, factory_id: str, ref: str, *, user_id: str | No
     A person reopens a proposal that closed itself (``POST …/proposals/{ref}/reopen``).
 
     It returns to the status it had, a pending one with a new decision; it no
-    longer closes itself for the reason it closed with. Applying it still
-    re-validates, so a change that cannot apply is refused then with its reason.
+    longer closes itself for the reason it closed with, and it waits for a
+    person again (a grace timer does not restart). Applying it still
+    re-validates. Only a reason Apply gets past reopens (:data:`REOPENABLE_CODES`);
+    for the rest the work is proposed again.
 
     :raises CockpitError: 404 ``unknown_proposal``, 409 ``not_closed`` (only a
-        proposal the server closed reopens).
+        proposal the server closed reopens), 409 ``not_reopenable``.
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
@@ -2885,10 +2974,20 @@ async def reopen(app_state: Any, factory_id: str, ref: str, *, user_id: str | No
             f"{label} did not close itself; it is {row.status}",
             status=row.status,
         )
+    if closed.get("code") not in REOPENABLE_CODES:
+        raise CockpitError(
+            409,
+            "not_reopenable",
+            f"{label} closed because {closed.get('reason')}; Apply would refuse it again, "
+            "so propose the work again",
+            closed_code=closed.get("code"),
+        )
     back = closed.get("from") if closed.get("from") in PROPOSAL_OPEN_STATUSES else "pending"
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     now = now_s()
-    result = {k: v for k, v in (row.result or {}).items() if k != "closed"}
+    # A person reopened it: it waits for them, no grace timer applies it on its own.
+    dropped = {"closed", "grace_until", "grace_on_cosign"}
+    result = {k: v for k, v in (row.result or {}).items() if k not in dropped}
     result["reopened"] = {
         "by": actor.id,
         "at": now,
@@ -3043,23 +3142,26 @@ async def apply_graceful(app_state: Any, factory_id: str, *, now: int | None = N
             continue
         actor = Actor.server()
         try:
-            result = await apply_now(app_state, root, row, plan, actor=actor, user_id=None)
+            result = await apply_now(
+                app_state, root, row, plan, actor=actor, user_id=None, by_grace=True
+            )
         except Exception:  # noqa: BLE001 - refused and logged by apply_now; go on
             _logger.warning("factory: %s failed to apply after grace", label, exc_info=True)
             continue
-        _tell_proposer(
-            app_state, row, applied_text(label, "server (no objection in 15 min)", result), None
-        )
+        _tell_proposer(app_state, row, applied_text(label, f"server ({GRACE_TEXT})", result), None)
         applied.append(label)
     return applied
 
 
 __all__ = [
     "CLOSED_BY",
+    "DONE_STAGES",
     "GRACE_S",
+    "GRACE_TEXT",
     "KIND_PROJECTS",
     "MAX_CHANGES",
     "PROPOSAL_EXPIRY_S",
+    "REOPENABLE_CODES",
     "STALE_CODES",
     "UNDO_WINDOW_S",
     "Change",

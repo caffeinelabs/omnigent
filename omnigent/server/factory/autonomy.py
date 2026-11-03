@@ -34,8 +34,8 @@ started). Structural ops, money and other repos keep their rules at every
 level.
 
 A proposal that carries out a person's answer to a decision (its
-``reply_to`` names ``D-<n>``) never waits for a second approval: see
-:mod:`.answer_authority`. Over-cap plans never get here: validation refuses
+``reply_to`` names ``D-<n>``) never waits for a second approval of what the
+answer covers: see :mod:`.answer_authority`. Over-cap plans never get here: validation refuses
 them. Money is the owners': an op that sets, raises or removes a USD budget
 (:func:`raises_budgets`) is of class ``owner``.
 """
@@ -147,8 +147,8 @@ class LevelText:
 
 _ALWAYS_AT_ONCE: Final = (
     "A change a person asked for in the Room in the last 24 hours (a create or an update).",
-    "A change that carries out a person's answer to a decision: only the projects and "
-    "changes that answer names, by the agent it was given to.",
+    "A change that carries out a person's answer to a decision, by the agent it was "
+    "given to: routine upkeep of the project it concerns, or what the chosen option names.",
     "A lead's priority, demo or preview tweak (an FYI in Needs you).",
 )
 _ALWAYS_WAITS: Final = (

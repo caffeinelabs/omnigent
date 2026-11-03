@@ -320,7 +320,12 @@ describe("ProposalCard autonomy", () => {
       ...proposalInState("withdrawn", NOW),
       decided_by: "server",
       result: {
-        closed: { by: "server", code: "project_closed", reason: "project 'billing' is done" },
+        closed: {
+          by: "server",
+          code: "project_done",
+          reason: "project 'billing' is merged",
+          reopenable: true,
+        },
       },
     };
     reply = (call) =>
@@ -329,11 +334,37 @@ describe("ProposalCard autonomy", () => {
         : json({}, 404);
     renderCard(closed);
     expect(screen.getByTestId("proposal-outcome-C-4")).toHaveTextContent(
-      "Closed itself: project 'billing' is done",
+      "Closed itself: project 'billing' is merged",
     );
     fireEvent.click(screen.getByTestId("proposal-reopen-C-4"));
     await waitFor(() => expect(card()).toHaveAttribute("data-state", "pending"));
     expect(calls.find((c) => c.path === `${BASE}/reopen`)?.method).toBe("POST");
+  });
+
+  it("a proposal that closed for good offers no Reopen, only proposing again", () => {
+    renderCard({
+      ...proposalInState("withdrawn", NOW),
+      decided_by: "server",
+      result: {
+        closed: {
+          by: "server",
+          code: "stale_proposal",
+          reason: "project 'billing' changed since this proposal was made; propose again",
+          reopenable: false,
+        },
+      },
+    });
+    expect(screen.getByTestId("proposal-outcome-C-4")).toHaveTextContent(
+      "propose it again if still needed",
+    );
+    expect(screen.queryByTestId("proposal-reopen-C-4")).toBeNull();
+  });
+
+  it("says when nobody objected within the grace period", () => {
+    renderCard({ ...proposalInState("auto_applied", NOW), result: { grace: true } });
+    expect(screen.getByTestId("proposal-outcome-C-4")).toHaveTextContent(
+      "Applied: no objection in 15 min",
+    );
   });
 
   it("an agent's own withdrawal offers no Reopen", () => {

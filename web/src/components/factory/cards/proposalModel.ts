@@ -436,12 +436,21 @@ function staleDefinitionText(proposal: ProposalView): string {
   return `${paths.length ? paths.join(", ") : "what it changes"} changed${against} since it was proposed; ask for a fresh proposal`;
 }
 
-/** What happened, in words, for a closed card's footer. */
 /** Why a proposal that closed itself closed (`result.closed`), or null for any other. */
 export function closedItself(proposal: ProposalView): string | null {
   const closed = (proposal.result ?? {}).closed as Record<string, unknown> | undefined;
   if (proposal.status !== "withdrawn" || !closed || closed.by !== "server") return null;
   return str(closed.reason) ?? "it no longer applies";
+}
+
+/**
+ * Whether a person can reopen a proposal that closed itself: only when Apply
+ * could still get past its reason (a finished project, a missing dependency).
+ * For the rest the work is proposed again.
+ */
+export function canReopen(proposal: ProposalView): boolean {
+  const closed = (proposal.result ?? {}).closed as Record<string, unknown> | undefined;
+  return closedItself(proposal) != null && closed?.reopenable === true;
 }
 
 /** Why an auto-applied proposal applied at once, in words (null: plain autonomy). */
@@ -456,6 +465,7 @@ export function appliedWhy(proposal: ProposalView): string | null {
   return null;
 }
 
+/** What happened, in words, for a closed card's footer. */
 export function outcomeLine(proposal: ProposalView, state: ProposalCardState): string | null {
   const by = proposal.decided_by ? ` by ${proposal.decided_by.split("@")[0]}` : "";
   const result = proposal.result ?? {};
@@ -466,6 +476,9 @@ export function outcomeLine(proposal: ProposalView, state: ProposalCardState): s
       const tail = spawning.length ? ` · spawning ${spawning.join(", ")}` : "";
       const why = appliedWhy(proposal);
       if (state === "auto_applied" && why) return `Applied at once, ${why}${tail}`;
+      if (state === "auto_applied" && result.grace === true) {
+        return `Applied: no objection in 15 min${tail}`;
+      }
       return state === "auto_applied"
         ? `Applied on its own (autonomy)${tail}`
         : `Applied${by}${tail}`;
@@ -485,8 +498,10 @@ export function outcomeLine(proposal: ProposalView, state: ProposalCardState): s
       return "Expired after 72 h without a decision";
     case "withdrawn":
       return "Withdrawn by its proposer";
-    case "closed":
-      return `Closed itself: ${closedItself(proposal) ?? "it no longer applies"}`;
+    case "closed": {
+      const reason = `Closed itself: ${closedItself(proposal) ?? "it no longer applies"}`;
+      return canReopen(proposal) ? reason : `${reason} · propose it again if still needed`;
+    }
     case "undone":
       return `Undone${proposal.reverted_by ? ` by ${proposal.reverted_by.split("@")[0]}` : ""}`;
     case "stale":

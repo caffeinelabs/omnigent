@@ -282,25 +282,42 @@ export const ProposalByLevel = proposalStory({
   result: { spawning: [], level: "standard" },
 });
 
-/** It closed itself: its project closed since, so nobody is asked; a person can reopen it. */
+const CLOSED_DONE = {
+  by: "server",
+  code: "project_done",
+  reason: "project 'billing-api' is merged",
+  reopenable: true,
+};
+
+/** It closed itself: its project merged since, so nobody is asked; a person can reopen it. */
 export const ProposalClosedItself = proposalStory({
   ...proposalInState("withdrawn"),
   decided_by: "server",
-  result: {
-    closed: { by: "server", code: "project_closed", reason: "project 'billing-api' is done" },
-  },
+  result: { closed: CLOSED_DONE },
 });
 
 export const ProposalClosedItselfDark = proposalStory(
   {
     ...proposalInState("withdrawn"),
     decided_by: "server",
-    result: {
-      closed: { by: "server", code: "project_closed", reason: "project 'billing-api' is done" },
-    },
+    result: { closed: CLOSED_DONE },
   },
   { theme: "dark" },
 );
+
+/** It closed itself for good (its project was cancelled): no Reopen, propose it again. */
+export const ProposalClosedForGood = proposalStory({
+  ...proposalInState("withdrawn"),
+  decided_by: "server",
+  result: {
+    closed: {
+      by: "server",
+      code: "project_closed",
+      reason: "project 'billing-api' is cancelled",
+      reopenable: false,
+    },
+  },
+});
 
 export const ProposalRefused = proposalStory(proposalInState("refused"));
 

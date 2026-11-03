@@ -120,8 +120,8 @@ const WAITS_ALWAYS = [
 ];
 const AT_ONCE_ALWAYS = [
   "A change a person asked for in the Room in the last 24 hours (a create or an update).",
-  "A change that carries out a person's answer to a decision: only the projects and " +
-    "changes that answer names, by the agent it was given to.",
+  "A change that carries out a person's answer to a decision, by the agent it was " +
+    "given to: routine upkeep of the project it concerns, or what the chosen option names.",
   "A lead's priority, demo or preview tweak (an FYI in Needs you).",
 ];
 const ROUTINE =

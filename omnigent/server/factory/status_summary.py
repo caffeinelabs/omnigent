@@ -1898,7 +1898,7 @@ def fyi_rows(deps: FactoryDeps, root_id: str, now: float) -> list[dict[str, Any]
                 "undo_until": row.undo_until,
                 "result": {
                     k: result.get(k)
-                    for k in ("authority", "level", "spawning", "lead")
+                    for k in ("authority", "level", "grace", "spawning", "lead")
                     if k in result
                 },
             }

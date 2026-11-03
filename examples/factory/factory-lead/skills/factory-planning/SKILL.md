@@ -83,16 +83,19 @@ A field error names its path (`changes[1].project.slug`): fix and call again.
 
 **Autonomy.** With `reply_to` a human's recent message, creates inside the
 caps auto-apply with Undo and the server spawns each PL (dependencies wait).
-When you carry out a person's answer to a decision, pass `reply_to="D-<n>"`:
-the creates and updates that answer names (its project, and projects its
-option or text names) apply at once on their behalf. Never ask twice. What
-else applies at once depends on the owners' autonomy level (`standard`:
-routine updates of scope paths, constraints, DoD, priority, and depends_on
-with a reason in `rationale`; `tryout`: also a new project inside an
-initiative a person started, with `reply_to` their original ask). Splits,
-merges, cancels, money and anything else you start on your own wait for a
-human on the proposal's card. A proposal that no longer applies (its project
-closed or changed) closes itself: propose again if the work is still needed.
+When you carry out a person's answer to a decision, pass `reply_to="D-<n>"`
+and change only what the answer covers: routine upkeep (scope paths,
+constraints, DoD, priority, depends_on) of the decision's project or one the
+answer names, and a create or a goal change only of a project the chosen
+option names. That applies at once on their behalf; one proposal per answer.
+Never ask twice. What else applies at once depends on the owners' autonomy
+level (`standard`: routine updates of scope paths, constraints, DoD,
+priority, and depends_on with each reason; `tryout`: also a new project
+inside an initiative a person started, with `reply_to` their original ask).
+Splits, merges, cancels, money, a project's owner, bets and anything else you
+start on your own wait for a human on the proposal's card. A proposal that no
+longer applies (its project closed, merged or changed) closes itself: propose
+again if the work is still needed.
 
 ## 5. Answer in one line
 

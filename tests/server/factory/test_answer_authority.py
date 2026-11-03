@@ -4,11 +4,12 @@ The live regression: a project lead asked D-1 ("a follow-up PR?"), a person
 answered "Add a follow-up PR", and the lead's proposal carrying that update
 waited hours for a second approval. Now it applies at once on the person's
 behalf, with Undo, a Room line and an FYI in Needs you; a proposal that adds
-more than the answer said waits and names what it adds.
+more than the answer said waits and names what it adds, field by field.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -21,7 +22,7 @@ from omnigent.server.factory.charter import normalize_charter
 from omnigent.stores.factory_store import now_s
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.projects_helpers import header_cockpit, project, propose
+from tests.server.factory.projects_helpers import REPO, header_cockpit, project, propose
 
 FOLLOW_UP = [
     {"id": "follow_up", "label": "Add a follow-up PR", "recommended": True},
@@ -151,8 +152,8 @@ async def test_extra_ops_wait_and_are_named(cockpit: Cockpit) -> None:
     assert body["decision"] is not None
     [warning] = [w for w in body["warnings"] if w.startswith("answer_scope:")]
     assert warning == (
-        f"answer_scope: {decision.ref} does not cover: create ledger-export "
-        "(the answer does not name ledger-export)"
+        f"answer_scope: {decision.ref} does not cover: create ledger-export: "
+        "a new project needs the chosen option to name ledger-export"
     )
     row = cockpit.store.get_proposal_by_number(cockpit.fid, 1)
     assert row is not None and row.on_behalf_of is None
@@ -206,24 +207,106 @@ async def test_the_lead_above_the_asker_may_carry_it_out(cockpit: Cockpit) -> No
     assert resp.json()["status"] == "applied", resp.text
 
 
-async def test_money_needs_an_owners_answer(cockpit: Cockpit) -> None:
+@pytest.mark.parametrize("user", ["carol", "alice"])
+async def test_money_never_rides_on_an_answer(cockpit: Cockpit, user: str) -> None:
+    # Neither an operator's answer nor an owner's: a raise needs its own owner approval.
     decision = _ask(cockpit)
-    await _answer(cockpit, decision, option_id="follow_up", user="carol")
-    raise_ = {"op": "update", "slug": "api-version", "patch": {"budgets": {"project_usd": 300}}}
-
-    by_operator = await propose(cockpit, raise_, key="pl", reply_to=decision.ref)
-
-    body = by_operator.json()
-    assert (body["status"], body["approval"]) == ("pending", "owner"), by_operator.text
-    assert any("needs an owner; carol answered as an operator" in w for w in body["warnings"])
-
-
-async def test_an_owners_answer_carries_an_owner_change(cockpit: Cockpit) -> None:
-    decision = _ask(cockpit)
-    await _answer(cockpit, decision, option_id="follow_up")
+    await _answer(cockpit, decision, option_id="follow_up", user=user)
     raise_ = {"op": "update", "slug": "api-version", "patch": {"budgets": {"project_usd": 300}}}
 
     resp = await propose(cockpit, raise_, key="pl", reply_to=decision.ref)
+
+    body = resp.json()
+    assert (body["status"], body["approval"]) == ("pending", "owner"), resp.text
+    assert (
+        f"answer_scope: {decision.ref} does not cover: update api-version (budgets): "
+        "money needs its own owner approval"
+    ) in body["warnings"]
+    row = cockpit.store.get_proposal_by_number(cockpit.fid, 1)
+    assert row is not None and row.on_behalf_of is None and "authority" not in (row.result or {})
+
+
+async def test_an_unrelated_answer_carries_no_rewrite(cockpit: Cockpit) -> None:
+    # The review probe: "Which test runner?" answered "pytest" never carries a new
+    # goal, outcome and a $5000 budget for the asker's own project.
+    runner = [{"id": "pytest", "label": "pytest"}, {"id": "unittest", "label": "unittest"}]
+    decision = _ask(cockpit, options=runner)
+    await _answer(cockpit, decision, option_id="pytest")
+    rewrite = {
+        "op": "update",
+        "slug": "api-version",
+        "patch": {
+            "goal": "Rewrite everything (sample).",
+            "outcome": "Users see a new thing (sample).",
+            "budgets": {"project_usd": 5000},
+        },
+    }
+
+    resp = await propose(cockpit, rewrite, key="pl", reply_to=decision.ref)
+
+    body = resp.json()
+    assert (body["status"], body["approval"]) == ("pending", "owner"), resp.text
+    assert any("money needs its own owner approval" in w for w in body["warnings"])
+    project_row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert project_row is not None
+    assert normalize_charter(project_row.charter)["goal"] == "Add GET /version."
+
+
+async def test_a_goal_rewrite_waits_unless_the_option_names_the_project(
+    cockpit: Cockpit,
+) -> None:
+    runner = [{"id": "pytest", "label": "pytest"}, {"id": "unittest", "label": "unittest"}]
+    unrelated = _ask(cockpit, options=runner, key="runner")
+    await _answer(cockpit, unrelated, option_id="pytest")
+    goal = {
+        "op": "update",
+        "slug": "api-version",
+        "patch": {"goal": "Answer GET /version with the sha.", "dod": DOD},
+    }
+
+    waits = await propose(cockpit, goal, key="pl", reply_to=unrelated.ref)
+
+    assert waits.json()["status"] == "pending", waits.text
+    assert (
+        f"answer_scope: {unrelated.ref} does not cover: update api-version (dod, goal): "
+        "goal of api-version needs its own approval (the chosen option does not name "
+        "api-version)"
+    ) in waits.json()["warnings"]
+    rewrite = [{"id": "yes", "label": "Rewrite api-version's goal to the sha"}]
+    named = _ask(cockpit, options=rewrite, key="rewrite")
+    await _answer(cockpit, named, option_id="yes")
+
+    applies = await propose(
+        cockpit,
+        {"op": "update", "slug": "api-version", "patch": {"goal": "Answer with the sha."}},
+        key="pl",
+        reply_to=named.ref,
+    )
+
+    assert applies.json()["status"] == "applied", applies.text
+
+
+async def test_a_project_the_person_ruled_out_is_not_named(cockpit: Cockpit) -> None:
+    cockpit.store.upsert_project(cockpit.fid, "db-version", title="db", repo=REPO)
+    decision = _ask(cockpit, asker="lead_a")
+    await _answer(cockpit, decision, text="Use pytest. Do NOT touch db-version.")
+
+    resp = await propose(
+        cockpit,
+        {"op": "update", "slug": "db-version", "patch": {"dod": ["x (sample)"]}},
+        reply_to=decision.ref,
+    )
+
+    body = resp.json()
+    assert body["status"] == "pending", resp.text
+    assert any("the answer does not name db-version" in w for w in body["warnings"])
+
+
+async def test_the_factory_lead_may_carry_out_a_pls_answer(cockpit: Cockpit) -> None:
+    decision = _ask(cockpit, asker="pl")
+    await _answer(cockpit, decision, option_id="follow_up")
+
+    resp = await propose(cockpit, _dod_update(), key="lead_a", reply_to=decision.ref)
 
     assert resp.json()["status"] == "applied", resp.text
 
@@ -243,9 +326,7 @@ async def test_splits_merges_and_cancels_never_ride_on_an_answer(cockpit: Cockpi
 
     body = resp.json()
     assert body["status"] == "pending", resp.text
-    assert any(
-        "a split, merge or cancel waits for its own approval" in w for w in body["warnings"]
-    )
+    assert any("a split, merge or cancel needs its own approval" in w for w in body["warnings"])
 
 
 async def test_one_proposal_per_answer(cockpit: Cockpit) -> None:
@@ -266,6 +347,32 @@ async def test_one_proposal_per_answer(cockpit: Cockpit) -> None:
         f"answer_scope: {decision.ref} was already carried out by C-1; this one waits"
         in again.json()["warnings"]
     )
+
+
+async def test_two_proposals_at_once_carry_an_answer_out_once(cockpit: Cockpit) -> None:
+    # An agent's parallel tool calls (or a retry after a timeout) race on one answer.
+    decision = _ask(cockpit)
+    await _answer(cockpit, decision, option_id="follow_up")
+
+    first, second = await asyncio.gather(
+        propose(cockpit, _dod_update(), key="pl", reply_to=decision.ref),
+        propose(
+            cockpit,
+            {"op": "update", "slug": "api-version", "patch": {"constraints": "no new deps"}},
+            key="pl",
+            reply_to=decision.ref,
+        ),
+    )
+
+    bodies = sorted([first.json(), second.json()], key=lambda b: b["proposal"])
+    assert [b["status"] for b in bodies] == ["applied", "pending"], bodies
+    assert (
+        f"answer_scope: {decision.ref} was already carried out by C-1; this one waits"
+        in bodies[1]["warnings"]
+    )
+    row = cockpit.store.get_proposal_by_number(cockpit.fid, 2)
+    assert row is not None and row.on_behalf_of is None and row.decision_id is not None
+    assert "authority" not in (row.result or {})
 
 
 async def test_an_open_or_old_answer_approves_nothing(
@@ -311,6 +418,23 @@ def test_named_slugs_are_whole_words() -> None:
     assert answer_authority.named_slugs(["Tighten api-version"], known) == {"api-version"}
     assert answer_authority.named_slugs(["the webhooks"], known) == set()
     assert answer_authority.named_slugs([None, "p:web and #api"], known) == {"web", "api"}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Use pytest. Do NOT touch api-version.", set()),
+        ("Never change api-version", set()),
+        ("everything except api-version", set()),
+        ("don't touch api-version; tighten web", {"web"}),
+        ("Not api. Then tighten api-version.", {"api-version"}),
+        ("No. Tighten api-version.", {"api-version"}),
+    ],
+)
+def test_a_negated_name_names_nothing(text: str, expected: set[str]) -> None:
+    known = {"api", "api-version", "web"}
+
+    assert answer_authority.named_slugs([text], known) == expected
 
 
 # ── The hint the asker gets ────────────────────────────────────

@@ -731,7 +731,7 @@ def set_path(doc: dict[str, Any], path: str, value: Any) -> None:
 
 SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq", team_spec.TEAM)
 """Keys a version stores only once they differ from their defaults (see :func:`stored_form`)."""
-SPARSE_FIELDS: Final = ("product.delivery.auto_merge",)
+SPARSE_FIELDS: Final = ("product.delivery.auto_merge", "autonomy.level")
 """Fields inside a stored block left out while they hold their defaults, so a server
 from before them still reads the block (see :func:`stored_form`)."""
 

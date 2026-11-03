@@ -2,7 +2,7 @@
 
 Each level gates exactly its ops: ``standard`` applies a lead's routine
 project updates at once (scope paths, constraints, DoD, priority, and
-depends_on with a reason), ``tryout`` also a new project inside an initiative a
+depends_on with each reason), ``tryout`` also a new project inside an initiative a
 person started; both with an FYI in Needs you and Undo. Cancels, money and
 anything else keep their rules, and no agent can change the level.
 """
@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 import pytest_asyncio
+from pydantic import BaseModel, ConfigDict
 
 from omnigent.server.factory import autonomy, definition, product_profile, proposals, snapshot
+from omnigent.server.factory import definition_blocks as blocks
 from omnigent.server.factory.autonomy import Verdict, decide, update_class, verdict
 from tests.server.factory import definition_helpers as defs
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
@@ -181,13 +183,21 @@ async def test_standard_dependencies_need_a_reason(cockpit: Cockpit) -> None:
     await _set_level(cockpit, "standard")
     cockpit.store.upsert_project(cockpit.fid, "db-version", title="db", repo=REPO)
 
+    # Each dependency carries its own reason (an agent's without one is refused) …
     bare = await propose(cockpit, _update(depends_on=["db-version"]), rationale="")
     why = await propose(
-        cockpit, _update(depends_on=["db-version"]), rationale="it reads the new table"
+        cockpit, _update(depends_on=["db-version: it reads the new table"]), rationale=""
+    )
+    # … and a gating change says why in the proposal.
+    mode = await propose(cockpit, _update(depends_mode="ready"), rationale="")
+    mode_why = await propose(
+        cockpit, _update(depends_mode="ready"), rationale="the API is stable on its branch"
     )
 
-    assert bare.json()["status"] == "pending", bare.text
+    assert (bare.status_code, error_code(bare)) == (400, "dependency_reason_required")
     assert why.json()["status"] == "applied", why.text
+    assert mode.json()["status"] == "pending", mode.text
+    assert mode_why.json()["status"] == "applied", mode_why.text
 
 
 @pytest.mark.parametrize(
@@ -336,6 +346,53 @@ async def test_steer_reads_every_level_in_plain_words(cockpit: Cockpit) -> None:
     assert any("Cancelling" in line for line in standard["waits"])
     assert body["effective"]["autonomy"]["level"] == "careful"
     assert "autonomy.level" in body["paths"]
+
+
+# ── Stored so that a rollback stays safe ──────────────────────
+
+
+class _OldAutonomyDef(BaseModel):
+    """``autonomy`` as a server from before the level reads it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    projects: Literal["confirm", "requested", "grace"] = "requested"
+
+
+def test_a_careful_level_is_never_stored() -> None:
+    stored = definition.stored_form(definition.default_doc())
+
+    assert "level" not in stored["autonomy"]
+    assert blocks.LEVEL_KEY not in stored
+    assert definition.full_doc(stored)["autonomy"]["level"] == "careful"
+
+
+def test_a_set_level_lives_under_its_own_key() -> None:
+    doc = definition.default_doc()
+    doc["autonomy"] = {"projects": "confirm", "level": "standard"}
+
+    stored = definition.stored_form(doc)
+
+    # An older server drops only the level (it reads careful) and keeps the owners' confirm.
+    assert stored[blocks.LEVEL_KEY] == "standard"
+    assert _OldAutonomyDef.model_validate(stored["autonomy"]).projects == "confirm"
+    assert definition.full_doc(stored)["autonomy"] == {"projects": "confirm", "level": "standard"}
+    assert definition.effective(stored)["autonomy"]["level"] == "standard"
+    assert product_profile._block_set({blocks.LEVEL_KEY: "standard"}, product_profile.AUTONOMY)
+    assert {d["path"] for d in definition.diff({}, {blocks.LEVEL_KEY: "standard"})} == {
+        "autonomy.level"
+    }
+
+
+async def test_an_owner_set_level_is_stored_rollback_safe(cockpit: Cockpit) -> None:
+    await _set_level(cockpit, "standard")
+
+    resolved = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True)
+
+    assert resolved is not None
+    assert resolved.stored[blocks.LEVEL_KEY] == "standard"
+    assert "level" not in resolved.stored["autonomy"]
+    assert resolved.doc["autonomy"]["level"] == "standard"
 
 
 # ── The deployment's seed ──────────────────────────────────────

@@ -5,8 +5,8 @@
  * countdown while its window lasts, and says why it applied at once (a
  * person's answer it carried out, or the autonomy level). A double click or a
  * second person gets "already applied by …"; a project changed since makes it
- * stale. One that closed itself because it no longer applied says why and
- * offers Reopen.
+ * stale. One that closed itself because it no longer applied says why, and
+ * offers Reopen when Apply could still get past that reason.
  */
 
 import { useState } from "react";
@@ -48,8 +48,8 @@ import {
   STATE_LABEL,
   STATE_TONE,
   analysisLine,
+  canReopen,
   changeRows,
-  closedItself,
   countdownText,
   createdProjects,
   hubFiles,
@@ -448,7 +448,7 @@ export function ProposalCard({
           >
             {outcome}
           </p>
-          {closedItself(proposal) != null && conflict == null && (
+          {canReopen(proposal) && conflict == null && (
             <ReasonGated reason={lever.reason} testId="reopen">
               <Button
                 size="sm"

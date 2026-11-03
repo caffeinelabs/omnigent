@@ -18,7 +18,7 @@ from fastapi.routing import APIRoute
 
 from omnigent import factory as F
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
-from omnigent.server.factory import projects, proposals, spawn, start
+from omnigent.server.factory import projects, proposals, snapshot, spawn, start
 from omnigent.server.factory.api import proposals as proposals_api
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.origin import require_human_origin
@@ -577,8 +577,17 @@ async def test_grace_applies_after_15_minutes_without_objection(cockpit: Cockpit
     )
 
     assert early == [] and late == ["C-1"]
-    assert _proposal(cockpit).status == "applied"
+    row = _proposal(cockpit)
+    assert row.status == "applied" and (row.result or {}).get("grace") is True
     assert cockpit.store.get_project(cockpit.fid, "db-version") is not None
+    [applied] = cockpit.events("proposal.applied")
+    assert applied.summary.startswith("C-1 applied: no objection in 15 min · Undo for 10 min")
+    # Needs you's FYI says why it applied without a click.
+    snapshot.reset_cache()
+    asks = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/asks", headers={"X-Test-User": "alice"}
+    )
+    assert [f["why"] for f in asks.json()["fyi"]] == ["no objection in 15 min"]
 
 
 # ── Routes ─────────────────────────────────────────────────────

@@ -338,7 +338,7 @@ To label a PR the human chose to review without a preview:
 |---|---|
 | `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> …]` + text | A human reviewed the demo or preview. Re-dispatch the author (`<task>-r<k>`) with the text verbatim, the demo link and the failing step; then the new head goes through the pipeline again. Note it in plan.md. |
 | `[Factory review · APPROVED PR #<n> …]` | The human will merge on GitHub. Keep the preview up; nothing else. |
-| `[Factory decision · D-<n> answered by <human> · "<option>"]` | Route the answer to whoever needed it (yourself, or the IC with `sys_session_send(session_id=…)`), act on it, and move D-<n> to answered in plan.md. If it changes your project (scope, DoD, a follow-up), file `sys_factory_project(changes=[{op: "update", …}], reply_to="D-<n>")`: it applies at once on the person's behalf; do not ask again. |
+| `[Factory decision · D-<n> answered by <human> · "<option>"]` | Route the answer to whoever needed it (yourself, or the IC with `sys_session_send(session_id=…)`), act on it, and move D-<n> to answered in plan.md. If it changes your project (scope, DoD, a follow-up), file `sys_factory_project(changes=[{op: "update", …}], reply_to="D-<n>")`: routine upkeep the answer covers applies at once on the person's behalf (a goal or outcome change only when the chosen option names your project); do not ask again. |
 | `[Factory decision · D-<n> withdrawn …]` | Drop the question. |
 | `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · …]` | Hand over (pipeline step 7) unless you already did for that head. |
 | `[Factory notice · PR <repo>#<n> checks failed: <names> …]` | Dispatch a fix to the author with the failing check names. |
