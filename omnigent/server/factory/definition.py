@@ -15,8 +15,9 @@ or a Tier-0 one, is refused with 422 ``tier0``. Rules are advisory text served
 by ``sys_factory_rules``; they never widen a policy or a gate.
 
 The product-agnostic blocks ``product``, ``strategy``, ``discovery``,
-``briefs`` and ``role_defaults`` (:mod:`.definition_blocks`) hold everything
-the factory knows about its product. Their lists with ids (goals, segments,
+``briefs``, ``role_defaults`` and ``structure`` (:mod:`.definition_blocks`)
+hold everything the factory knows about its product and how its cockpit
+names the levels of work. Their lists with ids (goals, segments,
 areas, sources) change item by item, like ``rules``. The ``team`` block
 (:mod:`.team_spec`) holds each project's team, member by member.
 """
@@ -69,6 +70,7 @@ from omnigent.server.factory.definition_blocks import (
     ProductDef,
     RoleDefaultsDef,
     StrategyDef,
+    StructureDef,
 )
 from omnigent.server.factory.team_spec import TeamDef
 from omnigent.stores.factory_store import DefinitionVersionExists, canonical_hash, norm_id
@@ -315,6 +317,7 @@ class FactoryDefinitionDoc(_Block):
     role_defaults: RoleDefaultsDef = Field(default_factory=RoleDefaultsDef)
     goal_seq: int = 0
     team: TeamDef = Field(default_factory=TeamDef)
+    structure: StructureDef = Field(default_factory=StructureDef)
 
     @field_validator("rules")
     @classmethod
@@ -422,6 +425,7 @@ BOUNDS: Final[dict[str, tuple[float, float]]] = {
     "discovery.rubric.map.value_high": (0, 1),
     "discovery.rubric.map.confidence_high": (0, 1),
     "discovery.rubric.human_minute_usd": (0, 100),
+    "structure.tiles_max": blocks.TILES_MAX_BOUNDS,
 }
 """Code bounds of every numeric path (an env default outside them widens them)."""
 ENV_CEILINGS: Final = frozenset(
@@ -478,6 +482,7 @@ CLASS_MAP: Final[dict[str, Callable[[Any, Any], Klass]]] = {
     "discovery.*": _always("B"),
     "briefs.*": _always("B"),
     "role_defaults.*": _always("B"),
+    "structure.*": _always("B"),
 }
 """``path pattern -> (before, after) -> class``; the first matching pattern wins."""
 CLASS_TABLE: Final = (
@@ -501,6 +506,7 @@ CLASS_TABLE: Final = (
     ("discovery.seat|rubric|thresholds|autonomy", "B (owners)"),
     ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
     ("briefs.*, role_defaults.*", "B (owners)"),
+    ("structure.*", "B (owners only: agents never propose it); applies as a version"),
     ("team.templates.*", "B (owners); never on trial (it reaches a project on a switch)"),
     (
         "team.projects.<slug> members",
@@ -526,6 +532,7 @@ OWNER_ONLY_PREFIXES: Final = (
     "discovery.",
     "briefs.",
     "role_defaults.",
+    "structure.",
 )
 """Only owners apply these: an agent's proposal of one always waits for them (class B)."""
 TIER0_PATHS: Final = frozenset(

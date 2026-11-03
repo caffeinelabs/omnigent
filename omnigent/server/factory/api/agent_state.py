@@ -44,6 +44,7 @@ from omnigent.server.factory import (
     definition,
     events,
     loops,
+    node_refs,
     nudge,
     product_profile,
     status,
@@ -183,6 +184,17 @@ def _clip(value: str | None, limit: int) -> str | None:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+def _subject_key(store: Any, factory_id: str, raw: str | None) -> str | None:
+    """A decision's subject with a node in its one key spelling (``T-4`` -> ``task:T-4``)."""
+    subject = _clip(raw, decision_routing.SUBJECT_MAX)
+    if subject is None:
+        return None
+    facts = node_refs.RefFacts(
+        projects=store.list_projects(factory_id), prs=store.list_prs(factory_id)
+    )
+    return _clip(node_refs.canonical_key(subject, facts), decision_routing.SUBJECT_MAX)
+
+
 def _options(body: AskBody) -> list[dict[str, Any]]:
     if len(body.options) > DECISION_MAX_OPTIONS:
         raise FactoryRouteError(400, "invalid_options", f"at most {DECISION_MAX_OPTIONS} options")
@@ -222,7 +234,7 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
     store = caller.deps.factory_store
     asker = norm_id(caller.session.id)
     assignee, warning = await asyncio.to_thread(_assignee_for, caller, body.for_, project)
-    subject = _clip(body.subject, decision_routing.SUBJECT_MAX)
+    subject = await asyncio.to_thread(_subject_key, store, caller.factory_id, body.subject)
 
     def _open_or_create() -> tuple[FactoryDecision, bool]:
         open_rows = store.list_decisions(factory_id=caller.factory_id, status="open", limit=1000)

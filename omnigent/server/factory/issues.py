@@ -28,7 +28,7 @@ import httpx
 from omnigent.entities.factory import FactoryIssue
 from omnigent.factory import ISSUE_OPEN_STATUSES, ROOT_CAUSES
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_READ
-from omnigent.server.factory import events, live, people
+from omnigent.server.factory import events, live, node_refs, people
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import (
     CockpitError,
@@ -74,9 +74,14 @@ REPORTS_PER_HOUR: Final = 10
 """"Report a problem" filings one person may make per factory and hour."""
 
 
+def stored_target(target: str) -> str:
+    """:returns: *target* as an issue stores it: a node in its one key spelling."""
+    return node_refs.canonical_key(target) or target
+
+
 def dedupe_key(rule: str, target: str) -> str:
     """:returns: ``<rule>:<target>``, hashed when longer than the column (96)."""
-    key = f"{rule}:{target}"
+    key = f"{rule}:{stored_target(target)}"
     if len(key) <= _DEDUPE_MAX:
         return key
     return f"{rule[:40]}:{hashlib.sha1(key.encode()).hexdigest()}"
@@ -156,7 +161,8 @@ async def raise_issue(
     ``wontfix`` stays closed. A re-raise at a higher severity emits
     ``issue.escalated`` (the Room posts the card again; Slack is unchanged).
 
-    :param target: e.g. ``"member:<id>"``, ``"pr:<id>"``, ``"project:<slug>"``.
+    :param target: e.g. ``"member:<id>"``, ``"pr:<id>"``, ``"project:<slug>"``; a node is
+        stored in its key spelling (:func:`stored_target`).
     :param by: Attribution for the event (``by``, ``by_kind``, ``by_role``); the server by default.
     :returns: The stored row, or ``None`` when it could not be stored.
     """
@@ -183,7 +189,7 @@ async def raise_issue(
                 factory_id,
                 class_=class_,
                 rule=rule,
-                target=target,
+                target=stored_target(target),
                 summary=summary,
                 dedupe_key=key,
                 **fields,
@@ -608,8 +614,9 @@ async def report(
             root.id,
             class_=class_,
             rule=HUMAN_RULE,
-            target=(target or "").strip()[:128]
-            or (f"project:{project}" if project else "factory"),
+            target=stored_target(
+                (target or "").strip()[:128] or (f"project:{project}" if project else "factory")
+            ),
             summary=summary,
             severity=severity,
             source="human",
@@ -844,6 +851,7 @@ __all__ = [
     "slack_text",
     "slack_webhook",
     "snooze",
+    "stored_target",
     "unsnooze_due",
     "valid_webhook",
     "visible_to",
