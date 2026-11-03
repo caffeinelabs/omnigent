@@ -213,6 +213,8 @@ def test_waiting_puts_the_viewers_first_then_urgent_then_the_longest_wait() -> N
         "queued": 0,
         "cant_start": 0,
         "held": 0,
+        # Needs you: INC-8 is a stuck agent the factory handles itself, so it is no row.
+        "needs_you": 5,
     }
     assert summary["headline"] == "Idle · 6 things wait on you"
 

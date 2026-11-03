@@ -8,7 +8,9 @@ appear). The digest adds the last 24 h's counts, factory-wide budget lines
 for owners and operators who read everything, and Sentinel's newest retro.
 It is skipped when nothing happened and nothing is waiting. Someone who
 switched to the new cockpit (offered with ``OMNIGENT_FACTORY_COCKPIT_V2``)
-also gets its top bar's verdict sentence above the headline.
+also gets its top bar's verdict sentence above the headline, and Needs you
+instead of Waiting on you: the rows of the one list Home shows
+(:mod:`.asks`), in its order, with what the factory handled itself.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import cockpit_v2_enabled
-from omnigent.server.factory import issues, status_summary
+from omnigent.server.factory import asks, issues, status_summary
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import rules
 from omnigent.server.factory.slackdm.render import esc, link, message
@@ -189,6 +191,56 @@ def waiting_lines(
     if len(lines) > WAITING_MAX:
         lines = [*lines[:WAITING_MAX], f"…and {len(lines) - WAITING_MAX} more"]
     return Waiting(lines=lines, count=len(mine))
+
+
+# ── Needs you (the new cockpit's list) ─────────────────────────
+
+
+def summary_and_asks(
+    deps: FactoryDeps,
+    ctx: FactoryCtx,
+    person: Person,
+    vis: Visibility,
+    raw: RawSnapshot | None,
+    now: float,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """The person's Now and Needs you from one load of their inputs (``None``: no snapshot)."""
+    if raw is None:
+        return None, None
+    inputs = status_summary.inputs_from_raw(
+        deps, ctx.factory_id, raw, vis.readable, person.user_id, now
+    )
+    summary = status_summary.build_status_summary(inputs, now=now)
+    return summary, asks.build_asks(asks.AskInputs.from_status(inputs), now=now)
+
+
+def ask_line(ask: Mapping[str, Any], now: float, base: str | None) -> str:
+    """One row of Home's Needs you as a mrkdwn bullet: its id (or title) linked, then why."""
+    title = str(ask["title"])
+    if ask.get("ref"):
+        line = f"• {link(str(ask['href']), str(ask['ref']), base)} {esc(title, 140)}"
+    else:
+        line = f"• {link(str(ask['href']), title, base)}"
+    items = ask.get("items") or []
+    if items:
+        prs = ", ".join(link(str(i["href"]), str(i["ref"]), base) for i in items)
+        more = int(ask.get("more_count") or 0)
+        line += f" — {prs}" + (f" and {more} more" if more else "")
+    elif ask.get("context"):
+        line += f" — {esc(str(ask['context']), 120)}"
+    since = ask.get("since")
+    if since:
+        line += f" · waiting {rules.fmt_age(now - since)}"
+    return line
+
+
+def needs_lines(asked: Mapping[str, Any] | None, now: float, base: str | None) -> Waiting:
+    """Home's Needs you for the person: the same rows, in the same order."""
+    rows = list((asked or {}).get("asks") or [])
+    lines = [ask_line(ask, now, base) for ask in rows]
+    if len(lines) > WAITING_MAX:
+        lines = [*lines[:WAITING_MAX], f"…and {len(lines) - WAITING_MAX} more"]
+    return Waiting(lines=lines, count=len(rows))
 
 
 def progress_lines(summary: Mapping[str, Any] | None, base: str | None) -> list[str]:
@@ -364,8 +416,16 @@ def build_digest(
     idle: tuple[float, float] | None = None,
 ) -> Digest | None:
     """:returns: The digest, or ``None`` when nothing happened and nothing waits (synchronous)."""
-    summary = summary_for(deps, ctx, person, vis, raw, now)
-    waiting = waiting_lines(summary, person, now, base)
+    v2 = sees_cockpit_v2(person)
+    if v2:
+        summary, asked = summary_and_asks(deps, ctx, person, vis, raw, now)
+    else:
+        summary, asked = summary_for(deps, ctx, person, vis, raw, now), None
+    waiting = (
+        needs_lines(asked, now, base)
+        if asked is not None
+        else waiting_lines(summary, person, now, base)
+    )
     counts, still_open = _counts(deps, ctx, vis, now)
     counted = _counts_line(counts, still_open)
     extras = _budget_extras(deps, ctx, now, idle) if vis.everything and person.acts else []
@@ -386,15 +446,19 @@ def build_digest(
     if summary is not None:
         # On the new cockpit, its verdict first (the same fact-built sentence as its top bar).
         sentence = (summary.get("verdict") or {}).get("sentence")
-        if sentence and sees_cockpit_v2(person):
+        if sentence and v2:
             top.append(f"*{esc(sentence, 160)}*")
         top.append(esc(summary["headline"], 200))
     # Each heading starts a section of its own (sections split between lines,
     # never inside a link), so a busy factory's digest keeps every heading.
+    heading = "Needs you" if asked is not None else "Waiting on you"
     if waiting.count:
-        waits = [f"*Waiting on you ({waiting.count})*", *waiting.lines]
+        waits = [f"*{heading} ({waiting.count})*", *waiting.lines]
     else:
-        waits = ["*Waiting on you:* nothing"]
+        waits = [f"*{heading}:* nothing"]
+    handled = (asked or {}).get("handled") or []
+    if handled:
+        waits.append(f"*Handled by the factory*  {esc(' '.join(handled), 400)}")
     doing = []
     if progress:
         doing = [f"*In progress ({len((summary or {}).get('working') or [])})*", *progress]
@@ -514,15 +578,18 @@ __all__ = [
     "Digest",
     "Visibility",
     "Waiting",
+    "ask_line",
     "bot_test_message",
     "build_digest",
     "code_message",
     "lead_line",
+    "needs_lines",
     "next_line",
     "progress_lines",
     "sees_cockpit_v2",
     "settings_line",
     "spend_line",
+    "summary_and_asks",
     "summary_for",
     "test_message",
     "visibility_for",

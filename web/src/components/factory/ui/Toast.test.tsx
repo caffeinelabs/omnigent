@@ -110,6 +110,20 @@ describe("FactoryToastProvider", () => {
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
+  it("tells the toast while the pointer holds it, and when it goes", () => {
+    const onHoldChange = vi.fn();
+    setup({ message: "Answer goes out (sample).", undo: () => undefined, onHoldChange });
+    const toast = screen.getByTestId("factory-toast");
+    fireEvent.pointerEnter(toast);
+    expect(onHoldChange.mock.calls).toEqual([[true]]);
+    fireEvent.pointerLeave(toast);
+    fireEvent.pointerEnter(toast);
+    expect(onHoldChange.mock.calls).toEqual([[true], [false], [true]]);
+    // Undo closes it while held: the hold ends with it.
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(onHoldChange.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+
   it("never closes under focus, and gives focus back when it does close", () => {
     const undo = vi.fn();
     setup({ message: "Answered (sample).", undo });

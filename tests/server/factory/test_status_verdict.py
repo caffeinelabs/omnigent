@@ -164,7 +164,8 @@ def test_things_waiting_only_on_the_viewer_make_it_amber() -> None:
     v = _verdict(body)
 
     assert v["dot"] == "amber"
-    assert v["sentence"] == "Running, 3 things wait on you"
+    # Two questions and one merge row: what Needs you lists (and Home's headline says).
+    assert v["sentence"] == "Running, 3 things need you"
     assert [(r["kind"], r["text"]) for r in v["reasons"]] == [
         ("waiting", "2 decisions wait on you"),
         ("waiting", "1 PR waits on you"),
@@ -224,7 +225,7 @@ def test_a_blocked_project_keeps_a_paused_factory_grey_and_amber_amber() -> None
     waiting = _verdict(_snapshot(projects=[blocked], decisions=[_decision(1)]))
 
     assert (paused["dot"], paused["sentence"]) == ("grey", "Paused, 1 project blocked")
-    assert (waiting["dot"], waiting["sentence"]) == ("amber", "Running, 1 decision waits on you")
+    assert (waiting["dot"], waiting["sentence"]) == ("amber", "Running, 1 thing needs you")
     # The blocked project is still a reason, after what waits on the viewer.
     assert [r["kind"] for r in waiting["reasons"]] == ["waiting", "blocked"]
 

@@ -159,6 +159,8 @@ export interface StatusCounts {
   cant_start?: number;
   /** Projects that only wait on people (not in `working`). */
   held?: number;
+  /** Rows of the one Needs-you list (`GET …/asks`) for the viewer (absent on older servers). */
+  needs_you?: number;
 }
 
 /** Red broken, amber waits on you, grey paused / finished / idle, green working. */

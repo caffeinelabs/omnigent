@@ -86,7 +86,11 @@ export function CockpitShell({
   const summary = summaryQuery.data?.factory_id === fid ? summaryQuery.data : undefined;
   const productName = useFactoryDefinition(fid).data?.effective.product?.name ?? null;
   const split = useMemo(() => splitNeedsYou(snapshot), [snapshot]);
-  const needsYou = summary?.counts.waiting_for_you ?? split.mine.length + split.role.length;
+  // One count: the rows of Needs you (older servers: what waits on the viewer).
+  const needsYou =
+    summary?.counts.needs_you ??
+    summary?.counts.waiting_for_you ??
+    split.mine.length + split.role.length;
   // Until the server's verdict is in (or when the read fails, or an older
   // server has none) the snapshot's facts speak, and they never say green.
   const verdict =

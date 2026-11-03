@@ -281,16 +281,25 @@ def load_proposals(deps: FactoryDeps, factory_id: str) -> dict[str, FactoryPropo
 
 
 def deadlines(
-    deps: FactoryDeps, factory_id: str, decisions: Sequence[FactoryDecision], root: Any
+    deps: FactoryDeps,
+    factory_id: str,
+    decisions: Sequence[FactoryDecision],
+    root: Any,
+    *,
+    proposals: dict[str, FactoryProposal] | None = None,
 ) -> dict[str, tuple[int, str]]:
-    """:returns: Decision id -> its deadline, for the open ones that have one (synchronous)."""
+    """
+    :param proposals: ``C-n`` -> the open proposals when the caller has them
+        (as :func:`load_proposals` reads them); read here otherwise.
+    :returns: Decision id -> its deadline, for the open ones that have one (synchronous).
+    """
     from omnigent.server.factory import autonomy
 
     open_ = [d for d in decisions if d.status == "open" and proposal_number(d.subject)]
     if not open_:
         return {}
     ctx = FactoryCtx(factory_id, "", {})
-    ctx.proposals = load_proposals(deps, factory_id)
+    ctx.proposals = proposals if proposals is not None else load_proposals(deps, factory_id)
     ctx.autonomy = autonomy.factory_autonomy(deps, root) if root is not None else None
     out: dict[str, tuple[int, str]] = {}
     for decision in open_:

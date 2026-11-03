@@ -27,6 +27,12 @@ export interface ToastMessage {
   undo?: () => void;
   /** Override how long it stays (ms); 12 s with Undo, 5 s without. */
   durationMs?: number;
+  /**
+   * Told when the pointer or focus starts (true) or stops (false) holding
+   * this toast open, and false when it goes while held: an act that runs
+   * on its own after a delay pauses meanwhile, so Undo never comes too late.
+   */
+  onHoldChange?: (held: boolean) => void;
 }
 
 export const TOAST_MS = 5_000;
@@ -190,6 +196,7 @@ export function FactoryToastProvider({ children }: { children: ReactNode }) {
     const hadFocus = region.current?.contains(document.activeElement) ?? false;
     const back = returnFocus.current;
     returnFocus.current = null;
+    if (held.current) current.current?.onHoldChange?.(false);
     held.current = false;
     current.current = null;
     setToast(null);
@@ -206,6 +213,12 @@ export function FactoryToastProvider({ children }: { children: ReactNode }) {
 
   const show = useCallback(
     (next: ToastMessage) => {
+      const prev = current.current;
+      if (held.current && prev !== next) {
+        // The pointer or focus now holds the newer one.
+        prev?.onHoldChange?.(false);
+        next.onHoldChange?.(true);
+      }
       current.current = next;
       setToast(next);
       arm();
@@ -217,6 +230,7 @@ export function FactoryToastProvider({ children }: { children: ReactNode }) {
     (next: boolean) => {
       if (held.current === next) return;
       held.current = next;
+      current.current?.onHoldChange?.(next);
       if (next) clearTimer();
       else arm();
     },

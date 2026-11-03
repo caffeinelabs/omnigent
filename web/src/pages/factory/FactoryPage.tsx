@@ -28,7 +28,6 @@ import { GraphPage } from "./GraphPage";
 import { ImprovementsPage } from "./ImprovementsPage";
 import { IncidentPage } from "./IncidentPage";
 import { InsightsPage } from "./InsightsPage";
-import { OverviewPage } from "./OverviewPage";
 import { PrPage } from "./PrPage";
 import { ProposalPage } from "./ProposalPage";
 import { ProjectPage } from "./ProjectPage";
@@ -37,7 +36,7 @@ import { RoomPage } from "./RoomPage";
 import { SettingsPage } from "./SettingsPage";
 import { SteerPage } from "./SteerPage";
 import { TimelinePage } from "./TimelinePage";
-import { AgentRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
+import { AgentRoute, HomeRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
 function ActivityPage() {
@@ -79,7 +78,7 @@ export function FactoryPage() {
   return (
     <FactoryLayout>
       <Routes>
-        <Route index element={<OverviewPage />} />
+        <Route index element={<HomeRoute />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:slug" element={<ProjectPage />} />
         <Route path="projects/:slug/team" element={<ProjectTeamRoute />} />

@@ -194,7 +194,8 @@ async def test_someone_on_the_new_cockpit_gets_its_verdict_above_the_headline(
         person, prefs=person.prefs.model_copy(update={"ui": prefs_mod.UiPrefs(cockpit="v2")})
     )
     verdict = f"*{card['verdict']['sentence']}*"
-    assert card["verdict"]["sentence"] == "Running, 2 things wait on you"
+    # The ready PR and the question: the two rows of Needs you.
+    assert card["verdict"]["sentence"] == "Running, 2 things need you"
 
     def lines(who: Any) -> list[str]:
         built = digest_mod.build_digest(cockpit.deps, ctx, who, vis, raw, now, BASE)

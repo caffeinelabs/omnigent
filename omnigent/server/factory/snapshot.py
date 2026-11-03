@@ -98,7 +98,13 @@ from omnigent.util.session_lifecycle import is_session_closed
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
-    from omnigent.entities.factory import FactoryDecision, FactoryDemo, FactoryEvent, FactoryPr
+    from omnigent.entities.factory import (
+        FactoryDecision,
+        FactoryDemo,
+        FactoryEvent,
+        FactoryPr,
+        FactoryProposal,
+    )
     from omnigent.stores import ConversationStore
 
 _logger = logging.getLogger(__name__)
@@ -576,6 +582,8 @@ class RawSnapshot:
     :param incident_scopes: ``(project, target)`` of each open or acked incident.
     :param notified: Subject -> Slack DM receipts (``NotifiedView`` rows), oldest first.
     :param handles: Handle -> session id of every member and sub-agent shown.
+    :param proposals: The pending, co-signing and on-trial proposals, which
+        the "Needs you" list sorts (``None`` when not loaded: readers query).
     """
 
     factory_id: str
@@ -588,6 +596,7 @@ class RawSnapshot:
     incident_scopes: list[tuple[str | None, str]] = field(default_factory=list)
     notified: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     handles: dict[str, str] = field(default_factory=dict)
+    proposals: list[FactoryProposal] | None = None
 
 
 @dataclass
@@ -620,6 +629,7 @@ class _Loaded:
     deadlines: dict[str, tuple[int, str]] = field(default_factory=dict)
     models: dict[str, str | None] = field(default_factory=dict)
     def_doc: dict[str, Any] = field(default_factory=dict)
+    proposals: list[FactoryProposal] = field(default_factory=list)
 
 
 def notified_by_subject(rows: Iterable[FactoryEvent]) -> dict[str, list[dict[str, Any]]]:
@@ -706,14 +716,22 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         children[member.id] = list(reversed(page.data))
     now_ms = int(now * 1000)
     open_decisions = fstore.list_decisions(factory_id=factory_id, status="open", limit=500)
+    # One read of the open proposals: deadlines, Steer's counts and Needs you share it.
+    proposals = fstore.list_proposals(
+        factory_id, status=["pending", "awaiting_cosign", "trial"], limit=1000
+    )
     try:
         deadlines = slack_rules.deadlines(
-            deps, factory_id, open_decisions, store.get_conversation(factory_id)
+            deps,
+            factory_id,
+            open_decisions,
+            store.get_conversation(factory_id),
+            proposals={f"C-{p.number}": p for p in proposals},
         )
     except Exception:  # noqa: BLE001 - a deadline chip is never worth a broken snapshot
         _logger.warning("factory: could not compute decision deadlines", exc_info=True)
         deadlines = {}
-    pending = fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
+    pending = [p for p in proposals if p.status in ("pending", "awaiting_cosign")]
     memo: dict[tuple[Any, ...], Any] = {}
     shown = [*members, *(k for kids in children.values() for k in kids)]
     harness = {c.id: _harness(c, deps, memo) for c in shown}
@@ -745,7 +763,8 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         proposals_pending=len(pending),
         # Steer's count: changes to how the factory works (plans and bets wait in Needs you).
         definition_proposals_pending=sum(1 for p in pending if p.kind != "projects"),
-        on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
+        on_trial=sum(1 for p in proposals if p.status == "trial"),
+        proposals=proposals,
         def_version=definition.pinned_version(deps, factory_id),
         product=product_profile.product(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
@@ -1491,6 +1510,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         incident_scopes=[(i.project_slug, i.target) for i in loaded.issues],
         notified=loaded.notified,
         handles={h: sid for sid, h in handles.items()},
+        proposals=loaded.proposals,
     )
 
 

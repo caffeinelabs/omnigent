@@ -1,0 +1,641 @@
+{
+  "note": "(sample) Sample data: asks.py over snapshot.round3.json, per viewer role.",
+  "now_s": 1793017800,
+  "cases": {
+    "creator": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "generated_at": 1793017800,
+      "asks": [
+        {
+          "id": "D-3",
+          "kind": "broken",
+          "subject": "decision:D-3",
+          "ref": "D-3",
+          "title": "The cache-warm lead stopped and could not restart",
+          "context": "\"PL · cache-warm\" relaunch failed 3× (runner_unavailable)",
+          "meta": ["cache-warm", "for owners"],
+          "since": 1793015760,
+          "age_s": 2040,
+          "cost_of_waiting": {
+            "score": 90,
+            "level": "high",
+            "text": "the cache-warm project is stopped",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "answer",
+            "label": "Relaunch with spec mode",
+            "href": null,
+            "option_id": "relaunch",
+            "peek": null
+          },
+          "options": [
+            {
+              "id": "restart",
+              "label": "Restart",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "relaunch",
+              "label": "Relaunch with spec mode",
+              "recommended": true,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "pause",
+              "label": "Pause cache-warm",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            }
+          ],
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "owners",
+          "mine": false,
+          "project": "cache-warm",
+          "decision_id": "176d6b5479215203bd985355ae160221",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": ["INC-12"],
+          "covers": [
+            "decision:176d6b5479215203bd985355ae160221",
+            "incident:1759c7ed06c2570796aa9ea7d578c679"
+          ],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
+        },
+        {
+          "id": "C-15",
+          "kind": "proposal",
+          "subject": "proposal:C-15",
+          "ref": "C-15",
+          "title": "Approve Sentinel's proposal: role=project_lead: decide reversible choices yourself",
+          "context": "D-1, D-2, D-5 and D-6 were answered with the recommended option in under 2 minutes.",
+          "meta": ["Sentinel", "for owners"],
+          "since": 1793012400,
+          "age_s": 5400,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks Sentinel",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "Review the proposal",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/improvements/C-15",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "owners",
+          "mine": false,
+          "project": null,
+          "decision_id": "931f22a2c84f579aaaba37711970aa4c",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:931f22a2c84f579aaaba37711970aa4c"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/improvements/C-15"
+        },
+        {
+          "id": "C-4",
+          "kind": "proposal",
+          "subject": "proposal:C-4",
+          "ref": "C-4",
+          "title": "Approve Atlas's proposal: Split billing v2 into schema, API and UI",
+          "context": "Three independently reviewable outcomes; the API waits for the schema and the UI for the API.",
+          "meta": ["Atlas", "for operators"],
+          "since": 1793014740,
+          "age_s": 3060,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks Atlas",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "Review the proposal",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/improvements/C-4",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": null,
+          "decision_id": "7d39c2ab229d5ebcb20c89e31d3a751e",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:7d39c2ab229d5ebcb20c89e31d3a751e"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/improvements/C-4"
+        },
+        {
+          "id": "D-31",
+          "kind": "decision",
+          "subject": "decision:D-31",
+          "ref": "D-31",
+          "title": "Decide on T-4 (budget or retries ran out)",
+          "context": "T-4 route · implement exhausted 3/3 ($11.80 of $15)",
+          "meta": ["db-version", "for operators"],
+          "since": 1793017080,
+          "age_s": 720,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks the db-version team",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "answer",
+            "label": "+1 attempt",
+            "href": null,
+            "option_id": "raise",
+            "peek": null
+          },
+          "options": [
+            {
+              "id": "raise",
+              "label": "+1 attempt",
+              "recommended": true,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "switch",
+              "label": "Switch to ic_codex",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "fresh",
+              "label": "Fresh restart",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "abandon",
+              "label": "Abandon task",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            }
+          ],
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": "db-version",
+          "decision_id": "ae1fb5c75b755a4dbc645077510d63ef",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:ae1fb5c75b755a4dbc645077510d63ef"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
+        },
+        {
+          "id": "D-34",
+          "kind": "decision",
+          "subject": "decision:D-34",
+          "ref": "D-34",
+          "title": "Approve or refuse an access request",
+          "context": "ops@caffeine.ai asks for operator access",
+          "meta": ["for owners"],
+          "since": 1793017200,
+          "age_s": 600,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks its asker",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "answer",
+            "label": "Grant operator",
+            "href": null,
+            "option_id": "grant",
+            "peek": null
+          },
+          "options": [
+            {
+              "id": "grant",
+              "label": "Grant operator",
+              "recommended": true,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "decline",
+              "label": "Decline",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            }
+          ],
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "owners",
+          "mine": false,
+          "project": null,
+          "decision_id": "7839f420d1b6578291fc39d54782176c",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:7839f420d1b6578291fc39d54782176c"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
+        },
+        {
+          "id": "merge",
+          "kind": "merge",
+          "subject": "prs:ready",
+          "ref": null,
+          "title": "Merge a ready pull request",
+          "context": "Its checks are green and its demo passed.",
+          "meta": [],
+          "since": 1793017040,
+          "age_s": 760,
+          "cost_of_waiting": {
+            "score": 55,
+            "level": "medium",
+            "text": "1 project waits for a merge",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "Review",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [
+            {
+              "ref": "PR #9630",
+              "title": "API version endpoint",
+              "project": "api-version",
+              "pr_id": "f74d5967c53455139e85ba1b402a5bd4",
+              "url": "https://github.com/caffeinelabs/app/pull/9630",
+              "since": 1793017040,
+              "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+            }
+          ],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": null,
+          "decision_id": null,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["pr:f74d5967c53455139e85ba1b402a5bd4"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+        }
+      ],
+      "handled": [
+        "The builder ic:route-r2 is stuck (the same failing call again and again); it clears once the agent moves again.",
+        "Trial C-14 is running: cadence.project_lead 7200→10800."
+      ],
+      "counts": {
+        "total": 6,
+        "mine": 0,
+        "others": 1,
+        "in_steer": 0,
+        "folded": 1
+      }
+    },
+    "operator": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "generated_at": 1793017800,
+      "asks": [
+        {
+          "id": "INC-12",
+          "kind": "broken",
+          "subject": "issue:INC-12",
+          "ref": "INC-12",
+          "title": "PL · cache-warm dead · relaunch failed 3×",
+          "context": null,
+          "meta": ["cache-warm", "critical", "for operators"],
+          "since": 1793015760,
+          "age_s": 2040,
+          "cost_of_waiting": {
+            "score": 100,
+            "level": "high",
+            "text": "something is down",
+            "holds": 0
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "See what to do",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": "cache-warm",
+          "decision_id": null,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["incident:1759c7ed06c2570796aa9ea7d578c679"],
+          "critical": true,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+        },
+        {
+          "id": "C-4",
+          "kind": "proposal",
+          "subject": "proposal:C-4",
+          "ref": "C-4",
+          "title": "Approve Atlas's proposal: Split billing v2 into schema, API and UI",
+          "context": "Three independently reviewable outcomes; the API waits for the schema and the UI for the API.",
+          "meta": ["Atlas", "for operators"],
+          "since": 1793014740,
+          "age_s": 3060,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks Atlas",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "Review the proposal",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/improvements/C-4",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": null,
+          "decision_id": "7d39c2ab229d5ebcb20c89e31d3a751e",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:7d39c2ab229d5ebcb20c89e31d3a751e"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/improvements/C-4"
+        },
+        {
+          "id": "D-2",
+          "kind": "decision",
+          "subject": "decision:D-2",
+          "ref": "D-2",
+          "title": "The db-version lead asks: Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
+          "context": "Both exist in caffeine-db.",
+          "meta": ["db-version", "the db-version lead"],
+          "since": 1793017080,
+          "age_s": 720,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks the db-version team",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "answer",
+            "label": "knex_migrations",
+            "href": null,
+            "option_id": "a",
+            "peek": null
+          },
+          "options": [
+            {
+              "id": "a",
+              "label": "knex_migrations",
+              "recommended": true,
+              "description": "Latest applied migration name and time",
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "b",
+              "label": "schema_migrations",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            }
+          ],
+          "allow_text": true,
+          "items": [],
+          "more_count": 0,
+          "assignee": "you",
+          "mine": true,
+          "project": "db-version",
+          "decision_id": "a9d44647df3050199c1577ba21f16b67",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:a9d44647df3050199c1577ba21f16b67"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
+        },
+        {
+          "id": "D-31",
+          "kind": "decision",
+          "subject": "decision:D-31",
+          "ref": "D-31",
+          "title": "Decide on T-4 (budget or retries ran out)",
+          "context": "T-4 route · implement exhausted 3/3 ($11.80 of $15)",
+          "meta": ["db-version", "for operators"],
+          "since": 1793017080,
+          "age_s": 720,
+          "cost_of_waiting": {
+            "score": 70,
+            "level": "high",
+            "text": "blocks the db-version team",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "answer",
+            "label": "+1 attempt",
+            "href": null,
+            "option_id": "raise",
+            "peek": null
+          },
+          "options": [
+            {
+              "id": "raise",
+              "label": "+1 attempt",
+              "recommended": true,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "switch",
+              "label": "Switch to ic_codex",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "fresh",
+              "label": "Fresh restart",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            },
+            {
+              "id": "abandon",
+              "label": "Abandon task",
+              "recommended": false,
+              "description": null,
+              "href": null,
+              "reasons": null
+            }
+          ],
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": "db-version",
+          "decision_id": "ae1fb5c75b755a4dbc645077510d63ef",
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["decision:ae1fb5c75b755a4dbc645077510d63ef"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
+        },
+        {
+          "id": "merge",
+          "kind": "merge",
+          "subject": "prs:ready",
+          "ref": null,
+          "title": "Merge a ready pull request",
+          "context": "Its checks are green and its demo passed.",
+          "meta": [],
+          "since": 1793017040,
+          "age_s": 760,
+          "cost_of_waiting": {
+            "score": 55,
+            "level": "medium",
+            "text": "1 project waits for a merge",
+            "holds": 1
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "Review",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [
+            {
+              "ref": "PR #9630",
+              "title": "API version endpoint",
+              "project": "api-version",
+              "pr_id": "f74d5967c53455139e85ba1b402a5bd4",
+              "url": "https://github.com/caffeinelabs/app/pull/9630",
+              "since": 1793017040,
+              "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+            }
+          ],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": null,
+          "decision_id": null,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["pr:f74d5967c53455139e85ba1b402a5bd4"],
+          "critical": false,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+        }
+      ],
+      "handled": [
+        "The builder ic:route-r2 is stuck (the same failing call again and again); it clears once the agent moves again.",
+        "Trial C-14 is running: cadence.project_lead 7200→10800."
+      ],
+      "counts": {
+        "total": 5,
+        "mine": 1,
+        "others": 3,
+        "in_steer": 0,
+        "folded": 0
+      }
+    },
+    "viewer": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "generated_at": 1793017800,
+      "asks": [],
+      "handled": [
+        "The builder ic:route-r2 is stuck (the same failing call again and again); it clears once the agent moves again.",
+        "Trial C-14 is running: cadence.project_lead 7200→10800."
+      ],
+      "counts": {
+        "total": 0,
+        "mine": 0,
+        "others": 7,
+        "in_steer": 0,
+        "folded": 1
+      }
+    }
+  }
+}
