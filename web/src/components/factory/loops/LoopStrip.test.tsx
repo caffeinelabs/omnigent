@@ -284,6 +284,53 @@ describe("a task waiting on a person's answer", () => {
     expect(chip).toHaveTextContent("implement 1/3 · waiting on D-22 +1");
   });
 
+  it("says what else it waits on, without a Decisions link", () => {
+    const merge = {
+      decision_id: null,
+      decision_ref: "waiting on a person to merge PR #9631",
+      refs: [],
+      since: 100,
+      count: 0,
+      kind: "merge",
+      label: "waiting on a person to merge PR #9631",
+      who: "an operator",
+    };
+    expect(heldText(merge)).toBe("waiting on a person to merge PR #9631");
+    const held = { ...heldLoop(), held_by: merge };
+    const [line] = loopLines([held], []);
+    expect(stateText(line!)).toBe("waiting on a person to merge PR #9631");
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FactoryViewerProvider viewer={viewerOf("creator")}>
+            <LoopStrip snapshot={snapshot} lines={[line!]} showSubject />
+            <LoopChips
+              factoryId={snapshot.factory.id}
+              chips={[
+                {
+                  id: "c1",
+                  kind: "implement",
+                  state: "running",
+                  iteration: 1,
+                  limit: 3,
+                  held_by: merge,
+                },
+              ]}
+            />
+          </FactoryViewerProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("loop-held-implement")).toHaveTextContent(
+      "waiting on a person to merge PR #9631 (an operator must act); not counted as stalled while it waits.",
+    );
+    const chip = screen.getByTestId("pr-loop-implement");
+    expect(chip).toHaveTextContent("implement 1/3 · waiting on a person to merge PR #9631");
+    expect(within(chip).queryByRole("link")).toBeNull();
+    expect(screen.queryByRole("link", { name: /PR #9631/ })).toBeNull();
+  });
+
   it("links the oldest answer and the rest from the chips", () => {
     render(
       <MemoryRouter>

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import (
@@ -236,6 +236,11 @@ async def expire_decision(
 SERVER_BY: Final = "server"
 """``answered_by`` of a decision the server closed itself (metrics leave it out)."""
 CLOSED_PREFIX: Final = "Closed by the server: "
+
+
+def server_closed(data: Mapping[str, Any]) -> bool:
+    """:returns: Whether a ``decision.answered`` event's *data* is the server closing it."""
+    return data.get("by_kind") == SERVER_BY
 
 
 async def close_by_server(app_state: Any, decision_id: str, *, why: str) -> FactoryDecision | None:
@@ -598,5 +603,6 @@ __all__ = [
     "open_storm_decision",
     "project_ended",
     "relaunch_failed_key",
+    "server_closed",
     "storm_key",
 ]

@@ -166,17 +166,23 @@ export interface NowState {
 }
 
 /** A compact loop badge, e.g. `implement 3/3`. */
-/** The person's answers a running implement loop waits on: its stall clock is paused. */
+/** What a running implement loop waits on: its stall clock is paused. */
 export interface LoopHoldView {
   decision_id: string | null;
-  /** The oldest open one, e.g. `D-22`. */
+  /** The first decision a person answers, e.g. `D-22`; with none, `label`. */
   decision_ref: string;
-  /** The oldest ones it waits on, oldest first (at most five). */
+  /** The decisions it waits on, in order (at most five); each links to the Decisions page. */
   refs: string[];
-  /** When the oldest was asked (epoch seconds). */
+  /** When the first wait began (epoch seconds). */
   since: number | null;
-  /** How many it waits on in all (older servers: absent, read `refs.length`). */
+  /** How many decisions it waits on in all (older servers: absent, read `refs.length`). */
   count?: number | null;
+  /** The first wait's kind: `decision`, `hold`, `merge`, `dependency`, … (older servers omit it). */
+  kind?: string | null;
+  /** The first wait in one line, e.g. `waiting on a person to merge PR #12`. */
+  label?: string | null;
+  /** Who must act on it, e.g. `an owner`, `api-core's lead`, `the server`. */
+  who?: string | null;
 }
 
 export interface LoopChipView {

@@ -1048,3 +1048,134 @@ async def test_a_budget_decision_is_not_a_stale_loop_decision(stall: Stall) -> N
     await stall.tick(MIN)
     current = cockpit.store.get_decision(budget.id)
     assert current is not None and current.status == "open"
+
+
+# ── Holds that must not hide a real stall ──────────────────────
+
+
+async def test_a_blocker_naming_its_own_pr_in_the_works_does_not_hide_a_dead_ic(
+    stall: Stall,
+) -> None:
+    """ "CI is red on PR #9631": nobody else owes it anything, so a closed IC still stalls."""
+    from tests.server.factory.test_loops import make_pr
+
+    cockpit = stall.cockpit
+    pr = make_pr(cockpit, KEY)  # open, not ready
+    stall.close(stall.ic.id)
+    row = cockpit.store.get_project(cockpit.fid, SLUG)
+    assert row is not None
+    cockpit.store.update_project(
+        row.id,
+        lead_update={"health": "at_risk", "blocker": f"CI is red on PR #{pr.number}", "at": 1},
+    )
+    loop = await stall.ticks(70 * MIN, every=10 * MIN)
+    assert (loop.state, loop.last_reason) == ("stalled", "no progress for 60 min")
+    assert loops.held_by(loop) is None
+
+
+async def test_a_hold_on_a_task_nobody_starts_does_not_hide_a_dead_ic(stall: Stall) -> None:
+    """Nobody must act on T-2: the wall budget still runs with the IC closed."""
+    cockpit = stall.cockpit
+    await plan(cockpit, "other-step")
+    stall.close(stall.ic.id)
+    out = await tasks.hold_task(
+        cockpit.app.state,
+        cockpit.fid,
+        task(cockpit, KEY),
+        tasks.HoldIn(on="T-2"),
+        _pl_actor(stall),
+    )
+    assert out["hold"]["active"] is True and out["hold"]["kind"] == "task"
+    loop = await stall.ticks(9 * HOUR, every=30 * MIN)
+    assert loop.state == "stalled" and loop.last_reason.startswith("running 8 h")
+    (asked,) = stall.stall_decisions()
+    waiting = [line for line in (asked.context or "").splitlines() if line.startswith("Waiting")]
+    assert waiting == ["Waiting on: T-1 held: waiting on T-2 (Task other-step, ready)"]
+
+
+async def test_a_hold_lapses_at_its_limit_and_its_lead_is_told(stall: Stall) -> None:
+    cockpit = stall.cockpit
+    await plan(cockpit, "other-step")
+    stall.status(stall.ic.id, "idle")
+    await tasks.hold_task(
+        cockpit.app.state,
+        cockpit.fid,
+        task(cockpit, KEY),
+        tasks.HoldIn(on="T-2", until="2h"),
+        _pl_actor(stall),
+    )
+    loop = await stall.ticks(110 * MIN, every=10 * MIN)
+    assert loop.state == "running" and loops.held_by(loop) is not None
+    assert task(cockpit, KEY).hold is not None
+    loop = await stall.ticks(20 * MIN, every=10 * MIN)
+    assert task(cockpit, KEY).hold is None
+    [released] = [e for e in cockpit.events("task.released") if e.data.get("reason") == "lapsed"]
+    assert released.data["why"] == "its time limit passed"
+    told = [t for t in cockpit.mailer.texts_to(cockpit.world.id("pl")) if "HOLD LAPSED" in t]
+    assert len(told) == 1
+    assert told[0].startswith("[Factory notice · HOLD LAPSED · T-1 · its time limit passed]")
+    # The clock runs again: an hour without progress stalls it.
+    loop = await stall.ticks(70 * MIN, every=10 * MIN)
+    assert loop.state == "stalled"
+    assert [d.status for d in stall.stall_decisions()] == ["open"]
+
+
+async def test_a_hold_on_an_answered_decision_is_cleared_on_the_tick(stall: Stall) -> None:
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    asked = stall.ask("Keep the v1 route?", asker=cockpit.world.id("lead_a"))
+    await tasks.hold_task(
+        cockpit.app.state,
+        cockpit.fid,
+        task(cockpit, KEY),
+        tasks.HoldIn(on=f"T-1 waits on {asked.ref}"),
+        _pl_actor(stall),
+    )
+    assert task(cockpit, KEY).hold["ref"] == asked.ref
+    await stall.tick(5 * MIN)
+    cockpit.store.answer_decision(asked.id, option_id="yes", text=None, by="carol")
+    await stall.tick(5 * MIN)
+    assert task(cockpit, KEY).hold is None
+    [text] = [t for t in cockpit.mailer.texts_to(cockpit.world.id("pl")) if "HOLD LAPSED" in t]
+    assert text.startswith(f"[Factory notice · HOLD LAPSED · T-1 · {asked.ref} closed]")
+
+
+async def test_held_by_carries_only_decisions_as_refs(stall: Stall) -> None:
+    """Its own ready PR waits on a merge: no Decisions link, the label says what."""
+    from tests.server.factory.test_loops import make_pr
+
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    pr = make_pr(cockpit, KEY)
+    cockpit.store.update_pr(pr.id, ready=True, ready_at=int(stall.clock()))
+    loop = await stall.ticks(2 * HOUR)
+    held = loops.held_by(loop)
+    assert held is not None
+    assert held["refs"] == [] and held["decision_id"] is None
+    assert held["kind"] == "merge"
+    assert held["label"] == held["decision_ref"] == f"waiting on a person to merge PR #{pr.number}"
+
+
+async def test_a_decision_a_sibling_loop_still_rides_on_stays_open(stall: Stall) -> None:
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(65 * MIN)
+    (asked,) = stall.stall_decisions()
+    review, _ = cockpit.store.upsert_loop(
+        cockpit.fid,
+        "review",
+        "pr:sibling",
+        state="stalled",
+        task_id=row.task_id,
+        project_slug=SLUG,
+        decision_id=asked.id,
+    )
+    cockpit.store.update_loop(row.id, state="converged", last_reason="T-1 is done")
+    assert loop_escalation.stale_loop_decisions(cockpit.deps, cockpit.fid) == []
+    await stall.tick(MIN)
+    current = cockpit.store.get_decision(asked.id)
+    assert current is not None and current.status == "open"
+    cockpit.store.update_loop(review.id, state="converged")
+    await stall.tick(MIN)
+    current = cockpit.store.get_decision(asked.id)
+    assert current is not None and (current.status, current.answered_by) == ("answered", "server")

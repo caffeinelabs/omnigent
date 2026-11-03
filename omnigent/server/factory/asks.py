@@ -904,13 +904,16 @@ def _merge_context(prs: Sequence[Mapping[str, Any]], policy: str | None) -> str 
 
 def merge_dependents(body: Mapping[str, Any]) -> dict[str, list[str]]:
     """
-    :returns: Project slug -> the live projects that wait on its merge (a ``merge``
-        wait in their ``waiting_on``), in snapshot order.
+    :returns: Project slug -> the live projects that wait on a person to merge it
+        (a ``merge`` wait in their ``waiting_on``), in snapshot order. A merge the
+        server makes itself (an auto-merge target) asks nobody.
     """
     out: dict[str, list[str]] = {}
     for project in body.get("projects") or []:
         for wait in project.get("waiting_on") or []:
             if not isinstance(wait, Mapping) or wait.get("kind") != "merge":
+                continue
+            if not wait.get("person"):
                 continue
             ref = str(wait.get("ref") or "")
             if ref and not ref.startswith("PR #") and project["slug"] not in out.get(ref, []):

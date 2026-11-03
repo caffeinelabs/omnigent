@@ -1116,7 +1116,12 @@ def merge_charter(old: Mapping[str, Any] | None, patch: CharterPatchIn) -> dict[
         focus = patch.demo_focus if "demo_focus" in fields else patch.demo
         merged["demo_focus"] = focus
         merged["demo"] = focus
+    old_why = dict(merged.get("depends_why") or {})
     merged.update(patch.charter_extras())
+    if "depends_why" in merged and merged["depends_why"] is not None:
+        # A patch names the reasons it changes; the others stay (normalize drops
+        # those of slugs no longer in depends_on).
+        merged["depends_why"] = {**old_why, **merged["depends_why"]}
     return merged
 
 

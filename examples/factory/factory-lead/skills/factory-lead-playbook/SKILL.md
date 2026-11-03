@@ -47,8 +47,8 @@ Every project is created, changed, split, merged or cancelled with
 - Shared groundwork is its own project that the others `depends_on`. The
   server holds those ("waiting on …") and spawns each PL once its
   dependencies merged (or are ready for human merge, with `depends_mode`).
-  Only a real code or API dependency, each with a one-line `depends_why`
-  (factory-planning §3).
+  Only a real code or API dependency, each with its one-line reason
+  (`"<slug>: <why>"`, factory-planning §3).
 - When you tell a PL to hold a task until something lands (a proposal, a
   decision, a PR), name it: the PL holds the task on it, and the server shows
   "held: waiting on …" instead of asking a person whether the task stalled.

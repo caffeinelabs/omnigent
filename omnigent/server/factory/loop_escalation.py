@@ -707,14 +707,24 @@ def _target_loop(deps: FactoryDeps, decision: FactoryDecision) -> tuple[bool, Fa
 
 def stale_loop_decisions(deps: FactoryDeps, factory_id: str) -> list[tuple[FactoryDecision, str]]:
     """
-    Open stall and claim decisions whose loop ended or is gone (synchronous).
+    Open stall and claim decisions whose loop ended or is gone (synchronous),
+    unless another bad loop still rides on them.
 
     :returns: ``(decision, why)`` pairs, e.g. ``(D-47, "PR #9881 merged")``.
     """
     rows = deps.factory_store.list_decisions(factory_id=factory_id, status="open", limit=500)
+    rows = [d for d in rows if d.source == SOURCE_LOOP]
+    if not rows:
+        return []
+    # A task's implement and review loops share one decision: it stays while one is bad.
+    ridden = {
+        norm_id(loop.decision_id)
+        for loop in deps.factory_store.list_loops(factory_id, states=_BAD)
+        if loop.decision_id
+    }
     out: list[tuple[FactoryDecision, str]] = []
     for decision in rows:
-        if decision.source != SOURCE_LOOP:
+        if norm_id(decision.id) in ridden:
             continue
         names, loop = _target_loop(deps, decision)
         if not names:

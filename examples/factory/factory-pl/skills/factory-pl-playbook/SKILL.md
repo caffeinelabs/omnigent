@@ -69,10 +69,12 @@ The server owns the tasks (`T-<n>`), their dependencies and states
 Your lead said wait for `C-16`, it needs a person's answer `D-45`, another PR
 must merge first: say on what, or after an hour the server asks a person
 whether the task stalled. `sys_factory_task(op="hold", key="<key>", on="C-16",
-note="<why>")` where your tool lists `hold` (it lifts by itself once that
-closes; `op="release"` lifts it now). Else name both in your update:
-`sys_factory_set(update={health: "at_risk", blocker: "T-16 waits on C-16 (D-45)"})`.
-Give the IC its next step as soon as the hold ends.
+note="<why>")` where your tool lists `hold`: it lifts by itself once that
+closes, and after a day unless `until` says longer (at most 7 days; hold again
+to renew); `op="release"` lifts it now. Else name both in your update:
+`sys_factory_set(update={health: "at_risk", blocker: "T-16 waits on C-16 (D-45)"})`
+(it holds only the tasks it names). Give the IC its next step as soon as the
+hold ends (`[Factory notice · HOLD LAPSED · T-<n> …]`).
 
 ## plan.md (`~/factory/<slug>/plan.md`)
 
@@ -348,6 +350,7 @@ To label a PR the human chose to review without a preview:
 | `[Factory notice · dev env needed · bring it up]` | env_keeper `UP base=<base>` now, next to the IC's dispatch; record it in plan.md. |
 | `[Factory control · …]` | The CONTROL section of your prompt. Reply once. |
 | `[Factory proposal · C-<n> …]` | The outcome of your `sys_factory_project` or `sys_factory_propose` proposal. Record it in plan.md; after a rejection, adapt the plan to the note. |
+| `[Factory notice · HOLD LAPSED · T-<n> · …]` | The task's hold ended (what it named closed, or its time ran out): give its IC the next step, or hold it again on what it still waits on. |
 | `[Factory loop · NUDGE · T-<n> …]` | A person saw the task's IC idle and waiting on you: send it its next step now, or hold the task on what it waits on (Work graph). |
 
 ## Splitting the project

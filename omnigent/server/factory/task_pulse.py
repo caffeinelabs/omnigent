@@ -112,14 +112,17 @@ class Hold:
     """
     What a task waits on (:mod:`.waits`), the most decisive first.
 
-    :param decision_id: The first one's decision row id, when a person answers it.
-    :param ref: The first one, e.g. ``D-22``, ``C-16``, ``PR #12`` or a project slug.
-    :param refs: The first ones, in order (at most :data:`HOLD_REFS_MAX`).
+    :param decision_id: The first decision a person answers (its row id), if any.
+    :param ref: The first wait, e.g. ``D-22``, ``C-16``, ``PR #12`` or a project slug.
+    :param refs: The decisions it waits on (``D-n``), in order (at most
+        :data:`HOLD_REFS_MAX`): the cockpit links each to the Decisions page.
     :param since: When the first began (epoch seconds; ``0`` when unknown).
-    :param count: How many there are in all.
+    :param count: How many decisions it waits on in all.
     :param kind: The first one's wait kind (``decision``, ``hold``, ``merge``, …).
     :param label: It in one line, e.g. ``waiting on D-45 (Approve C-16, needs an owner)``.
     :param who: Who must act on it.
+    :param on_purpose: A hold its lead or a person put on it that the clock trusts
+        with no IC open (:attr:`.waits.Wait.on_purpose`).
     """
 
     decision_id: str | None
@@ -130,12 +133,17 @@ class Hold:
     kind: str = "decision"
     label: str | None = None
     who: str | None = None
+    on_purpose: bool = False
 
     def to_json(self) -> dict[str, Any]:
-        """:returns: The ``held_by`` of a loop's ``spent`` (and its views)."""
+        """
+        :returns: The ``held_by`` of a loop's ``spent`` (and its views). Only
+            decisions are refs; another wait is carried by its kind and label
+            (``decision_ref`` is then the label).
+        """
         out: dict[str, Any] = {
             "decision_id": self.decision_id,
-            "decision_ref": self.ref,
+            "decision_ref": self.refs[0] if self.refs else (self.label or self.ref),
             "refs": list(self.refs),
             "since": self.since,
             "count": max(self.count, len(self.refs)),
@@ -150,15 +158,17 @@ class Hold:
         if not found:
             return None
         first = found[0]
+        answers = [w for w in found if w.decision_id and w.ref.upper().startswith("D-")]
         return cls(
-            decision_id=first.decision_id,
+            decision_id=answers[0].decision_id if answers else None,
             ref=first.ref,
-            refs=tuple(w.ref for w in found[:HOLD_REFS_MAX]),
+            refs=tuple(w.ref for w in answers[:HOLD_REFS_MAX]),
             since=int(first.since or 0),
-            count=len(found),
+            count=len(answers),
             kind=first.kind,
             label=first.label,
             who=first.who,
+            on_purpose=any(w.on_purpose for w in found),
         )
 
     @property
@@ -733,22 +743,21 @@ class Reader:
     def facts(self) -> waits.Facts:
         """:returns: What the tasks' waits read, loaded once per tick."""
         if self._facts is None:
-            self._facts = waits.Facts.load(self.deps, self.factory_id, self.now)
+            self._facts = waits.Facts.load(
+                self.deps, self.factory_id, self.now, tasks=self.tasks or None
+            )
+        return self._facts
+
+    def loaded(self) -> waits.Facts | None:
+        """:returns: The facts this tick read, if a task's watch read them."""
         return self._facts
 
     def watch(self, task: FactoryTask) -> Watch:
         """:returns: *task*'s pulse now (synchronous)."""
         facts = self.facts()
         lead = self._lead(task.project_slug)
-        others = [t for t in self.tasks if t.project_slug == task.project_slug]
         pulse = read_pulse(
-            self.deps,
-            task,
-            now=self.now,
-            lead=lead,
-            quiet_s=self.quiet_s(),
-            others=others,
-            facts=facts,
+            self.deps, task, now=self.now, lead=lead, quiet_s=self.quiet_s(), facts=facts
         )
         return Watch(self.deps, task, lead, pulse, self.now)
 
@@ -758,7 +767,10 @@ def held_view(spent: Mapping[str, Any] | None) -> dict[str, Any] | None:
     found = (spent or {}).get("held_by")
     if not isinstance(found, Mapping) or not found.get("decision_ref"):
         return None
-    refs = [str(r) for r in found.get("refs") or [] if r] or [str(found["decision_ref"])]
+    refs = [str(r) for r in found.get("refs") or [] if r]
+    if not refs and not found.get("label"):
+        # Recorded before waits carried a label: its only ref is the decision.
+        refs = [str(found["decision_ref"])]
     count = found.get("count")
     out = {
         "decision_id": found.get("decision_id"),

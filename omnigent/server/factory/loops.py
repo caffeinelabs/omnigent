@@ -77,7 +77,7 @@ from omnigent.factory import (
     STATE_PAUSED,
 )
 from omnigent.factory_gates import DEMO_GATE, GATE_FAIL, GATE_PENDING, READY_GATES
-from omnigent.server.factory import events, task_pulse, tasks
+from omnigent.server.factory import events, task_pulse, tasks, waits
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.stage import changes_requested_on_head, ready_for_human
@@ -482,6 +482,10 @@ class Ctx:
     factory_id: str
     now: float
     changes: list[Change] = field(default_factory=list)
+    held: list[FactoryTask] = field(default_factory=list)
+    """Tasks read with a hold this pass (the hold sweep re-checks them)."""
+    facts: waits.Facts | None = None
+    """What the pass read of the tasks' waits, when it read them."""
 
     @property
     def store(self) -> Any:
@@ -1856,8 +1860,9 @@ def check_clock(
 
     With the tick's *watch* the clock also reads what the task waits on
     (:mod:`.waits`): while something holds it, that time is not charged to the
-    wall budget while its IC lives (or always, for a hold its lead or a person
-    put on it), and the no-progress clock restarts once it ends. Its open
+    wall budget while its IC lives (or always, for a stored hold on purpose:
+    one a person must act on, see :attr:`.waits.Wait.on_purpose`), and the
+    no-progress clock restarts once it ends. Its open
     sessions' activity and its lead's tool calls about it are progress while
     its IC lives, and after "Keep waiting" only the wall budget, or the try
     getting worse, stalls it. With its IC gone, failed or never bound, only
@@ -1872,9 +1877,10 @@ def check_clock(
     values["wall_s"] = now - loop.started_at
     pulse = watch.pulse if watch is not None else None
     hold = pulse.held if pulse is not None else None
-    # A hold its lead (or a person) put on the task says no IC is expected: it pauses
-    # the clock like a live IC's hold. It lapses by itself, so it hides nothing for good.
-    on_purpose = hold is not None and hold.kind == "hold"
+    # A stored hold a person must act on (or that a person put on, or that names no
+    # ref) says no IC is expected: it pauses the clock like a live IC's hold. It lapses
+    # at its limit, so it hides nothing for good; any other wait keeps the dead-IC rule.
+    on_purpose = hold is not None and hold.on_purpose
     dead = pulse is not None and pulse.worker in task_pulse.DEAD_WORKERS and not on_purpose
     _track_hold(values, hold, now, paused=not dead)
     if (
@@ -2238,10 +2244,11 @@ async def tick(
 
     Mirrors each factory's engine mode onto its PLs (the guard reads it),
     ends the loops whose work ended (:func:`close_ended`), applies the wall,
-    no-progress, $ and plan rules, re-opens the decision of a loop whose
-    project was paused from it, closes stall decisions nothing is left to act
-    on, checks the project and factory $ budgets, sends READY waves and
-    flushes coalesced NEXT hints.
+    no-progress, $ and plan rules, clears the task holds that lapsed (their
+    PL is told), re-opens the decision of a loop whose project was paused
+    from it, closes stall decisions nothing is left to act on, checks the
+    project and factory $ budgets, sends READY waves and flushes coalesced
+    NEXT hints.
     """
     from omnigent.server.factory import budgets, loop_escalation, pipeline
 
@@ -2258,6 +2265,7 @@ async def tick(
                 ctx = Ctx(deps, factory_id, at)
                 await asyncio.to_thread(tick_sync, ctx)
             await apply(app_state, ctx)
+            await tasks.sweep_holds(app_state, factory_id, ctx.held, now=at, facts=ctx.facts)
             await loop_escalation.reconcile(app_state, deps, factory_id)
             await loop_escalation.close_stale(app_state, deps, factory_id)
             await loop_escalation.done_checks(app_state, deps, factory_id, at)
@@ -2393,6 +2401,7 @@ def tick_sync(ctx: Ctx) -> None:
     projects = {p.slug: p for p in ctx.store.list_projects(ctx.factory_id)}
     by_task = {norm_id(t.id): t for t in rows}
     close_ended(ctx, projects, by_task)
+    ctx.held = [t for t in rows if t.hold]
     reader = task_pulse.Reader(ctx.deps, ctx.factory_id, ctx.now, tasks=rows)
     for loop in ctx.store.list_loops(
         ctx.factory_id, kinds=["implement"], states=["running", "stalled"]
@@ -2419,6 +2428,7 @@ def tick_sync(ctx: Ctx) -> None:
         if project is not None and project.status not in (None, "active"):
             held = True
         check_wait(ctx, loop, _get_pr(ctx, loop.pr_id), paused=held)
+    ctx.facts = reader.loaded()
     for slug in sorted({t.project_slug for t in rows}):
         project = projects.get(slug)
         if project is not None and project.status not in (None, "active"):

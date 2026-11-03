@@ -910,6 +910,18 @@ async def test_project_files_a_proposal_for_the_caller() -> None:
     }
 
 
+def test_project_schema_takes_each_dependencys_reason() -> None:
+    """A harness that enforces tool schemas accepts depends_why and the inline form."""
+    from omnigent.tools.builtins.factory import SysFactoryProjectTool
+
+    params = _params(SysFactoryProjectTool)
+    change = params["properties"]["changes"]["items"]
+    project = change["properties"]["project"]["properties"]
+    assert project["depends_why"]["type"] == "object"
+    assert "'<slug>: <what it needs from it>'" in project["depends_on"]["description"]
+    assert "depends_why" in change["properties"]["patch"]["description"]
+
+
 async def test_project_without_changes_lists_projects_and_withdraw_withdraws() -> None:
     server = (
         FakeServer()

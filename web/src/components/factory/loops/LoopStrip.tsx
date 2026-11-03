@@ -26,7 +26,14 @@ import { agentPageHref, alertPageHref } from "../factoryRoutes";
 import { answerBlockedReason } from "../decisions/DecisionCard";
 import { LeverGated, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { HeldRefList } from "./HeldRefs";
-import { type Attempt, type LoopLine, budgetShare, isBadState, stateText } from "./loopStripModel";
+import {
+  type Attempt,
+  type LoopLine,
+  budgetShare,
+  heldOnAnswer,
+  isBadState,
+  stateText,
+} from "./loopStripModel";
 
 const STATE_TONE: Record<LoopLine["state"], FactoryTone> = {
   running: "active",
@@ -337,7 +344,7 @@ function LineView({
             last: <span className="break-words text-foreground/80">“{line.lastReason}”</span>
           </span>
         )}
-        {line.heldBy && (
+        {line.heldBy && heldOnAnswer(line.heldBy) && (
           <span
             data-testid={`loop-held-${line.loop.kind}`}
             className="min-w-0 text-xs text-muted-foreground"
@@ -350,6 +357,16 @@ function LineView({
               className="text-foreground/80"
             />
             ; not counted as stalled until then.
+          </span>
+        )}
+        {line.heldBy && !heldOnAnswer(line.heldBy) && (
+          <span
+            data-testid={`loop-held-${line.loop.kind}`}
+            className="min-w-0 text-xs text-muted-foreground"
+          >
+            <span className="text-foreground/80">{line.heldBy.label}</span>
+            {line.heldBy.who ? ` (${line.heldBy.who} must act)` : ""}; not counted as stalled while
+            it waits.
           </span>
         )}
         {(decision || isBadState(line.state)) && (

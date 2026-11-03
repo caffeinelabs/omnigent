@@ -2,7 +2,7 @@
 
 One answer for every surface. :func:`task_waits` and :func:`project_waits` are
 pure: they read :class:`Facts` (the factory's open decisions, open proposals,
-projects, PRs, tasks and bad loops, loaded once per pass) and return
+projects, PRs, open tasks and bad loops, loaded once per pass) and return
 :class:`Wait` items, the most decisive first:
 
 - ``stall``: a loop of the project went bad and a person decides what next;
@@ -12,16 +12,21 @@ projects, PRs, tasks and bad loops, loaded once per pass) and return
   shows every open question about the project;
 - ``proposal``: a proposal that changes the project waits on a person (its
   ``D-n``) or on the other lead's case against;
-- ``hold``: the task's lead holds it on purpose and says on what
-  (``sys_factory_task(op="hold")``, or the blocker of its update naming an
-  open ``D-n``, ``C-n``, ``PR #n`` or ``T-n``);
+- ``hold``: the task's lead (or a person) holds it on purpose and says on what
+  (``sys_factory_task(op="hold")``, stored on the task);
 - ``merge``: the project's own PR, or the PR of a project it depends on,
-  waits for a person to merge it;
+  waits for a person to merge it (or for the server, on an owner-set
+  auto-merge target);
 - ``dependency``: a project it depends on is not there yet;
 - ``capacity``: no free machine to start it on.
 
-A hold on an item that closed, or past its ``until``, lapses by itself. The
-loop engine's stall clock (:mod:`.task_pulse`) waits while a task has any
+The blocker of the lead's newest update holds the tasks it names by ``T-n``
+while the ``D-n``, ``C-n`` or ``PR #n`` it names is open; those waits keep
+their own kind. A stored hold lapses when what it names closes or at its
+``until`` (a day unless given, at most a week). Only a hold that a person
+must act on, or that names no ref, counts as on purpose
+(:attr:`Wait.on_purpose`): the stall clock then waits even with no IC open.
+The loop engine's stall clock (:mod:`.task_pulse`) waits while a task has any
 wait, and the snapshot shows each project's list (``ProjectView.waiting_on``)
 so the cockpit, Home and Slack say the same thing.
 """
@@ -29,7 +34,7 @@ so the cockpit, Home and Slack say the same thing.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final
 
@@ -51,13 +56,18 @@ KINDS: Final = ("stall", "decision", "proposal", "hold", "merge", "dependency", 
 """Wait kinds, in the order a project's list shows them."""
 _RANK: Final = {kind: i for i, kind in enumerate(KINDS)}
 
-HOLD_TEXT_MAX_S: Final = 24 * 3600
-"""A hold on free text (no ``D-n``/``C-n``/``PR #n``/``T-n``/project) lapses after this."""
+HOLD_DEFAULT_S: Final = 24 * 3600
+"""A hold without ``until`` lapses this long after it was put on (holding again renews it)."""
 HOLD_UNTIL_MAX_S: Final = 7 * 24 * 3600
 """The latest ``until`` a hold may name."""
 HOLD_NOTE_MAX: Final = 200
 LABEL_MAX: Final = 160
 QUESTION_WORDS_MAX: Final = 60
+
+SOURCE_HOLD: Final = "hold"
+"""A wait from the hold stored on the task."""
+SOURCE_UPDATE: Final = "update"
+"""A wait the blocker of the lead's update names."""
 
 PROJECT_SOURCES: Final = frozenset({"agent", "blocked_approval", "proposal", "relaunch_failed"})
 """Decision sources a project's list shows while open (never the stall's own ``loop``)."""
@@ -79,7 +89,10 @@ REF_KIND_TEXT: Final = "text"
 _DECISION_RE: Final = re.compile(r"(?<![\w-])D-(\d+)(?![\w-])", re.IGNORECASE)
 _PROPOSAL_RE: Final = re.compile(r"(?<![\w-])C-(\d+)(?![\w-])", re.IGNORECASE)
 _TASK_RE: Final = re.compile(r"(?<![\w-])T-(\d+)(?![\w-])", re.IGNORECASE)
-_PR_RE: Final = re.compile(r"(?:(?<![\w-])PR\s*#?|(?<![\w#])#|!)(\d+)(?![\w-])", re.IGNORECASE)
+_PR_RE: Final = re.compile(
+    r"(?:(?<![\w-])(?P<named>PR)\s*#?|(?<![\w#])#|!)(?P<n>\d+)(?![\w-])", re.IGNORECASE
+)
+"""``PR #12``, ``PR 12`` (named), or a bare ``#12`` / ``!12`` (a PR only when tracked)."""
 _SLUG_RE: Final = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 _WORD_RE: Final = re.compile(r"[a-z0-9][a-z0-9-]*[a-z0-9]")
 
@@ -94,11 +107,18 @@ class Wait:
         ``pods``, or the held task's ref for a hold on free text.
     :param label: One line, e.g. ``waiting on D-45 (Approve C-16, needs an owner)``.
     :param who: Who must act, in plain words: ``an owner``, ``an operator``, a
-        person's id, ``a person``, ``the project lead``, ``the other lead``, …
+        person's id, ``a person``, ``the project lead``, ``the other lead``,
+        ``the server``, …
     :param person: A person must act (it belongs in "Needs you").
     :param since: When the wait began (epoch seconds), when known.
     :param task: The task that waits, e.g. ``T-16`` (``None``: the project).
     :param decision_id: The decision a person answers, when there is one.
+    :param source: Where it comes from: :data:`SOURCE_HOLD` (stored on the task),
+        :data:`SOURCE_UPDATE` (the lead's update blocker), ``None`` (inferred).
+        Not serialized.
+    :param on_purpose: A stored hold the stall clock trusts even with no IC open:
+        a person must act on what it names, a person put it on, or it names
+        no ref (it lapses at its ``until``). Not serialized.
     """
 
     kind: str
@@ -109,6 +129,8 @@ class Wait:
     since: int | None = None
     task: str | None = None
     decision_id: str | None = None
+    source: str | None = None
+    on_purpose: bool = False
 
     def to_json(self) -> dict[str, Any]:
         """:returns: The ``WaitingOnView`` JSON."""
@@ -131,9 +153,11 @@ class Facts:
 
     :param decisions: The factory's open decisions.
     :param proposals: Its open (pending, co-signing) proposals.
-    :param tasks: Its tasks (any state: dependencies name closed ones too).
+    :param tasks: Its open tasks (closed ones may be given too; they never hold).
     :param loops: Its bad loops (stalled, exhausted, thrashing).
     :param leads: Project slug -> its lead's session id (the lead-asked rule).
+    :param auto_merge: The owner-set auto-merge targets, ``(lowercase owner/repo,
+        base)``: a ready PR into one waits on the server, not a person.
     """
 
     projects: Mapping[str, FactoryProject] = field(default_factory=dict)
@@ -144,38 +168,75 @@ class Facts:
     loops: Sequence[FactoryLoop] = ()
     leads: Mapping[str, str | None] = field(default_factory=dict)
     now: float = 0.0
+    auto_merge: frozenset[tuple[str, str]] = frozenset()
     _decisions_by_number: dict[int, FactoryDecision] = field(init=False, repr=False)
+    _decisions_by_id: dict[str, FactoryDecision] = field(init=False, repr=False)
     _proposals_by_number: dict[int, FactoryProposal] = field(init=False, repr=False)
     _tasks_by_number: dict[int, FactoryTask] = field(init=False, repr=False)
+    _tasks_by_id: dict[str, FactoryTask] = field(init=False, repr=False)
+    _open_by_project: dict[str, list[FactoryTask]] = field(init=False, repr=False)
     _prs_by_id: dict[str, FactoryPr] = field(init=False, repr=False)
+    _prs_by_project: dict[str, list[FactoryPr]] = field(init=False, repr=False)
     _mirrors: dict[str, FactoryDecision] = field(init=False, repr=False)
+    _askers: dict[str, str | None] = field(init=False, repr=False)
+    _patterns: dict[str, re.Pattern[str]] = field(init=False, repr=False)
+    _project_names: dict[str, re.Pattern[str] | None] = field(init=False, repr=False)
+    _inner: dict[str, str | None] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.decisions = [d for d in self.decisions if d.status == "open"]
-        self.proposals = [p for p in self.proposals if p.status in PROPOSAL_OPEN_STATUSES]
+        self.decisions = sorted(
+            (d for d in self.decisions if d.status == "open"),
+            key=lambda d: (d.created_at, d.number),
+        )
+        self.proposals = sorted(
+            (p for p in self.proposals if p.status in PROPOSAL_OPEN_STATUSES),
+            key=lambda p: p.number,
+        )
         self._decisions_by_number = {d.number: d for d in self.decisions}
+        self._decisions_by_id = {norm_id(d.id): d for d in self.decisions}
         self._proposals_by_number = {p.number: p for p in self.proposals}
         self._tasks_by_number = {t.number: t for t in self.tasks}
+        self._tasks_by_id = {norm_id(t.id): t for t in self.tasks}
+        self._open_by_project = {}
+        for row in sorted(self.tasks, key=lambda t: t.number):
+            if row.state in OPEN_TASK_STATES:
+                self._open_by_project.setdefault(row.project_slug, []).append(row)
         self._prs_by_id = {norm_id(p.id): p for p in self.prs}
+        self._prs_by_project = {}
+        for pr in sorted(self.prs, key=lambda p: p.number):
+            self._prs_by_project.setdefault(pr.project_slug or "", []).append(pr)
         self._mirrors = {
             (d.subject or "").lower(): d
             for d in self.decisions
             if d.source == "proposal" and (d.subject or "").lower().startswith("proposal:")
         }
+        self._askers = {d.id: _norm_or_none(d.asked_by_session_id) for d in self.decisions}
+        self._patterns = {}
+        self._project_names = {}
+        self._inner = {}
 
     @classmethod
-    def load(cls, deps: FactoryDeps, factory_id: str, now: float) -> Facts:
-        """Read what the waits need (synchronous; a handful of row reads)."""
-        from omnigent.server.factory.control import find_project_pl
+    def load(
+        cls,
+        deps: FactoryDeps,
+        factory_id: str,
+        now: float,
+        *,
+        tasks: Sequence[FactoryTask] | None = None,
+    ) -> Facts:
+        """
+        Read what the waits need (synchronous; a handful of row reads).
 
+        :param tasks: The factory's tasks when the caller already read them (only
+            the open ones are kept); else the open tasks are read.
+        """
         store = deps.factory_store
         projects = {p.slug: p for p in store.list_projects(factory_id)}
-        leads: dict[str, str | None] = {}
-        for slug, project in projects.items():
-            if project.status != "active":
-                continue
-            pl = find_project_pl(deps, factory_id, slug)
-            leads[slug] = pl.id if pl is not None else project.pl_session_id
+        rows = (
+            [t for t in tasks if t.state in OPEN_TASK_STATES]
+            if tasks is not None
+            else store.list_tasks(factory_id, states=sorted(OPEN_TASK_STATES))
+        )
         return cls(
             projects=projects,
             prs=store.list_prs(factory_id),
@@ -183,15 +244,19 @@ class Facts:
             proposals=store.list_proposals(
                 factory_id, status=sorted(PROPOSAL_OPEN_STATUSES), limit=500
             ),
-            tasks=store.list_tasks(factory_id),
+            tasks=rows,
             loops=store.list_loops(factory_id, states=sorted(BAD_LOOP_STATES)),
-            leads=leads,
+            leads=project_leads(deps, factory_id, projects.values()),
             now=now,
         )
 
     def decision(self, number: int) -> FactoryDecision | None:
         """:returns: Open decision ``D-<number>``, else ``None``."""
         return self._decisions_by_number.get(number)
+
+    def decision_by_id(self, decision_id: str | None) -> FactoryDecision | None:
+        """:returns: The open decision with row id *decision_id*, else ``None``."""
+        return self._decisions_by_id.get(norm_id(decision_id)) if decision_id else None
 
     def proposal(self, number: int) -> FactoryProposal | None:
         """:returns: Open proposal ``C-<number>``, else ``None``."""
@@ -202,17 +267,100 @@ class Facts:
         return self._mirrors.get(f"proposal:c-{proposal.number}")
 
     def task(self, number: int) -> FactoryTask | None:
-        """:returns: Task ``T-<number>`` (any state), else ``None``."""
+        """:returns: Task ``T-<number>`` (open, or closed when given), else ``None``."""
         return self._tasks_by_number.get(number)
+
+    def task_by_id(self, task_id: str | None) -> FactoryTask | None:
+        """:returns: The task with row id *task_id*, else ``None``."""
+        return self._tasks_by_id.get(norm_id(task_id)) if task_id else None
+
+    def open_tasks(self, slug: str) -> list[FactoryTask]:
+        """:returns: Project *slug*'s open tasks, by number."""
+        return self._open_by_project.get(slug, [])
 
     def pr(self, pr_id: str | None) -> FactoryPr | None:
         """:returns: The PR row, else ``None``."""
         return self._prs_by_id.get(norm_id(pr_id)) if pr_id else None
 
+    def prs_of(self, slug: str) -> list[FactoryPr]:
+        """:returns: Project *slug*'s PRs (any state), by number."""
+        return self._prs_by_project.get(slug, [])
+
     def pr_number(self, number: int) -> FactoryPr | None:
         """:returns: The newest tracked PR with *number*, else ``None``."""
         found = [p for p in self.prs if p.number == number]
         return max(found, key=lambda p: p.created_at) if found else None
+
+    def merges_itself(self, pr: FactoryPr) -> bool:
+        """:returns: Whether the server merges *pr* when ready (an owner-set target)."""
+        if not pr.repo or not pr.base_ref:
+            return False
+        return (pr.repo.strip().lower(), pr.base_ref.strip()) in self.auto_merge
+
+    def asker(self, decision: FactoryDecision) -> str | None:
+        """:returns: The normalized session id that asked *decision*, else ``None``."""
+        if decision.id in self._askers:
+            return self._askers[decision.id]
+        return _norm_or_none(decision.asked_by_session_id)
+
+    def task_pattern(self, task: FactoryTask) -> re.Pattern[str]:
+        """:returns: What names *task* in prose (its ref, branch or distinct key), cached."""
+        found = self._patterns.get(task.id)
+        if found is None:
+            found = self._patterns[task.id] = re.compile(
+                "|".join(_task_names(task)), re.IGNORECASE
+            )
+        return found
+
+    def project_names(self, slug: str) -> re.Pattern[str] | None:
+        """:returns: What names any open task of *slug* in prose (one pattern), cached."""
+        if slug not in self._project_names:
+            names = [n for t in self.open_tasks(slug) for n in _task_names(t)]
+            self._project_names[slug] = (
+                re.compile("|".join(names), re.IGNORECASE) if names else None
+            )
+        return self._project_names[slug]
+
+    def inner_reason(self, project: FactoryProject) -> str | None:
+        """:returns: The first thing *project* itself waits on, in a few words (cached)."""
+        if project.slug not in self._inner:
+            self._inner[project.slug] = _first_reason(project, self)
+        return self._inner[project.slug]
+
+
+def _norm_or_none(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return norm_id(value)
+    except ValueError:
+        return None
+
+
+def project_leads(
+    deps: FactoryDeps, factory_id: str, projects: Iterable[FactoryProject]
+) -> dict[str, str | None]:
+    """
+    Each active project's lead session: its row's ``pl_session_id``, else the
+    live member labelled its project lead (the factory's members read once).
+    """
+    from omnigent.factory import LABEL_PROJECT, LABEL_ROLE, ROLE_PROJECT_LEAD
+    from omnigent.server.factory.control import is_gone
+    from omnigent.server.factory.membership import factory_members
+
+    active = [p for p in projects if p.status == "active"]
+    leads: dict[str, str | None] = {p.slug: p.pl_session_id for p in active}
+    missing = {slug for slug, pl in leads.items() if not pl}
+    if missing:
+        for member in factory_members(factory_id, deps.conversation_store):
+            slug = member.labels.get(LABEL_PROJECT)
+            if (
+                slug in missing
+                and member.labels.get(LABEL_ROLE) == ROLE_PROJECT_LEAD
+                and not is_gone(member)
+            ):
+                leads[slug] = member.id
+    return leads
 
 
 # ── Plain words ────────────────────────────────────────────────
@@ -253,23 +401,28 @@ def decision_label(decision: FactoryDecision) -> str:
     return f"{decision.ref} ({_decision_words(decision)}, needs {who_of_decision(decision)})"
 
 
+def _decision_wait(decision: FactoryDecision, *, task: str | None, prefix: str = "") -> Wait:
+    """An open decision a person answers."""
+    subject = (decision.subject or "").lower()
+    return Wait(
+        kind="proposal" if subject.startswith("proposal:") else "decision",
+        ref=decision.ref,
+        label=clip(f"{prefix}waiting on {decision_label(decision)}"),
+        who=who_of_decision(decision),
+        person=True,
+        since=int(decision.created_at),
+        task=task,
+        decision_id=decision.id,
+    )
+
+
 def _proposal_wait(
     proposal: FactoryProposal, facts: Facts, *, task: str | None, prefix: str = ""
 ) -> Wait:
     """A proposal that waits on a person (its decision) or on the other lead."""
     mirror = facts.mirror(proposal)
     if mirror is not None:
-        who = who_of_decision(mirror)
-        return Wait(
-            kind="proposal",
-            ref=mirror.ref,
-            label=clip(f"{prefix}waiting on {decision_label(mirror)}"),
-            who=who,
-            person=True,
-            since=int(mirror.created_at),
-            task=task,
-            decision_id=mirror.id,
-        )
+        return replace(_decision_wait(mirror, task=task, prefix=prefix), kind="proposal")
     ref = f"C-{proposal.number}"
     if proposal.status == "awaiting_cosign":
         what, who, person = "the other lead's case against", "the other lead", False
@@ -294,6 +447,27 @@ def merge_who(project: FactoryProject | None) -> str:
     return _person_name(str(owner)) if owner else "an operator"
 
 
+SERVER_MERGES: Final = "the server"
+"""Who merges a ready PR into an owner-set auto-merge target."""
+
+
+def _merge_wait(
+    pr: FactoryPr, project: FactoryProject | None, facts: Facts, *, task: str | None, prefix: str
+) -> Wait:
+    """A ready PR that waits for its merge: a person's, or the server's on a target."""
+    auto = facts.merges_itself(pr)
+    what = SERVER_MERGES if auto else "a person"
+    return Wait(
+        kind="merge",
+        ref=f"PR #{pr.number}",
+        label=clip(f"{prefix}waiting on {what} to merge PR #{pr.number}"),
+        who=SERVER_MERGES if auto else merge_who(project),
+        person=not auto,
+        since=pr.ready_at,
+        task=task,
+    )
+
+
 # ── Holds a lead declares ──────────────────────────────────────
 
 
@@ -311,27 +485,57 @@ class HoldRef:
     number: int | None = None
 
 
-def parse_on(on: str, projects: Iterable[str] = ()) -> HoldRef:
+def _first(found: Iterable[tuple[int, HoldRef]]) -> HoldRef | None:
+    ordered = sorted(found, key=lambda pair: pair[0])
+    return ordered[0][1] if ordered else None
+
+
+def parse_on(
+    on: str,
+    projects: Iterable[str] = (),
+    *,
+    own: str | None = None,
+    prs: Collection[int] | None = None,
+) -> HoldRef:
     """
-    Read what a hold waits on: the first ``D-n``, ``C-n``, ``PR #n``, ``T-n`` or
-    project slug in *on*, else free text.
+    Read what a hold waits on: a ``D-n`` or ``C-n`` first (who must act), then a
+    ``T-n`` or ``PR #n``, then a project slug, else free text. The earliest of
+    each pair wins.
 
     :param projects: The factory's project slugs (a bare word naming one is a project).
+    :param own: The held task's ref (``T-16 waits on C-16`` names C-16, not T-16).
+    :param prs: The PR numbers the factory tracks: a bare ``#n`` naming none is text
+        (``the CI run #4``). ``None``: every ``#n`` is a PR.
     """
     text = " ".join((on or "").split())
-    found: list[tuple[int, HoldRef]] = []
-    for kind, pattern, ref in (
+    people: list[tuple[int, HoldRef]] = []
+    for kind, pattern, fmt in (
         (REF_KIND_DECISION, _DECISION_RE, "D-{}"),
         (REF_KIND_PROPOSAL, _PROPOSAL_RE, "C-{}"),
-        (REF_KIND_TASK, _TASK_RE, "T-{}"),
-        (REF_KIND_PR, _PR_RE, "PR #{}"),
     ):
         match = pattern.search(text)
         if match is not None:
             number = int(match.group(1))
-            found.append((match.start(), HoldRef(kind, ref.format(number), number)))
-    if found:
-        return min(found, key=lambda pair: pair[0])[1]
+            people.append((match.start(), HoldRef(kind, fmt.format(number), number)))
+    found = _first(people)
+    if found is not None:
+        return found
+    work: list[tuple[int, HoldRef]] = []
+    for match in _TASK_RE.finditer(text):
+        number = int(match.group(1))
+        if own is not None and f"T-{number}" == own.upper():
+            continue
+        work.append((match.start(), HoldRef(REF_KIND_TASK, f"T-{number}", number)))
+        break
+    for match in _PR_RE.finditer(text):
+        number = int(match.group("n"))
+        if not match.group("named") and prs is not None and number not in prs:
+            continue
+        work.append((match.start(), HoldRef(REF_KIND_PR, f"PR #{number}", number)))
+        break
+    found = _first(work)
+    if found is not None:
+        return found
     slugs = set(projects)
     lowered = text.lower().removeprefix("project:")
     if lowered in slugs:
@@ -352,21 +556,25 @@ def hold_record(
     by_title: str | None,
     now: int,
     projects: Iterable[str] = (),
+    own: str | None = None,
+    prs: Collection[int] | None = None,
 ) -> dict[str, Any]:
-    """:returns: The ``factory_tasks.hold`` JSON for a hold put on now."""
-    parsed = parse_on(on, projects)
-    record: dict[str, Any] = {
+    """
+    :returns: The ``factory_tasks.hold`` JSON for a hold put on now; without
+        *until* it lapses after :data:`HOLD_DEFAULT_S`.
+    """
+    parsed = parse_on(on, projects, own=own, prs=prs)
+    return {
         "on": clip(on, HOLD_NOTE_MAX),
         "kind": parsed.kind,
         "ref": parsed.ref,
         "note": clip(note, HOLD_NOTE_MAX) or None,
-        "until": until,
+        "until": until if until is not None else now + HOLD_DEFAULT_S,
         "by": by,
         "by_kind": by_kind,
         "by_title": by_title,
         "since": now,
     }
-    return record
 
 
 def _ref_wait(
@@ -377,18 +585,7 @@ def _ref_wait(
         decision = facts.decision(hold.number)
         if decision is None:
             return None
-        subject = (decision.subject or "").lower()
-        kind = "proposal" if subject.startswith("proposal:") else "decision"
-        return Wait(
-            kind=kind,
-            ref=decision.ref,
-            label=clip(f"{prefix}waiting on {decision_label(decision)}"),
-            who=who_of_decision(decision),
-            person=True,
-            since=int(decision.created_at),
-            task=task,
-            decision_id=decision.id,
-        )
+        return _decision_wait(decision, task=task, prefix=prefix)
     if hold.kind == REF_KIND_PROPOSAL and hold.number is not None:
         proposal = facts.proposal(hold.number)
         if proposal is None:
@@ -412,16 +609,7 @@ def _ref_wait(
             return None
         project = facts.projects.get(pr.project_slug or "")
         if pr.ready:
-            who = merge_who(project)
-            return Wait(
-                kind="merge",
-                ref=f"PR #{pr.number}",
-                label=clip(f"{prefix}waiting on a person to merge PR #{pr.number}"),
-                who=who,
-                person=True,
-                since=pr.ready_at,
-                task=task,
-            )
+            return _merge_wait(pr, project, facts, task=task, prefix=prefix)
         return Wait(
             kind="dependency",
             ref=f"PR #{pr.number}",
@@ -441,50 +629,88 @@ def _ref_wait(
     return None
 
 
-def explicit_hold(task: FactoryTask, facts: Facts, *, explain: bool = True) -> Wait | None:
-    """
-    The hold *task*'s lead (or a person) put on it, while it holds.
-
-    It lapses when ``until`` passed, when what it names closed, or a day after
-    a hold on free text was put on.
-
-    :param explain: Say what a held-on project waits on in turn (one level).
-    """
+def _stored_hold(task: FactoryTask) -> Mapping[str, Any] | None:
     hold = task.hold if isinstance(task.hold, Mapping) else None
-    if not hold:
-        return None
-    now = facts.now
+    return hold or None
+
+
+def hold_until(hold: Mapping[str, Any]) -> int | None:
+    """:returns: When a stored hold lapses at the latest (epoch seconds), else ``None``."""
     until = hold.get("until")
-    if isinstance(until, int | float) and now >= until:
-        return None
+    if isinstance(until, int | float) and not isinstance(until, bool):
+        return int(until)
+    since = hold.get("since")
+    if isinstance(since, int | float) and not isinstance(since, bool) and since:
+        return int(since) + HOLD_DEFAULT_S
+    return None
+
+
+def _hold_state(
+    task: FactoryTask, facts: Facts, *, explain: bool = True
+) -> tuple[Wait | None, str | None]:
+    """:returns: ``(its stored hold's wait, None)`` while it holds, else ``(None, why not)``."""
+    hold = _stored_hold(task)
+    if hold is None:
+        return None, None
+    until = hold_until(hold)
+    if until is not None and facts.now >= until:
+        return None, "its time limit passed"
     since = int(hold.get("since") or 0) or None
-    by = str(
-        hold.get("by_title") or ("a person" if hold.get("by_kind") == "human" else "its lead")
-    )
+    human = hold.get("by_kind") == "human"
+    by = str(hold.get("by_title") or ("a person" if human else "its lead"))
     prefix = f"{task.ref} held: "
     parsed = HoldRef(
-        str(hold.get("kind") or REF_KIND_TEXT),
-        hold.get("ref"),
-        ref_number(hold.get("ref")),
+        str(hold.get("kind") or REF_KIND_TEXT), hold.get("ref"), ref_number(hold.get("ref"))
     )
     if parsed.kind != REF_KIND_TEXT:
         found = _ref_wait(parsed, facts, task=task.ref, prefix=prefix, explain=explain)
         if found is None:
-            return None
+            return None, f"{parsed.ref or 'what it named'} closed"
         note = hold.get("note")
         label = found.label if not note else clip(f"{found.label} · {note}")
-        return replace(found, kind="hold", label=label, since=since or found.since)
-    if until is None and since is not None and now - since >= HOLD_TEXT_MAX_S:
-        return None
+        return (
+            replace(
+                found,
+                kind="hold",
+                label=label,
+                since=since or found.since,
+                source=SOURCE_HOLD,
+                on_purpose=found.person or human,
+            ),
+            None,
+        )
     text = hold.get("note") or hold.get("on") or "on purpose"
-    return Wait(
-        kind="hold",
-        ref=task.ref,
-        label=clip(f"{prefix}{text}"),
-        who=by,
-        since=since,
-        task=task.ref,
+    return (
+        Wait(
+            kind="hold",
+            ref=task.ref,
+            label=clip(f"{prefix}{text}"),
+            who=by,
+            since=since,
+            task=task.ref,
+            source=SOURCE_HOLD,
+            on_purpose=True,
+        ),
+        None,
     )
+
+
+def explicit_hold(task: FactoryTask, facts: Facts, *, explain: bool = True) -> Wait | None:
+    """
+    The hold *task*'s lead (or a person) put on it, while it holds.
+
+    It lapses at its ``until`` (a day after it was put on, unless given) and
+    when what it names closes. A hold on a ``T-n``, a PR in the works or a
+    project is not on purpose: nobody must act on it, so a dead IC still stalls.
+
+    :param explain: Say what a held-on project waits on in turn (one level).
+    """
+    return _hold_state(task, facts, explain=explain)[0]
+
+
+def hold_lapse(task: FactoryTask, facts: Facts) -> str | None:
+    """:returns: Why *task*'s stored hold no longer holds (``None``: it holds, or has none)."""
+    return _hold_state(task, facts, explain=False)[1]
 
 
 def ref_number(ref: Any) -> int | None:
@@ -499,8 +725,12 @@ def update_holds(
     """
     What the blocker of the lead's newest update names, while it is open.
 
-    :returns: ``(wait, the task refs it names)`` pairs; an empty set holds
-        every task of the project.
+    The waits keep their own kind (a lead's word is not a hold the clock
+    trusts). A PR of the project itself that is not ready is skipped: nobody
+    else owes it anything.
+
+    :returns: ``(wait, the task refs it names)`` pairs; an empty set holds no
+        task (the project's list still shows it).
     """
     update = project.lead_update if isinstance(project.lead_update, Mapping) else None
     blocker = str((update or {}).get("blocker") or "").strip()
@@ -508,21 +738,22 @@ def update_holds(
         return []
     tasks = {f"T-{m}" for m in _TASK_RE.findall(blocker)}
     since = int((update or {}).get("at") or 0) or None
+    refs: list[HoldRef] = []
+    for kind, pattern in ((REF_KIND_DECISION, _DECISION_RE), (REF_KIND_PROPOSAL, _PROPOSAL_RE)):
+        refs += [HoldRef(kind, None, int(m.group(1))) for m in pattern.finditer(blocker)]
+    for match in _PR_RE.finditer(blocker):
+        pr = facts.pr_number(int(match.group("n")))
+        if pr is None or (pr.project_slug == project.slug and not pr.ready):
+            continue
+        refs.append(HoldRef(REF_KIND_PR, None, pr.number))
     out: list[tuple[Wait, set[str]]] = []
     seen: set[str] = set()
-    for kind, pattern in (
-        (REF_KIND_DECISION, _DECISION_RE),
-        (REF_KIND_PROPOSAL, _PROPOSAL_RE),
-        (REF_KIND_PR, _PR_RE),
-    ):
-        for match in pattern.finditer(blocker):
-            number = int(match.group(1))
-            ref = HoldRef(kind, None, number)
-            found = _ref_wait(ref, facts, task=None, prefix="held by its lead: ", explain=explain)
-            if found is None or found.ref in seen:
-                continue
-            seen.add(found.ref)
-            out.append((replace(found, kind="hold", since=since or found.since), tasks))
+    for ref in refs:
+        found = _ref_wait(ref, facts, task=None, prefix="held by its lead: ", explain=explain)
+        if found is None or found.ref in seen:
+            continue
+        seen.add(found.ref)
+        out.append((replace(found, since=since or found.since, source=SOURCE_UPDATE), tasks))
     return out
 
 
@@ -540,25 +771,30 @@ def _dependency_wait(
     explain: bool = True,
 ) -> Wait:
     """
-    A project not there yet: its PR waits on a person (``merge``) or it is still building.
+    A project not there yet: its PR waits on a merge (``merge``) or it is still building.
 
     :param explain: Say what the project itself waits on (one level down).
     """
-    own = [p for p in facts.prs if p.project_slug == target.slug and p.state == "open"]
-    ready = [p for p in own if p.ready]
+    ready = [p for p in facts.prs_of(target.slug) if p.state == "open" and p.ready]
     because = f" · {clip(why, 80)}" if why else ""
     if ready and mode != "ready":
         pr = min(ready, key=lambda p: p.ready_at or p.created_at)
+        if all(facts.merges_itself(p) for p in ready):
+            label = f"{prefix}waiting on {SERVER_MERGES} to merge {target.slug}{because}"
+            who, person = SERVER_MERGES, False
+        else:
+            label = f"{prefix}waiting on {target.slug}'s merge (needs a person){because}"
+            who, person = merge_who(target), True
         return Wait(
             kind="merge",
             ref=target.slug,
-            label=clip(f"{prefix}waiting on {target.slug}'s merge (needs a person){because}"),
-            who=merge_who(target),
-            person=True,
+            label=clip(label),
+            who=who,
+            person=person,
             since=pr.ready_at or None,
             task=task,
         )
-    inner = _first_reason(target, facts) if explain else None
+    inner = facts.inner_reason(target) if explain else None
     state = inner or (target.stage if target.stage != "queued" else "not started")
     return Wait(
         kind="dependency",
@@ -592,7 +828,7 @@ def unmet_dependencies(project: FactoryProject, facts: Facts) -> list[tuple[Fact
     out: list[tuple[FactoryProject, str]] = []
     for slug in depends_on:
         target = resolve_alias(slug, facts.projects)
-        if target is None or dependency_met(target, facts.prs, mode):
+        if target is None or dependency_met(target, facts.prs_of(target.slug), mode):
             continue
         out.append((target, mode))
     return out
@@ -612,10 +848,11 @@ def dependency_waits(project: FactoryProject, facts: Facts) -> list[Wait]:
 # ── Decisions and proposals about a task or project ────────────
 
 
-def _names(text: str, mine: re.Pattern[str], others: Sequence[re.Pattern[str]]) -> str | None:
+def _names(text: str, mine: re.Pattern[str], tasks: re.Pattern[str] | None) -> str | None:
+    """``mine`` when *text* names the task, ``other`` when it names another one."""
     if mine.search(text):
         return "mine"
-    if _TASK_RE.search(text) or any(p.search(text) for p in others):
+    if _TASK_RE.search(text) or (tasks is not None and tasks.search(text)):
         return "other"
     return None
 
@@ -624,25 +861,30 @@ def _about_task(
     decision: FactoryDecision,
     subjects: set[str],
     mine: re.Pattern[str],
-    others: Sequence[re.Pattern[str]],
+    tasks: re.Pattern[str] | None,
 ) -> bool:
-    """A question about the task, or about no task in particular."""
+    """
+    A question about the task, or about no task in particular.
+
+    :param tasks: Names any open task of the project (the task's own included:
+        once *mine* did not match, a match names another task).
+    """
     subject = (decision.subject or "").strip().lower()
     if subject.startswith("task:"):
         return subject in subjects
     for text in (decision.question, decision.context):
-        found = _names(text or "", mine, others)
+        found = _names(text or "", mine, tasks)
         if found is not None:
             return found == "mine"
     return True
 
 
-def _task_pattern(task: FactoryTask) -> re.Pattern[str]:
+def _task_names(task: FactoryTask) -> list[str]:
     key = re.escape(task.key)
     names = [rf"(?<![\w-]){re.escape(task.ref)}(?![\w-])", rf"factory/[\w.-]+/{key}(?![\w-])"]
     if "-" in task.key or any(ch.isdigit() for ch in task.key):
         names.append(rf"(?<![\w-]){key}(?![\w-])")
-    return re.compile("|".join(names), re.IGNORECASE)
+    return names
 
 
 def _names_task(decision: FactoryDecision, mine: re.Pattern[str]) -> bool:
@@ -666,69 +908,39 @@ def decision_waits(task: FactoryTask, facts: Facts, *, lead_id: str | None) -> l
     are about its project (a proposal that changes it, a member parked on an
     approval or failing to relaunch) and name no other task.
     """
-    askers = {norm_id(s) for s in task.session_ids or [] if _is_id(s)}
-    lead = norm_id(lead_id) if lead_id and _is_id(lead_id) else None
+    askers = {a for s in task.session_ids or [] if (a := _norm_or_none(s))}
+    lead = _norm_or_none(lead_id)
     subjects = {f"task:{task.ref}".lower(), f"task:{task.key}".lower()}
-    mine = _task_pattern(task)
-    others = [
-        _task_pattern(t)
-        for t in facts.tasks
-        if t.project_slug == task.project_slug and t.id != task.id
-    ]
+    mine = facts.task_pattern(task)
+    names = facts.project_names(task.project_slug)
     out: list[Wait] = []
-    for decision in sorted(facts.decisions, key=lambda d: (d.created_at, d.number)):
-        if decision.status != "open" or decision.source in ("loop", "done_check"):
+    for decision in facts.decisions:
+        if decision.source in ("loop", "done_check"):
             continue
-        subject = (decision.subject or "").strip().lower()
-        about = subject in subjects and decision.project_slug in (None, task.project_slug)
-        asker = (
-            norm_id(decision.asked_by_session_id)
-            if decision.asked_by_session_id and _is_id(decision.asked_by_session_id)
-            else None
-        )
-        blocking_agent = decision.blocking and decision.source in ("agent", "blocked_approval")
         same_project = decision.project_slug in (None, task.project_slug)
+        subject = (decision.subject or "").strip().lower()
+        asker = facts.asker(decision)
+        blocking_agent = decision.blocking and decision.source in ("agent", "blocked_approval")
         held = (
-            about
+            (subject in subjects and same_project)
             or (blocking_agent and asker is not None and asker in askers)
             or (
                 blocking_agent
                 and asker is not None
                 and asker == lead
-                and _about_task(decision, subjects, mine, others)
+                and _about_task(decision, subjects, mine, names)
             )
             or (blocking_agent and same_project and _names_task(decision, mine))
             or (
                 decision.project_slug == task.project_slug
                 and decision.source in WORK_SOURCES
                 and (decision.blocking or decision.source == "proposal")
-                and _about_task(decision, subjects, mine, others)
+                and _about_task(decision, subjects, mine, names)
             )
         )
-        if not held:
-            continue
-        kind = "proposal" if subject.startswith("proposal:") else "decision"
-        out.append(
-            Wait(
-                kind=kind,
-                ref=decision.ref,
-                label=clip(f"waiting on {decision_label(decision)}"),
-                who=who_of_decision(decision),
-                person=True,
-                since=int(decision.created_at),
-                task=task.ref,
-                decision_id=decision.id,
-            )
-        )
+        if held:
+            out.append(_decision_wait(decision, task=task.ref))
     return out
-
-
-def _is_id(value: str) -> bool:
-    try:
-        norm_id(value)
-    except ValueError:
-        return False
-    return True
 
 
 def proposal_slugs(proposal: FactoryProposal) -> set[str]:
@@ -749,14 +961,11 @@ def proposal_slugs(proposal: FactoryProposal) -> set[str]:
 
 def proposal_waits(slug: str, facts: Facts, *, task: str | None = None) -> list[Wait]:
     """Open proposals that change project *slug* (their decision, or the other lead)."""
-    out: list[Wait] = []
-    for proposal in sorted(facts.proposals, key=lambda p: p.number):
-        if proposal.status not in PROPOSAL_OPEN_STATUSES or proposal.kind != "projects":
-            continue
-        if slug not in proposal_slugs(proposal):
-            continue
-        out.append(_proposal_wait(proposal, facts, task=task))
-    return out
+    return [
+        _proposal_wait(proposal, facts, task=task)
+        for proposal in facts.proposals
+        if proposal.kind == "projects" and slug in proposal_slugs(proposal)
+    ]
 
 
 # ── A task, a project ──────────────────────────────────────────
@@ -764,53 +973,33 @@ def proposal_waits(slug: str, facts: Facts, *, task: str | None = None) -> list[
 
 def _task_dependency_waits(task: FactoryTask, facts: Facts, *, explain: bool = True) -> list[Wait]:
     """``project:<slug>`` and ``decision:D-n`` dependencies of a task that are not met."""
+    from omnigent.server.factory.gating import dependency_met
+
     out: list[Wait] = []
     for dep in task.deps or []:
         text = str(dep)
         if text.startswith("project:"):
             target = facts.projects.get(text.removeprefix("project:"))
-            if target is None:
+            if target is None or dependency_met(target, facts.prs_of(target.slug), "merged"):
                 continue
-            from omnigent.server.factory.gating import dependency_met
-
-            if not dependency_met(target, facts.prs, "merged"):
-                out.append(
-                    _dependency_wait(target, facts, task=task.ref, mode="merged", explain=explain)
-                )
+            out.append(
+                _dependency_wait(target, facts, task=task.ref, mode="merged", explain=explain)
+            )
         elif text.startswith("decision:"):
             number = ref_number(text)
             decision = facts.decision(number) if number is not None else None
             if decision is not None:
-                out.append(
-                    Wait(
-                        kind="decision",
-                        ref=decision.ref,
-                        label=clip(f"waiting on {decision_label(decision)}"),
-                        who=who_of_decision(decision),
-                        person=True,
-                        since=int(decision.created_at),
-                        task=task.ref,
-                        decision_id=decision.id,
-                    )
-                )
+                out.append(replace(_decision_wait(decision, task=task.ref), kind="decision"))
     return out
 
 
 def _own_merge(task: FactoryTask, facts: Facts) -> Wait | None:
-    """The task's PR is ready and only waits for a person to merge it."""
+    """The task's PR is ready and only waits for its merge."""
     pr = facts.pr(task.pr_id)
     if pr is None or pr.state != "open" or not pr.ready:
         return None
     project = facts.projects.get(task.project_slug)
-    return Wait(
-        kind="merge",
-        ref=f"PR #{pr.number}",
-        label=clip(f"waiting on a person to merge PR #{pr.number}"),
-        who=merge_who(project),
-        person=True,
-        since=pr.ready_at,
-        task=task.ref,
-    )
+    return _merge_wait(pr, project, facts, task=task.ref, prefix="")
 
 
 def task_waits(task: FactoryTask, facts: Facts, *, lead_id: str | None = None) -> list[Wait]:
@@ -832,7 +1021,7 @@ def task_waits(task: FactoryTask, facts: Facts, *, lead_id: str | None = None) -
     found += proposal_waits(task.project_slug, facts, task=task.ref)
     if project is not None:
         for wait, names in update_holds(project, facts):
-            if not names or task.ref in names:
+            if task.ref in names:
                 found.append(replace(wait, task=task.ref))
     own = _own_merge(task, facts)
     if own is not None:
@@ -859,14 +1048,12 @@ def _stall_waits(project: FactoryProject, facts: Facts) -> list[Wait]:
     """Bad loops of the project and the decision a person answers for each."""
     from omnigent.server.factory.loops import task_label
 
-    by_id = {norm_id(d.id): d for d in facts.decisions}
-    tasks = {norm_id(t.id): t for t in facts.tasks}
     out: list[Wait] = []
     for loop in facts.loops:
         if loop.project_slug != project.slug or loop.state not in BAD_LOOP_STATES:
             continue
-        decision = by_id.get(norm_id(loop.decision_id)) if loop.decision_id else None
-        task = tasks.get(norm_id(loop.task_id)) if loop.task_id else None
+        decision = facts.decision_by_id(loop.decision_id)
+        task = facts.task_by_id(loop.task_id)
         what = task_label(task) if task is not None else loop.kind
         reason = clip(loop.last_reason or loop.state, 60)
         if decision is not None:
@@ -891,41 +1078,19 @@ def _stall_waits(project: FactoryProject, facts: Facts) -> list[Wait]:
 
 def _project_decisions(project: FactoryProject, facts: Facts) -> list[Wait]:
     """Open decisions about the project that hold its work (a stall's own is a ``stall``)."""
-    out: list[Wait] = []
-    for decision in sorted(facts.decisions, key=lambda d: (d.created_at, d.number)):
-        if decision.project_slug != project.slug or not _holds_project(decision):
-            continue
-        subject = (decision.subject or "").lower()
-        out.append(
-            Wait(
-                kind="proposal" if subject.startswith("proposal:") else "decision",
-                ref=decision.ref,
-                label=clip(f"waiting on {decision_label(decision)}"),
-                who=who_of_decision(decision),
-                person=True,
-                since=int(decision.created_at),
-                decision_id=decision.id,
-            )
-        )
-    return out
+    return [
+        _decision_wait(decision, task=None)
+        for decision in facts.decisions
+        if decision.project_slug == project.slug and _holds_project(decision)
+    ]
 
 
 def _own_merges(project: FactoryProject, facts: Facts) -> list[Wait]:
-    out: list[Wait] = []
-    for pr in sorted(facts.prs, key=lambda p: p.number):
-        if pr.project_slug != project.slug or pr.state != "open" or not pr.ready:
-            continue
-        out.append(
-            Wait(
-                kind="merge",
-                ref=f"PR #{pr.number}",
-                label=f"waiting on a person to merge PR #{pr.number}",
-                who=merge_who(project),
-                person=True,
-                since=pr.ready_at,
-            )
-        )
-    return out
+    return [
+        _merge_wait(pr, project, facts, task=None, prefix="")
+        for pr in facts.prs_of(project.slug)
+        if pr.state == "open" and pr.ready
+    ]
 
 
 def capacity_wait(start: Mapping[str, Any] | None) -> Wait | None:
@@ -962,11 +1127,7 @@ def project_waits(
         return []
     lead_id = facts.leads.get(project.slug)
     explain = depth == 0
-    mine = [
-        t
-        for t in sorted(facts.tasks, key=lambda t: t.number)
-        if t.project_slug == project.slug and t.state in OPEN_TASK_STATES
-    ]
+    mine = facts.open_tasks(project.slug)
     # A lead's own hold says the most (which task, on what): it wins a shared ref.
     found: list[Wait] = [h for t in mine if (h := explicit_hold(t, facts, explain=explain))]
     found += _stall_waits(project, facts)
@@ -1002,12 +1163,13 @@ def one_line(waits: Sequence[Wait | Mapping[str, Any]]) -> str | None:
 
 def task_hold_view(task: FactoryTask, facts: Facts | None = None) -> dict[str, Any] | None:
     """:returns: The task's hold as stored, with ``active`` when *facts* says it still holds."""
-    hold = task.hold if isinstance(task.hold, Mapping) else None
-    if not hold:
+    hold = _stored_hold(task)
+    if hold is None:
         return None
     out = {k: hold.get(k) for k in ("on", "kind", "ref", "note", "until", "by", "by_kind")}
     out["by_title"] = hold.get("by_title")
     out["since"] = hold.get("since")
+    out["until"] = hold_until(hold)
     if facts is not None:
         found = explicit_hold(task, facts)
         out["active"] = found is not None
@@ -1016,9 +1178,12 @@ def task_hold_view(task: FactoryTask, facts: Facts | None = None) -> dict[str, A
 
 
 __all__ = [
-    "HOLD_TEXT_MAX_S",
+    "HOLD_DEFAULT_S",
     "HOLD_UNTIL_MAX_S",
     "KINDS",
+    "SERVER_MERGES",
+    "SOURCE_HOLD",
+    "SOURCE_UPDATE",
     "Facts",
     "HoldRef",
     "Wait",
@@ -1028,10 +1193,13 @@ __all__ = [
     "decision_waits",
     "dependency_waits",
     "explicit_hold",
+    "hold_lapse",
     "hold_record",
+    "hold_until",
     "merge_who",
     "one_line",
     "parse_on",
+    "project_leads",
     "project_waits",
     "proposal_slugs",
     "proposal_waits",

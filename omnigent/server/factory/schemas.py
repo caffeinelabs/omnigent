@@ -181,12 +181,13 @@ class LoopHoldView(_View):
     """
     What a running implement loop waits on: its stall clock is paused.
 
-    :param decision_ref: The first thing it waits on, e.g. ``D-22``, ``C-16``,
-        ``PR #12`` or a project slug.
-    :param refs: The first ones it waits on, in order (at most five).
-    :param since: When the first began (epoch seconds).
-    :param count: How many it waits on in all.
-    :param kind: The first one's wait kind (``decision``, ``hold``, ``merge``, …).
+    :param decision_id: The first decision a person answers, if any.
+    :param decision_ref: That decision, e.g. ``D-22``; with none, *label*.
+    :param refs: The decisions it waits on, in order (at most five); other waits
+        (a merge, a dependency, a hold on a task) are carried by *kind* and *label*.
+    :param since: When the first wait began (epoch seconds).
+    :param count: How many decisions it waits on in all.
+    :param kind: The first wait's kind (``decision``, ``hold``, ``merge``, …).
     :param label: It in one line, e.g. ``T-16 held: waiting on D-45 (Approve C-16,
         needs an owner)``.
     :param who: Who must act on it.

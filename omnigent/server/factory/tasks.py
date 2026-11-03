@@ -1780,6 +1780,14 @@ async def add_task(
     }
 
 
+@dataclass(frozen=True)
+class _HoldWrite:
+    """A person's PATCH sets (*record*) or lifts (``None``) the task's hold."""
+
+    record: dict[str, Any] | None
+    facts: waits.Facts
+
+
 async def edit_task(
     app_state: Any, factory_id: str, ref: str, body: TaskEditIn, actor: Actor, by: str
 ) -> dict[str, Any]:
@@ -1792,9 +1800,22 @@ async def edit_task(
     :returns: ``{task, changed, mail_id, warnings}``.
     """
     deps = factory_deps(app_state)
+    now = int(time.time())
+    if body.cancel and body.hold is not None:
+        raise CockpitError(400, "invalid_body", "a cancelled task cannot be held", field="hold")
 
-    def run() -> tuple[FactoryTask, FactoryTask, Write | None]:
+    def run() -> tuple[FactoryTask, FactoryTask, Write | None, _HoldWrite | None]:
         task = resolve_task_ref(deps, factory_id, ref)
+        held: _HoldWrite | None = None
+        if "hold" in body.model_fields_set and (body.hold is not None or task.hold):
+            # The hold is checked before anything is written: a refused one changes nothing.
+            facts = waits.Facts.load(deps, factory_id, now)
+            record = (
+                hold_of_input(task, body.hold, actor, now, facts)
+                if body.hold is not None
+                else None
+            )
+            held = _HoldWrite(record, facts)
         numbers = _numbers(deps, factory_id, task.project_slug)
         fields = _row_fields(
             body, task, numbers, budget=body.budget, budget_set="budget" in body.model_fields_set
@@ -1805,6 +1826,8 @@ async def edit_task(
         if fields:
             write = apply_fields(deps, factory_id, task.project_slug, [(task.key, fields)], actor)
         after = deps.factory_store.get_task(task.id) or task
+        if held is not None:
+            after = deps.factory_store.update_task(after.id, hold=held.record) or after
         if body.cancel and after.state != "cancelled":
             after, event = move(deps, after, "cancelled", actor, reason="cancelled by a person")
             if write is None:
@@ -1813,15 +1836,16 @@ async def edit_task(
                 write.events.append(event)
             write.ctx = load_ctx(deps, factory_id, task.project_slug)
             write.events += refresh_states(deps, write.ctx)
-        return task, after, write
+        return task, after, write, held
 
     async with lock(factory_id):
-        before, after, write = await asyncio.to_thread(run)
+        before, after, write, held = await asyncio.to_thread(run)
     if write is not None:
         await emit_all(app_state, factory_id, write.events)
-    if "hold" in body.model_fields_set and (body.hold is not None or after.hold):
-        await hold_task(app_state, factory_id, after, body.hold, actor)
-        after = await asyncio.to_thread(deps.factory_store.get_task, after.id) or after
+    if held is not None:
+        view = waits.task_hold_view(after, held.facts)
+        label = view.get("label") if view is not None else None
+        await _hold_event(app_state, factory_id, after, held.record, label, actor)
     ctx = (
         write.ctx
         if write is not None
@@ -1860,6 +1884,8 @@ def parse_until(value: int | str | None, now: int) -> int | None:
     """
     When a hold lapses: epoch seconds, an ISO-8601 time, or ``2h``/``30m``/``1d`` from now.
 
+    :returns: Epoch seconds, or ``None`` when not given (the hold then lapses after
+        :data:`.waits.HOLD_DEFAULT_S`).
     :raises CockpitError: 400 ``invalid_until`` (unreadable, past, or more than 7 days out).
     """
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -1896,14 +1922,15 @@ def parse_until(value: int | str | None, now: int) -> int | None:
     return at
 
 
-def _check_hold_target(
-    deps: FactoryDeps, factory_id: str, task: FactoryTask, record: Mapping[str, Any]
-) -> None:
+def _check_hold_target(task: FactoryTask, record: Mapping[str, Any], facts: waits.Facts) -> None:
     """A hold on a ref must name something open now (else there is nothing to wait on)."""
     kind, ref = record.get("kind"), record.get("ref")
     if kind == waits.REF_KIND_TEXT or not ref:
+        if str(record.get("on") or "").strip().upper() == task.ref.upper():
+            raise CockpitError(
+                409, "nothing_to_wait_on", "a task cannot wait on itself", field="on"
+            )
         return
-    facts = waits.Facts.load(deps, factory_id, time.time())
     number = waits.ref_number(ref)
     gone: str | None = None
     if kind == waits.REF_KIND_DECISION and (number is None or facts.decision(number) is None):
@@ -1930,6 +1957,65 @@ def _check_hold_target(
         raise CockpitError(409, "nothing_to_wait_on", f"{gone}: nothing to hold on", field="on")
 
 
+def hold_of_input(
+    task: FactoryTask, hold: HoldIn, actor: Actor, now: int, facts: waits.Facts
+) -> dict[str, Any]:
+    """
+    Validate a hold for *task* before anything is written.
+
+    :returns: Its ``factory_tasks.hold`` record (``until`` defaults to a day out).
+    :raises CockpitError: 409 ``task_closed`` / ``nothing_to_wait_on``, 400 ``invalid_until``.
+    """
+    if task.state in TASK_CLOSED_STATES:
+        raise CockpitError(409, "task_closed", f"{task.ref} is {task.state}")
+    record = waits.hold_record(
+        hold.on,
+        note=hold.note,
+        until=parse_until(hold.until, now),
+        by=actor.id,
+        by_kind=actor.kind,
+        by_title=actor.title,
+        now=now,
+        projects=list(facts.projects),
+        own=task.ref,
+        prs={p.number for p in facts.prs},
+    )
+    _check_hold_target(task, record, facts)
+    return record
+
+
+async def _hold_event(
+    app_state: Any,
+    factory_id: str,
+    row: FactoryTask,
+    record: Mapping[str, Any] | None,
+    label: str | None,
+    actor: Actor,
+) -> None:
+    """``task.held`` (who, on what, until when) or ``task.released`` (a hold lifted)."""
+    if record is not None:
+        words = label or f"{row.ref} held: {record['on']}"
+        kind, summary = "task.held", f"{words} ({actor.title})"
+    else:
+        kind, summary, label = "task.released", f"{row.ref} hold lifted by {actor.title}", None
+    await events.emit(
+        app_state,
+        factory_id,
+        kind,
+        severity="notice",
+        project=row.project_slug,
+        subject=task_subject(row),
+        summary=summary,
+        data={
+            "task_id": row.id,
+            "ref": row.ref,
+            "hold": dict(record) if record is not None else None,
+            "label": label,
+            **actor.event_data(),
+        },
+    )
+
+
 async def hold_task(
     app_state: Any,
     factory_id: str,
@@ -1941,9 +2027,9 @@ async def hold_task(
     Hold a task on purpose, or lift its hold (*hold* ``None``).
 
     While it holds, the loop engine does not call the task stalled: it shows
-    "held: waiting on …" instead. A hold on a ``D-n``, ``C-n``, ``PR #n``,
-    ``T-n`` or project lapses by itself once that closes; one on free text
-    after a day, unless ``until`` says otherwise. Logs ``task.held`` or
+    "held: waiting on …" instead. A hold lapses once what it names closes, and
+    at its ``until`` (a day after it was put on unless given; holding again
+    renews it); the PL is told when it lapses. Logs ``task.held`` or
     ``task.released`` (who, on what, since when).
 
     :returns: ``{task, hold}``: the task view and the hold as it reads now.
@@ -1952,59 +2038,118 @@ async def hold_task(
     deps = factory_deps(app_state)
     now = int(time.time())
 
-    def run() -> tuple[FactoryTask, dict[str, Any] | None, str | None]:
+    def run() -> tuple[FactoryTask, dict[str, Any] | None, bool, waits.Facts]:
+        facts = waits.Facts.load(deps, factory_id, now)
         current = deps.factory_store.get_task(task.id) or task
         if hold is None:
             if not current.hold:
-                return current, None, None
-            row = deps.factory_store.update_task(current.id, hold=None) or current
-            return row, None, "lifted"
-        if current.state in TASK_CLOSED_STATES:
-            raise CockpitError(409, "task_closed", f"{current.ref} is {current.state}")
-        until = parse_until(hold.until, now)
-        projects = [p.slug for p in deps.factory_store.list_projects(factory_id)]
-        record = waits.hold_record(
-            hold.on,
-            note=hold.note,
-            until=until,
-            by=actor.id,
-            by_kind=actor.kind,
-            by_title=actor.title,
-            now=now,
-            projects=projects,
-        )
-        _check_hold_target(deps, factory_id, current, record)
+                return current, None, False, facts
+            return (
+                deps.factory_store.update_task(current.id, hold=None) or current,
+                None,
+                True,
+                facts,
+            )
+        record = hold_of_input(current, hold, actor, now, facts)
         row = deps.factory_store.update_task(current.id, hold=record) or current
-        facts = waits.Facts.load(deps, factory_id, now)
-        found = waits.explicit_hold(row, facts)
-        return row, record, found.label if found is not None else None
+        return row, record, True, facts
 
     async with lock(factory_id):
-        row, record, label = await asyncio.to_thread(run)
-    if record is None and label is None:
-        return {"task": task_view(row), "hold": None}
-    kind = "task.held" if record is not None else "task.released"
-    if record is None:
-        label = None
-    words = label or (f"{row.ref} held: {record['on']}" if record else f"{row.ref} hold lifted")
-    await events.emit(
-        app_state,
-        factory_id,
-        kind,
-        severity="notice",
-        project=row.project_slug,
-        subject=task_subject(row),
-        summary=f"{words} ({actor.title})" if record else f"{words} by {actor.title}",
-        data={
-            "task_id": row.id,
-            "ref": row.ref,
-            "hold": record,
-            "label": label,
-            **actor.event_data(),
-        },
+        row, record, changed, facts = await asyncio.to_thread(run)
+    view = waits.task_hold_view(row, facts)
+    if changed:
+        label = view.get("label") if view is not None else None
+        await _hold_event(app_state, factory_id, row, record, label, actor)
+    return {"task": task_view(row), "hold": view}
+
+
+HOLD_LAPSED_HEAD: Final = "[Factory notice · HOLD LAPSED"
+
+
+def hold_lapsed_text(task: FactoryTask, hold: Mapping[str, Any], why: str) -> str:
+    """The ``[Factory notice · HOLD LAPSED · T-n · why]`` mail to the task's PL."""
+    on = waits.clip(str(hold.get("on") or "-"), 80)
+    return (
+        f"{HOLD_LAPSED_HEAD} · {task.ref} · {why}]\n"
+        f'Your hold on {task.ref} ({task.key}) on "{on}" lapsed: {why}. The stall clock '
+        "runs again: give its IC its next step now, or, if it still waits on purpose, hold "
+        f'it again on what it waits on: sys_factory_task(op="hold", key="{task.key}", '
+        'on="D-<n>|C-<n>|PR #<n>|T-<n>|<project>", until="1d").'
     )
-    facts = await asyncio.to_thread(waits.Facts.load, deps, factory_id, time.time())
-    return {"task": task_view(row), "hold": waits.task_hold_view(row, facts)}
+
+
+async def sweep_holds(
+    app_state: Any,
+    factory_id: str,
+    candidates: Sequence[FactoryTask],
+    *,
+    now: float,
+    facts: waits.Facts | None = None,
+) -> list[str]:
+    """
+    Clear the holds that ended: what they named closed, their limit passed, or
+    their task closed. Logs ``task.released`` (reason ``lapsed``) and tells the
+    PL of an open task. Never raises.
+
+    :param candidates: Tasks read with a hold (the tick's rows); each is re-read
+        under the lock, and a hold changed since is left alone.
+    :param facts: The tick's facts, when it read them.
+    :returns: The refs whose hold was cleared.
+    """
+    if not candidates:
+        return []
+    deps = factory_deps(app_state)
+
+    def run() -> list[tuple[FactoryTask, dict[str, Any], str, bool]]:
+        found = facts or waits.Facts.load(deps, factory_id, now)
+        out: list[tuple[FactoryTask, dict[str, Any], str, bool]] = []
+        for seen in candidates:
+            current = deps.factory_store.get_task(seen.id)
+            if current is None or not current.hold or current.hold != seen.hold:
+                continue
+            if current.state in TASK_CLOSED_STATES:
+                why: str | None = f"{current.ref} is {current.state}"
+            else:
+                why = waits.hold_lapse(current, found)
+            if why is None:
+                continue
+            row = deps.factory_store.update_task(current.id, hold=None) or current
+            out.append((row, dict(current.hold), why, current.state not in TASK_CLOSED_STATES))
+        return out
+
+    try:
+        async with lock(factory_id):
+            lapsed = await asyncio.to_thread(run)
+    except Exception:  # noqa: BLE001 - the next tick retries
+        _logger.warning("factory tasks: no hold sweep for %s", factory_id, exc_info=True)
+        return []
+    for row, hold, why, tell in lapsed:
+        try:
+            await events.emit(
+                app_state,
+                factory_id,
+                "task.released",
+                severity="notice",
+                project=row.project_slug,
+                subject=task_subject(row),
+                summary=f"{row.ref} hold lapsed: {why}",
+                data={
+                    "task_id": row.id,
+                    "ref": row.ref,
+                    "hold": hold,
+                    "reason": "lapsed",
+                    "why": why,
+                    "by": "server",
+                    "by_kind": "server",
+                },
+            )
+            if tell:
+                await _mail_pl(
+                    app_state, factory_id, row.project_slug, hold_lapsed_text(row, hold, why)
+                )
+        except Exception:  # noqa: BLE001 - the hold is already cleared
+            _logger.warning("factory tasks: hold lapse of %s not told", row.id, exc_info=True)
+    return [row.ref for row, *_ in lapsed]
 
 
 def reset() -> None:
@@ -2036,6 +2181,8 @@ __all__ = [
     "emit_all",
     "engine_mode",
     "get_view",
+    "hold_lapsed_text",
+    "hold_of_input",
     "hold_task",
     "hub_files",
     "list_view",
@@ -2045,6 +2192,7 @@ __all__ = [
     "move",
     "node_of",
     "note_bound_attempt",
+    "parse_until",
     "project_dep_met",
     "ready_view",
     "refresh_ready",
@@ -2055,6 +2203,7 @@ __all__ = [
     "snapshot_fields",
     "start_task",
     "summary",
+    "sweep_holds",
     "task_budget",
     "task_diff",
     "task_subject",

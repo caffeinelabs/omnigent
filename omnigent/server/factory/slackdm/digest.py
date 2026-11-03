@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import cockpit_v2_enabled
 from omnigent.server.factory import asks, issues, status_summary
+from omnigent.server.factory.server_decisions import server_closed
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import rules
 from omnigent.server.factory.slackdm.render import esc, link, message
@@ -331,6 +332,8 @@ def _counts(
             continue
         data = event.data or {}
         if event.kind.startswith("issue.") and data.get("class") != "incident":
+            continue
+        if event.kind == "decision.answered" and server_closed(data):
             continue
         counts[event.kind] = counts.get(event.kind, 0) + 1
     if counts.get("issue.opened"):

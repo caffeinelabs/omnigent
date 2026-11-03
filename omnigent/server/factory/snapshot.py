@@ -20,6 +20,7 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1254,8 +1255,13 @@ def _waiting_views(
     starts: Mapping[str, Mapping[str, Any] | None],
     project_pl: Mapping[str, str | None],
     now: float,
+    open_tasks: Sequence[FactoryTask],
 ) -> None:
-    """Each live project's ``waiting_on``: why it is not moving (in place; never raises)."""
+    """
+    Each live project's ``waiting_on``: why it is not moving (in place; never raises).
+
+    :param open_tasks: The factory's open tasks, as the snapshot read them.
+    """
     try:
         bad = deps.factory_store.list_loops(factory_id, states=sorted(waits.BAD_LOOP_STATES))
         facts = waits.Facts(
@@ -1263,7 +1269,7 @@ def _waiting_views(
             prs=loaded.prs,
             decisions=loaded.open_decisions,
             proposals=loaded.proposals,
-            tasks=deps.factory_store.list_tasks(factory_id),
+            tasks=open_tasks,
             loops=bad,
             leads=project_pl,
             now=now,
@@ -1508,7 +1514,16 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         view["active_task"] = active.get(view["slug"])
     _health_views(project_views, by_slug, pr_views, views, project_pl, now)
     await asyncio.to_thread(
-        _waiting_views, deps, factory_id, project_views, by_slug, loaded, starts, project_pl, now
+        _waiting_views,
+        deps,
+        factory_id,
+        project_views,
+        by_slug,
+        loaded,
+        starts,
+        project_pl,
+        now,
+        open_tasks,
     )
     for pr, view in zip(loaded.prs, pr_views, strict=True):
         view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")
@@ -1699,6 +1714,31 @@ async def readable_for(user_id: str | None, raw: RawSnapshot, deps: FactoryDeps)
     return readable
 
 
+_REF_WORD_RE: Final = re.compile(r"[A-Za-z0-9][\w#-]*")
+
+
+def _visible_wait(
+    wait: dict[str, Any], open_ids: set[str], dropped: set[str], hidden: set[str]
+) -> dict[str, Any]:
+    """
+    A ``waiting_on`` item as a viewer may read it: one that quotes a decision they
+    cannot open, or names a project they cannot see, keeps only its ref.
+    """
+    label = str(wait.get("label") or "")
+    words = set(_REF_WORD_RE.findall(label))
+    decision_id = wait.get("decision_id")
+    hides = bool(decision_id and decision_id not in open_ids) or bool(words & (dropped | hidden))
+    if not hides:
+        return wait
+    ref = str(wait.get("ref") or "")
+    head = f"{wait['task']} held: " if wait.get("kind") == "hold" and wait.get("task") else ""
+    return {
+        **wait,
+        "label": f"{head}waiting on {ref}",
+        "decision_id": decision_id if decision_id in open_ids else None,
+    }
+
+
 def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     """
     Cut *raw* down to what a viewer reading *readable* may see.
@@ -1717,9 +1757,14 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
         if not d["asked_by_session_id"] or d["asked_by_session_id"] in readable
     ]
     open_ids = {d["id"] for d in body["decisions"]}
+    dropped = {d["ref"] for d in raw.body["decisions"] if d["id"] not in open_ids and d.get("ref")}
     for project in visible_projects:
         project["team"] = [m for m in project["team"] if m["session_id"] in readable]
         project["open_decision_ids"] = [i for i in project["open_decision_ids"] if i in open_ids]
+        if project.get("waiting_on"):
+            project["waiting_on"] = [
+                _visible_wait(w, open_ids, dropped, hidden) for w in project["waiting_on"]
+            ]
     body["projects"] = visible_projects
     prs = [p for p in body["prs"] if p["project_slug"] not in hidden]
     for pr in prs:

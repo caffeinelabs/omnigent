@@ -21,6 +21,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.server.factory import asks, detectors, issues, snapshot, tasks
+from omnigent.server.factory.charter import normalize_charter
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.projects_helpers import REPO, header_cockpit, project, propose
@@ -159,6 +160,45 @@ async def test_a_person_holds_and_lifts_a_hold_with_a_task_edit(cockpit: Cockpit
     assert [e.data["by_kind"] for e in cockpit.events("task.released")] == ["human"]
 
 
+async def test_a_refused_hold_in_a_task_edit_changes_nothing(cockpit: Cockpit) -> None:
+    """PATCH {priority, hold on a closed ref}: the 409 leaves the priority as it was."""
+    await _plan(cockpit, "route")
+    before = cockpit.store.get_task_by_number(cockpit.fid, 1)
+    assert before is not None
+    resp = await cockpit.patch(
+        f"/v1/factory/factories/{cockpit.fid}/tasks/T-1",
+        {"priority": 0 if before.priority != 0 else 3, "hold": {"on": "D-999"}},
+    )
+    assert (resp.status_code, error_code(resp)) == (409, "nothing_to_wait_on")
+    after = cockpit.store.get_task_by_number(cockpit.fid, 1)
+    assert after is not None and (after.priority, after.hold) == (before.priority, None)
+    assert cockpit.mailer.texts_to(cockpit.world.id("pl")) == []
+    late = await cockpit.patch(
+        f"/v1/factory/factories/{cockpit.fid}/tasks/T-1",
+        {"priority": 1, "hold": {"on": "the schema review", "until": "30d"}},
+    )
+    assert (late.status_code, error_code(late)) == (400, "invalid_until")
+    both = await cockpit.patch(
+        f"/v1/factory/factories/{cockpit.fid}/tasks/T-1",
+        {"cancel": True, "hold": {"on": "the schema review"}},
+    )
+    assert (both.status_code, error_code(both)) == (400, "invalid_body")
+    row = cockpit.store.get_task_by_number(cockpit.fid, 1)
+    assert row is not None and row.priority == before.priority and row.state != "cancelled"
+
+
+async def test_the_playbooks_blocker_words_hold_on_what_a_person_owes(cockpit: Cockpit) -> None:
+    await _plan(cockpit, "route")
+    asked = _ask(cockpit, "Approve the scope?")
+    resp = await _op(cockpit, "route", "hold", on=f"T-1 waits on {asked.ref}")
+    assert resp.status_code == 200, resp.text
+    hold = resp.json()["hold"]
+    assert (hold["kind"], hold["ref"]) == ("decision", asked.ref)
+    assert hold["until"] - int(time.time()) > 23 * 3600
+    ci = await _op(cockpit, "route", "hold", on="the CI run #4")
+    assert ci.status_code == 200 and ci.json()["hold"]["kind"] == "text"
+
+
 # ── Dependency hygiene ─────────────────────────────────────────
 
 
@@ -267,6 +307,93 @@ async def test_a_dependent_waits_on_merges_a_person_owes_and_the_asks_say_so(
     )
     row = next(p for p in listed.json()["projects"] if p["slug"] == "panel-ux")
     assert [w["ref"] for w in row["waits"]] == ["ux-badge-copy", "ux-status-page"]
+
+
+def test_a_patch_keeps_the_reasons_of_the_dependencies_it_does_not_name() -> None:
+    from omnigent.server.factory import start
+
+    old = {
+        "goal": "g",
+        "depends_on": ["a", "b"],
+        "depends_why": {"a": "reads its table", "b": "calls its route"},
+    }
+    patch = start.parse_body(start.CharterPatchIn, {"depends_on": ["a", "b: a new reason"]})
+    merged = normalize_charter(start.merge_charter(old, patch))
+    assert merged["depends_why"] == {"a": "reads its table", "b": "a new reason"}
+    dropped = start.parse_body(start.CharterPatchIn, {"depends_on": ["b"]})
+    assert normalize_charter(start.merge_charter(old, dropped))["depends_why"] == {
+        "b": "calls its route"
+    }
+
+
+async def test_a_viewer_reads_no_question_they_cannot_open_in_waiting_on(
+    cockpit: Cockpit,
+) -> None:
+    await _plan(cockpit, "route")
+    world = cockpit.world
+    secret, _ = cockpit.store.create_decision(
+        cockpit.fid,
+        dedupe_key="secret",
+        question="Should we drop the partner integration?",
+        source="agent",
+        options=[{"id": "yes", "label": "Yes"}],
+        blocking=True,
+        project_slug=SLUG,
+        asked_by_session_id=world.id("lead_b"),
+        assignee="owners",
+    )
+    resp = await _op(cockpit, "route", "hold", on=secret.ref)
+    assert resp.status_code == 200, resp.text
+    raw = await snapshot.build_snapshot(cockpit.app.state, world.get("lead_a"))
+    full = next(p for p in raw.body["projects"] if p["slug"] == SLUG)
+    assert "partner integration" in full["waiting_on"][0]["label"]
+    readable = set(raw.top_level_of) - {world.id("lead_b")}
+    seen = snapshot.filter_snapshot(raw, readable)
+    view = next(p for p in seen["projects"] if p["slug"] == SLUG)
+    labels = [w["label"] for w in view["waiting_on"]]
+    assert labels[0] == f"T-1 held: waiting on {secret.ref}"
+    assert not any("partner" in label for label in labels)
+    assert all(w["decision_id"] != secret.id for w in view["waiting_on"])
+
+
+def test_decisions_the_server_closed_are_not_counted_as_answered() -> None:
+    from types import SimpleNamespace
+
+    from omnigent.entities.factory import FactoryEvent
+    from omnigent.server.factory import idle
+    from omnigent.server.factory.slackdm import digest
+
+    now = time.time()
+
+    def event(n: int, data: dict[str, Any]) -> FactoryEvent:
+        return FactoryEvent(
+            id=f"{n:032x}",
+            factory_id="f" * 32,
+            ts=int(now * 1000) - n,
+            kind="decision.answered",
+            summary="answered",
+            data=data,
+        )
+
+    found = [
+        event(1, {"by": "alice"}),
+        event(2, {"by": "server", "by_kind": "server", "auto": True}),
+    ]
+    store = SimpleNamespace(
+        find_events=lambda *_a, **_k: found,
+        list_issues=lambda *_a, **_k: [],
+        list_feedback=lambda *_a, **_k: [],
+    )
+    deps = SimpleNamespace(factory_store=store)
+    counts, _ = digest._counts(
+        deps,  # type: ignore[arg-type]
+        SimpleNamespace(factory_id="f" * 32),  # type: ignore[arg-type]
+        digest.Visibility(),
+        now,
+    )
+    assert counts == {"decision.answered": 1}
+    signals = idle.retro_signals(deps, "f" * 32, int(now) - 3600, int(now) + 3600)  # type: ignore[arg-type]
+    assert signals.decisions == 1
 
 
 # ── Incidents of closed projects (FX-11) ───────────────────────

@@ -45,9 +45,9 @@ node ~/factory/bin/scope-graph.mjs --selftest
   "nice to have first". Every dependency holds the dependent queued until a
   person merges the other project's PR (with `merged`), so one too many costs
   hours of nothing.
-- Explain each one in a line that names what it needs:
-  `depends_on: ["db-version"], depends_why: {"db-version": "api-version reads its version table"}`
-  (or the item `"db-version: api-version reads its version table"`). The
+- Explain each one in a line that names what it needs, written into the item
+  itself: `depends_on: ["db-version: api-version reads its version table"]`
+  (`depends_why: {"db-version": "…"}` works too where your tool lists it). The
   server refuses a dependency without a reason, an unknown project, and one
   that is done or cancelled (nothing to wait for, or never coming).
 - Unrelated work waiting for a human merge is never a dependency: if the new
@@ -66,18 +66,18 @@ The planner writes `~/factory/plans/<id>.json` and ends with
 ```json
 {"changes": [{"op": "create", "project": {"slug": "db-version", "title": "…", "goal": "…",
   "dod": ["…"], "scope_paths": ["services/api/src/db/**"], "demo_focus": "…",
-  "depends_on": [], "depends_why": {}, "budget_ics": 2, "priority": 1}}],
+  "depends_on": ["<slug>: <what it needs from it>"], "budget_ics": 2, "priority": 1}}],
  "analysis": {"head": "<base sha>", "scope_graph": {"…": "scope-graph.mjs output"},
   "hub_files": ["…"], "overlaps": [], "sizes": {"db-version": "S · 1 PR · 4 files"},
   "notes": ["…"]}}
 ```
 
 Read it, fix anything that breaks the heuristics (drop each dependency that is
-not a real code or API one; give each one left its `depends_why`), then file it
-as ONE proposal:
+not a real code or API one; give each one left its reason, `"<slug>: <why>"`),
+then file it as ONE proposal:
 `sys_factory_project(changes=<its changes>, rationale=<why this split, 2-4 lines>, thread="factory", reply_to="chat_<id>", analysis_file="~/factory/plans/<id>.json")`.
 A field error names its path (`changes[1].project.slug`): fix and call again.
-`dependency_reason_required`: add the one-line `depends_why` it names.
+`dependency_reason_required`: write the item it names as `"<slug>: <why>"`.
 `dependency_closed`: the project is done or cancelled; drop the dependency.
 `PLAN FAILED`: propose what you can yourself, or ask in the thread.
 
