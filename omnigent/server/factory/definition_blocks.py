@@ -893,13 +893,39 @@ AUTO_MERGE_KEY: Final = "auto_merge_targets"
 server from before the targets drops only them (it still reads the product block)."""
 
 
+LEVEL_KEY: Final = "autonomy_level"
+"""Where a version stores a set ``autonomy.level``: its own top-level key, so a server
+from before the level drops only it on a rollback (it reads ``careful``, the safe
+direction) and still reads ``autonomy.projects`` as the owners set it."""
+
+
 def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with legacy blocks moved: an owner-set ``models.<kind>``
-        becomes ``role_defaults.<kind>.model`` unless that is already set, and
-        the stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery``.
+        becomes ``role_defaults.<kind>.model`` unless that is already set, the
+        stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery`` and
+        :data:`LEVEL_KEY` back into ``autonomy.level``.
     """
-    return _upgrade_models(_lower_targets(stored))
+    return _upgrade_models(_lower_level(_lower_targets(stored)))
+
+
+def _lower_level(stored: dict[str, Any]) -> dict[str, Any]:
+    if LEVEL_KEY not in stored:
+        return stored
+    out = {k: v for k, v in stored.items() if k != LEVEL_KEY}
+    found = out.get("autonomy")
+    out["autonomy"] = {**(found if isinstance(found, Mapping) else {}), "level": stored[LEVEL_KEY]}
+    return out
+
+
+def _lift_level(stored: dict[str, Any]) -> dict[str, Any]:
+    found = stored.get("autonomy")
+    if not isinstance(found, Mapping) or "level" not in found:
+        return stored
+    out = dict(stored)
+    out["autonomy"] = {k: v for k, v in found.items() if k != "level"}
+    out[LEVEL_KEY] = found["level"]
+    return out
 
 
 def _lower_targets(stored: dict[str, Any]) -> dict[str, Any]:
@@ -958,11 +984,12 @@ def downgrade(stored: Mapping[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with ``role_defaults`` written as the legacy ``models``
         block when all it sets is the model alias of ``ic``, ``reviewer`` or
-        ``planner``, and ``product.delivery.auto_merge`` under
-        :data:`AUTO_MERGE_KEY` (:func:`upgrade` reads both back), so a server
-        from before them still reads the version. Anything else stays as it is.
+        ``planner``, ``product.delivery.auto_merge`` under
+        :data:`AUTO_MERGE_KEY` and ``autonomy.level`` under :data:`LEVEL_KEY`
+        (:func:`upgrade` reads them back), so a server from before them still
+        reads the version. Anything else stays as it is.
     """
-    return _lift_targets(_downgrade_models(stored))
+    return _lift_level(_lift_targets(_downgrade_models(stored)))
 
 
 def _downgrade_models(stored: Mapping[str, Any]) -> dict[str, Any]:
@@ -1104,12 +1131,15 @@ AGENT_GATED: Final = (*BLOCKS, "team")
 ALLOWLIST_SEATS: Final = frozenset({"scout"})
 """Seats that may propose only their :data:`AGENT_PATHS`, in any block (Scout reads users'
 text, so it never proposes caps, budgets, autonomy or any other setting)."""
-AGENT_NEVER: Final = ("product.delivery.auto_merge",)
-"""Paths no agent proposes, whatever its seat: which PRs the server merges is the owners' call."""
-AGENT_NEVER_REASON: Final = (
-    "auto-merge targets are set by owners in the cockpit; agents never propose them "
-    "and never merge"
-)
+AGENT_NEVER: Final[Mapping[str, str]] = {
+    "product.delivery.auto_merge": (
+        "auto-merge targets are set by owners in the cockpit; agents never propose them "
+        "and never merge"
+    ),
+    "autonomy": "owners set the factory's autonomy in Steer; agents never propose it",
+}
+"""Paths no agent proposes, whatever its seat, and why: which PRs the server merges and how
+much the agents may do alone are the owners' call."""
 
 
 def under(path: str, prefix: str) -> bool:
@@ -1122,9 +1152,20 @@ def in_blocks(path: str, blocks: tuple[str, ...] = BLOCKS) -> bool:
     return any(under(path, block) for block in blocks)
 
 
+def agent_never_reason(path: str) -> str | None:
+    """
+    :returns: Why no agent may propose *path* when it is, holds or lies in one of
+        :data:`AGENT_NEVER` (the first that matches), else ``None``.
+    """
+    for never, reason in AGENT_NEVER.items():
+        if under(path, never) or under(never, path):
+            return reason
+    return None
+
+
 def agent_never(path: str) -> bool:
     """Whether *path* is, holds or lies in one no agent may propose (:data:`AGENT_NEVER`)."""
-    return any(under(path, never) or under(never, path) for never in AGENT_NEVER)
+    return agent_never_reason(path) is not None
 
 
 def agent_may_propose(seat: str, path: str) -> bool:
@@ -1214,7 +1255,6 @@ def slower_or_off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
 __all__ = [
     "AGENT_GATED",
     "AGENT_NEVER",
-    "AGENT_NEVER_REASON",
     "AGENT_PATHS",
     "ALLOWLIST_SEATS",
     "AUTO_MERGE_KEY",
@@ -1229,6 +1269,7 @@ __all__ = [
     "GOAL_ID_RE",
     "KEEP_DAYS",
     "LEGACY_MODELS",
+    "LEVEL_KEY",
     "LISTS",
     "MIXED_GUARDS",
     "NEEDS_DISCOVERY_GUARDS",
@@ -1258,6 +1299,7 @@ __all__ = [
     "StrategyDef",
     "agent_may_propose",
     "agent_never",
+    "agent_never_reason",
     "discovery_server_on",
     "downgrade",
     "has_secret",

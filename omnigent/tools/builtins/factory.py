@@ -930,7 +930,8 @@ class SysFactoryProjectTool(Tool):
             f"call files one proposal C-<n> with 1-{PROJECT_OPS_MAX} changes. The server "
             "validates it (errors name the field, e.g. changes[1].project.slug), applies it "
             "at once when the factory's autonomy allows (a create a human asked for: pass "
-            "reply_to=<chat message id>), and otherwise opens a decision D-<n> for a human "
+            "reply_to=<chat message id>; carrying out a person's answer: reply_to='D-<n>'), "
+            "and otherwise opens a decision D-<n> for a human "
             "to Apply, Edit & apply or Reject. The server spawns each new project's PL "
             "itself (you get `[Factory notice · PL·<slug> spawned by the server · C-<n>]`) "
             "and holds a project until its depends_on are met. The outcome arrives as "
@@ -1016,7 +1017,10 @@ class SysFactoryProjectTool(Tool):
                     },
                     "reply_to": {
                         "type": "string",
-                        "description": "The human chat message (id) it answers.",
+                        "description": (
+                            "The human chat message (id) it answers, or 'D-<n>': the "
+                            "decision whose answer it carries out (applies at once)."
+                        ),
                     },
                     "analysis_file": {
                         "type": "string",

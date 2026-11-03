@@ -10,6 +10,7 @@
  * keeps today's Now card in place of Needs you.
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLinkIcon, UsersIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { AgentPanel } from "@/components/factory/agents/AgentPanel";
@@ -62,6 +63,8 @@ import { LoopStrip } from "@/components/factory/ui/LoopStrip";
 import { Peek } from "@/components/factory/ui/Peek";
 import { FactoryToastProvider } from "@/components/factory/ui/Toast";
 import { Button } from "@/components/ui/button";
+import { factoryInvalidationKeys } from "@/hooks/useFactory";
+import { undoProposal } from "@/lib/factoryRoomApi";
 import { Link, useSearchParams } from "@/lib/routing";
 
 const AGENT_PEEK = "agent:";
@@ -80,6 +83,19 @@ function HomeBody() {
   const discovery = useDiscoveryHome(fid, discoveryOn);
   const opportunities = useTopOpportunities(fid, discoveryOn);
   const deferred = useDeferredAnswers(fid);
+  const queryClient = useQueryClient();
+  const refetchAsks = asks.refetch;
+  // Undo of an FYI line: the proposal's own Undo, then everything reads it again.
+  const undoFyi = useCallback(
+    async (ref: string) => {
+      await undoProposal(fid, ref);
+      for (const key of factoryInvalidationKeys(fid)) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
+      void refetchAsks();
+    },
+    [fid, queryClient, refetchAsks],
+  );
   const asksMissing = asks.error != null && isMissing(asks.error) && !asks.data;
   const asksData = asks.data?.factory_id === fid ? asks.data : undefined;
 
@@ -174,6 +190,7 @@ function HomeBody() {
       canAnswer={can.answer}
       deferred={deferred}
       onPeek={setPeek}
+      onUndo={undoFyi}
     />
   );
 

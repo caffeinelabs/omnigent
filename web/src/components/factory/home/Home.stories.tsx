@@ -13,6 +13,7 @@ import {
   homeRoutes,
   homeSnapshot,
   manyProjectsSnapshot,
+  sampleFyi,
   withBet,
   withReadyPrs,
 } from "./__fixtures__/homeFixtures";
@@ -20,8 +21,9 @@ import {
 // Home in the new cockpit over sample factories (every product word is the
 // sample's own data): the round-3 sample with discovery learning, nothing
 // waiting, many ready PRs, discovery off (in the factory, or on the server), a
-// cold start, 12 projects with 60 agents, and an answer held for Undo (the
-// top bar's count leaves it out, as Home does); light, dark and a 390 px phone.
+// cold start, 12 projects with 60 agents, an answer held for Undo (the top
+// bar's count leaves it out, as Home does) and what the factory did on its own
+// (FYI lines with Undo); light, dark and a 390 px phone.
 
 function home(
   snapshot: FactorySnapshot,
@@ -100,6 +102,23 @@ export const AnswerHeld = answerHeld(home(live.snapshot, LIVE, { theme: "dark" }
 export const AnswerHeldLight = answerHeld(home(live.snapshot, LIVE));
 
 export const AnswerHeldMobile = phone(answerHeld(home(live.snapshot, LIVE, { theme: "dark" })));
+
+/**
+ * What the factory did on its own, yours to undo: a project update that
+ * carried out a person's answer, and a routine update the autonomy level let
+ * through. FYI lines never count in Needs you.
+ */
+export const DoneOnItsOwn = home(live.snapshot, { ...LIVE, fyi: sampleFyi(live.snapshot) });
+
+export const DoneOnItsOwnDark = home(
+  live.snapshot,
+  { ...LIVE, fyi: sampleFyi(live.snapshot) },
+  { theme: "dark" },
+);
+
+export const DoneOnItsOwnMobile = phone(
+  home(live.snapshot, { ...LIVE, fyi: sampleFyi(live.snapshot) }, { theme: "dark" }),
+);
 
 /** Nothing needs you: one calm line, and what the factory handled itself. */
 export const NothingNeedsYou = home(calmSnapshot(homeSnapshot()), {

@@ -2,8 +2,11 @@
  * A proposal (`C-n`) as a live card: its changes as charter diffs, warnings,
  * the planner's analysis, who proposed it for whom, and Apply ★ / Edit &
  * apply / Reject while it is pending. An applied proposal keeps an Undo
- * countdown while its window lasts. A double click or a second person gets
- * "already applied by …"; a project changed since makes it stale.
+ * countdown while its window lasts, and says why it applied at once (a
+ * person's answer it carried out, or the autonomy level). A double click or a
+ * second person gets "already applied by …"; a project changed since makes it
+ * stale. One that closed itself because it no longer applied says why, and
+ * offers Reopen when Apply could still get past that reason.
  */
 
 import { useState } from "react";
@@ -15,6 +18,7 @@ import {
   ListTreeIcon,
   Loader2Icon,
   PencilIcon,
+  RotateCcwIcon,
   ScrollTextIcon,
   SlidersHorizontalIcon,
   StarIcon,
@@ -31,7 +35,7 @@ import {
   type ProposalKind,
   type ProposalView,
 } from "@/lib/factoryApi";
-import { applyProposal, rejectProposal, undoProposal } from "@/lib/factoryRoomApi";
+import { applyProposal, rejectProposal, reopenProposal, undoProposal } from "@/lib/factoryRoomApi";
 import { cn } from "@/lib/utils";
 import { ageText } from "../board/boardModel";
 import { useFactoryServerNowS } from "../factoryClock";
@@ -44,6 +48,7 @@ import {
   STATE_LABEL,
   STATE_TONE,
   analysisLine,
+  canReopen,
   changeRows,
   countdownText,
   createdProjects,
@@ -148,7 +153,7 @@ function Changes({ rows }: { rows: ChangeRow[] }) {
   );
 }
 
-type Busy = "apply" | "reject" | "undo" | null;
+type Busy = "apply" | "reject" | "undo" | "reopen" | null;
 
 interface Conflict {
   status: string;
@@ -252,7 +257,7 @@ export function ProposalCard({
       setLocal(res.proposal);
       setRejecting(false);
       invalidate();
-      if (kind !== "undo") onDecided?.();
+      if (kind !== "undo" && kind !== "reopen") onDecided?.();
     } catch (err) {
       fail(err);
     } finally {
@@ -443,6 +448,21 @@ export function ProposalCard({
           >
             {outcome}
           </p>
+          {canReopen(proposal) && conflict == null && (
+            <ReasonGated reason={lever.reason} testId="reopen">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void run("reopen", () => reopenProposal(factoryId, proposal.ref))}
+                disabled={busy != null}
+                data-testid={`proposal-reopen-${proposal.ref}`}
+                componentId="factory.proposal.reopen"
+              >
+                {busy === "reopen" ? <Loader2Icon className="animate-spin" /> : <RotateCcwIcon />}
+                Reopen
+              </Button>
+            </ReasonGated>
+          )}
           {undoLeft != null && conflict == null && (
             <ReasonGated reason={lever.reason} testId="undo">
               <Button

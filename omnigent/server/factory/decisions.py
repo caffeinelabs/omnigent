@@ -163,6 +163,34 @@ def withdraw_text(decision: FactoryDecision, by: str, reason: str | None) -> str
     return f"{head}{note}\nQuestion: {question_excerpt(decision.question)}"
 
 
+CARRY_OUT_HINT: Final = (
+    'If acting on it changes a project, file it with sys_factory_project(reply_to="{ref}"): '
+    "routine upkeep of the project it concerns (scope paths, constraints, DoD, priority, "
+    "dependencies) and what the chosen option names apply at once on the person's behalf; "
+    "anything more waits for a person."
+)
+"""The line a lead or project lead gets under a person's answer (see :mod:`.answer_authority`)."""
+
+
+def carry_out_hint(
+    deps: FactoryDeps,
+    decision: FactoryDecision,
+    to: Conversation,
+    answered_by: str | None = None,
+) -> str | None:
+    """
+    :returns: :data:`CARRY_OUT_HINT` for a person's answer delivered to a lead or
+        project lead (the agents that propose project changes), else ``None``.
+    """
+    from omnigent.factory import ROLE_LEAD, ROLE_PROJECT_LEAD
+
+    if answered_by is not None or not is_top_level(to):
+        return None
+    if resolve_role(to, deps) not in (ROLE_LEAD, ROLE_PROJECT_LEAD):
+        return None
+    return CARRY_OUT_HINT.format(ref=decision.ref)
+
+
 def info_copy_text(decision: FactoryDecision, by: str, label: str, to: Conversation) -> str:
     """:returns: The root lead's info copy of an answered blocking decision."""
     title = display_title(to.title, to.id)
@@ -714,7 +742,8 @@ async def answer_decision(
     if decision.source == "agent":
         target = await asyncio.to_thread(route_answer, deps, answered, asker)
         if target is not None:
-            outgoing = answer_text(answered, by, label, text)
+            hint = await asyncio.to_thread(carry_out_hint, deps, answered, target, answered_by)
+            outgoing = answer_text(answered, by, label, text, hint)
         unrouted = target is None
     elif isinstance(planned, ControlPlan):
         target = planned.recipients[0] if planned.recipients else None
@@ -794,6 +823,8 @@ async def answer_decision(
         data={
             "from": by,
             "by": by,
+            # Who answered, for a proposal that carries the answer out (answer_authority).
+            "by_id": user_id if answered_by is None else None,
             "option_id": option_id,
             "label": label,
             "action": action,
@@ -916,11 +947,13 @@ events.add_listener(_receipt_on_delivery)
 
 __all__ = [
     "ANSWER_TEXT_MAX_CHARS",
+    "CARRY_OUT_HINT",
     "AnswerResult",
     "GrantPlan",
     "NobodyToTell",
     "answer_decision",
     "answer_text",
+    "carry_out_hint",
     "decision_view",
     "require_assigned",
     "route_answer",

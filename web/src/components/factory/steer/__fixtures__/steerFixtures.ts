@@ -7,6 +7,7 @@
 // operator's change that waits for owners). Every export is a fresh copy.
 
 import type {
+  AutonomyLevelText,
   DefinitionPreviewResponse,
   DefinitionResponse,
   DefinitionView,
@@ -106,7 +107,64 @@ export interface SteerDefinitionOptions {
   noEnvironment?: boolean;
   /** The web source waits for an owner's approval (the starter left it unticked). */
   pendingWeb?: boolean;
+  /** The autonomy level in force (`careful` by default). */
+  autonomyLevel?: AutonomyLevelText["level"];
 }
+
+const WAITS_ALWAYS = [
+  "Cancelling, splitting or merging projects.",
+  "Setting or raising a budget, or a project on another repo or base (owners).",
+  "Definition changes, discovery sources and bets (Steer's own rules).",
+  "Merges: the merge policy decides those.",
+  "This level itself: only owners change it, agents never.",
+];
+const AT_ONCE_ALWAYS = [
+  "A change a person asked for in the Room in the last 24 hours (a create or an update).",
+  "A change that carries out a person's answer to a decision, by the agent it was " +
+    "given to: routine upkeep of the project it concerns, or what the chosen option names.",
+  "A lead's priority, demo or preview tweak (an FYI in Needs you).",
+];
+const ROUTINE =
+  "A lead's routine update of a project: scope paths, constraints, definition of done, " +
+  "priority, and depends_on with a reason.";
+
+/** The server's plain words for each autonomy level (`autonomy_levels`). */
+export const SAMPLE_AUTONOMY_LEVELS: AutonomyLevelText[] = [
+  {
+    level: "careful",
+    label: "Careful",
+    summary: "Agents ask before every project change they start on their own.",
+    at_once: AT_ONCE_ALWAYS,
+    waits: [
+      "A lead's other project updates and new projects it starts on its own.",
+      ...WAITS_ALWAYS,
+    ],
+  },
+  {
+    level: "standard",
+    label: "Standard",
+    summary:
+      "Routine project upkeep happens at once; you see an FYI and can undo it for 10 minutes.",
+    at_once: [...AT_ONCE_ALWAYS, ROUTINE],
+    waits: ["New projects a lead starts on its own, and goal or outcome changes.", ...WAITS_ALWAYS],
+  },
+  {
+    level: "tryout",
+    label: "Tryout",
+    summary:
+      "For a tryout: leads also grow an initiative you started without asking; FYI and Undo.",
+    at_once: [
+      ...AT_ONCE_ALWAYS,
+      ROUTINE,
+      "A lead creating a project inside an initiative a person already started, within the " +
+        "project cap and without raising a budget.",
+    ],
+    waits: [
+      "A brand-new line of work nobody asked for, and goal or outcome changes.",
+      ...WAITS_ALWAYS,
+    ],
+  },
+];
 
 /** The sample environment profile (what a deployment's seed gives a factory). */
 function sampleEnvironment(): EnvironmentDef {
@@ -199,6 +257,10 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
       ) as unknown as typeof effective.briefs)
     : { ...effective.briefs!, scout: "Focus on people in their first two weeks (sample)." };
   if (options.bare) effective.rules = [];
+  effective.autonomy = {
+    ...((effective.autonomy as Record<string, unknown> | undefined) ?? {}),
+    level: options.autonomyLevel ?? "careful",
+  };
   const trial = options.noTrial ? [] : [rubricTrial()];
   const inForce = options.moved || options.undoable ? STEER_VERSION + 1 : STEER_VERSION;
   return {
@@ -265,6 +327,7 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
       atlas: ["team"],
     },
     discovery_server: options.server ?? true,
+    autonomy_levels: SAMPLE_AUTONOMY_LEVELS,
   };
 }
 

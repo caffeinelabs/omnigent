@@ -32,25 +32,32 @@ OPERATOR = Verdict("operator")
 GRACE = Verdict("operator", grace=True)
 OWNER = Verdict("owner")
 
-# (op class, a human asked, the agent acted on its own) for each mode.
+# (op class, a human asked, the agent acted on its own) for each mode, at the
+# default ``careful`` level (test_autonomy_levels covers the other levels).
 MATRIX: dict[str, dict[str, tuple[Verdict, Verdict]]] = {
     "requested": {
         "create": (AUTO, OPERATOR),
+        "create_joined": (AUTO, OPERATOR),
         "update_minor": (AUTO, AUTO_INFO),
+        "update_routine": (AUTO, OPERATOR),
         "update_major": (AUTO, OPERATOR),
         "structural": (OPERATOR, OPERATOR),
         "owner": (OWNER, OWNER),
     },
     "grace": {
         "create": (AUTO, GRACE),
+        "create_joined": (AUTO, GRACE),
         "update_minor": (AUTO, AUTO_INFO),
+        "update_routine": (AUTO, OPERATOR),
         "update_major": (AUTO, OPERATOR),
         "structural": (OPERATOR, OPERATOR),
         "owner": (OWNER, OWNER),
     },
     "confirm": {
         "create": (OPERATOR, OPERATOR),
+        "create_joined": (OPERATOR, OPERATOR),
         "update_minor": (OPERATOR, OPERATOR),
+        "update_routine": (OPERATOR, OPERATOR),
         "update_major": (OPERATOR, OPERATOR),
         "structural": (OPERATOR, OPERATOR),
         "owner": (OWNER, OWNER),
@@ -84,9 +91,10 @@ def test_the_matrix_covers_every_mode_and_class() -> None:
         ({"priority"}, "update_minor"),
         ({"demo_focus", "preview", "budget_ics"}, "update_minor"),
         ({"goal"}, "update_major"),
-        ({"dod", "priority"}, "update_major"),
-        ({"scope_paths"}, "update_major"),
-        ({"depends_on"}, "update_major"),
+        # A lead's routine upkeep: it waits for an operator only at the careful level.
+        ({"dod", "priority"}, "update_routine"),
+        ({"scope_paths"}, "update_routine"),
+        ({"depends_on"}, "update_routine"),
     ],
 )
 def test_update_classes(fields: set[str], expected: str) -> None:

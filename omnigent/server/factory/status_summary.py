@@ -462,6 +462,8 @@ class StatusInputs:
         dicts), which the "Needs you" list sorts into bets, sources and the rest.
     :param pending_sources: Discovery sources that wait for an owner's approval
         (``{id, label, kind, since}``; only while discovery runs for the factory).
+    :param fyi: Projects proposals the factory applied without a person's click
+        whose Undo is still open (:func:`fyi_rows`): Needs you's FYI lines.
     """
 
     snapshot: Mapping[str, Any]
@@ -475,6 +477,7 @@ class StatusInputs:
     usd_per_h_alert: float | None = None
     proposals: Sequence[Mapping[str, Any]] = ()
     pending_sources: Sequence[Mapping[str, Any]] = ()
+    fyi: Sequence[Mapping[str, Any]] = ()
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -1807,6 +1810,7 @@ def load_inputs(
     proposals = [proposal_row(row) for row in open_proposals]
     return StatusInputs(
         proposals=proposals,
+        fyi=fyi_rows(deps, root_id, now),
         pending_sources=pending_sources(deps, root_id),
         usd_per_h_alert=detectors.threshold(root_id, "usd_per_hour_alert"),
         snapshot=body,
@@ -1852,6 +1856,54 @@ def pending_sources(deps: FactoryDeps, root_id: str) -> list[dict[str, Any]]:
 
 PROPOSAL_ASK_STATUSES: Final = ("pending", "awaiting_cosign", "trial")
 """Proposals the "Needs you" list reads (awaiting a person, a co-sign, or on trial)."""
+FYI_SCAN: Final = 50
+"""Newest applied projects proposals an FYI read looks at (the Undo window is 10 minutes)."""
+
+
+def unattended(row: FactoryProposal) -> bool:
+    """Whether *row* applied without a person's click (autonomy, an answer, the grace timer)."""
+    return (
+        row.approval == "auto"
+        or row.decided_by in (None, "server")
+        or (row.author_kind == "agent" and row.decided_by == row.author)
+    )
+
+
+def fyi_rows(deps: FactoryDeps, root_id: str, now: float) -> list[dict[str, Any]]:
+    """
+    The projects proposals the factory applied on its own whose Undo is still
+    open, newest first, as plain JSON (``number``, ``title``, ``ops``,
+    ``applied_at``, ``undo_until``, ``on_behalf_of``, ``result.authority`` …).
+    """
+    rows = deps.factory_store.list_proposals(
+        root_id, status="applied", kind="projects", limit=FYI_SCAN
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.undo_until is None or row.undo_until < now or not unattended(row):
+            continue
+        result = row.result if isinstance(row.result, Mapping) else {}
+        out.append(
+            {
+                "id": row.id,
+                "number": row.number,
+                "title": row.title,
+                "ops": row.ops,
+                "author": row.author,
+                "author_kind": row.author_kind,
+                "author_role": row.author_role,
+                "on_behalf_of": row.on_behalf_of,
+                "approval": row.approval,
+                "applied_at": row.applied_at or row.updated_at,
+                "undo_until": row.undo_until,
+                "result": {
+                    k: result.get(k)
+                    for k in ("authority", "level", "grace", "spawning", "lead")
+                    if k in result
+                },
+            }
+        )
+    return out
 
 
 def proposal_row(row: FactoryProposal) -> dict[str, Any]:
@@ -1956,6 +2008,7 @@ async def status_summary_for(
 
 
 __all__ = [
+    "FYI_SCAN",
     "PROPOSAL_ASK_STATUSES",
     "CheckIn",
     "HealthBlock",
@@ -1976,6 +2029,7 @@ __all__ = [
     "build_status_summary",
     "clip_words",
     "decision_who",
+    "fyi_rows",
     "headline",
     "held_projects",
     "inputs_from_raw",
@@ -1991,6 +2045,7 @@ __all__ = [
     "status_summary_for",
     "summary_for_viewer",
     "summary_from_raw",
+    "unattended",
     "utc_day",
     "verdict",
     "waiting_items",

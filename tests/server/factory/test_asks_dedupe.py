@@ -243,7 +243,14 @@ def test_four_ready_prs_and_their_incidents_become_one_row() -> None:
         "Demos passed and checks are green on all 4. A person merges every pull request."
     )
     assert row["cost_of_waiting"]["text"] == "4 projects wait for a merge"
-    assert built["counts"] == {"total": 1, "mine": 0, "others": 0, "in_steer": 0, "folded": 5}
+    assert built["counts"] == {
+        "total": 1,
+        "mine": 0,
+        "others": 0,
+        "in_steer": 0,
+        "folded": 5,
+        "fyi": 0,
+    }
     assert built["handled"] == []
 
 

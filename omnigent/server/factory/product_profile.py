@@ -32,7 +32,10 @@ While ``preview_domain`` is unset, the deployment's env domain applies
 The ``environment`` block (:mod:`.environment`) is seeded the same way from
 :data:`ENVIRONMENT_SEED_ENV` (``{"<owner/repo>": {<environment fields>}}``),
 each seed once (:data:`SEEDS`); a seeded environment names its repo, so it
-reaches only that repo's projects.
+reaches only that repo's projects. So is the autonomy level
+(:data:`AUTONOMY_SEED_ENV`, ``{"<owner/repo>": {"level": "standard"}}``): a
+factory on that repo starts at that level, or gets it once as a seed version
+while no version ever set ``autonomy.level``; owners change it in Steer.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import BaseModel, ValidationError
 
 from omnigent.factory import LABEL_PREFIX
+from omnigent.server.factory.autonomy import AutonomyDef
 from omnigent.server.factory.definition_blocks import DeliveryDef, EnvironmentDef
 
 if TYPE_CHECKING:
@@ -64,6 +68,10 @@ ENVIRONMENT_SEED_ENV: Final = "OMNIGENT_FACTORY_ENVIRONMENT_SEED"
 """JSON ``{"<owner/repo>": {<environment fields>}}``: a factory on that repo starts there."""
 LABEL_ENVIRONMENT_SEED: Final = f"{LABEL_PREFIX}environment_seed"
 """On a factory root once its environment was seeded (``v<n>``) or found set (``set``)."""
+AUTONOMY_SEED_ENV: Final = "OMNIGENT_FACTORY_AUTONOMY_SEED"
+"""JSON ``{"<owner/repo>": {"level": "standard"}}``: the level that repo's factories start at."""
+LABEL_AUTONOMY_SEED: Final = f"{LABEL_PREFIX}autonomy_seed"
+"""On a factory root once its autonomy level was seeded (``v<n>``) or found set (``set``)."""
 _HISTORY_LIMIT: Final = 1000
 
 
@@ -77,6 +85,8 @@ class ProfileSeed:
     :param model: The block's model (validates a seed).
     :param label: The factory root label that marks it seeded, once.
     :param repo_field: A field set to the seed's repo when the seed leaves it out.
+    :param fields: Only these fields of the block are seeded and checked for
+        "ever set" (``None``: the whole block).
     """
 
     env: str
@@ -84,6 +94,7 @@ class ProfileSeed:
     model: type[BaseModel]
     label: str
     repo_field: str | None = None
+    fields: tuple[str, ...] | None = None
 
     def default(self) -> dict[str, Any]:
         """:returns: The block's defaults."""
@@ -94,7 +105,10 @@ DELIVERY: Final = ProfileSeed(DELIVERY_SEED_ENV, SEED_PATH, DeliveryDef, LABEL_D
 ENVIRONMENT: Final = ProfileSeed(
     ENVIRONMENT_SEED_ENV, "environment", EnvironmentDef, LABEL_ENVIRONMENT_SEED, "repo"
 )
-SEEDS: Final = (DELIVERY, ENVIRONMENT)
+AUTONOMY: Final = ProfileSeed(
+    AUTONOMY_SEED_ENV, "autonomy", AutonomyDef, LABEL_AUTONOMY_SEED, fields=("level",)
+)
+SEEDS: Final = (DELIVERY, ENVIRONMENT, AUTONOMY)
 
 
 def _default_delivery() -> dict[str, Any]:
@@ -129,7 +143,10 @@ def deployment_seeds(seed: ProfileSeed = DELIVERY) -> dict[str, dict[str, Any]]:
             if not repo or not isinstance(fields, Mapping):
                 raise ValueError(f"{key!r}: keys are owner/repo, values {seed.path} objects")
             found = seed.model.model_validate(dict(fields))
-            if values := found.model_dump(mode="json", exclude_unset=True):
+            values = found.model_dump(mode="json", exclude_unset=True)
+            if seed.fields is not None:
+                values = {k: v for k, v in values.items() if k in seed.fields}
+            if values:
                 if seed.repo_field and seed.repo_field not in values:
                     values[seed.repo_field] = repo
                 seeds[repo] = values
@@ -185,8 +202,12 @@ def _block_set(doc: Mapping[str, Any] | None, seed: ProfileSeed) -> bool:
     found: Any = definition_blocks.upgrade(dict(doc or {}))
     for part in seed.path.split("."):
         found = found.get(part) if isinstance(found, Mapping) else None
+    if not isinstance(found, Mapping):
+        return False
     defaults = seed.default()
-    return isinstance(found, Mapping) and {**defaults, **found} != defaults
+    if seed.fields is not None:
+        return any(k in found and found[k] != defaults.get(k) for k in seed.fields)
+    return {**defaults, **found} != defaults
 
 
 def ever_set(deps: FactoryDeps, factory_id: str, seed: ProfileSeed = DELIVERY) -> bool:
@@ -298,10 +319,13 @@ def preview_domain(deps: FactoryDeps | None, factory_id: str | None) -> str | No
 
 
 __all__ = [
+    "AUTONOMY",
+    "AUTONOMY_SEED_ENV",
     "DELIVERY",
     "DELIVERY_SEED_ENV",
     "ENVIRONMENT",
     "ENVIRONMENT_SEED_ENV",
+    "LABEL_AUTONOMY_SEED",
     "LABEL_DELIVERY_SEED",
     "LABEL_ENVIRONMENT_SEED",
     "SEEDS",

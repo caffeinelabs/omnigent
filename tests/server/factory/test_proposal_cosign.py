@@ -284,6 +284,34 @@ async def test_a_requested_bet_does_not_wait(cockpit: Cockpit) -> None:
     assert row.status == "applied" and row.case_against
 
 
+async def test_an_answer_never_carries_a_bet(cockpit: Cockpit) -> None:
+    # A person's answer covers project changes, not a bet: it still waits for the case against.
+    decision, _ = cockpit.store.create_decision(
+        cockpit.fid,
+        dedupe_key="share",
+        question="Should we start draft-share? (sample)",
+        source="agent",
+        options=[{"id": "yes", "label": "Start draft-share"}],
+        blocking=False,
+        allow_text=True,
+        asked_by_session_id=cockpit.world.id("lead_a"),
+    )
+    answered = await cockpit.post(
+        f"/v1/factory/decisions/{decision.id}/answer", {"option_id": "yes"}
+    )
+    assert answered.status_code == 200, answered.text
+
+    resp = await file_bet(cockpit, reply_to=decision.ref)
+
+    body = resp.json()
+    assert resp.status_code == 200, resp.text
+    assert body["status"] == "awaiting_cosign"
+    assert any(
+        "the bet or opportunity it plans needs its own approval" in w for w in body["warnings"]
+    )
+    assert _row(cockpit).on_behalf_of is None
+
+
 async def test_without_another_lead_a_person_decides_alone(cockpit: Cockpit) -> None:
     cockpit.world.store.set_labels(cockpit.world.id("lead_b"), {F.LABEL_STATE: F.STATE_DONE})
 

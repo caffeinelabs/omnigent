@@ -261,6 +261,64 @@ export const ProposalRaceLost = proposalStory(
   },
 );
 
+/** It carried out a person's answer to a decision: applied at once on their behalf, with Undo. */
+export const ProposalAnswerCarried = proposalStory({
+  ...proposalInState("auto_applied"),
+  on_behalf_of: "lena@example.com",
+  result: {
+    spawning: [],
+    authority: {
+      decision: "D-42",
+      answered_by: "lena@example.com",
+      answered_by_name: "lena@example.com",
+      option: "Add a follow-up PR",
+    },
+  },
+});
+
+/** An autonomy level let a routine update through: an FYI, with Undo. */
+export const ProposalByLevel = proposalStory({
+  ...proposalInState("auto_applied"),
+  result: { spawning: [], level: "standard" },
+});
+
+const CLOSED_DONE = {
+  by: "server",
+  code: "project_done",
+  reason: "project 'billing-api' is merged",
+  reopenable: true,
+};
+
+/** It closed itself: its project merged since, so nobody is asked; a person can reopen it. */
+export const ProposalClosedItself = proposalStory({
+  ...proposalInState("withdrawn"),
+  decided_by: "server",
+  result: { closed: CLOSED_DONE },
+});
+
+export const ProposalClosedItselfDark = proposalStory(
+  {
+    ...proposalInState("withdrawn"),
+    decided_by: "server",
+    result: { closed: CLOSED_DONE },
+  },
+  { theme: "dark" },
+);
+
+/** It closed itself for good (its project was cancelled): no Reopen, propose it again. */
+export const ProposalClosedForGood = proposalStory({
+  ...proposalInState("withdrawn"),
+  decided_by: "server",
+  result: {
+    closed: {
+      by: "server",
+      code: "project_closed",
+      reason: "project 'billing-api' is cancelled",
+      reopenable: false,
+    },
+  },
+});
+
 export const ProposalRefused = proposalStory(proposalInState("refused"));
 
 export const ProposalRejected = proposalStory(proposalInState("rejected"));

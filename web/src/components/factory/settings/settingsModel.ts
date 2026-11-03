@@ -36,6 +36,36 @@ const n = (
 
 export const AUTONOMY_GROUPS: FieldGroup[] = [
   {
+    title: "Autonomy level",
+    description:
+      "How much the agents do without asking. Owners set it; agents never change it. " +
+      "Whatever applies at once shows as an FYI in Needs you with Undo.",
+    fields: [
+      {
+        path: "autonomy.level",
+        label: "Level",
+        kind: "select",
+        options: [
+          {
+            value: "careful",
+            label: "Careful",
+            hint: "agents ask before every project change they start on their own",
+          },
+          {
+            value: "standard",
+            label: "Standard",
+            hint: "routine upkeep (scope, constraints, DoD, priority, dependencies) applies at once",
+          },
+          {
+            value: "tryout",
+            label: "Tryout",
+            hint: "also new projects inside an initiative a person started",
+          },
+        ],
+      },
+    ],
+  },
+  {
     title: "Projects",
     description: "When an agent's project proposal applies on its own.",
     fields: [

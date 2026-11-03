@@ -13,6 +13,7 @@ import type {
   PrView,
   DecisionView,
 } from "@/lib/factoryApi";
+import type { AsksResponse, Fyi } from "@/lib/factoryAsksApi";
 import { preflightOk } from "../../__fixtures__/liveRun";
 import { round3IssueList } from "../../agents/__fixtures__/opsFixtures";
 import type { StoryRoutes } from "../../factoryStoryFixtures";
@@ -453,6 +454,51 @@ export interface HomeRouteOptions {
   proposals?: readonly ProposalView[];
   /** Incidents (round 3's by default). */
   incidents?: ReturnType<typeof round3IssueList>;
+  /** FYI lines: what the factory did on its own, Undo still open. */
+  fyi?: readonly Fyi[];
+}
+
+/** Two sample FYI lines: an answer carried out and a routine update a level let through. */
+export function sampleFyi(snapshot: FactorySnapshot): Fyi[] {
+  const now = snapshot.server_time;
+  const base = `/factory/${snapshot.factory.id}/improvements`;
+  return [
+    {
+      id: "C-16",
+      subject: "proposal:C-16",
+      ref: "C-16",
+      title: "update api-version (dod, scope_paths)",
+      why: "for lena: their answer to D-42",
+      project: "api-version",
+      since: now - 90,
+      age_s: 90,
+      undo_until: now + 510,
+      can_undo: true,
+      decision: "D-42",
+      level: null,
+      href: `${base}/C-16`,
+    },
+    {
+      id: "C-17",
+      subject: "proposal:C-17",
+      ref: "C-17",
+      title: "update billing-api (constraints)",
+      why: "autonomy: standard",
+      project: "billing-api",
+      since: now - 240,
+      age_s: 240,
+      undo_until: now + 360,
+      can_undo: true,
+      decision: null,
+      level: "standard",
+      href: `${base}/C-17`,
+    },
+  ];
+}
+
+/** *asks* with *fyi* as its FYI lines (they never count in Needs you). */
+function withFyi(asks: AsksResponse, fyi: readonly Fyi[]): AsksResponse {
+  return { ...asks, fyi: [...fyi], counts: { ...asks.counts, fyi: fyi.length } };
 }
 
 /** The new cockpit's routes for Home over `snapshot` (fixture-built Now and asks). */
@@ -468,7 +514,10 @@ export function homeRoutes(snapshot: FactorySnapshot, options: HomeRouteOptions 
     [`${own}/issues`]: { body: { data: incidents, count: incidents.length, mine: [] } },
     [`${own}/status-summary`]: { body: statusSummaryOf(snapshot, { incidents, usdPerHAlert: 40 }) },
     [`${own}/asks`]: {
-      body: asksOf(snapshot, { incidents, proposals: options.proposals ?? roomProposals() }),
+      body: withFyi(
+        asksOf(snapshot, { incidents, proposals: options.proposals ?? roomProposals() }),
+        options.fyi ?? [],
+      ),
     },
     [`${own}/discovery`]: options.discovery ? { body: options.discovery } : missing,
     [`${own}/opportunities`]: options.opportunities ? { body: options.opportunities } : missing,
