@@ -36,6 +36,7 @@ import {
   roomLink,
 } from "@/components/factory/projects/ProjectSections";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
+import { TeamSection } from "@/components/factory/team/TeamSection";
 import { useHashScroll } from "@/components/factory/shell/scroll";
 import { findPr } from "@/components/factory/shell/shellRoutes";
 import { plural } from "@/components/factory/factoryFormat";
@@ -130,6 +131,8 @@ function ProjectBody({
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const fid = snapshot.factory.id;
+  // The new cockpit draws the team as an org chart right under the header.
+  const cockpitV2 = useFactoryShell().cockpit === "v2";
   const prs = projectPrList(snapshot, project);
   const decisions = projectDecisions(snapshot, project);
   const openDecisions = decisions.filter((d) => d.status === "open").length;
@@ -156,6 +159,9 @@ function ProjectBody({
     <div data-testid={`project-page-${project.slug}`} className="flex min-w-0 flex-col gap-4">
       <Breadcrumb factoryId={fid} title={project.title} />
       <ProjectHeader snapshot={snapshot} project={project} nowS={nowS} onDecision={onDecision} />
+      {cockpitV2 && (
+        <TeamSection snapshot={snapshot} project={project} nowS={nowS} sectionId="team" />
+      )}
       <SectionNav
         sections={PROJECT_SECTIONS}
         counts={counts}
@@ -230,9 +236,12 @@ function ProjectBody({
             </p>
           )}
         </PageSection>
-        <PageSection id="team" title="Team" meta="agents on this project">
-          <TeamTable project={project} nowS={nowS} factoryId={fid} />
-        </PageSection>
+        {/* The new cockpit's chart above is the Team section. */}
+        {!cockpitV2 && (
+          <PageSection id="team" title="Team" meta="agents on this project">
+            <TeamTable project={project} nowS={nowS} factoryId={fid} />
+          </PageSection>
+        )}
         <PageSection id="loops" title="Loops">
           <ProjectLoops snapshot={snapshot} project={project} nowS={nowS} />
         </PageSection>

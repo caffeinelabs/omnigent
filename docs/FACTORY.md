@@ -860,6 +860,16 @@ default). `enforce` needs the PL's `team_guard` policy, which is held out of the
 `omnigent.policies.builtins.factory_team` (a runner that cannot import a policy
 path denies every tool call); add it back before turning `enforce` on.
 
+In the new cockpit a project's page draws its team as an org chart (the lead,
+then Build, Check and Run), and `/projects/<slug>/team` (also `e` on the
+project, "Change model…" on an agent, Edit team on Teams) is its editor: the
+staged changes compile to the team paths above, the server's preview prices
+them and says who applies them, and Apply makes one definition version with a
+10-minute Undo (a re-pin of the version before it). History restores an
+earlier team of that project only, as a staged replace of
+`team.projects.<slug>`. Apply stays off, so the editor only stages and
+previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
+
 | Paths | Class |
 |---|---|
 | `cadence.*` | A when slower, else B (0 = off is B) |

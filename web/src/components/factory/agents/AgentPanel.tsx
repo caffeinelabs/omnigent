@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useFactoryControls } from "../controls/useFactoryControls";
 import { agentPageHref, projectPageHref, roomPageHref } from "../factoryRoutes";
 import { ReasonGated, useViewerCan } from "../shell/viewerCan";
+import { teamEditorHref } from "../team/teamStaging";
 import { AgentStateSentence } from "./AgentStateSentence";
 import { AgentStateStrip, Sparkline, seriesSummary } from "./AgentStateStrip";
 import { agentSentence, shortSpan } from "./agentSentence";
@@ -86,8 +87,19 @@ function controlTarget(member: TeamMember): `project:${string}` | `member:${stri
     : `member:${member.row.session_id}`;
 }
 
-function Levers({ factoryId, member }: { factoryId: string; member: TeamMember }) {
-  const { can } = useViewerCan();
+function Levers({
+  factoryId,
+  member,
+  project,
+}: {
+  factoryId: string;
+  member: TeamMember;
+  project: ProjectView | null;
+}) {
+  const { can, readOnly } = useViewerCan();
+  // A project member's model changes in its team editor (its project needs a team spec).
+  const teamHref =
+    project?.team_spec && member.seat == null ? teamEditorHref(factoryId, project.slug) : null;
   const controls = useFactoryControls(factoryId);
   const top = member.row.is_top_level;
   const paused = member.row.state === "paused";
@@ -161,13 +173,22 @@ function Levers({ factoryId, member }: { factoryId: string; member: TeamMember }
             Restart
           </Button>
         )}
-        {can.settings && (
-          <ReasonGated reason="Changing a member's model comes with team specs.">
-            <Button type="button" variant="outline" size="sm" disabled>
+        {teamHref && !readOnly ? (
+          <Button asChild variant="outline" size="sm">
+            <Link to={teamHref} componentId="factory.agent_panel.change_model">
               <ZapIcon aria-hidden className="size-3.5" />
               Change model…
-            </Button>
-          </ReasonGated>
+            </Link>
+          </Button>
+        ) : (
+          can.settings && (
+            <ReasonGated reason="Changing a member's model needs its project's team spec.">
+              <Button type="button" variant="outline" size="sm" disabled>
+                <ZapIcon aria-hidden className="size-3.5" />
+                Change model…
+              </Button>
+            </ReasonGated>
+          )
         )}
       </div>
       {!can.control && !can.post && (
@@ -402,7 +423,7 @@ export function AgentPanel({
         </div>
       </div>
       <AgentStateSentence sentence={sentence} />
-      <Levers factoryId={factoryId} member={member} />
+      <Levers factoryId={factoryId} member={member} project={project} />
       <NowSection member={member} nowS={nowS} />
       <StripSection
         factoryId={factoryId}

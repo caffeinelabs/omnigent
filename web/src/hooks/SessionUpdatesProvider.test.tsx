@@ -460,6 +460,32 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     ]);
   });
 
+  it("re-reads the team catalog, versions and preview only on a definition frame", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const keys = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+
+    act(() =>
+      frameHandler()({
+        type: "factory_changed",
+        factory_id: "f4f4ba9c",
+        scopes: ["snapshot", "events", "tasks"],
+      }),
+    );
+    expect(keys()).not.toContainEqual(["factory-team", "f4f4ba9c"]);
+
+    act(() =>
+      frameHandler()({
+        type: "factory_changed",
+        factory_id: "f4f4ba9c",
+        scopes: ["snapshot", "events", "definition"],
+      }),
+    );
+    expect(keys()).toContainEqual(["factory-team", "f4f4ba9c"]);
+  });
+
   it("re-reads only the snapshot on a live 'now' tick (no spans, events, demos or Now)", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);
