@@ -71,6 +71,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from omnigent.factory import PROJECT_KIND_INTEGRATION, ROLE_PROJECT_LEAD, STAGES
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
 from omnigent.server.factory import issues
+from omnigent.server.factory.auto_merge import AUTO_TEXT
 from omnigent.server.factory.decision_routing import is_mine_by, roster_owner
 
 if TYPE_CHECKING:
@@ -699,7 +700,7 @@ def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
             )
         )
     for pr in body.get("prs") or []:
-        if pr.get("state") != "open" or not pr.get("ready"):
+        if pr.get("state") != "open" or not pr.get("ready") or pr.get("auto_merge"):
             continue
         project = pr.get("project_slug")
         who, mine = _pr_who(inputs.owners.get(project or ""), user_id, operator)
@@ -909,7 +910,7 @@ def pr_status(pr: Mapping[str, Any]) -> str | None:
     if _changes_requested(pr):
         return f"{ref}: making the changes a person asked for"
     if pr.get("ready"):
-        return f"{ref} ready for a merge"
+        return f"{ref} {AUTO_TEXT}" if pr.get("auto_merge") else f"{ref} ready for a merge"
     if pr.get("is_draft") or gates.get("draft") == "fail":
         return f"{ref} is a draft"
     steps = (

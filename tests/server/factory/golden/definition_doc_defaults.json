@@ -179,6 +179,7 @@
     "areas": [],
     "competitors": [],
     "delivery": {
+      "auto_merge": [],
       "demo_paths": [],
       "flags": {
         "convention": null,

@@ -634,7 +634,9 @@ def incident_items(
 def pr_items(
     ctx: FactoryCtx, event: FactoryEvent, pr: FactoryPr, base_url: str | None
 ) -> list[tuple[str, Item]]:
-    """E5: a PR became ready for human merge."""
+    """E5: a PR became ready for human merge (none for one the server merges itself)."""
+    if (event.data or {}).get("auto_merge") is True:
+        return []
     owner = ctx.human_owners.get(pr.project_slug or "")
     if owner and owner in ctx.people:
         recipients = [(owner, f"you own project {pr.project_slug}")]

@@ -806,6 +806,8 @@ class PrView(_View):
     gates: GatesView
     ready: bool
     ready_since: int | None = None
+    auto_merge: bool = False
+    """Its repo and base are an owner-set auto-merge target: the server merges it when green."""
     sentinel: SentinelView | None = None
     human_review: HumanReviewView | None = None
     preview: PreviewView | None = None

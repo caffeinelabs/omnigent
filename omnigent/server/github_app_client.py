@@ -60,6 +60,8 @@ _BRANCH_PROTECTION_ENDPOINT = (
     "https://api.github.com/repos/{full_name}/branches/{branch}/protection"
 )
 _PULL_FILES_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/files"
+_PULL_MERGE_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/merge"
+_MERGE_METHODS = frozenset({"squash", "merge", "rebase"})
 _RULES_PER_PAGE = 100
 _RULES_MAX_PAGES = 5
 # GitHub lists at most 3000 files of a PR.
@@ -174,6 +176,18 @@ def _api_error(what: str, resp: httpx.Response) -> GitHubApiError:
         rate_limit=_header_rate_limit(resp),
         retry_after=float(retry_after) if retry_after is not None else None,
     )
+
+
+def _error_message(resp: httpx.Response) -> str | None:
+    """:returns: GitHub's ``message`` of an error answer, one line, or ``None``."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    message = body.get("message") if isinstance(body, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return " ".join(message.split())[:200]
 
 
 def _graphql_rate_limit(data: Mapping[str, Any], resp: httpx.Response) -> RateLimit | None:
@@ -480,6 +494,60 @@ class GitHubAppClient:
                 if len(files) < _PULL_FILES_PER_PAGE:
                     break
         return paths
+
+    async def merge_pull(
+        self,
+        access_token: str,
+        repo: str,
+        number: int,
+        *,
+        sha: str,
+        merge_method: str = "squash",
+    ) -> dict[str, Any]:
+        """Merge a pull request at an expected head (``PUT /repos/{repo}/pulls/{n}/merge``).
+
+        The factory's only pull-request write: the server's auto-merger calls it
+        for owner-set targets (agents never merge). GitHub refuses with 409 when
+        the head is no longer *sha*, so a push after the caller's checks cannot
+        slip in.
+
+        :param access_token: A valid user access token.
+        :param repo: ``owner/name``.
+        :param number: The PR number.
+        :param sha: The head the caller checked (40 hex); the merge needs it.
+        :param merge_method: ``squash`` (default), ``merge`` or ``rebase``.
+        :returns: GitHub's answer, ``{"merged": true, "sha": <merge commit>, "message": …}``.
+        :raises GitHubApiError: When GitHub does not merge it (405 not mergeable,
+            409 head moved, 403/404 no access, 422 invalid), with GitHub's message.
+        :raises ValueError: For a malformed *sha* or *merge_method*.
+        """
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", sha or ""):
+            raise ValueError("merge_pull needs the 40-hex head the caller checked")
+        if merge_method not in _MERGE_METHODS:
+            raise ValueError(f"merge_method is one of {sorted(_MERGE_METHODS)}")
+        async with self._http_client() as client:
+            resp = await client.put(
+                _PULL_MERGE_ENDPOINT.format(full_name=repo, number=int(number)),
+                json={"merge_method": merge_method, "sha": sha.lower()},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code != 200:
+            error = _api_error(f"merging {repo}#{int(number)}", resp)
+            reason = _error_message(resp)
+            if reason:
+                error.args = (f"{error.args[0]}: {reason}",)
+            raise error
+        body = resp.json()
+        if not isinstance(body, dict) or body.get("merged") is not True:
+            raise GitHubApiError(
+                f"GitHub did not merge {repo}#{int(number)}",
+                status_code=resp.status_code,
+                rate_limit=_header_rate_limit(resp),
+            )
+        return body
 
     async def branch_rules(self, access_token: str, repo: str, base: str) -> BranchRules:
         """Read what *base* requires: rulesets, plus classic protection when readable.

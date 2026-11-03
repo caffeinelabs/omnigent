@@ -1,7 +1,8 @@
-"""The GitHub client's read-only methods for the factory poller.
+"""The GitHub client's read-only methods for the factory poller, and its one merge.
 
 ``graphql``, ``list_pulls`` and ``branch_rules`` over ``httpx.MockTransport``;
 the transport fails the test on anything but GET and GraphQL queries.
+``merge_pull`` (the server's auto-merger) has its own handler.
 """
 
 from __future__ import annotations
@@ -324,3 +325,65 @@ async def test_branch_rules_unreadable_rulesets_raise() -> None:
     with pytest.raises(GitHubApiError) as info:
         await _client(handler).branch_rules(_TOKEN, "caffeinelabs/app", "main")
     assert info.value.status_code == 404
+
+
+# ── merge_pull (the auto-merger's one write) ────────────────────
+
+_HEAD = "ab" * 20
+
+
+def _merge_client(handler: Any) -> GitHubAppClient:
+    def _guard(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT", f"unexpected {request.method}"
+        assert request.url.path == "/repos/sample-org/sample-app/pulls/7/merge"
+        assert request.headers["authorization"] == f"Bearer {_TOKEN}"
+        return handler(request)
+
+    return GitHubAppClient(make_config(), transport=httpx.MockTransport(_guard))
+
+
+async def test_merge_pull_squashes_at_the_expected_head() -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"sha": "cd" * 20, "merged": True, "message": "ok"})
+
+    answer = await _merge_client(handler).merge_pull(
+        _TOKEN, "sample-org/sample-app", 7, sha=_HEAD.upper()
+    )
+    assert sent == [{"merge_method": "squash", "sha": _HEAD}]
+    assert answer["merged"] is True and answer["sha"] == "cd" * 20
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "words"),
+    [
+        (409, {"message": "Head branch was modified."}, "returned 409: Head branch was modified."),
+        (405, {"message": "Pull Request is not mergeable"}, "405: Pull Request is not mergeable"),
+        (200, {"merged": False, "message": "nope"}, "did not merge"),
+        (502, "not json", "returned 502"),
+    ],
+)
+async def test_merge_pull_refusals_raise_with_githubs_reason(
+    status: int, body: Any, words: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if isinstance(body, str):
+            return httpx.Response(status, text=body)
+        return httpx.Response(status, json=body)
+
+    with pytest.raises(GitHubApiError, match=words) as info:
+        await _merge_client(handler).merge_pull(_TOKEN, "sample-org/sample-app", 7, sha=_HEAD)
+    assert info.value.status_code == status
+
+
+@pytest.mark.parametrize(("sha", "method"), [("abc", "squash"), (_HEAD, "fast-forward")])
+async def test_merge_pull_never_sends_without_a_full_head(sha: str, method: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("nothing may be sent")
+
+    with pytest.raises(ValueError):
+        await _merge_client(handler).merge_pull(
+            _TOKEN, "sample-org/sample-app", 7, sha=sha, merge_method=method
+        )

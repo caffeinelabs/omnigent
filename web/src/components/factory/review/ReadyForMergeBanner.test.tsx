@@ -119,4 +119,12 @@ describe("ReadyForMergeBanner", () => {
     expect(banner).toHaveTextContent("Ready for human merge · 7/7 gates");
     expect(within(banner).queryByRole("button")).toBeNull();
   });
+
+  it("says the server merges a PR into an auto-merge target", () => {
+    const pr = { ...liveRunSnapshot().prs.find((p) => p.number === 9630)!, auto_merge: true };
+    renderBoard(<ReadyForMergeBanner pr={pr} nowS={LIVE_RUN_NOW_S} />);
+    expect(screen.getByTestId("drawer-ready-banner-9630")).toHaveTextContent(
+      "Ready · merges automatically when checks pass · 7/7 gates",
+    );
+  });
 });

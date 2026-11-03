@@ -13,8 +13,8 @@ Event                                           Thread                         C
 ``proposal.*``                                  its thread, else ``factory``   proposal
                                                 (projects) / ``improvements``
 ``control.*``                                   its project, else ``factory``  control
-``pr.discovered/ready/merged/closed/            ``pr:<id>`` plus a one-liner   pr
-human_review``                                  in its project
+``pr.discovered/ready/auto_merged/merged/       ``pr:<id>`` plus a one-liner   pr
+closed/human_review``                           in its project
 ``demo.published``                              ``pr:<id>``                    demo
 ``loop.exhausted/stalled/thrashing/escalated``  its project, else ``factory``  loop
 ``issue.opened/escalated`` (warning or worse;   its project, else ``factory``  issue
@@ -86,7 +86,7 @@ _logger = logging.getLogger(__name__)
 
 DECISION_KINDS: Final = frozenset({"decision.opened", "decision.answered", "decision.escalated"})
 PR_KINDS: Final = frozenset(
-    {"pr.discovered", "pr.ready", "pr.merged", "pr.closed", "pr.human_review"}
+    {"pr.discovered", "pr.ready", "pr.auto_merged", "pr.merged", "pr.closed", "pr.human_review"}
 )
 LOOP_KINDS: Final = frozenset(
     {"loop.exhausted", "loop.stalled", "loop.thrashing", "loop.escalated"}

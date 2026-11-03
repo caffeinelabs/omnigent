@@ -37,6 +37,7 @@ from omnigent.factory_gates import (
     parse_time,
 )
 from omnigent.server.factory import events, live, nudge
+from omnigent.server.factory.auto_merge import factory_targets, is_target, nudge_merger
 from omnigent.server.factory.charter import (
     DEFAULT_BASE_BRANCH,
     normalize_charter,
@@ -243,6 +244,15 @@ def _rollup_checks(node: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [check for _, check in newest.values()]
 
 
+def head_checks(node: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """
+    :param node: An aliased ``pullRequest`` whose head commit is aliased ``head``.
+    :returns: The head's checks as ``{name, state, required, url}``, the newest
+        run per name; ``state`` is the conclusion, or ``PENDING`` until it completes.
+    """
+    return _rollup_checks(node)
+
+
 def normalize_pr(node: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """
     Convert a GraphQL pull request to the ``gh pr view --json`` shape.
@@ -301,16 +311,30 @@ def _teardown(preview: Mapping[str, Any] | None, number: int) -> str:
     return f" · tear down preview p{number}"
 
 
-def ready_notice(pr: FactoryPr, gate_count: int, *, for_lead: bool = False) -> str:
-    """``[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 6/6 gates · head <sha7>]``."""
+def ready_notice(
+    pr: FactoryPr, gate_count: int, *, for_lead: bool = False, auto_merge: bool = False
+) -> str:
+    """``[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 6/6 gates · head <sha7>]``.
+
+    :param auto_merge: The PR targets an owner-set auto-merge base: the
+        server, not a person, merges it once its checks pass.
+    """
     head = (
         f"[Factory notice · PR {pr.repo}#{pr.number} READY FOR HUMAN MERGE · "
         f"{gate_count}/{gate_count} gates · head {_sha7(pr.head_sha)}]"
     )
     if for_lead:
         project = pr.project_slug or "?"
+        who = (
+            "the factory's server merges it when its checks pass"
+            if auto_merge
+            else "the cockpit lists it for the human"
+        )
+        return f"{head} Info only (project {project}): {who}. {pr.url}"
+    if auto_merge:
         return (
-            f"{head} Info only (project {project}): the cockpit lists it for the human. {pr.url}"
+            f"{head} {pr.base_ref} is an auto-merge target: the factory's server merges it "
+            f"when its checks pass. Keep its preview up and do not merge it. {pr.url}"
         )
     return f"{head} A human merges it on GitHub; keep its preview up and do not merge it. {pr.url}"
 
@@ -879,12 +903,20 @@ async def _announce(
         out.notices.append((pl_target, base_notice(pr, base.get("actual"), base.get("expected"))))
     if lift is not None:
         _announce_lift(pr, lift, pl_target, out)
+    auto = (
+        pr.ready and pr.state == "open" and await asyncio.to_thread(_auto_merge_target, deps, pr)
+    )
     if pr.ready and not row.ready:
-        out.events.append(_event("pr.ready", f"PR #{pr.number} ready for human merge", "notice"))
+        summary = (
+            f"PR #{pr.number} ready; the factory merges it when checks pass"
+            if auto
+            else f"PR #{pr.number} ready for human merge"
+        )
+        out.events.append(_event("pr.ready", summary, "notice", auto_merge=auto))
         count = len(report.gates)
-        out.notices.append((pl_target, ready_notice(pr, count)))
+        out.notices.append((pl_target, ready_notice(pr, count, auto_merge=auto)))
         if pl_id and pl_id != lead_id:
-            out.notices.append((lead_id, ready_notice(pr, count, for_lead=True)))
+            out.notices.append((lead_id, ready_notice(pr, count, for_lead=True, auto_merge=auto)))
     elif row.ready and not pr.ready and pr.state == "open":
         reasons = report.reasons[:3]
         if changes_requested_on_head(pr.human_review, pr.head_sha):
@@ -957,6 +989,9 @@ async def _announce(
             mailer.notify(target, text)
         except RuntimeError:
             _logger.warning("factory: mailer closed; dropped PR notice for %s", target)
+    if auto:
+        # The server's merger looks at it now instead of on its next pass.
+        nudge_merger(pr.id)
     if pr.project_slug and (
         out.events or row.state != pr.state or row.ready != pr.ready or row.gates != pr.gates
     ):
@@ -964,6 +999,15 @@ async def _announce(
     if not out.events and _visible_change(row, pr):
         # Events announce themselves; quiet changes (e.g. evidence) still refresh the cockpit.
         live.announce_factory_changed(app_state, scope.factory_id, ("snapshot",))
+
+
+def _auto_merge_target(deps: FactoryDeps, pr: FactoryPr) -> bool:
+    """Whether *pr* goes into one of its factory's auto-merge targets (never raises)."""
+    try:
+        return is_target(factory_targets(deps, pr.factory_id), pr.repo, pr.base_ref)
+    except Exception:  # noqa: BLE001 - a person merges it, as without targets
+        _logger.warning("factory: could not read the auto-merge targets", exc_info=True)
+        return False
 
 
 _VISIBLE_FIELDS: Final = (
@@ -1154,6 +1198,7 @@ __all__ = [
     "checks_failed_notice",
     "closed_notice",
     "files_gap",
+    "head_checks",
     "human_hold_reason",
     "merged_notice",
     "normalize_pr",

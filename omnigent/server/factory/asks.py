@@ -24,6 +24,8 @@ dropping a measured bet, or answering "did it help?"), ``broken``
 - Every ready PR the same person merges folds into one ``merge`` row, with
   at most :data:`ITEMS_MAX` sub-items and ``more_count`` for the rest; a
   viewer who merges as an operator and as a project's owner gets one row.
+  A ready PR into an owner-set auto-merge target asks nobody: it is a
+  ``handled`` sentence ("merges automatically when checks pass").
 - An incident folds into the row of what it is about: a ready PR's merge
   row, or the decision whose options act on the same target (an agent that
   could not restart, a loop out of budget), as long as that row waits on
@@ -63,6 +65,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import issues
 from omnigent.server.factory import status_summary as summary_mod
+from omnigent.server.factory.auto_merge import AUTO_TEXT
 from omnigent.server.factory.decision_routing import is_mine_by
 from omnigent.server.factory.stuck import STUCK_RULES
 
@@ -902,7 +905,8 @@ def _merge_drafts(ctx: _Ctx) -> list[_Draft]:
     body = ctx.inputs.snapshot
     groups: dict[tuple[str | None, str, bool, bool], list[Mapping[str, Any]]] = {}
     for pr in body.get("prs") or []:
-        if pr.get("state") != "open" or not pr.get("ready"):
+        if pr.get("state") != "open" or not pr.get("ready") or pr.get("auto_merge"):
+            # A PR into an owner-set auto-merge target waits on the server, not a person.
             continue
         groups.setdefault(_pr_who(ctx, pr.get("project_slug")), []).append(pr)
     yours = [key for key in groups if key[2]]
@@ -1067,6 +1071,22 @@ def _stuck_sentence(issue: FactoryIssue, ctx: _Ctx) -> str:
     return f"{name} is stuck ({reason}); it clears once the agent moves again."
 
 
+def _auto_merging(ctx: _Ctx) -> list[str]:
+    """One sentence per ready PR the server merges itself (an owner-set target)."""
+    prs = [
+        pr
+        for pr in ctx.inputs.snapshot.get("prs") or []
+        if pr.get("state") == "open" and pr.get("ready") and pr.get("auto_merge")
+    ]
+    prs.sort(key=lambda p: (int(p.get("ready_since") or 0), int(p.get("number") or 0)))
+    lines: list[str] = []
+    for pr in prs:
+        title = ctx.project_title(pr.get("project_slug")) or _clip(pr.get("title"), TITLE_MAX)
+        what = f" ({title.rstrip('.')})" if title else ""
+        lines.append(f"PR #{pr['number']}{what} {AUTO_TEXT}.")
+    return lines
+
+
 def _handled(ctx: _Ctx, healing: Sequence[FactoryIssue]) -> list[str]:
     """The calm "Handled by the factory" sentences, stuck agents first."""
     lines: list[str] = []
@@ -1093,7 +1113,7 @@ def _handled(ctx: _Ctx, healing: Sequence[FactoryIssue]) -> list[str]:
             lines.append(
                 f"The bet {ref} waits for the other lead's co-sign before it reaches a person."
             )
-    return lines
+    return [*lines, *_auto_merging(ctx)]
 
 
 @dataclass(frozen=True)

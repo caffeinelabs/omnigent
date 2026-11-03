@@ -5,7 +5,9 @@ the branch rules and protection reads, and the poller's GraphQL refresh
 query (PRs and base heads) from in-memory objects. Its transport fails the
 test on any request that could write to GitHub: a method other than GET, a
 POST anywhere but ``/graphql``, or a GraphQL document that is not a query.
-:class:`FakeGitData` is the one writable slice: the demo mirror repo's Git
+The one exception is opt-in: with ``allow_merge`` it serves the auto-merger's
+``PUT /repos/{repo}/pulls/{n}/merge`` (and records it in :attr:`FakeGitHub.merges`).
+:class:`FakeGitData` is the other writable slice: the demo mirror repo's Git
 Data API.
 """
 
@@ -98,6 +100,7 @@ class FakePr:
     merge_sha: str | None = None
     closed_at: float | None = None
     closed_by: str | None = None
+    review_decision: str | None = None
 
     @property
     def url(self) -> str:
@@ -180,6 +183,7 @@ class FakePr:
             "headRefName": self.head_ref,
             "baseRefName": self.base_ref,
             "mergeable": self.mergeable,
+            "reviewDecision": self.review_decision,
             "mergedAt": iso(self.merged_at) if self.merged_at else None,
             "closedAt": iso(self.closed_at) if self.closed_at else None,
             "mergeCommit": {"oid": self.merge_sha} if self.merge_sha else None,
@@ -203,7 +207,12 @@ class FakePr:
                         "commit": {
                             "oid": self.head_sha,
                             "statusCheckRollup": (
-                                {"contexts": {"nodes": [c.node() for c in self.checks]}}
+                                {
+                                    "contexts": {
+                                        "totalCount": len(self.checks),
+                                        "nodes": [c.node() for c in self.checks],
+                                    }
+                                }
                                 if self.checks
                                 else None
                             ),
@@ -237,6 +246,13 @@ class FakeGitHub:
     files_status: int | None = None
     retry_after: int | None = None
     requests: list[httpx.Request] = field(default_factory=list)
+    allow_merge: bool = False
+    """Serve the auto-merger's merge call; anything else that writes still fails the test."""
+    merge_status: int | None = None
+    """Answer every merge call with this error status (and a GitHub-like message)."""
+    merges: list[dict[str, Any]] = field(default_factory=list)
+    """Every merge call's ``{repo, number, merge_method, sha}``."""
+    merged_by: str = "lena"
 
     def add(self, pr: FakePr) -> FakePr:
         """Publish *pr* and return it."""
@@ -265,6 +281,9 @@ class FakeGitHub:
     def handler(self, request: httpx.Request) -> httpx.Response:
         """Serve one request; fail the test on anything that could write."""
         self.requests.append(request)
+        merge = re.fullmatch(r"/repos/([^/]+/[^/]+)/pulls/(\d+)/merge", request.url.path)
+        if request.method == "PUT" and merge and self.allow_merge:
+            return self._merge(merge.group(1), int(merge.group(2)), json.loads(request.content))
         if request.method == "POST":
             if request.url.path != "/graphql":
                 pytest.fail(f"GitHub write attempted: POST {request.url}")
@@ -298,6 +317,34 @@ class FakeGitHub:
                 return httpx.Response(404, json={"message": "Branch not protected"})
             return httpx.Response(200, json=classic)
         return httpx.Response(404, json={"message": "Not Found"})
+
+    def _merge(self, repo: str, number: int, body: dict[str, Any]) -> httpx.Response:
+        self.merges.append({"repo": repo, "number": number, **body})
+        if self.merge_status is not None:
+            headers = {"retry-after": str(self.retry_after)} if self.retry_after else {}
+            return httpx.Response(
+                self.merge_status,
+                json={"message": "Pull Request is not mergeable (sample)"},
+                headers=headers,
+            )
+        pr = next((p for p in self.prs if p.repo == repo and p.number == number), None)
+        if pr is None:
+            return httpx.Response(404, json={"message": "Not Found"})
+        if pr.state != "OPEN":
+            return httpx.Response(405, json={"message": "Pull Request is not mergeable"})
+        if body.get("sha") != pr.head_sha:
+            return httpx.Response(
+                409, json={"message": "Head branch was modified. Review and try the merge again."}
+            )
+        merge_sha = sha(f"merge{number}")
+        pr.state = "MERGED"
+        pr.merged_by = self.merged_by
+        pr.merge_sha = merge_sha
+        pr.merged_at = pr.closed_at = datetime.now(tz=UTC).timestamp()
+        return httpx.Response(
+            200,
+            json={"sha": merge_sha, "merged": True, "message": "Pull Request successfully merged"},
+        )
 
     def _pulls(self, repo: str, params: httpx.QueryParams) -> httpx.Response:
         state = params.get("state", "open")

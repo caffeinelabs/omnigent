@@ -37,6 +37,8 @@ from pydantic import (
     model_validator,
 )
 
+from omnigent.server.factory.charter import BRANCH_RE
+
 DISCOVERY_ENV: Final = "OMNIGENT_FACTORY_DISCOVERY"
 """Server switch for discovery routes, tools and jobs (off unless ``1``/``true``)."""
 BRIEF_MAX: Final = 4000
@@ -126,6 +128,12 @@ def _repo(value: str) -> str:
     return value
 
 
+def _branch(value: str) -> str:
+    if not BRANCH_RE.match(value):
+        raise ValueError("a branch name such as main or release/2 (no wildcards)")
+    return value
+
+
 def _host(value: str | None) -> str | None:
     if value is not None and not _HOST_RE.match(value):
         raise ValueError("a domain such as previews.example.org (no scheme or path)")
@@ -141,6 +149,7 @@ def _link(value: str) -> str:
 Slug = Annotated[str, AfterValidator(_slug)]
 Alias = Annotated[str | None, AfterValidator(_alias)]
 Repo = Annotated[str, AfterValidator(_repo)]
+Branch = Annotated[str, AfterValidator(_branch)]
 Host = Annotated[str | None, AfterValidator(_host)]
 
 
@@ -204,17 +213,28 @@ class FlagsDef(_Block):
     convention: Words | None = None
 
 
+class AutoMergeTargetDef(_Block):
+    """One repo and base branch whose ready factory PRs the server merges (names only)."""
+
+    repo: Repo
+    base: Branch
+
+
 class DeliveryDef(_Block):
     """
     How work reaches users.
 
-    :param merge_policy: Who merges pull requests, in words. The factory never
-        merges (Tier 0), whatever this says.
+    :param merge_policy: Who merges pull requests, in words. Agents never
+        merge (Tier 0), whatever this says.
+    :param auto_merge: Repo and base pairs whose factory PRs the server
+        merges once ready and green (:mod:`.auto_merge`). Owners alone set
+        it; an agent never proposes it (:data:`AGENT_NEVER`).
     :param release: What counts as released: ``merged``, ``github_release``,
         ``github_deployment:<env>`` or ``manual``.
     """
 
     merge_policy: Annotated[str, _strip(300)] | None = None
+    auto_merge: list[AutoMergeTargetDef] = Field(default_factory=list, max_length=10)
     protected_repos: list[Repo] = Field(default_factory=list, max_length=20)
     demo_paths: list[Glob] = Field(default_factory=list, max_length=30)
     preview_domain: Host = None
@@ -229,6 +249,17 @@ class DeliveryDef(_Block):
                 "release is merged, github_release, github_deployment:<env> or manual"
             )
         return value
+
+    @field_validator("auto_merge")
+    @classmethod
+    def _targets(cls, items: list[AutoMergeTargetDef]) -> list[AutoMergeTargetDef]:
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            key = (item.repo.lower(), item.base)
+            if key in seen:
+                raise ValueError(f"auto_merge lists {item.repo}#{item.base} twice")
+            seen.add(key)
+        return items
 
 
 class ProductDef(_Block):
@@ -1030,6 +1061,12 @@ AGENT_GATED: Final = (*BLOCKS, "team")
 ALLOWLIST_SEATS: Final = frozenset({"scout"})
 """Seats that may propose only their :data:`AGENT_PATHS`, in any block (Scout reads users'
 text, so it never proposes caps, budgets, autonomy or any other setting)."""
+AGENT_NEVER: Final = ("product.delivery.auto_merge",)
+"""Paths no agent proposes, whatever its seat: which PRs the server merges is the owners' call."""
+AGENT_NEVER_REASON: Final = (
+    "auto-merge targets are set by owners in the cockpit; agents never propose them "
+    "and never merge"
+)
 
 
 def under(path: str, prefix: str) -> bool:
@@ -1042,8 +1079,15 @@ def in_blocks(path: str, blocks: tuple[str, ...] = BLOCKS) -> bool:
     return any(under(path, block) for block in blocks)
 
 
+def agent_never(path: str) -> bool:
+    """Whether *path* is, holds or lies in one no agent may propose (:data:`AGENT_NEVER`)."""
+    return any(under(path, never) or under(never, path) for never in AGENT_NEVER)
+
+
 def agent_may_propose(seat: str, path: str) -> bool:
     """Whether an agent in *seat* (``scout``, ``sentinel``, ``atlas``, …) may propose *path*."""
+    if agent_never(path):
+        return False
     allowed = AGENT_PATHS.get(seat, ())
     if seat not in ALLOWLIST_SEATS and not in_blocks(path, AGENT_GATED):
         return True
@@ -1126,6 +1170,8 @@ def slower_or_off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
 
 __all__ = [
     "AGENT_GATED",
+    "AGENT_NEVER",
+    "AGENT_NEVER_REASON",
     "AGENT_PATHS",
     "ALLOWLIST_SEATS",
     "BLOCKS",
@@ -1152,7 +1198,9 @@ __all__ = [
     "TOO_FEW_PRS",
     "USER_ID",
     "VENDORS_BY_ROLE",
+    "AutoMergeTargetDef",
     "BriefsDef",
+    "DeliveryDef",
     "DemoAuthDef",
     "DiscoveryDef",
     "EnvironmentDef",
@@ -1165,6 +1213,7 @@ __all__ = [
     "SourceDef",
     "StrategyDef",
     "agent_may_propose",
+    "agent_never",
     "discovery_server_on",
     "downgrade",
     "has_secret",
