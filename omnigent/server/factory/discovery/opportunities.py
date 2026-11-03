@@ -451,6 +451,24 @@ def solution_named(statement: str) -> str | None:
     return None
 
 
+def check_need(statement: str) -> None:
+    """
+    An agent's statement is a need in job form that names no solution.
+
+    :raises CockpitError: 422 ``not_job_form`` / ``names_a_solution``.
+    """
+    if not _JOB_RE.match(statement):
+        raise CockpitError(
+            422,
+            "not_job_form",
+            'say the need in job form: "When I …, I want …, so I can …"',
+            field="statement",
+        )
+    why = solution_named(statement)
+    if why is not None:
+        raise CockpitError(422, "names_a_solution", why, field="statement")
+
+
 def _words(text: str) -> set[str]:
     return set(_WORD_RE.findall(text.casefold()))
 
@@ -627,16 +645,7 @@ def create(
     cited = check_signals(deps, factory_id, body.signals)
     alternatives = list(body.alternatives)
     if actor.kind == "agent":
-        if not _JOB_RE.match(body.statement):
-            raise CockpitError(
-                422,
-                "not_job_form",
-                'say the need in job form: "When I …, I want …, so I can …"',
-                field="statement",
-            )
-        why = solution_named(body.statement)
-        if why is not None:
-            raise CockpitError(422, "names_a_solution", why, field="statement")
+        check_need(body.statement)
         alternatives = distinct_alternatives(body.alternatives)
         refs = [f"S-{n}" for n, _ in cited]
         quotes.check(deps, factory_id, _agent_texts(body), cited=refs)
@@ -720,6 +729,7 @@ __all__ = [
     "Facts",
     "NewOpportunity",
     "SignalRef",
+    "check_need",
     "check_placement",
     "check_signals",
     "create",

@@ -35,9 +35,12 @@ Omnigent terminal) and denies:
   read the way gh and git read them (any host case, a root dot, ``www.``), and
   one that names no GitHub repo (``-R $R``, ``git push $URL``, another host,
   ``..`` segments) is denied rather than assumed to be allowed;
-- per role: any push or PR creation (CLI or API) by a lead, reviewer, planner
-  or the demo agent, every PR write but ``gh pr comment`` by the demo agent,
-  every PR or issue write by the planner, and env lifecycle
+- per role: any push or PR creation (CLI or API) by a lead, reviewer, planner,
+  the demo agent or Scout, every PR write but ``gh pr comment`` by the demo agent,
+  every PR or issue write by the planner, every network command (``curl``,
+  ``wget``, any ``gh``, ``git clone|fetch|pull``, …) and Claude Code's own
+  WebSearch and WebFetch for Scout (it reads only through the server's logged
+  source gateway), and env lifecycle
   (``tilt up|down|ci``, ``pnpm factory:up|down|preview`` or the script behind
   it, ``kubectl delete ns``) for anyone but env_keeper and the project lead.
   A sub-agent is also held to its parent's guardrails (stricter wins), so the
@@ -68,6 +71,7 @@ from omnigent.factory import (
     ROLE_PLANNER,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
+    ROLE_SCOUT,
     ROLES,
 )
 from omnigent.policies.builtins._shell import (
@@ -148,8 +152,39 @@ _TERMINAL_INPUT_TOOLS: frozenset[str] = frozenset({"sys_terminal_send"})
 GUARD_ROLES: frozenset[str] = ROLES
 
 # Roles that never push or open PRs: leads delegate, reviewers and the demo
-# agent comment, the planner only reads.
-_NO_PUSH_ROLES: frozenset[str] = frozenset({ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER})
+# agent comment, the planner and Scout only read.
+_NO_PUSH_ROLES: frozenset[str] = frozenset(
+    {ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER, ROLE_SCOUT}
+)
+
+# Scout reads users' text: it gets no outbound channel and reads only through the gateway.
+_NETWORK_HEADS: frozenset[str] = frozenset(
+    {
+        "curl",
+        "wget",
+        "gh",
+        "xh",
+        "httpie",
+        "aria2c",
+        "nc",
+        "ncat",
+        "netcat",
+        "socat",
+        "telnet",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "ftp",
+        "lynx",
+        "w3m",
+    }
+)
+_GIT_NETWORK_SUBCOMMANDS: frozenset[str] = frozenset(
+    {"clone", "fetch", "pull", "ls-remote", "submodule"}
+)
+# Claude Code's own web tools: off in Scout's bundle, and denied here too.
+_WEB_TOOLS: frozenset[str] = frozenset({"WebSearch", "WebFetch"})
 
 # Commands whose arguments are data, not commands (``echo git push`` is no push).
 _INERT_HEADS: frozenset[str] = frozenset(
@@ -475,6 +510,11 @@ _FACTORY_ENV_REASON = (
     "Setting `OMNIGENT_FACTORY_*` in a command (assignment, `env` or `export`) is blocked: "
     f"factory server knobs are {_HUMAN_ONLY_HINT}. Quoting one in prose? Put the text in a "
     "file and pass it with `--body-file` / `-F`."
+)
+_SCOUT_HINT = (
+    "Scout reads sources only through the server's logged gateway "
+    "(`sys_discovery_query`) and reads the product through `sys_discovery_read`; it has "
+    "no outbound channel, writes no code and files no PRs or issues"
 )
 _DEMO_HINT = (
     "it only records evidence against the preview. Post the demo with "
@@ -1129,7 +1169,10 @@ class _RoleGuard:
         :returns: A DENY reason, or ``None``.
         """
         if name == "gh":
-            return self._check_gh(args, gh_repos)
+            # Scout: the specific reason (a merge, an admin write) first, else no network.
+            return self._check_gh(args, gh_repos) or self._network_reason(name)
+        if name in _NETWORK_HEADS and (reason := self._network_reason(name)):
+            return reason
         if name == "git":
             return self._check_git(args)
         if name == "tilt":
@@ -1196,7 +1239,15 @@ class _RoleGuard:
             )
         if self.role == ROLE_DEMO:
             return f"The demo agent never `{what}`: {_DEMO_HINT}."
+        if self.role == ROLE_SCOUT:
+            return f"Scout never `{what}`: {_SCOUT_HINT}."
         return f"The planner never `{what}`: {_PLANNER_HINT}."
+
+    def _network_reason(self, what: str) -> str | None:
+        """DENY network commands for Scout (its reads go through the source gateway)."""
+        if self.role != ROLE_SCOUT:
+            return None
+        return f"`{what}` is blocked for Scout: {_SCOUT_HINT}."
 
     def _demo_pr_reason(self, what: str) -> str | None:
         """DENY every PR write but commenting for the demo agent."""
@@ -1510,6 +1561,8 @@ class _RoleGuard:
         configs, index = _git_global_options(args)
         sub = args[index] if index < len(args) else ""
         rest = args[index + 1 :]
+        if sub in _GIT_NETWORK_SUBCOMMANDS and (reason := self._network_reason(f"git {sub}")):
+            return reason
         reason = self._git_inline_config_reason(configs, sub)
         if reason:
             return reason
@@ -1811,6 +1864,13 @@ def _is_mcp_merge(event: _Json) -> bool:
     )
 
 
+def _is_web_tool(event: _Json) -> bool:
+    """:returns: Whether *event* calls Claude Code's own WebSearch or WebFetch."""
+    data = event.get("data")
+    name = data.get("name") if isinstance(data, dict) else None
+    return event.get("type") == "tool_call" and isinstance(name, str) and name in _WEB_TOOLS
+
+
 def _command_of(event: _Json) -> str | None:
     """
     Return the command a shell or terminal-input tool call will run.
@@ -1959,6 +2019,8 @@ def guard_evaluator(
         """
         if not isinstance(event, dict):
             return _ALLOW
+        if guard.role == ROLE_SCOUT and _is_web_tool(event):
+            return _decision(f"{prefix}Claude Code's web tools are off for Scout: {_SCOUT_HINT}.")
         if _is_mcp_merge(event):
             return _decision(f"{prefix}GitHub MCP merges are blocked: {MERGE_GATE_HINT}.")
         if budgeted is not None and (reason := _dispatch_reason(event, budgeted)):
@@ -2065,7 +2127,7 @@ def factory_role_guard(
     (``task.unplanned``, ``loop.budget_violation``).
 
     :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
-        ``env_keeper``, ``reviewer``, ``demo`` or ``planner``.
+        ``env_keeper``, ``reviewer``, ``demo``, ``planner`` or ``scout``.
     :param write_repos: Repos PR writes and URL pushes may target outside a
         factory, e.g. ``["acme/app"]`` (none by default). Ignored for a
         factory member, whose *factory_repos* the server sets.
@@ -2155,8 +2217,9 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "in commands, GitHub admin writes, pushes outside push_ref_prefixes (bare pushes, "
         "HEAD, deletes, tags, protected branches), writes to repos outside write_repos (for "
         "a factory member: outside its factory projects' repos, set by the server), and "
-        "role-restricted actions (lead, reviewer, planner and demo pushes, demo PR writes "
-        "other than comments, planner PR and issue writes, env lifecycle including factory "
+        "role-restricted actions (lead, reviewer, planner, demo and Scout pushes, demo PR "
+        "writes other than comments, planner PR and issue writes, Scout's network commands "
+        "and web tools, env lifecycle including factory "
         "previews outside env_keeper).",
         "params_schema": {
             "type": "object",

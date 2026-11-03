@@ -514,8 +514,12 @@ class ToolManager:
         ``sys_factory_rules`` for every role, ``sys_factory_propose``,
         ``sys_factory_insights`` and ``sys_factory_retro`` for ``lead`` and
         ``project_lead``. The read-only ``planner`` gets the roster, the rules
-        and the insights. All are runner-dispatched to the server's
-        ``/v1/factory`` routes.
+        and the insights. The discovery seat (``scout``) gets the four
+        ``sys_discovery_*`` tools, the roster, its beacon, the rules, asks, the
+        Room (its thread only, enforced by the server) and proposals (only
+        the profile, strategy and sources, enforced by the server); no
+        messaging, PR, project or spawn tool. Leads also read discovery and
+        file ideas. All are runner-dispatched to the server's ``/v1/factory`` routes.
         """
         from omnigent.factory import (
             ROLE_DEMO,
@@ -524,9 +528,14 @@ class ToolManager:
             ROLE_LEAD,
             ROLE_PLANNER,
             ROLE_PROJECT_LEAD,
+            ROLE_SCOUT,
             factory_role_from_spec,
         )
         from omnigent.tools.builtins.factory import (
+            SysDiscoveryCodeTool,
+            SysDiscoveryOpportunityTool,
+            SysDiscoveryQueryTool,
+            SysDiscoveryReadTool,
             SysFactoryAskTool,
             SysFactoryChatTool,
             SysFactoryDemoTool,
@@ -555,6 +564,21 @@ class ToolManager:
             ):
                 self._tools[planner_tool.name()] = planner_tool
             return
+        if role == ROLE_SCOUT:
+            for scout_tool in (
+                SysDiscoveryReadTool(),
+                SysDiscoveryQueryTool(),
+                SysDiscoveryCodeTool(),
+                SysDiscoveryOpportunityTool(),
+                SysFactoryRosterTool(),
+                SysFactorySetTool(),
+                SysFactoryRulesTool(),
+                SysFactoryAskTool(),
+                SysFactoryChatTool(),
+                SysFactoryProposeTool(),
+            ):
+                self._tools[scout_tool.name()] = scout_tool
+            return
         tools: list[Tool] = [
             SysSessionPostTool(),
             SysFactoryRosterTool(),
@@ -564,7 +588,7 @@ class ToolManager:
             SysFactoryRulesTool(),
         ]
         if role == ROLE_LEAD:
-            tools.append(SysFactorySpawnTool())
+            tools += [SysFactorySpawnTool(), SysDiscoveryReadTool(), SysDiscoveryOpportunityTool()]
         if role in (ROLE_LEAD, ROLE_PROJECT_LEAD):
             tools.append(SysFactoryProjectTool())
             tools.append(SysFactoryChatTool())

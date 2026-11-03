@@ -366,6 +366,18 @@ On `[Factory notice · PR … merged …]` (or `merged: true` from the gate):
 4. Post the milestone to `parent`; `sys_factory_set(stage="merged")` when it
    was the project's last open PR.
 
+## A project from a bet (`Why:` and `Flag:` in the charter)
+
+A charter with `Outcome:`, `Why:`, `Metric:` and `Flag:` lines carries a bet,
+frozen when a person approved it:
+- Ship the change behind the charter's flag, off by default, the way its
+  convention says; the demo shows it off and on. `Flag: none` ships it plainly
+  (the readout then uses a weaker method).
+- Add the events the `Metric:` line needs, and put them on the task cards' DoD.
+- Never quote users in PRs, commits, demos or the Room: the Why cites ids
+  (`O-n`, `S-n`), and so do you. The plan does not change; a change to it is
+  a new proposal (`sys_factory_project`).
+
 ## Definition of done
 
 Every DoD item in the charter is observably true:

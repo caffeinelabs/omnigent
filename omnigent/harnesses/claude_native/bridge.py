@@ -2228,6 +2228,35 @@ def url_component(value: str) -> str:
 # as an approve/reject card.
 _OMNIGENT_DISALLOWED_TOOLS: tuple[str, ...] = ()
 
+DISALLOWED_TOOLS_CONFIG_KEY = "disallowed_tools"
+"""``executor.config`` key a bundle uses to switch off Claude Code tools for its agent."""
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+def disallowed_tools_from_config(config: object) -> tuple[str, ...]:
+    """
+    The Claude Code tools a bundle switches off (``executor.config.disallowed_tools``).
+
+    A bundle's discovery seat, for example, sets ``disallowed_tools: WebSearch,WebFetch``
+    so every web read goes through the server's logged gateway instead.
+
+    :param config: The spec's ``executor.config`` (scalar values arrive as strings).
+    :returns: e.g. ``("WebSearch", "WebFetch")``; names that are not plain tool
+        names are dropped, so the option can only turn tools off.
+    """
+    if not isinstance(config, Mapping):
+        return ()
+    raw = config.get(DISALLOWED_TOOLS_CONFIG_KEY)
+    if isinstance(raw, str):
+        names: list[object] = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, list | tuple):
+        names = list(raw)
+    else:
+        return ()
+    return tuple(
+        dict.fromkeys(n for n in names if isinstance(n, str) and _TOOL_NAME_RE.fullmatch(n))
+    )
+
 
 def augment_claude_args(
     claude_args: tuple[str, ...],
@@ -2245,6 +2274,7 @@ def augment_claude_args(
     allowed_tools: tuple[str, ...] = (),
     subagent_router_dir: Path | None = None,
     turn_routing: bool = False,
+    disallowed_tools: tuple[str, ...] = (),
 ) -> list[str]:
     """
     Return Claude CLI args with Omnigent MCP/hook/skill injection.
@@ -2297,6 +2327,9 @@ def augment_claude_args(
         Routing on, threaded to :func:`build_hook_settings` so the
         ``UserPromptSubmit`` first-message routing hook is registered.
         ``False`` keeps every prompt off the routing round trip.
+    :param disallowed_tools: Claude tools the agent's bundle switches off
+        (:func:`disallowed_tools_from_config`), merged into ``--disallowedTools``
+        next to Omnigent's own.
     :returns: Augmented argument list for the terminal resource.
     """
     mcp_config = build_mcp_config(bridge_dir, python_executable=python_executable)
@@ -2314,7 +2347,9 @@ def augment_claude_args(
         subagent_router_dir=subagent_router_dir,
         turn_routing=turn_routing,
     )
-    args = _merge_disallowed_tools(list(claude_args), _OMNIGENT_DISALLOWED_TOOLS)
+    args = _merge_disallowed_tools(
+        list(claude_args), tuple(dict.fromkeys((*_OMNIGENT_DISALLOWED_TOOLS, *disallowed_tools)))
+    )
     args = _merge_allowed_tools(args, allowed_tools)
     settings_path = bridge_dir / _INVOCATION_SETTINGS_FILE
     _write_json_file(settings_path, hook_settings)

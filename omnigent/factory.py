@@ -103,6 +103,8 @@ ROLE_REVIEWER: Final = "reviewer"
 ROLE_DEMO: Final = "demo"
 ROLE_PLANNER: Final = "planner"
 """Read-only sub-agent of a lead that decomposes work into project proposals."""
+ROLE_SCOUT: Final = "scout"
+"""The discovery seat: a top-level member the server seats while ``discovery.enabled``."""
 ROLES: Final = frozenset(
     {
         ROLE_LEAD,
@@ -112,9 +114,13 @@ ROLES: Final = frozenset(
         ROLE_REVIEWER,
         ROLE_DEMO,
         ROLE_PLANNER,
+        ROLE_SCOUT,
     }
 )
 TOP_LEVEL_ROLES: Final = frozenset({ROLE_LEAD, ROLE_PROJECT_LEAD})
+SEAT_ROLES: Final = frozenset({ROLE_SCOUT})
+"""Top-level roles only the server seats: no agent spawns one, no session enrols as one by
+itself, and a sub-agent running such a spec is an ``ic``."""
 SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
 """Roles ``sys_factory_spawn`` (or the server, for a PL) creates a top-level member in."""
 
@@ -129,7 +135,12 @@ HEALTH_BLOCKED: Final = "blocked"
 HEALTH_DEAD: Final = "dead"
 HEALTH: Final = frozenset({HEALTH_OK, HEALTH_DEGRADED, HEALTH_BLOCKED, HEALTH_DEAD})
 
-DEFAULT_HEARTBEAT_S: Final[dict[str, int]] = {ROLE_LEAD: 3600, ROLE_PROJECT_LEAD: 7200}
+DEFAULT_HEARTBEAT_S: Final[dict[str, int]] = {
+    ROLE_LEAD: 3600,
+    ROLE_PROJECT_LEAD: 7200,
+    # Scout wakes on the server's discovery beats (sweep, synthesis, asks), never on a timer.
+    ROLE_SCOUT: 0,
+}
 
 CADENCE_DEMO: Final = "demo"
 CADENCE_NORMAL: Final = "normal"
@@ -408,6 +419,8 @@ ENGINE_MODES: Final = ("observe", "assist", "enforce")
 
 THREAD_FACTORY: Final = "factory"
 THREAD_IMPROVEMENTS: Final = "improvements"
+THREAD_DISCOVERY: Final = "discovery"
+"""Scout's Room thread. Not a fixed thread: it is listed only while discovery runs."""
 THREAD_PROJECT_PREFIX: Final = "project:"
 THREAD_PR_PREFIX: Final = "pr:"
 FIXED_THREADS: Final = (THREAD_FACTORY, THREAD_IMPROVEMENTS)
@@ -590,12 +603,12 @@ def thread_kind(key: object) -> str | None:
     Classify a Room thread key.
 
     :param key: e.g. ``"factory"``, ``"project:db-version"`` or ``"pr:<id>"``.
-    :returns: ``factory`` / ``improvements`` / ``project`` / ``pr``, or ``None``
-        when *key* is not a thread key.
+    :returns: ``factory`` / ``improvements`` / ``discovery`` / ``project`` / ``pr``,
+        or ``None`` when *key* is not a thread key.
     """
     if not isinstance(key, str) or not key or len(key) > THREAD_MAX_LEN:
         return None
-    if key in FIXED_THREADS:
+    if key in FIXED_THREADS or key == THREAD_DISCOVERY:
         return key
     for prefix in THREAD_PREFIXES:
         if key.startswith(prefix) and len(key) > len(prefix):

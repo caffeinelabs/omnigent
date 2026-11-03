@@ -52,8 +52,10 @@ from omnigent.factory import (
     PROJECT_SLUG_RE,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
+    ROLE_SCOUT,
     STATE_DONE,
     STATE_PAUSED,
+    THREAD_DISCOVERY,
     THREAD_FACTORY,
     THREAD_IMPROVEMENTS,
     THREAD_PR_PREFIX,
@@ -181,7 +183,7 @@ class Thread:
 
 def thread_title(key: str, pr_number: int | None = None) -> str:
     """:returns: How a thread is shown, e.g. ``"#db-version"`` or ``"!9631"``."""
-    if key in FIXED_THREADS:
+    if key in FIXED_THREADS or key == THREAD_DISCOVERY:
         return f"#{key}"
     if key.startswith(THREAD_PROJECT_PREFIX):
         return f"#{key[len(THREAD_PROJECT_PREFIX) :]}"
@@ -195,7 +197,8 @@ def _spelled(raw: str) -> str:
     value = raw.strip()
     if value.startswith("#"):
         name = value[1:]
-        return name if name in FIXED_THREADS else f"{THREAD_PROJECT_PREFIX}{name}"
+        fixed = name in FIXED_THREADS or name == THREAD_DISCOVERY
+        return name if fixed else f"{THREAD_PROJECT_PREFIX}{name}"
     if value.startswith("p:"):
         return f"{THREAD_PROJECT_PREFIX}{value[2:]}"
     if value.startswith("!"):
@@ -210,13 +213,19 @@ def resolve_thread(deps: FactoryDeps, factory_id: str, raw: object) -> Thread:
     :param raw: ``"factory"``, ``"improvements"``, ``"project:<slug>"`` or
         ``"pr:<id or number>"`` (``#…``, ``p:<slug>`` and ``!<n>`` too).
     :raises CockpitError: 400 ``invalid_thread``, 404 ``unknown_project`` /
-        ``unknown_pr``, 409 ``ambiguous_pr`` (one number in several repos).
+        ``unknown_pr`` / ``discovery_off`` (``#discovery`` exists while discovery
+        runs), 409 ``ambiguous_pr`` (one number in several repos).
     """
     if not isinstance(raw, str) or not raw.strip():
         raise CockpitError(400, "invalid_thread", "thread is required", field="thread")
     key = _spelled(raw)
     store = deps.factory_store
     if key in (THREAD_FACTORY, THREAD_IMPROVEMENTS):
+        return Thread(key, key, thread_title(key))
+    if key == THREAD_DISCOVERY:
+        from omnigent.server.factory.discovery import require_on
+
+        require_on(deps, factory_id)
         return Thread(key, key, thread_title(key))
     if key.startswith(THREAD_PROJECT_PREFIX):
         slug = key[len(THREAD_PROJECT_PREFIX) :]
@@ -288,6 +297,21 @@ def _sentinel(deps: FactoryDeps, root: Conversation) -> Conversation | None:
     return leads[0] if leads else None
 
 
+def _scout(deps: FactoryDeps, root: Conversation) -> tuple[Conversation | None, bool]:
+    """:returns: ``(the seated Scout, whether discovery runs)`` (no Scout while it is off)."""
+    from omnigent.server.factory import definition
+
+    if not definition.discovery_enabled(deps, root.id):
+        return None, False
+    seats = [
+        m
+        for m in factory_members(root.id, deps.conversation_store)
+        if m.labels.get(LABEL_ROLE) == ROLE_SCOUT
+    ]
+    seats.sort(key=lambda c: (member_state(c) != chat_routing.STATE_LIVE, -c.created_at))
+    return (seats[0] if seats else None), True
+
+
 def room_members(
     deps: FactoryDeps, root: Conversation, thread: Thread, mentions: Sequence[str] = ()
 ) -> Members:
@@ -312,6 +336,7 @@ def members_of(
         if pl is not None:
             pls[slug] = _agent(pl, f"PL · {slug}")
     sentinel = _sentinel(deps, root)
+    scout, discovery = _scout(deps, root)
     prs = [t for t in threads if t.pr is not None]
     return Members(
         atlas=_agent(root, "Atlas"),
@@ -319,6 +344,8 @@ def members_of(
         pls=pls,
         pr_projects={t.key: t.pr.project_slug for t in prs if t.pr and t.pr.project_slug},
         pr_numbers={t.key: t.pr.number for t in prs if t.pr},
+        scout=_agent(scout, "Scout") if scout is not None else None,
+        discovery=discovery,
     )
 
 
@@ -1362,10 +1389,12 @@ def allowed_thread(role: str | None, own_project: str | None, thread: Thread) ->
     Whether an agent of *role* may post in *thread*.
 
     Leads post anywhere; a project lead in ``#factory``, its project's thread
-    and its project's PR threads.
+    and its project's PR threads; Scout in ``#discovery``.
     """
     if role == ROLE_LEAD:
         return True
+    if role == ROLE_SCOUT:
+        return thread.kind == THREAD_DISCOVERY
     if role != ROLE_PROJECT_LEAD or not own_project:
         return False
     if thread.kind == THREAD_FACTORY:
@@ -1390,8 +1419,11 @@ async def post_agent(
         bad body, 429 ``rate_limited``.
     """
     membership = caller.membership
-    if membership.role not in (ROLE_LEAD, ROLE_PROJECT_LEAD) or not membership.is_top_level:
-        raise CockpitError(403, "not_allowed", "only leads and project leads post in the Room")
+    roles = (ROLE_LEAD, ROLE_PROJECT_LEAD, ROLE_SCOUT)
+    if membership.role not in roles or not membership.is_top_level:
+        raise CockpitError(
+            403, "not_allowed", "only leads, project leads and Scout post in the Room"
+        )
     deps = caller.deps
     from omnigent.server.factory.control import get_conv
 
@@ -1400,12 +1432,12 @@ async def post_agent(
         raise CockpitError(404, "not_a_factory", "the factory root is gone")
     thread = await asyncio.to_thread(resolve_thread, deps, root.id, payload.get("thread"))
     if not allowed_thread(membership.role, membership.project, thread):
-        raise CockpitError(
-            403,
-            "thread_not_allowed",
-            f"a project lead posts in #factory and its own project's threads, not {thread.title}",
-            field="thread",
+        who = (
+            "Scout posts in #discovery"
+            if membership.role == ROLE_SCOUT
+            else "a project lead posts in #factory and its own project's threads"
         )
+        raise CockpitError(403, "thread_not_allowed", f"{who}, not {thread.title}", field="thread")
     body = _check_body(payload.get("message"))
     reply_to = await asyncio.to_thread(
         _reply_target, deps, root.id, thread.key, payload.get("reply_to")

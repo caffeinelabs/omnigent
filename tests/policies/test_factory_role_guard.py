@@ -26,6 +26,7 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
+    ROLE_SCOUT,
 )
 from omnigent.policies.builtins import BUILTIN_POLICY_MODULES
 from omnigent.policies.builtins._shell import SHELL_TOOLS
@@ -49,8 +50,12 @@ from omnigent.spec import load
 _HANDLER = "omnigent.policies.builtins.factory.factory_role_guard"
 _ALL_ROLES = sorted(GUARD_ROLES)
 _PUSHING_ROLES = [ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER]
-_NO_PUSH_ROLES = [ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER]
-_COMMENTING_ROLES = [r for r in _ALL_ROLES if r != ROLE_PLANNER]
+_NO_PUSH_ROLES = [ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER, ROLE_SCOUT]
+_READ_ONLY_ROLES = [ROLE_PLANNER, ROLE_SCOUT]
+_COMMENTING_ROLES = [r for r in _ALL_ROLES if r not in _READ_ONLY_ROLES]
+# Scout has no network: every gh, curl and git fetch is denied for it (its reads go
+# through the server's gateway); the other roles keep these reads.
+_NETWORKED_ROLES = [r for r in _ALL_ROLES if r != ROLE_SCOUT]
 _ENV_ROLES = [ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD]
 _NON_ENV_ROLES = [r for r in _ALL_ROLES if r not in _ENV_ROLES]
 _MERGE_URL = "https://github.com/sample-org/sample-app/pull/7"
@@ -289,12 +294,23 @@ _PR_COMMENTS = [
 ]
 
 
+def _networked(command: str) -> bool:
+    """:returns: Whether *command* runs gh, curl or git fetch (not as prose)."""
+    return command.startswith(("gh ", "GH_REPO=", "curl ", "git fetch"))
+
+
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
     _cases(_ALL_ROLES, _DENIED_FOR_ALL, "DENY")
-    + _cases(_ALL_ROLES, _ALLOWED_FOR_ALL, "ALLOW")
+    + _cases(_NETWORKED_ROLES, _ALLOWED_FOR_ALL, "ALLOW")
+    + _cases([ROLE_SCOUT], [c for c in _ALLOWED_FOR_ALL if not _networked(c)], "ALLOW")
+    + _cases(
+        [ROLE_SCOUT],
+        [c for c in _ALLOWED_FOR_ALL if _networked(c)],
+        "DENY",
+    )
     + _cases(_COMMENTING_ROLES, _PR_COMMENTS, "ALLOW")
-    + _cases([ROLE_PLANNER], _PR_COMMENTS, "DENY"),
+    + _cases(_READ_ONLY_ROLES, _PR_COMMENTS, "DENY"),
 )
 def test_rules_for_every_role(role: str, command: str, expected: str) -> None:
     """

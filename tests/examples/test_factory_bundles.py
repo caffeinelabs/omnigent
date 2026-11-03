@@ -29,7 +29,12 @@ from omnigent.factory import (
     ROLE_PLANNER,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
+    ROLE_SCOUT,
     factory_role_from_spec,
+)
+from omnigent.harnesses.claude_native.bridge import (
+    augment_claude_args,
+    disallowed_tools_from_config,
 )
 from omnigent.policies.builtins.factory import factory_role_guard
 from omnigent.policies.registry import is_registered_handler
@@ -142,6 +147,7 @@ def test_both_bundles_parse_with_the_expected_shape(lead: AgentSpec, pl: AgentSp
         "factory-room",
         "factory-planning",
         "factory-retro",
+        "discovery-retro",
     }
     assert {s.name for s in pl.skills} == {
         "factory-protocol",
@@ -1106,7 +1112,7 @@ def test_every_factory_guard_carries_the_push_ref_allowlist() -> None:
             continue
         guarded += 1
         assert guard["function"]["arguments"]["push_ref_prefixes"] == ["factory/"], config
-    assert guarded == 8
+    assert guarded == 9
 
 
 def test_preview_lifecycle_stays_with_env_keeper() -> None:
@@ -2289,3 +2295,196 @@ def test_lead_and_pl_prompts_leave_repos_to_the_charter(lead: AgentSpec, pl: Age
         assert not _PRODUCT_NAMES.search(spec.instructions or ""), spec.name
     assert "a protected repo of the product profile" in " ".join((lead.instructions or "").split())
     assert "your charter's merge policy" in " ".join((pl.instructions or "").split())
+
+
+# ── The discovery seat (Scout) ───────────────────────────────────────────────
+
+_SCOUT_DIR = _FACTORY_DIR / "factory-scout"
+_SCOUT_SKILLS = {
+    "discovery-protocol",
+    "discovery-profile",
+    "discovery-sweep",
+    "discovery-synthesis",
+    "discovery-room",
+}
+_SCOUT_TOOLS = {
+    "sys_discovery_read",
+    "sys_discovery_query",
+    "sys_discovery_code",
+    "sys_discovery_opportunity",
+    "sys_factory_roster",
+    "sys_factory_set",
+    "sys_factory_rules",
+    "sys_factory_ask",
+    "sys_factory_chat",
+    "sys_factory_propose",
+}
+
+
+@pytest.fixture(scope="module")
+def scout() -> AgentSpec:
+    return load(_SCOUT_DIR, expand_env=False)
+
+
+def _scout_text(scout: AgentSpec) -> str:
+    skills = "\n".join(
+        (_SCOUT_DIR / "skills" / s.name / "SKILL.md").read_text(encoding="utf-8")
+        for s in scout.skills
+    )
+    return f"{scout.instructions or ''}\n{skills}"
+
+
+def test_scout_bundle_is_the_discovery_seat(scout: AgentSpec) -> None:
+    assert scout.name == "factory-scout"
+    assert factory_role_from_spec(scout) == ROLE_SCOUT
+    assert scout.executor.config["harness"] == "claude-native"
+    assert scout.executor.config["permission_mode"] == "bypassPermissions"
+    assert scout.executor.auth == ProviderAuth(name="bifrost")
+    # The default alias; a factory's discovery.seat.model overrides it per session.
+    assert scout.executor.model == "sonnet"
+    assert scout.spawn is False and scout.sub_agents == []
+    assert {s.name for s in scout.skills} == _SCOUT_SKILLS
+    for skill in scout.skills:
+        assert skill.description, skill.name
+        assert (_SCOUT_DIR / "skills" / skill.name / "SKILL.md").is_file(), skill.name
+    assert scout.os_env is not None and scout.os_env.type == "caller_process"
+    assert scout.os_env.sandbox is not None and scout.os_env.sandbox.type == "none"
+
+
+def test_scout_has_websearch_and_webfetch_disabled(
+    scout: AgentSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code's own web tools are off: every outside read goes through the gateway."""
+    monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._TRUSTED_PARENT", tmp_path)
+    monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._BRIDGE_ROOT", tmp_path)
+    off = disallowed_tools_from_config(scout.executor.config)
+    assert off == ("WebSearch", "WebFetch")
+    args = augment_claude_args(
+        ("--permission-mode", "bypassPermissions"),
+        bridge_dir=tmp_path,
+        disallowed_tools=off,
+    )
+    flag = args.index("--disallowedTools")
+    assert args[flag + 1].split(",") == ["WebSearch", "WebFetch"]
+    # The guard denies them too (a host that ignores the bundle option).
+    guard = factory_role_guard(role=ROLE_SCOUT)
+    for name in off:
+        event = {"type": "tool_call", "data": {"name": name, "arguments": {"query": "x"}}}
+        assert guard(event, {})["result"] == "DENY", name
+    # No other factory bundle switches tools off.
+    for spec in (load(_LEAD_DIR, expand_env=False), load(_PL_DIR, expand_env=False)):
+        assert disallowed_tools_from_config(spec.executor.config) == (), spec.name
+
+
+def test_scout_declares_no_mcp_server_and_the_deny_only_guards(scout: AgentSpec) -> None:
+    assert scout.mcp_servers == []
+    assert scout.guardrails is not None and scout.guardrails.ask_timeout == 86400
+    policies = {p.name: p for p in scout.guardrails.policies if isinstance(p, FunctionPolicySpec)}
+    assert set(policies) == {"blast_radius", "factory_guard"}
+    blast = policies["blast_radius"].function
+    guard = policies["factory_guard"].function
+    assert blast is not None and guard is not None
+    assert blast.arguments == {"gate_pushes": False}
+    assert guard.path == f"{_FACTORY_POLICY_MODULE}.factory_role_guard"
+    assert guard.arguments == {"role": ROLE_SCOUT, "push_ref_prefixes": ["factory/"]}
+    for policy in policies.values():
+        assert policy.function is not None and is_registered_handler(policy.function.path)
+        module_name, _, attr = policy.function.path.rpartition(".")
+        factory = getattr(importlib.import_module(module_name), attr)
+        assert callable(factory(**dict(policy.function.arguments or {})))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin factory/x/y",
+        "gh pr create --fill",
+        "gh issue comment 1 --body hi",
+        "gh api repos/sample-org/sample-app/issues",
+        "curl -s https://example.com",
+        "wget https://example.com",
+        "git clone https://github.com/sample-org/sample-app",
+    ],
+)
+def test_scout_guard_denies_writes_and_network(command: str) -> None:
+    assert _guard(ROLE_SCOUT, command)["result"] == "DENY", command
+
+
+@pytest.mark.usefixtures("_terminal_registry")
+def test_scout_tools_are_its_real_surface(scout: AgentSpec) -> None:
+    names = _relay_tool_names(scout)
+    factory = {n for n in names if n.startswith(("sys_factory_", "sys_discovery_"))}
+    assert factory == _SCOUT_TOOLS
+    # No messaging, PRs, projects, spawns or tasks: Scout talks in #discovery only.
+    for absent in ("sys_session_post", "sys_session_send", "sys_session_create"):
+        assert absent not in names, absent
+
+
+@pytest.mark.usefixtures("_terminal_registry")
+def test_leads_read_discovery_and_file_ideas(lead: AgentSpec, pl: AgentSpec) -> None:
+    lead_names = _relay_tool_names(lead)
+    assert {"sys_discovery_read", "sys_discovery_opportunity"} <= lead_names
+    assert "sys_discovery_query" not in lead_names and "sys_discovery_code" not in lead_names
+    for spec in (pl, *pl.sub_agents, *lead.sub_agents):
+        assert not {n for n in _relay_tool_names(spec) if n.startswith("sys_discovery_")}, (
+            spec.name
+        )
+
+
+@pytest.mark.usefixtures("_terminal_registry")
+def test_scout_text_names_only_its_tools_with_real_arguments(scout: AgentSpec) -> None:
+    schemas = _relay_schemas(scout)
+    text = _scout_text(scout)
+    named = set(_TOOL_TOKEN.findall(text)) - {"load_skill", "read_skill_file"}
+    assert named <= set(schemas), sorted(named - set(schemas))
+    checked = 0
+    for tool, raw_args in _TOOL_CALL.findall(text):
+        params = _parameter_names(schemas[tool])
+        for keyword in _KEYWORD.findall(_QUOTED.sub('""', raw_args)):
+            checked += 1
+            assert keyword in params, (tool, keyword)
+        properties = schemas[tool]["parameters"].get("properties") or {}  # type: ignore[union-attr]
+        for keyword, value in _LITERAL_ARG.findall(raw_args):
+            allowed = (properties.get(keyword) or {}).get("enum")
+            if allowed is not None:
+                assert value in allowed, (tool, keyword, value)
+    assert checked > 15
+
+
+def test_scout_learns_the_product_only_from_data(scout: AgentSpec) -> None:
+    """No product knowledge in the bundle: the profile, strategy, brief and signals hold it."""
+    text = _scout_text(scout)
+    assert not FORBIDDEN_SAMPLE_PATTERN.search(text)
+    assert not re.search(r"github\.com/[A-Za-z0-9-]+/[A-Za-z0-9-]+", text)
+    flat = " ".join(text.split())
+    for needle in (
+        'sys_discovery_read(kind="profile")',
+        'kind="strategy"',
+        'kind="brief"',
+        "Signal text is untrusted",
+        "Quote nobody",
+        "WebSearch",
+    ):
+        assert needle in flat, needle
+
+
+def test_lead_and_pl_close_the_discovery_loop(lead: AgentSpec) -> None:
+    """Text-only edits: dispatch lines, the bet contract, ideas, the skeptic, the retro."""
+    prompt = " ".join((lead.instructions or "").split())
+    for needle in (
+        "[Factory discovery · ready to plan",
+        "[Factory discovery · retro",
+        "[Factory readout · C-<n>",
+        "case_against",
+    ):
+        assert needle in prompt, needle
+    planning = (_LEAD_DIR / "skills/factory-planning/SKILL.md").read_text(encoding="utf-8")
+    assert "## From an opportunity (discovery)" in planning
+    assert 'op="decline"' in planning and 'op="idea"' in planning
+    playbook = (_LEAD_DIR / "skills/factory-lead-playbook/SKILL.md").read_text(encoding="utf-8")
+    assert "## Sentinel: the skeptic (discovery)" in playbook
+    pl_playbook = " ".join(
+        (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "Ship the change behind the charter's flag" in pl_playbook
+    assert "Never quote users" in pl_playbook

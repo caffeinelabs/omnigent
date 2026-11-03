@@ -52,7 +52,9 @@ from omnigent.factory import (
     PROPOSAL_OPEN_STATUSES,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
+    ROLE_SCOUT,
     STATE_DONE,
+    THREAD_DISCOVERY,
     THREAD_IMPROVEMENTS,
     THREAD_MAX_LEN,
 )
@@ -685,8 +687,15 @@ async def handle(
     """``sys_factory_propose``: propose, co-sign or withdraw a tuning, rules or code change."""
     body = parse_body(ProposeIn, payload)
     role = caller.membership.role
-    if role not in (ROLE_LEAD, ROLE_PROJECT_LEAD) or not caller.membership.is_top_level:
-        raise CockpitError(403, "not_allowed", "only leads and project leads propose changes")
+    if (
+        role not in (ROLE_LEAD, ROLE_PROJECT_LEAD, ROLE_SCOUT)
+        or not caller.membership.is_top_level
+    ):
+        raise CockpitError(
+            403, "not_allowed", "only leads, project leads and Scout propose changes"
+        )
+    if role == ROLE_SCOUT and body.op == "cosign":
+        raise CockpitError(403, "not_allowed", "Scout co-signs nothing; the leads co-sign")
     if body.op == "withdraw":
         from omnigent.server.factory.proposals import withdraw
 
@@ -715,6 +724,17 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
         raise CockpitError(404, "not_a_factory", "the factory root is gone")
     if role == ROLE_PROJECT_LEAD and body.kind != "rules":
         raise CockpitError(403, "not_allowed", "a project lead proposes rules for its project")
+    if role == ROLE_SCOUT and body.kind != "tuning":
+        raise CockpitError(
+            403,
+            "not_allowed",
+            "Scout proposes changes to the product profile, the strategy and the sources "
+            "(kind='tuning'); people own rules and code",
+        )
+    if role == ROLE_SCOUT:
+        from omnigent.server.factory.discovery import require_on
+
+        await asyncio.to_thread(require_on, caller.deps, caller.factory_id)
     if not body.evidence:
         raise CockpitError(
             422, "evidence_required", "cite at least one evidence id (F-n, D-n, INC-n, !pr, …)"
@@ -813,7 +833,8 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
             expected_effect=effect,
             warnings=warnings,
             author_role=role,
-            thread=body.thread or THREAD_IMPROVEMENTS,
+            thread=body.thread
+            or (THREAD_DISCOVERY if role == ROLE_SCOUT else THREAD_IMPROVEMENTS),
             result={"trial_h": trial_h},
         )
     )

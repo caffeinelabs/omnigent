@@ -68,7 +68,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.factory import LABEL_ROLE, THREAD_FACTORY, thread_kind
+from omnigent.factory import THREAD_FACTORY, thread_kind
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import control, definition, events, people
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps, factory_deps
@@ -1311,12 +1311,11 @@ async def _room(app_state: Any, factory_id: str, text: str, key: str) -> None:
 
 
 def _scout(deps: FactoryDeps, factory_id: str) -> str | None:
-    from omnigent.server.factory.membership import factory_members
+    """The Scout a readout may wake: seated, active and within today's discovery budget."""
+    from omnigent.server.factory.discovery.seat import awake_scout
 
-    for conv in factory_members(factory_id, deps.conversation_store):
-        if conv.labels.get(LABEL_ROLE) == "scout" and not control.is_gone(conv):
-            return conv.id
-    return None
+    conv = awake_scout(deps, factory_id)
+    return conv.id if conv is not None else None
 
 
 async def _tell_scout(app_state: Any, factory_id: str, row: FactoryReadout) -> None:

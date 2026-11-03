@@ -58,15 +58,22 @@ _TASK = "sys_factory_task"
 _CHAT = "sys_factory_chat"
 _RULES = "sys_factory_rules"
 _LEARN = {"sys_factory_propose", "sys_factory_insights", "sys_factory_retro"}
-_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN
+_READ = "sys_discovery_read"
+_IDEA = "sys_discovery_opportunity"
+_DISCOVERY = {_READ, "sys_discovery_query", "sys_discovery_code", _IDEA}
+_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN | _DISCOVERY
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN,
+    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES, _READ, _IDEA} | _LEARN,
     "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN,
     "env_keeper": _EVERY_ROLE | {_ENV, _DEMO, _RULES},
     "ic": _EVERY_ROLE | {_TASK, _RULES},
     "reviewer": _EVERY_ROLE | {_RULES},
     "demo": _EVERY_ROLE | {_DEMO, _RULES},
     "planner": {"sys_factory_roster", _RULES, "sys_factory_insights"},
+    # The discovery seat: no messaging, PR, project or task tool.
+    "scout": _DISCOVERY
+    | {"sys_factory_roster", "sys_factory_set", "sys_factory_ask", _CHAT, _RULES}
+    | {"sys_factory_propose"},
 }
 
 

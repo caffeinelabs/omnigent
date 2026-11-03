@@ -33,7 +33,7 @@ export type AgentStage = "planning" | "building" | "review" | "verify" | "ready"
 export type FactoryOverlay =
   "paused" | "blocked" | "failed" | "pr_closed" | "cancelled" | "merged" | "waiting";
 export type FactoryRole =
-  "lead" | "project_lead" | "ic" | "env_keeper" | "reviewer" | "demo" | "planner";
+  "lead" | "project_lead" | "ic" | "env_keeper" | "reviewer" | "demo" | "planner" | "scout";
 export type MemberState = "active" | "paused" | "done";
 export type FactoryCadence = "demo" | "normal";
 export type GateState = "pass" | "pending" | "fail" | "skip" | "unknown";
@@ -82,7 +82,8 @@ export type ActorKind = "human" | "agent" | "server";
 export type ChatAuthorKind = "human" | "agent" | "system";
 export type ChatCardType =
   "decision" | "proposal" | "control" | "pr" | "demo" | "loop" | "issue" | "system";
-export type ThreadKind = "factory" | "improvements" | "project" | "pr";
+/** `discovery` is Scout's thread; the server lists it only while discovery runs. */
+export type ThreadKind = "factory" | "improvements" | "discovery" | "project" | "pr";
 export type ProposalKind = "projects" | "tuning" | "rules" | "code";
 export type ProposalStatus =
   | "pending"
