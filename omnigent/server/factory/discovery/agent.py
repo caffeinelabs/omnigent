@@ -668,6 +668,12 @@ def _attach_one(deps: FactoryDeps, fid: str, item: LinkIn, actor: Actor) -> tupl
             "detached_by_a_person",
             f"a person said {signal.ref} is not about O-{number}; it stays detached",
         )
+    if link is not None and link.active and link.attached_kind == "human":
+        raise CockpitError(
+            409,
+            "attached_by_a_person",
+            f"a person attached {signal.ref} to O-{number}; their link stands",
+        )
     deps.factory_store.put_link(
         fid,
         signal.number,

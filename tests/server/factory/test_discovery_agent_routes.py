@@ -263,6 +263,8 @@ async def test_attach_and_detach_keep_peoples_corrections(cockpit: Cockpit, scou
             attach=[
                 {"signal": second.ref, "opportunity": row.ref},
                 {"signal": flagged.ref, "opportunity": row.ref},
+                # Re-attaching a person's link as counter-evidence would rewrite it.
+                {"signal": first.ref, "opportunity": row.ref, "counter": True},
             ],
             detach=[{"signal": first.ref, "opportunity": row.ref}],
         )
@@ -273,7 +275,10 @@ async def test_attach_and_detach_keep_peoples_corrections(cockpit: Cockpit, scou
         "detached_by_a_person",
         "injection_suspect",
         "attached_by_a_person",
+        "attached_by_a_person",
     ]
+    link = cockpit.store.list_links(cockpit.fid, signals=[first.number])[0]
+    assert link.attached_kind == "human" and link.counter is False
 
 
 async def test_scout_attaches_and_detaches_its_own_links(cockpit: Cockpit, scout: str) -> None:
