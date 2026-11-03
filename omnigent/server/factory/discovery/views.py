@@ -550,12 +550,19 @@ def learned(
     :returns: ``[{text, ref, kind}]``, at most :data:`LEARNED_MAX`; ``ref`` is
         what the line is about (``O-n``, else ``C-n``).
     """
+    return [line for _at, line in learned_dated(deps, factory_id, items, now=now)]
+
+
+def learned_dated(
+    deps: FactoryDeps, factory_id: str, items: Sequence[Evaluated], *, now: int
+) -> list[tuple[int, dict[str, Any]]]:
+    """:returns: :func:`learned`'s lines, each with when it happened (epoch seconds)."""
     since = now - _WEEK_S
     titles = {e.row.ref: e.row.title for e in items}
     store = deps.factory_store
     dated: list[tuple[int, dict[str, Any]]] = []
-    for row in store.list_readouts(factory_id, limit=500):
-        if row.status not in ("written", "decided") or (row.written_at or 0) < since:
+    for row in store.list_readouts(factory_id, statuses=("written", "decided"), limit=5000):
+        if (row.written_at or 0) < since:
             continue
         opp = f"O-{row.opportunity}" if row.opportunity else None
         about = f" on {opp} {_short(titles.get(opp))}".rstrip() if opp else ""
@@ -600,7 +607,7 @@ def learned(
             )
         )
     dated.sort(key=lambda pair: -pair[0])
-    return [line for _at, line in dated[:LEARNED_MAX]]
+    return dated[:LEARNED_MAX]
 
 
 __all__ = [
@@ -608,6 +615,7 @@ __all__ = [
     "SCOUT_ROLE",
     "author_name",
     "learned",
+    "learned_dated",
     "lifecycle",
     "next_step",
     "opportunity_detail",

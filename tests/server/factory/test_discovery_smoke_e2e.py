@@ -411,6 +411,8 @@ async def test_the_smoke_loop(env: tuple[Cockpit, FakeCreates]) -> None:
     bet_rows = [a for a in waiting_rows if a["kind"] == "bet"]
     assert [a["subject"] for a in bet_rows] == [f"proposal:{bet_ref}"]
     assert bet_rows[0]["opportunity"] == refs["draft"]
+    # Titled with what users get (the bet's outcome), not the proposal's ops.
+    assert bet_rows[0]["title"] == "Approve a bet: Share a private draft link (sample)"
     contract["bet_waits"] = {"asks": waiting_rows}
     approved = await cockpit.post(url(fid, f"/proposals/{bet_ref}/apply"), {})
     assert approved.status_code == 200, approved.text

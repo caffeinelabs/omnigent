@@ -6,15 +6,16 @@
 // values and the version list. Apply sends everything staged as one
 // `PUT …/definition`, so one apply is one version.
 
-import type {
-  DefinitionChange,
-  DefinitionDoc,
-  DefinitionResponse,
-  DefinitionView,
-  GoalDef,
-  MixDef,
-  ProposalView,
-  SegmentDef,
+import {
+  type DefinitionChange,
+  type DefinitionDoc,
+  type DefinitionResponse,
+  type DefinitionView,
+  type GoalDef,
+  type MixDef,
+  type ProposalView,
+  type SegmentDef,
+  sourcesOn,
 } from "@/lib/factoryApi";
 import { STEER_SECTIONS, type SteerSection } from "../factoryRoutes";
 import { OTHER_GROUPS } from "../settings/settingsModel";
@@ -939,9 +940,7 @@ export function outlineValue(section: SteerSection, facts: OutlineFacts): string
       return `${name ?? "no name yet"} · ${n} ${n === 1 ? "segment" : "segments"}`;
     }
     case "sources": {
-      const all = doc.discovery?.sources ?? [];
-      // Paused sources and those waiting for an owner's approval read nothing.
-      const on = all.filter((s) => s.state !== "paused" && s.state !== "pending").length;
+      const on = sourcesOn(doc.discovery?.sources);
       return `${on} on${facts.sourcesWaiting ? ` · ${facts.sourcesWaiting} ${facts.sourcesWaiting === 1 ? "waits" : "wait"} for you` : ""}`;
     }
     case "rubric": {

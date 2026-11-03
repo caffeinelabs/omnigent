@@ -14,7 +14,12 @@ import type {
   SourceDef,
 } from "@/lib/factoryApi";
 import { keyOwnedByTarget } from "../cmdk/useFactoryPaletteHotkey";
-import { missingStarterSources } from "./discoveryStarter";
+import {
+  STARTER_SWEEP_H,
+  STARTER_SYNTHESIS_H,
+  STARTER_USD_PER_DAY,
+  missingStarterSources,
+} from "./discoveryStarter";
 import { plural } from "../factoryFormat";
 import {
   EVIDENCE_LEVELS,
@@ -66,7 +71,7 @@ function level(value: unknown): EvidenceLevel | "none" {
 
 // ── The summary (`GET …/discovery`) ────────────────────────────
 
-export type SourceState = "trial" | "active" | "paused";
+export type SourceState = "trial" | "active" | "paused" | "pending";
 
 export interface SourceView {
   id: string;
@@ -1735,12 +1740,13 @@ export function starterSummary(definition: DefinitionDoc | null | undefined): {
       added: true,
     })),
   ];
+  // As applied: the factory's own budget and cadence, else the starter's.
   return {
     reads,
-    usdPerDay: num(discovery?.budgets?.usd_per_day),
+    usdPerDay: num(discovery?.budgets?.usd_per_day) ?? STARTER_USD_PER_DAY,
     perAsk: num(discovery?.budgets?.per_ask),
-    sweepH: num(discovery?.cadence?.sweep_h),
-    synthesisH: num(discovery?.cadence?.synthesis_h),
+    sweepH: num(discovery?.cadence?.sweep_h) ?? STARTER_SWEEP_H,
+    synthesisH: num(discovery?.cadence?.synthesis_h) ?? STARTER_SYNTHESIS_H,
   };
 }
 

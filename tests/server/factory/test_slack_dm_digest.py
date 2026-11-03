@@ -259,6 +259,46 @@ async def test_the_new_cockpits_digest_has_learned_this_week_while_discovery_run
     ]
 
 
+async def test_only_a_line_learned_today_sends_a_quiet_factorys_digest(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A week of "Learned this week" rides along, but an old line alone sends no DM."""
+    from omnigent.server.factory import definition
+    from omnigent.server.factory.definition_blocks import DISCOVERY_ENV
+    from tests.server.factory.discovery_helpers import ingest, label, make_opportunity, turn_on
+
+    link(cockpit, "alice")
+    monkeypatch.setenv(F.COCKPIT_V2_ENV, "1")
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    ctx = await engine_mod.factory_ctx(cockpit.app.state, root)
+    raw = await snapshot.get_snapshot(cockpit.app.state, root)
+    vis = await digest_mod.visibility_for(cockpit.deps, raw, "alice")
+    person = ctx.people["alice"]
+    chose = dataclasses.replace(
+        person, prefs=person.prefs.model_copy(update={"ui": prefs_mod.UiPrefs(cockpit="v2")})
+    )
+    restore = definition.install(cockpit.app.state)
+    monkeypatch.setenv(DISCOVERY_ENV, "1")
+    try:
+        turn_on(cockpit)
+        signals = ingest(
+            cockpit, "repo-issues", [f"I need a draft link {i} (sample)" for i in range(3)]
+        )
+        label(cockpit, signals, "workaround")
+        made = make_opportunity(cockpit, signals)
+        today = digest_mod.build_digest(
+            cockpit.deps, ctx, chose, vis, raw, made.created_at + 3600, BASE
+        )
+        three_days_on = digest_mod.build_digest(
+            cockpit.deps, ctx, chose, vis, raw, made.created_at + 3 * 86400, BASE
+        )
+    finally:
+        restore()
+    assert today is not None
+    assert _section(_text(today), "Learned this week")[0].startswith("• New opportunity O-1:")
+    assert three_days_on is None
+
+
 async def test_a_readers_digest_hides_what_their_card_hides(cockpit: Cockpit) -> None:
     _seed(cockpit)
     cockpit.store.upsert_person(cockpit.fid, "bob", role="viewer", invited_by="alice")

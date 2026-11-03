@@ -82,9 +82,10 @@ export function starterSource(source: StarterSource, approved: boolean): Starter
 
 /**
  * The definition changes that turn discovery on with the starter: the switch,
- * Scout's model, budget and cadence where they differ, then each starter
- * source the factory does not have yet; one in `approved` is added in its
- * trial, any other that needs approval is added `pending`.
+ * Scout's model, budget and cadence where they are unset (an owner's earlier
+ * values stay), then each starter source the factory does not have yet; one
+ * in `approved` is added in its trial, any other that needs approval is added
+ * `pending`.
  */
 export function starterChanges(
   doc: DefinitionDoc | null | undefined,
@@ -98,17 +99,17 @@ export function starterChanges(
   if (!disc?.seat?.model) {
     changes.push({ op: "replace", path: "discovery.seat.model", value: STARTER_MODEL });
   }
-  if (disc?.budgets?.usd_per_day !== STARTER_USD_PER_DAY) {
+  if (disc?.budgets?.usd_per_day == null) {
     changes.push({
       op: "replace",
       path: "discovery.budgets.usd_per_day",
       value: STARTER_USD_PER_DAY,
     });
   }
-  if (disc?.cadence?.sweep_h !== STARTER_SWEEP_H) {
+  if (disc?.cadence?.sweep_h == null) {
     changes.push({ op: "replace", path: "discovery.cadence.sweep_h", value: STARTER_SWEEP_H });
   }
-  if (disc?.cadence?.synthesis_h !== STARTER_SYNTHESIS_H) {
+  if (disc?.cadence?.synthesis_h == null) {
     changes.push({
       op: "replace",
       path: "discovery.cadence.synthesis_h",

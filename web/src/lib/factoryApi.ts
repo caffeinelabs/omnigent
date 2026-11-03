@@ -2948,6 +2948,11 @@ export interface SourceDef {
   state: "trial" | "active" | "paused" | "pending";
 }
 
+/** How many of `sources` are on: paused ones and those waiting for an owner read nothing. */
+export function sourcesOn(sources: readonly { state?: string }[] | null | undefined): number {
+  return (sources ?? []).filter((s) => s.state !== "paused" && s.state !== "pending").length;
+}
+
 /** The rank's numbers; its formula is code. */
 export interface RubricDef {
   ladder: { hunch: number; weak: number; moderate: number; strong: number; proven: number };

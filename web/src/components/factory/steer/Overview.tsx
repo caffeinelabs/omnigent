@@ -11,7 +11,7 @@ import { CompassIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Ask } from "@/lib/factoryAsksApi";
-import type { DefinitionView } from "@/lib/factoryApi";
+import { type DefinitionView, sourcesOn } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { waitingOnViewer } from "../agents/fleetModel";
@@ -196,7 +196,7 @@ export function Overview({
         {
           label: "Sources",
           section: "sources",
-          value: `${sources.filter((s) => s.state !== "paused" && s.state !== "pending").length} on`,
+          value: `${sourcesOn(sources)} on`,
         },
         {
           label: "Product profile",

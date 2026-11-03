@@ -87,6 +87,21 @@ describe("sections", () => {
       outlineValue("strategy", { ...facts, definition: steerDefinition({ noGoal: true }) }),
     ).toBe("no goal yet");
   });
+
+  it("counts neither a paused source nor one waiting for an owner as on", () => {
+    const held = steerDefinition({ pendingWeb: true });
+    held.effective.discovery!.sources = held.effective.discovery!.sources.map((s) =>
+      s.id === "forum" ? { ...s, state: "paused" } : s,
+    );
+    const facts = {
+      definition: held,
+      discoveryOn: true,
+      sourcesWaiting: 2,
+      templates: 4,
+      trialsRunning: 1,
+    };
+    expect(outlineValue("sources", facts)).toBe("2 on · 2 wait for you");
+  });
 });
 
 describe("staging", () => {

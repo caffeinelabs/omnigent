@@ -6,14 +6,15 @@
 // nothing here names a product. Pure; `homeModel.test.ts` pins it.
 
 import type { Ask } from "@/lib/factoryAsksApi";
-import type {
-  AgentRowView,
-  DefinitionDoc,
-  FactorySnapshot,
-  FactoryStage,
-  MemberView,
-  ProjectView,
-  PrView,
+import {
+  type AgentRowView,
+  type DefinitionDoc,
+  type FactorySnapshot,
+  type FactoryStage,
+  type MemberView,
+  type ProjectView,
+  type PrView,
+  sourcesOn,
 } from "@/lib/factoryApi";
 import { type TeamMember, groupTeams, modelLabel, teamRows } from "../agents/teamsModel";
 import { formatElapsed, formatUsd, plural, primaryPr, projectPrs } from "../factoryFormat";
@@ -615,8 +616,7 @@ export function homeLoop({
   leads,
   hrefs,
 }: LoopInput): HomeLoop {
-  const sources = definition?.discovery?.sources ?? [];
-  const on = sources.filter((s) => s.state !== "paused").length;
+  const on = sourcesOn(definition?.discovery?.sources);
   const sourceAsks = countKind(asks, "source");
   const goals = definition?.strategy?.goals ?? [];
   const first = goals[0] ?? null;

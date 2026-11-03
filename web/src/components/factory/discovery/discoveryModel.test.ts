@@ -617,6 +617,29 @@ describe("the discovery starter", () => {
     ]);
   });
 
+  it("keeps a budget and cadence an owner set, and says what applying it costs", () => {
+    const off = structuredClone(definitionResponse().effective);
+    off.discovery = {
+      ...off.discovery!,
+      enabled: false,
+      budgets: { ...off.discovery!.budgets, usd_per_day: 3 },
+      cadence: { ...off.discovery!.cadence, sweep_h: 12 },
+    };
+    const paths = starterChanges(off).map((c) => c.path);
+    expect(paths).not.toContain("discovery.budgets.usd_per_day");
+    expect(paths).not.toContain("discovery.cadence.sweep_h");
+    expect(starterSummary(off)).toMatchObject({ usdPerDay: 3, sweepH: 12 });
+
+    const unset = structuredClone(off);
+    delete (unset.discovery!.budgets as { usd_per_day?: number }).usd_per_day;
+    expect(starterChanges(unset)).toContainEqual({
+      op: "replace",
+      path: "discovery.budgets.usd_per_day",
+      value: 10,
+    });
+    expect(starterSummary(unset).usdPerDay).toBe(10);
+  });
+
   it("adds only the starter sources a factory does not have yet", () => {
     const on = discoveryDefinition().effective;
     expect(starterChanges(on).filter((c) => c.path === "discovery.sources")).toEqual([]);

@@ -47,9 +47,9 @@ export const STARTER_WORDS = {
 } as const;
 
 /**
- * The starter as staged edits over `doc`: only what differs from it (a source
- * the factory already has is left alone). A source that needs approval and is
- * not in `approved` is staged `pending`.
+ * The starter as staged edits over `doc`: only what it lacks (a source the
+ * factory already has, and a budget or cadence an owner set, are left alone).
+ * A source that needs approval and is not in `approved` is staged `pending`.
  */
 export function stageStarter(
   staging: SteerStaging,
@@ -70,7 +70,7 @@ export function stageStarter(
   if (!disc?.seat?.model) {
     edits.push(replaceEdit("roles", "discovery.seat.model", "Scout's model", null, STARTER_MODEL));
   }
-  if (disc?.budgets?.usd_per_day !== STARTER_USD_PER_DAY) {
+  if (disc?.budgets?.usd_per_day == null) {
     edits.push(
       replaceEdit(
         "budgets",
@@ -82,7 +82,7 @@ export function stageStarter(
       ),
     );
   }
-  if (disc?.cadence?.sweep_h !== STARTER_SWEEP_H) {
+  if (disc?.cadence?.sweep_h == null) {
     edits.push(
       replaceEdit(
         "roles",
@@ -93,7 +93,7 @@ export function stageStarter(
       ),
     );
   }
-  if (disc?.cadence?.synthesis_h !== STARTER_SYNTHESIS_H) {
+  if (disc?.cadence?.synthesis_h == null) {
     edits.push(
       replaceEdit(
         "roles",

@@ -321,6 +321,37 @@ describe("the loop strip", () => {
     expect([decide!.count, decide!.waiting]).toEqual([1, "1 waits for you"]);
   });
 
+  it("counts neither a paused source nor one waiting for an owner as on", () => {
+    const definition = {
+      discovery: {
+        enabled: true,
+        sources: [
+          { id: "repo", label: "Repos (sample)", state: "trial" },
+          { id: "team", label: "People (sample)", state: "active" },
+          { id: "web", label: "Web (sample)", state: "pending" },
+          { id: "forum", label: "Forum (sample)", state: "paused" },
+        ],
+      },
+    } as unknown as DefinitionDoc;
+    const pendingRow = ask("source:web", { kind: "source", subject: "source:web" });
+
+    const [sense] = homeLoop({
+      snapshot: round3Snapshot(),
+      definition,
+      discoveryOn: true,
+      asks: [pendingRow],
+      discovery: null,
+      leads: {},
+      hrefs: { signals: "/s", opportunities: "/o", flow: "/f", projects: "/p", impact: "/i" },
+    }).stages;
+
+    expect([sense!.count, sense!.unit, sense!.waiting]).toEqual([
+      2,
+      "sources on",
+      "1 waits for you",
+    ]);
+  });
+
   it("stays dark while this server has discovery off, whatever the definition says", () => {
     const definition = { discovery_server: false, effective: DISCOVERY_ON };
     expect(discoveryRuns(definition)).toBe(false);

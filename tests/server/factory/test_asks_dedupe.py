@@ -536,6 +536,34 @@ def test_a_bet_reads_its_range_and_its_case_against() -> None:
     assert row["primary_action"]["label"] == "Review the bet"
 
 
+def test_a_bet_is_titled_with_its_outcome_not_its_ops() -> None:
+    decision = _proposal_decision(
+        32, "C-32", question="Atlas proposes C-32: create draft-share (sample)"
+    )
+    bet = {
+        "kind": "outcome",
+        "hypothesis": "People share drafts (sample)",
+        "outcome": "Share a private draft link (sample)",
+        "metric": "weekly publishes",
+        "expected": {"direction": "up", "low": 1, "high": 4, "unit": "pp"},
+    }
+    proposals = [
+        _proposal(
+            32,
+            "projects",
+            title="create draft-share (sample)",
+            before=None,
+            after=None,
+            opportunity="O-15",
+            bet=bet,
+        )
+    ]
+
+    [row] = _asks(_snapshot(decisions=[decision]), proposals=proposals)["asks"]
+
+    assert row["title"] == "Approve a bet: Share a private draft link (sample)"
+
+
 def test_a_co_signing_bet_and_a_running_trial_are_handled_not_asked() -> None:
     proposals = [
         _proposal(31, "projects", status="awaiting_cosign"),

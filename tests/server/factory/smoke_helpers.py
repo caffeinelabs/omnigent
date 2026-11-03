@@ -549,21 +549,30 @@ def shape(value: Any, path: str = "$") -> set[str]:
 
 def check_contract(contract: Mapping[str, Any]) -> None:
     """
-    The web's contract fixture has the shape of *contract* (fresh route answers).
-    With :data:`UPDATE_CONTRACT_ENV` set it is rewritten from them first.
+    Every key path of the web's contract fixture is still in *contract* (fresh
+    route answers): a removed or renamed field fails, an added one cannot break
+    a web reader and is only reported. With :data:`UPDATE_CONTRACT_ENV` set the
+    fixture is rewritten from the answers first.
     """
     import os
+    import warnings
 
     fresh = json.loads(json.dumps(contract, default=str))
     if os.environ.get(UPDATE_CONTRACT_ENV):
         CONTRACT_FIXTURE.write_text(json.dumps(fresh, indent=2, sort_keys=True) + "\n")
     committed = json.loads(CONTRACT_FIXTURE.read_text(encoding="utf-8"))
     added, gone = shape(fresh) - shape(committed), shape(committed) - shape(fresh)
-    assert not added and not gone, (
-        f"the discovery routes' answers changed shape (new {sorted(added)[:20]}, gone "
-        f"{sorted(gone)[:20]}): rerun with {UPDATE_CONTRACT_ENV}=1 (pre-commit's prettier "
-        "formats the file), and check the web's readers (serverContract.test.ts) still read them"
+    assert not gone, (
+        f"the discovery routes' answers lost fields the web's fixture has ({sorted(gone)[:20]}): "
+        f"rerun with {UPDATE_CONTRACT_ENV}=1 (pre-commit's prettier formats the file), and "
+        "check the web's readers (serverContract.test.ts) still read them"
     )
+    if added:
+        warnings.warn(
+            f"the discovery routes' answers have new fields ({sorted(added)[:20]}); rerun with "
+            f"{UPDATE_CONTRACT_ENV}=1 to put them in the web's contract fixture",
+            stacklevel=2,
+        )
 
 
 async def capture(cockpit: Cockpit, fid: str, paths: Mapping[str, str]) -> dict[str, Any]:
