@@ -110,6 +110,8 @@ export const MapView = discovery("map");
 
 export const MapViewDark = discovery("map", {}, { theme: "dark" });
 
+export const MapViewMobile = phone(discovery("map"));
+
 /** Impact: a won readout, bets waiting for theirs, the prediction ledger. */
 export const Impact = discovery("impact", {}, { theme: "dark" });
 
@@ -125,8 +127,19 @@ export const SignalsWithInjectionDark = discovery("signals", {}, { theme: "dark"
 
 export const SignalsMobile = phone(discovery("signals"));
 
-/** Hunches and what came of them. */
+/** Hunches and what came of them; a flagged one struck through; Withdraw on people's hunches. */
 export const Hunches = discovery("hunches");
+
+export const HunchesDark = discovery("hunches", {}, { theme: "dark" });
+
+/** An operator may withdraw only their own hunch. */
+export const HunchesOperator = discovery(
+  "hunches",
+  {},
+  { snapshot: discoverySnapshot("operator") },
+);
+
+export const HunchesMobile = phone(discovery("hunches"));
 
 /** The opportunity panel: moderate evidence, a bet that waits for you. */
 export const OpportunityPeekModerate = discovery("", {}, { theme: "dark", search: "?peek=O-15" });
@@ -153,6 +166,23 @@ export const BetPeekMobile = phone(discovery("", {}, { search: "?peek=C-31" }));
 
 /** An active source: what Scout reads, the three read-only layers, usage, the access log. */
 export const SourcePeekActive = discovery("", {}, { search: "?peek=source:repo" });
+
+/** A source the server holds after repeated failures: why, and Lift the hold and retry. */
+export const SourcePeekHeld = discovery(
+  "",
+  { heldSource: true },
+  { theme: "dark", search: "?peek=source:trk" },
+);
+
+export const SourcePeekHeldLight = discovery(
+  "",
+  { heldSource: true },
+  { search: "?peek=source:trk" },
+);
+
+export const SourcePeekHeldMobile = phone(
+  discovery("", { heldSource: true }, { search: "?peek=source:trk" }),
+);
 
 /** A source an agent proposed, waiting for an owner. */
 export const SourcePeekPending = discovery("", {}, { theme: "dark", search: "?peek=source:ana" });

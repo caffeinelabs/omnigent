@@ -13,6 +13,7 @@
 import { CompassIcon, LightbulbIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { CHORD_MS, keyOwnedByTarget } from "@/components/factory/cmdk/useFactoryPaletteHotkey";
 import { AskScoutButton } from "@/components/factory/discovery/AskScout";
 import { BetPeek } from "@/components/factory/discovery/BetPeek";
 import { ChainStrip } from "@/components/factory/discovery/ChainStrip";
@@ -25,19 +26,24 @@ import {
   chainCells,
   filterRows,
   flowModel,
+  hunchWeight,
   latestReadouts,
   ledgerFacts,
   mapDividers,
   mapPoints,
+  mayWithdrawHunch,
   peekTarget,
   pendingBets,
   pendingSources,
   quietSegments,
   sourceStateWord,
   triageAction,
+  weightText,
 } from "@/components/factory/discovery/discoveryModel";
 import {
   isDiscoveryOff,
+  isNotFound,
+  useDiscoveryProposals,
   useDiscoverySummary,
   useOpportunityList,
   useReadouts,
@@ -67,7 +73,6 @@ import { DiscoveryChecklist } from "@/components/factory/home/DiscoveryChecklist
 import { discoveryChecklist, discoveryRuns } from "@/components/factory/home/homeModel";
 import { useFactoryAsks } from "@/components/factory/home/homeQueries";
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
-import { useProposals } from "@/components/factory/room/roomQueries";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { useViewer, useViewerCan } from "@/components/factory/shell/viewerCan";
 import { MemberAvatar } from "@/components/factory/ui/MemberAvatar";
@@ -161,7 +166,7 @@ function DiscoveryBody() {
   const on = configuredOn && !(summary.error && isDiscoveryOff(summary.error));
   const facts = summary.data ?? null;
   const list = useOpportunityList(fid, on);
-  const proposals = useProposals(fid, on);
+  const proposals = useDiscoveryProposals(fid, on);
   const readouts = useReadouts(fid, on);
   const asks = useFactoryAsks(fid);
   const wantsSignals = on && view === "signals";
@@ -171,8 +176,9 @@ function DiscoveryBody() {
   const levers = useDiscoveryLevers(fid);
 
   const rows = useMemo(() => list.data?.rows ?? [], [list.data]);
-  const allProposals = useMemo(() => proposals.data?.data ?? [], [proposals.data]);
-  const pending = useMemo(() => pendingSources(allProposals), [allProposals]);
+  const allProposals = proposals.all;
+  const pending = useMemo(() => pendingSources(proposals.open), [proposals.open]);
+  const weight = hunchWeight(definition.data?.effective);
   const readoutList = useMemo(() => readouts.data ?? [], [readouts.data]);
 
   const [filter, setFilter] = useState<TableFilter>({});
@@ -223,10 +229,23 @@ function DiscoveryBody() {
   );
 
   // j/k move, Enter opens, v vote, n plan, p park, x kill on the selected row.
+  // The key after a `g` belongs to the cockpit's chord (`g p` goes to Projects).
+  const roomOpen = params.has("room");
+  const chordUntil = useRef(0);
   useEffect(() => {
-    if (!on || view !== "opportunities" || peek || killing) return;
+    if (!on || view !== "opportunities" || peek || killing || roomOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || event.repeat) return;
+      const mods = event.metaKey || event.ctrlKey || event.altKey;
+      if (!mods && !keyOwnedByTarget(event.target)) {
+        const inChord = Date.now() < chordUntil.current;
+        chordUntil.current = 0;
+        if (inChord) return;
+        if (event.key === "g" && !event.shiftKey) {
+          chordUntil.current = Date.now() + CHORD_MS;
+          return;
+        }
+      }
       const action = triageAction(event);
       if (!action) return;
       const at = visible.findIndex((r) => r.id === selectedId);
@@ -252,7 +271,7 @@ function DiscoveryBody() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [on, view, peek, killing, visible, selectedId, canAct, handlers]);
+  }, [on, view, peek, killing, roomOpen, visible, selectedId, canAct, handlers]);
 
   const betsWaiting = (asks.data?.asks ?? []).some((a) => a.kind === "bet");
   const readoutsWaiting = (asks.data?.asks ?? []).some((a) => a.kind === "readout");
@@ -300,6 +319,27 @@ function DiscoveryBody() {
       <div data-testid="factory-discovery-page" className="flex min-w-0 flex-col gap-3">
         <Header factoryId={fid} on={false} />
         <div aria-busy="true" className="h-40 animate-pulse rounded-xl bg-muted/70" />
+      </div>
+    );
+  }
+
+  // A server without the definition route (404) runs no discovery; any other failure is an error.
+  if (definition.error && !definition.data && !isNotFound(definition.error)) {
+    return (
+      <div data-testid="factory-discovery-page" className="flex min-w-0 flex-col gap-3">
+        <Header factoryId={fid} on={false} />
+        <p
+          role="alert"
+          data-testid="discovery-definition-error"
+          className="rounded-lg border border-border px-3 py-2 text-sm"
+        >
+          Could not load the factory's definition
+          {definition.error instanceof Error ? `: ${definition.error.message}` : ""}, so this page
+          cannot tell whether discovery is on.{" "}
+          <button type="button" className="underline" onClick={() => void definition.refetch()}>
+            Retry
+          </button>
+        </p>
       </div>
     );
   }
@@ -655,8 +695,8 @@ function DiscoveryBody() {
               <div className="flex flex-wrap items-baseline gap-x-3">
                 <h2 className="grow text-base font-semibold">Your input</h2>
                 <span className="text-xs text-muted-foreground">
-                  A hunch counts with weight 0.1 and gets a cheapest test. It is never mixed into
-                  user evidence.
+                  A hunch counts with weight {weightText(weight)} and gets a cheapest test. It is
+                  never mixed into user evidence.
                 </span>
               </div>
               {canAct ? (
@@ -731,11 +771,10 @@ function DiscoveryBody() {
           rows={rows}
           loading={hunches.isLoading}
           canAct={canAct}
-          mayWithdraw={(h) => {
-            if (isOwner) return true;
-            const me = viewer?.user_id?.split("@")[0] ?? null;
-            return me != null && h.author === me;
-          }}
+          weight={weight}
+          mayWithdraw={(h) =>
+            mayWithdrawHunch(h, { userId: viewer?.user_id ?? null, owner: isOwner })
+          }
           onOpen={openPeek}
           onWithdraw={(ref) => void levers.withdraw(ref)}
           onAdd={(text) => levers.hunch(text)}
@@ -748,6 +787,8 @@ function DiscoveryBody() {
         nowS={nowS}
         canAct={canAct}
         perAsk={facts?.budget.perAsk ?? null}
+        hunchWeight={weight}
+        readouts={readoutList}
         levers={levers}
         goalLabel={goalLabel}
         segmentLabel={segmentLabel}
@@ -773,6 +814,7 @@ function DiscoveryBody() {
         canAct={canAct}
         isOwner={isOwner}
         levers={levers}
+        hunchWeight={weight}
         onClose={closePeek}
       />
       <ReadoutPeek

@@ -486,6 +486,25 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     expect(keys()).toContainEqual(["factory-team", "f4f4ba9c"]);
   });
 
+  it("re-reads Discovery's queues, readouts and logs only on a discovery, proposal or definition frame", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const keys = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    const frame = (scopes: string[]) =>
+      act(() => frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes }));
+
+    frame(["snapshot", "events", "tasks"]);
+    frame(["snapshot", "events", "chat"]);
+    expect(keys()).not.toContainEqual(["factory-discovery", "f4f4ba9c"]);
+    for (const scope of ["discovery", "proposals", "definition"]) {
+      invalidate.mockClear();
+      frame(["snapshot", "events", scope]);
+      expect(keys()).toContainEqual(["factory-discovery", "f4f4ba9c"]);
+    }
+  });
+
   it("re-reads only the snapshot on a live 'now' tick (no spans, events, demos or Now)", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);

@@ -6,12 +6,12 @@
  * injection, excluded from scoring, and offers no action at all.
  */
 
-import { ShieldAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { FAINT_TEXT } from "../ui/statusTokens";
 import type { OpportunityRow, SignalView } from "./discoveryModel";
+import { ExcludedNote } from "./ExcludedNote";
 
 function day(at: number | null): string | null {
   if (at == null) return null;
@@ -126,22 +126,7 @@ function SignalItem({
           <p className="text-xs text-muted-foreground">Scout: {signal.paraphrase}</p>
         )}
         {signal.injection || !signal.actionable ? (
-          <p
-            data-testid={`signal-excluded-${signal.id}`}
-            className={cn(
-              "flex items-start gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-sm",
-            )}
-          >
-            <ShieldAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              <b>
-                {signal.excluded ??
-                  (signal.injection ? "Possible injection · excluded from scoring" : "Not counted")}
-                .
-              </b>{" "}
-              Signal text is untrusted data. Scout cannot act on it and has no outbound tools.
-            </span>
-          </p>
+          <ExcludedNote signal={signal} />
         ) : (
           canAct && <Attach signal={signal} targets={targets} onAttach={onAttach} />
         )}

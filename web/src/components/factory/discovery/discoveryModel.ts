@@ -14,6 +14,7 @@ import type {
   ProposalView,
   SourceDef,
 } from "@/lib/factoryApi";
+import { keyOwnedByTarget } from "../cmdk/useFactoryPaletteHotkey";
 import { plural } from "../factoryFormat";
 import {
   EVIDENCE_LEVELS,
@@ -859,7 +860,10 @@ export const TRIAGE_KEYS: Readonly<Record<string, TriageAction>> = {
   x: "kill",
 };
 
-/** The triage action of a key press, or null (modifiers, or typing in a field). */
+/**
+ * The triage action of a key press, or null: with a modifier, or when the key
+ * belongs to what has focus (a field, a menu, a list, a dialog, the Room).
+ */
 export function triageAction(event: {
   key: string;
   metaKey?: boolean;
@@ -868,13 +872,7 @@ export function triageAction(event: {
   target?: EventTarget | null;
 }): TriageAction | null {
   if (event.metaKey || event.ctrlKey || event.altKey) return null;
-  const target = event.target;
-  if (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-  ) {
-    return null;
-  }
+  if (keyOwnedByTarget(event.target ?? null)) return null;
   return TRIAGE_KEYS[event.key] ?? null;
 }
 
@@ -919,7 +917,10 @@ export interface SignalView {
   actionable: boolean;
   weight: number | null;
   hunch: boolean;
+  /** How the server names the author: a person's id, or an agent's title. */
   author: string | null;
+  /** `human` or `agent` when the server says so. */
+  authorKind: string | null;
   links: { opportunity: string; title: string | null; counter: boolean }[];
 }
 
@@ -948,6 +949,7 @@ export function parseSignal(raw: unknown): SignalView | null {
     weight: num(s.weight),
     hunch: bool(s.hunch),
     author: str(s.author),
+    authorKind: str(s.author_kind),
     links: list(s.links)
       .map((l) => {
         const link = obj(l);
@@ -969,6 +971,20 @@ export function parseSignals(raw: unknown): SignalView[] | null {
       : null;
   if (!data) return null;
   return data.map(parseSignal).filter((s): s is SignalView => s != null);
+}
+
+/**
+ * Whether the viewer may withdraw this conviction. The server takes back only
+ * a person's hunch (never an agent's idea or a repo post), by its author or an
+ * owner; `author` is the person's id as the server names it.
+ */
+export function mayWithdrawHunch(
+  hunch: SignalView,
+  viewer: { userId: string | null; owner: boolean },
+): boolean {
+  if (hunch.kind !== "hunch" || hunch.gone || hunch.author == null) return false;
+  if (hunch.authorKind != null && hunch.authorKind !== "human") return false;
+  return viewer.owner || (viewer.userId != null && hunch.author === viewer.userId);
 }
 
 /** What came of a hunch, in words, from the opportunities it is attached to. */
@@ -1186,7 +1202,11 @@ export function ledgerFacts(
   const latest = latestReadouts(readouts);
   const live = projects.filter((p) => p.kind !== "integration" && p.status !== "cancelled");
   const requested = live.filter((p) => !p.why?.opportunity);
-  const requestedMeasured = requested.filter((p) => p.why?.metric).length;
+  // Measured means a readout exists, not merely a metric.
+  const readOut = new Set(latest.map((r) => r.proposal).filter(Boolean));
+  const requestedMeasured = requested.filter(
+    (p) => p.why?.proposal != null && readOut.has(p.why.proposal),
+  ).length;
   const enough = (ledger?.byLevel ?? []).filter((l) => l.n >= (ledger?.minPerLevel ?? 5));
   const min = ledger?.minPerLevel ?? 5;
   const levelLine = enough.length
@@ -1221,6 +1241,20 @@ export interface MapPoint {
 export interface MapDividers {
   value: number;
   confidence: number;
+}
+
+/** The weight a hunch counts with when the rubric sets none. */
+export const HUNCH_WEIGHT_FALLBACK = 0.1;
+
+/** The hunch weight of the rubric in force (`discovery.rubric.ladder.hunch`). */
+export function hunchWeight(definition: DefinitionDoc | null | undefined): number {
+  const ladder = obj(obj(obj(definition?.discovery)?.rubric)?.ladder);
+  return num(ladder?.hunch) ?? HUNCH_WEIGHT_FALLBACK;
+}
+
+/** A weight as people read it: `0.1`, `0.25`. */
+export function weightText(weight: number): string {
+  return String(Math.round(weight * 100) / 100);
 }
 
 /** The map's dividers: rubric fields of the definition in force (null when it has none). */
@@ -1576,7 +1610,8 @@ export function pendingSources(proposals: readonly ProposalView[]): PendingSourc
  * The starter's sources: none needs a secret. The factory's own repos
  * (issues, discussions and releases of the last 90 days; team authors count
  * as hunches), the open web (30 queries a day, public pages), and the
- * factory's people (hunches, weight 0.1). Each starts in its trial state.
+ * factory's people (hunches, with the rubric's hunch weight). Each starts in
+ * its trial state.
  */
 export interface StarterSource extends Pick<SourceDef, "id" | "label" | "kind"> {
   params?: Record<string, unknown>;
@@ -1594,12 +1629,19 @@ export const STARTER_SOURCES: readonly StarterSource[] = [
   { id: "team", label: "The factory's people", kind: "team" },
 ];
 
-/** What each starter source lets Scout read, in plain words. */
-export const STARTER_READS: Record<string, string> = {
-  repo: "issues, discussions and releases of the factory's own repositories from the last 90 days (the team's own posts count as hunches)",
-  web: "up to 30 web searches a day and the public pages they find, plus competitors' changelogs once the product profile lists them",
-  team: 'hunches from the factory\'s people ("I think … because …"), counted with weight 0.1, never as user evidence',
-};
+/** What each starter source lets Scout read, in plain words (hunches with the rubric's weight). */
+export function starterReads(kind: string, weight: number = HUNCH_WEIGHT_FALLBACK): string | null {
+  switch (kind) {
+    case "repo":
+      return "issues, discussions and releases of the factory's own repositories from the last 90 days (the team's own posts count as hunches)";
+    case "web":
+      return "up to 30 web searches a day and the public pages they find, plus competitors' changelogs once the product profile lists them";
+    case "team":
+      return `hunches from the factory's people ("I think … because …"), counted with weight ${weightText(weight)}, never as user evidence`;
+    default:
+      return null;
+  }
+}
 
 /**
  * The definition changes that turn discovery on with the starter: the switch,
@@ -1628,10 +1670,14 @@ export function starterSummary(definition: DefinitionDoc | null | undefined): {
 } {
   const discovery = definition?.discovery;
   const have = discovery?.sources ?? [];
+  const weight = hunchWeight(definition);
   const reads = [
-    ...have.map((s) => ({ label: s.label, text: STARTER_READS[s.kind] ?? `a ${s.kind} source` })),
+    ...have.map((s) => ({
+      label: s.label,
+      text: starterReads(s.kind, weight) ?? `a ${s.kind} source`,
+    })),
     ...STARTER_SOURCES.filter((s) => !have.some((h) => h.id === s.id || h.kind === s.kind)).map(
-      (s) => ({ label: s.label, text: STARTER_READS[s.id] ?? "" }),
+      (s) => ({ label: s.label, text: starterReads(s.kind, weight) ?? "" }),
     ),
   ];
   return {

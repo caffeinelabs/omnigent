@@ -39,10 +39,9 @@ function place(model: FlowModel): { placed: Placed[]; height: number } {
   return { placed, height: Math.max(...next) + 34 };
 }
 
-function nodeLabel(node: FlowNode): string {
-  return [node.title, node.detail, node.look === "amber" ? "waits for you" : null]
-    .filter(Boolean)
-    .join(". ");
+/** Amber boxes wait for a person; say so unless the detail already does. */
+function waitsUnsaid(node: FlowNode): boolean {
+  return node.look === "amber" && !/waits for you/i.test(node.detail);
 }
 
 function Legend() {
@@ -101,8 +100,6 @@ function NodeButton({
     <button
       type="button"
       aria-pressed={selected}
-      aria-label={nodeLabel(node)}
-      title={nodeLabel(node)}
       data-testid={`flow-node-${node.id}`}
       data-lit={lit ? (on ? "on" : "off") : undefined}
       onClick={() => onSelect(selected ? null : node.id)}
@@ -117,17 +114,25 @@ function NodeButton({
       )}
       style={style}
     >
-      <span className="truncate text-sm font-semibold">{node.title}</span>
+      {/* The visible text is the name; each line keeps its full text as a tooltip. */}
+      <span className="truncate text-sm font-semibold" title={node.title}>
+        {node.title}
+      </span>
       {node.detail && (
-        <span
-          className={cn(
-            "truncate text-xs",
-            node.look === "amber" ? MEANING.needsYou.text : "text-muted-foreground",
-          )}
-        >
-          {node.detail}
-        </span>
+        <>
+          <span className="sr-only">. </span>
+          <span
+            title={node.detail}
+            className={cn(
+              "truncate text-xs",
+              node.look === "amber" ? MEANING.needsYou.text : "text-muted-foreground",
+            )}
+          >
+            {node.detail}
+          </span>
+        </>
       )}
+      {waitsUnsaid(node) && <span className="sr-only">. Waits for you</span>}
     </button>
   );
 }

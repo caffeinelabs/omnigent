@@ -20,11 +20,13 @@ import {
   filterRows,
   flowModel,
   hunchOutcome,
+  hunchWeight,
   latestReadouts,
   ledgerFacts,
   leversFor,
   mapDividers,
   mapPoints,
+  mayWithdrawHunch,
   parseOpportunityDetail,
   parseOpportunityList,
   parseReadouts,
@@ -37,6 +39,7 @@ import {
   rankText,
   sourceStateWord,
   starterChanges,
+  starterReads,
   starterSummary,
   statusWords,
   triageAction,
@@ -108,7 +111,7 @@ describe("readers", () => {
     const detail = parseOpportunityDetail(sampleOpportunityDetail("O-15", NOW))!;
     expect(detail.quotes.said).toHaveLength(3);
     expect(detail.quotes.said.every((q) => q.verified && !q.hunch)).toBe(true);
-    expect(detail.quotes.hunches[0]).toMatchObject({ hunch: true, author: "ana" });
+    expect(detail.quotes.hunches[0]).toMatchObject({ hunch: true, author: "ana@example.com" });
     expect(detail.why.map((w) => [w.kind, w.missing])).toEqual([
       ["evidence", false],
       ["opportunity", false],
@@ -265,6 +268,17 @@ describe("triage keys", () => {
     expect(triageAction({ key: "q" })).toBeNull();
     const input = document.createElement("input");
     expect(triageAction({ key: "v", target: input })).toBeNull();
+  });
+
+  it("leaves keys to a dialog, a menu or a list that has focus", () => {
+    for (const role of ["dialog", "menu", "listbox"]) {
+      const owner = document.createElement("div");
+      owner.setAttribute("role", role);
+      const button = document.createElement("button");
+      owner.append(button);
+      expect(triageAction({ key: "p", target: button })).toBeNull();
+    }
+    expect(triageAction({ key: "p", target: document.createElement("button") })).toBe("park");
   });
 });
 
@@ -436,6 +450,48 @@ describe("map, impact and the ledger", () => {
       "Evidence found: 30 accounts. Test: the other lead is co-signing.",
     );
     expect(hunchOutcome(mia!, rows())).toMatch(/^No opportunity yet/);
+  });
+
+  it("lets a person's hunch be withdrawn by its author or an owner, never an agent's idea", () => {
+    const [ana, atlas, mia] = parseSignals({ data: sampleHunches(NOW) })!;
+    const operator = { userId: "mia@example.com", owner: false };
+    const owner = { userId: "lena@example.com", owner: true };
+    expect(mayWithdrawHunch(mia!, operator)).toBe(true);
+    expect(mayWithdrawHunch(ana!, operator)).toBe(false);
+    expect(mayWithdrawHunch(ana!, owner)).toBe(true);
+    expect(mayWithdrawHunch(atlas!, owner)).toBe(false);
+    // A repo post by a team author (no author) and an agent's hunch stay too.
+    expect(mayWithdrawHunch({ ...ana!, author: null }, owner)).toBe(false);
+    expect(mayWithdrawHunch({ ...ana!, authorKind: "agent" }, owner)).toBe(false);
+    expect(mayWithdrawHunch({ ...mia!, gone: "withdrawn" }, operator)).toBe(false);
+  });
+
+  it("reads the hunch weight from the rubric, 0.1 when it sets none", () => {
+    expect(hunchWeight(null)).toBe(0.1);
+    const doc = {
+      discovery: { rubric: { ladder: { hunch: 0.25 } } },
+    } as unknown as DefinitionDoc;
+    expect(hunchWeight(doc)).toBe(0.25);
+    expect(starterReads("team", 0.25)).toContain("weight 0.25");
+    expect(starterReads("calendar")).toBeNull();
+  });
+
+  it("counts requested work as measured only once a readout exists", () => {
+    const snapshot = discoverySnapshot();
+    const requested = snapshot.projects.filter(
+      (p) => p.kind !== "integration" && p.status !== "cancelled" && !p.why?.opportunity,
+    );
+    const withMetric: ProjectView[] = snapshot.projects.map((p) =>
+      p.slug === requested[0]!.slug
+        ? ({
+            ...p,
+            why: { ...p.why, proposal: "C-90", metric: "time to first result" },
+          } as ProjectView)
+        : p,
+    );
+    expect(ledgerFacts(null, [], withMetric).requested.measured).toBe(0);
+    const readout = parseReadouts([{ id: "R-9", proposal: "C-90", day: 7 }])!;
+    expect(ledgerFacts(null, readout, withMetric).requested.measured).toBe(1);
   });
 });
 

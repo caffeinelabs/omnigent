@@ -173,6 +173,19 @@ describe("Discovery off", () => {
     expect(reads("/discovery")).toBe(0);
   });
 
+  it("says it could not read the definition instead of calling discovery off", async () => {
+    serve({
+      overrides: {
+        [`GET ${SNAPSHOT}/definition`]: () => json({ error: { message: "unavailable" } }, 503),
+      },
+    });
+    renderAt("/discovery");
+    const alert = await screen.findByTestId("discovery-definition-error", {}, { timeout: 5000 });
+    expect(alert).toHaveTextContent("Could not load the factory's definition");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.queryByTestId("discovery-off")).toBeNull();
+  });
+
   it("tells an operator that an owner turns it on", async () => {
     serve({ snapshot: discoverySnapshot("operator"), routes: { state: "off" } });
     renderAt("/discovery");
@@ -240,6 +253,37 @@ describe("Discovery on", () => {
     expect(await screen.findByTestId("factory-toast")).toHaveTextContent(
       "Asked the portfolio lead to plan O-15.",
     );
+  });
+
+  it("leaves the key after g to the cockpit's chord: g p goes to Projects and parks nothing", async () => {
+    serve({ overrides: { [`PATCH ${SNAPSHOT}/opportunities/O-3`]: lever("O-3") } });
+    renderAt("/discovery");
+    await screen.findByTestId("opportunity-table");
+    fireEvent.keyDown(document.body, { key: "j" });
+    expect(screen.getByTestId("opportunity-row-O-3")).toHaveAttribute("data-selected", "true");
+    fireEvent.keyDown(document.body, { key: "g" });
+    fireEvent.keyDown(document.body, { key: "p" });
+    await waitFor(() => expect(location).toBe(`${BASE}/projects`));
+    expect(sent("PATCH", "/opportunities/O-3")).toEqual([]);
+  });
+
+  it("leaves keys to a dialog that has focus", async () => {
+    serve({ overrides: { [`PATCH ${SNAPSHOT}/opportunities/O-3`]: lever("O-3") } });
+    renderAt("/discovery");
+    await screen.findByTestId("opportunity-table");
+    fireEvent.keyDown(document.body, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "?" });
+    const help = await screen.findByRole("dialog");
+    const focused = within(help).getAllByRole("button")[0]!;
+    focused.focus();
+    fireEvent.keyDown(focused, { key: "p" });
+    fireEvent.keyDown(focused, { key: "n" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      server.calls.filter((c) => c.method !== "GET" && c.path.includes("/opportunities")),
+    ).toEqual([]);
   });
 
   it("kills only with a reason from the seeded list", async () => {
@@ -369,6 +413,44 @@ describe("Discovery on", () => {
     await waitFor(() => expect(sent("POST", "/definition/pin")).toEqual([{ version: 12 }]));
   });
 
+  it("lifts the server's hold on a failing source", async () => {
+    serve({
+      routes: { heldSource: true },
+      overrides: {
+        [`POST ${SNAPSHOT}/sources/trk/resume`]: () =>
+          json({ changed: true, def_version: 12, state: "trial" }),
+      },
+    });
+    renderAt("/discovery?peek=source:trk");
+    const peek = await screen.findByTestId("source-peek-trk");
+    expect(within(peek).getByTestId("source-held")).toHaveTextContent(
+      "the tracker answered 503 three times",
+    );
+    expect(screen.queryByTestId("source-pause")).toBeNull();
+    fireEvent.click(screen.getByTestId("source-lift-hold"));
+    await waitFor(() => expect(sent("POST", "/sources/trk/resume")).toEqual([{}]));
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent(
+      "Lifted the hold on Support tracker (sample). It runs again.",
+    );
+  });
+
+  it("opens a measured opportunity's readout to decide", async () => {
+    serve({
+      overrides: {
+        [`GET ${SNAPSHOT}/opportunities/O-9`]: () =>
+          json({
+            ...sampleOpportunityDetail("O-9", 0),
+            status: "measured",
+            next: { action: "decide", label: "Decide: keep or drop" },
+          }),
+      },
+    });
+    renderAt("/discovery?peek=O-9");
+    await screen.findByTestId("opportunity-peek-O-9");
+    fireEvent.click(screen.getByRole("button", { name: "Decide: keep or drop" }));
+    await waitFor(() => expect(decodeURIComponent(location)).toContain("peek=readout:R-1"));
+  });
+
   it("says when a panel's id is not in this factory", async () => {
     serve();
     renderAt("/discovery?peek=O-99");
@@ -389,5 +471,41 @@ describe("Discovery on", () => {
     expect(
       server.calls.filter((c) => c.method !== "GET" && c.path.includes("/opportunities")),
     ).toEqual([]);
+  });
+
+  it("still shows a viewer where an opportunity goes next", async () => {
+    serve({ snapshot: discoverySnapshot("viewer") });
+    renderAt("/discovery?peek=O-15");
+    await screen.findByTestId("opportunity-peek-O-15");
+    fireEvent.click(screen.getByRole("button", { name: "Review bet C-31" }));
+    await waitFor(() => expect(location).toContain("peek=C-31"));
+  });
+});
+
+describe("Hunches", () => {
+  it("lets an operator withdraw their own hunch, never another's or an agent's idea", async () => {
+    serve({
+      snapshot: discoverySnapshot("operator"),
+      overrides: { [`DELETE ${SNAPSHOT}/hunches/S-1003`]: () => json({ signal: {} }) },
+    });
+    renderAt("/discovery/hunches");
+    const mine = await screen.findByTestId("hunch-S-1003");
+    expect(screen.queryByTestId("hunch-withdraw-S-1001")).toBeNull();
+    expect(screen.queryByTestId("hunch-withdraw-S-1002")).toBeNull();
+    fireEvent.click(within(mine).getByTestId("hunch-withdraw-S-1003"));
+    await waitFor(() => expect(sent("DELETE", "/hunches/S-1003")).toHaveLength(1));
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent("Withdrew hunch S-1003.");
+  });
+
+  it("offers an owner Withdraw on people's hunches only, and keeps a flagged one struck through", async () => {
+    serve();
+    renderAt("/discovery/hunches");
+    await screen.findByTestId("hunch-S-1001");
+    expect(screen.getByTestId("hunch-withdraw-S-1001")).toBeInTheDocument();
+    expect(screen.queryByTestId("hunch-withdraw-S-1002")).toBeNull();
+    const flagged = screen.getByTestId("hunch-S-1005");
+    expect(flagged).toHaveAttribute("data-injection", "true");
+    expect(flagged.querySelector("q")).toHaveClass("line-through");
+    expect(flagged).toHaveTextContent("Possible injection · excluded from scoring");
   });
 });

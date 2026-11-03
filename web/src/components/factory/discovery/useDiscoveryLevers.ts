@@ -47,7 +47,8 @@ export interface DiscoveryLevers {
   hunch: (text: string, opportunity?: string) => Promise<boolean>;
   withdraw: (signal: string) => Promise<void>;
   pauseSource: (id: string, label: string) => Promise<void>;
-  resumeSource: (id: string, label: string) => Promise<void>;
+  /** Resume a paused source, or (`hold`) lift the server's hold after failures. */
+  resumeSource: (id: string, label: string, options?: { hold?: boolean }) => Promise<void>;
 }
 
 export function useDiscoveryLevers(factoryId: string): DiscoveryLevers {
@@ -191,13 +192,22 @@ export function useDiscoveryLevers(factoryId: string): DiscoveryLevers {
           toast.show({ message: `Could not pause ${label}: ${message(error)}` });
         }
       },
-      resumeSource: async (id, label) => {
+      resumeSource: async (id, label, options) => {
+        const hold = options?.hold === true;
         try {
           const result = await resumeSource(factoryId, id);
           refresh();
-          toast.show({ message: result.changed ? `Resumed ${label}.` : `${label} already runs.` });
+          toast.show({
+            message: !result.changed
+              ? `${label} already runs.`
+              : hold
+                ? `Lifted the hold on ${label}. It runs again.`
+                : `Resumed ${label}.`,
+          });
         } catch (error) {
-          toast.show({ message: `Could not resume ${label}: ${message(error)}` });
+          toast.show({
+            message: `Could not ${hold ? "lift the hold on" : "resume"} ${label}: ${message(error)}`,
+          });
         }
       },
     }),

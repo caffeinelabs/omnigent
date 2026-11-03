@@ -19,18 +19,19 @@ import { Peek } from "../ui/Peek";
 import { useFactoryToast } from "../ui/Toast";
 import { MEANING } from "../ui/statusTokens";
 import {
+  HUNCH_WEIGHT_FALLBACK,
   type PendingSource,
-  STARTER_READS,
   type SourceView,
   sourceStateWord,
+  starterReads,
 } from "./discoveryModel";
 import { useSourceLog } from "./discoveryQueries";
 import type { DiscoveryLevers } from "./useDiscoveryLevers";
 
 const EYEBROW = "text-xs font-semibold tracking-wide text-muted-foreground uppercase";
 
-function readsOf(kind: string): string {
-  return STARTER_READS[kind] ?? `what its ${kind} connection returns, read-only`;
+function readsOf(kind: string, weight: number): string {
+  return starterReads(kind, weight) ?? `what its ${kind} connection returns, read-only`;
 }
 
 function Layers() {
@@ -98,10 +99,12 @@ function Configured({
   factoryId,
   source,
   canAct,
+  weight,
 }: {
   factoryId: string;
   source: SourceView;
   canAct: boolean;
+  weight: number;
 }) {
   const log = useSourceLog(factoryId, source.id, true);
   const toast = useFactoryToast();
@@ -120,6 +123,7 @@ function Configured({
     }
   };
   const entries = logEntries(log.data);
+  const held = source.health === "failing" && source.state !== "paused";
   const calls =
     source.callsPerDay != null
       ? `up to ${source.callsPerDay} calls a day`
@@ -132,12 +136,22 @@ function Configured({
       <section className="flex flex-col gap-1.5">
         <h3 className={EYEBROW}>In plain words</h3>
         <p className="rounded-lg border border-dashed border-border px-3 py-2 text-sm">
-          Scout can read {readsOf(source.kind)}, {calls}. Emails, phone numbers and tokens are
-          removed before anyone reads it.
+          Scout can read {readsOf(source.kind, weight)}, {calls}. Emails, phone numbers and tokens
+          are removed before anyone reads it.
           {source.keepDays != null ? ` Text is kept ${source.keepDays} days.` : ""}
           {source.state === "trial" ? " It runs a 14-day trial first, then asks “keep it?”." : ""}
         </p>
       </section>
+      {held && (
+        <p
+          data-testid="source-held"
+          className={cn("rounded-lg border px-3 py-2 text-sm", MEANING.broken.border)}
+        >
+          <b>On hold after repeated failures.</b> Scout reads nothing from it until someone lifts
+          the hold.
+          {source.lastError ? ` The last error: ${source.lastError}` : ""}
+        </p>
+      )}
       <Layers />
       <section className="flex flex-col gap-1.5">
         <h3 className={cn(EYEBROW, "flex items-center gap-2")}>
@@ -167,7 +181,7 @@ function Configured({
             .filter(Boolean)
             .join(" · ") || "Nothing read yet."}
         </p>
-        {source.lastError && (
+        {source.lastError && !held && (
           <p className={cn("text-sm", MEANING.broken.text)}>Last error: {source.lastError}</p>
         )}
       </section>
@@ -200,11 +214,13 @@ function Pending({
   pending,
   snapshot,
   clockOffsetS,
+  weight,
 }: {
   factoryId: string;
   pending: PendingSource;
   snapshot: FactorySnapshot;
   clockOffsetS: number;
+  weight: number;
 }) {
   const proposal = useFactoryProposal(factoryId, pending.proposal).data?.proposal ?? null;
   const calls = pending.source.budget?.calls_per_day;
@@ -217,7 +233,7 @@ function Pending({
       <section className="flex flex-col gap-1.5">
         <h3 className={EYEBROW}>In plain words</h3>
         <p className="rounded-lg border border-dashed border-border px-3 py-2 text-sm">
-          If an owner approves, Scout can read {readsOf(String(pending.source.kind ?? ""))}
+          If an owner approves, Scout can read {readsOf(String(pending.source.kind ?? ""), weight)}
           {calls != null ? `, up to ${calls} times a day` : ""}. It starts with a 14-day trial, then
           asks “keep it?”. Nothing is read until then.
         </p>
@@ -247,6 +263,7 @@ export function SourcePeek({
   canAct,
   isOwner,
   levers,
+  hunchWeight = HUNCH_WEIGHT_FALLBACK,
   onClose,
 }: {
   factoryId: string;
@@ -259,11 +276,15 @@ export function SourcePeek({
   canAct: boolean;
   isOwner: boolean;
   levers: DiscoveryLevers;
+  /** The rubric's hunch weight, for the team source's plain words. */
+  hunchWeight?: number;
   onClose: () => void;
 }) {
   const source = sources.find((s) => s.id === sourceId) ?? null;
   const waiting = source ? null : (pending.find((p) => p.id === sourceId) ?? null);
   const paused = source?.state === "paused";
+  // The server holds a source after repeated failures; any editor lifts the hold.
+  const held = source != null && !paused && source.health === "failing";
   return (
     <Peek
       open={sourceId != null}
@@ -284,7 +305,15 @@ export function SourcePeek({
       }
       footer={
         source && canAct ? (
-          paused ? (
+          held ? (
+            <Button
+              size="sm"
+              data-testid="source-lift-hold"
+              onClick={() => void levers.resumeSource(source.id, source.label, { hold: true })}
+            >
+              Lift the hold and retry
+            </Button>
+          ) : paused ? (
             isOwner ? (
               <Button size="sm" onClick={() => void levers.resumeSource(source.id, source.label)}>
                 Resume
@@ -306,13 +335,14 @@ export function SourcePeek({
       }
     >
       {source ? (
-        <Configured factoryId={factoryId} source={source} canAct={canAct} />
+        <Configured factoryId={factoryId} source={source} canAct={canAct} weight={hunchWeight} />
       ) : waiting ? (
         <Pending
           factoryId={factoryId}
           pending={waiting}
           snapshot={snapshot}
           clockOffsetS={clockOffsetS}
+          weight={hunchWeight}
         />
       ) : (
         <p role="alert" className="text-sm">

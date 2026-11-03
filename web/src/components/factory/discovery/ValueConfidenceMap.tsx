@@ -25,8 +25,16 @@ const TONE: Record<MapPoint["tone"], string> = {
 
 const QUADRANT_ORDER: readonly Quadrant[] = ["bet", "test_first", "quick_win", "wait"];
 
-function short(text: string, max = 28): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+/** What a dot says besides its title: value, confidence, quadrant and state. */
+function dotFacts(p: MapPoint): string {
+  return [
+    `value ${rankText(p.value)}`,
+    `confidence ${rankText(p.confidence)}`,
+    p.quadrant ? QUADRANT_WORD[p.quadrant] : null,
+    p.tone === "waits" ? "waits for you" : p.tone === "building" ? "building" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 export function ValueConfidenceMap({
@@ -107,7 +115,6 @@ export function ValueConfidenceMap({
                   data-testid={`map-dot-${p.id}`}
                   data-tone={p.tone}
                   onClick={() => onOpen(p.id)}
-                  aria-label={`${p.title}: value ${rankText(p.value)}, confidence ${rankText(p.confidence)}${p.quadrant ? `, ${QUADRANT_WORD[p.quadrant]}` : ""}${p.tone === "waits" ? ", waits for you" : p.tone === "building" ? ", building" : ""}`}
                   className={cn(
                     "group absolute flex -translate-x-[7px] -translate-y-1/2 items-center gap-1.5 rounded-full",
                     FOCUS_RING,
@@ -119,9 +126,14 @@ export function ValueConfidenceMap({
                     className="size-3.5 shrink-0 rounded-full border-2 border-card-solid"
                     style={{ background: TONE[p.tone] }}
                   />
-                  <span className="max-w-44 truncate text-xs text-muted-foreground group-hover:text-foreground max-md:hidden">
-                    {short(p.title)}
+                  {/* The full title is the name (CSS shortens it); a phone shows only the dot. */}
+                  <span
+                    title={p.title}
+                    className="max-w-44 truncate text-xs text-muted-foreground group-hover:text-foreground max-md:sr-only"
+                  >
+                    {p.title}
                   </span>
+                  <span className="sr-only">: {dotFacts(p)}</span>
                 </button>
               ))}
             </div>

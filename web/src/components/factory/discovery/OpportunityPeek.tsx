@@ -21,16 +21,21 @@ import { WhyChain, type WhyLink } from "../ui/WhyChain";
 import { DATA_HUE, FAINT_TEXT, FOCUS_RING, MEANING } from "../ui/statusTokens";
 import { AskScoutButton, ResearchForm } from "./AskScout";
 import {
+  HUNCH_WEIGHT_FALLBACK,
   type OpportunityDetail,
   type QuoteView,
+  type ReadoutView,
+  latestReadouts,
   leversFor,
   rankText,
   statusWords,
+  weightText,
 } from "./discoveryModel";
 import { isNotFound, useOpportunity } from "./discoveryQueries";
 import type { DiscoveryLevers } from "./useDiscoveryLevers";
 
 const EYEBROW = "text-xs font-semibold tracking-wide text-muted-foreground uppercase";
+const NO_READOUTS: readonly ReadoutView[] = [];
 
 function Section({
   title,
@@ -63,7 +68,15 @@ function ago(at: number | null, nowS: number): string | null {
   return days === 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
-function Quote({ quote, dashed = false }: { quote: QuoteView; dashed?: boolean }) {
+function Quote({
+  quote,
+  dashed = false,
+  weight = HUNCH_WEIGHT_FALLBACK,
+}: {
+  quote: QuoteView;
+  dashed?: boolean;
+  weight?: number;
+}) {
   return (
     <figure
       data-testid={`quote-${quote.signal}`}
@@ -76,7 +89,8 @@ function Quote({ quote, dashed = false }: { quote: QuoteView; dashed?: boolean }
       <figcaption className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
         {quote.hunch ? (
           <span>
-            hunch{quote.author ? ` from ${quote.author}` : ""} · weight 0.1 · not user evidence
+            hunch{quote.author ? ` from ${quote.author}` : ""} · weight {weightText(weight)} · not
+            user evidence
           </span>
         ) : (
           <>
@@ -278,6 +292,7 @@ function Body({
   segmentLabel,
   onPeek,
   research,
+  weight,
 }: {
   detail: OpportunityDetail;
   factoryId: string;
@@ -286,6 +301,7 @@ function Body({
   segmentLabel: (id: string) => string;
   onPeek: (value: string) => void;
   research: ReactNode;
+  weight: number;
 }) {
   const betRef = detail.proposals.find((p) => p.bet)?.proposal ?? detail.bet?.proposal ?? null;
   const said = [
@@ -329,7 +345,7 @@ function Body({
               <Quote key={q.signal} quote={q} />
             ))}
             {detail.quotes.hunches.map((q) => (
-              <Quote key={q.signal} quote={q} dashed />
+              <Quote key={q.signal} quote={q} dashed weight={weight} />
             ))}
           </div>
         )}
@@ -419,6 +435,8 @@ export function OpportunityPeek({
   nowS,
   canAct,
   perAsk,
+  hunchWeight = HUNCH_WEIGHT_FALLBACK,
+  readouts = NO_READOUTS,
   levers,
   goalLabel,
   segmentLabel,
@@ -432,6 +450,10 @@ export function OpportunityPeek({
   nowS: number;
   canAct: boolean;
   perAsk: number | null;
+  /** The rubric's hunch weight. */
+  hunchWeight?: number;
+  /** The readouts the server wrote, for a measured opportunity's decision. */
+  readouts?: readonly ReadoutView[];
   levers: DiscoveryLevers;
   goalLabel: (id: string) => string | null;
   segmentLabel: (id: string) => string;
@@ -452,9 +474,29 @@ export function OpportunityPeek({
   };
 
   const next = detail?.next;
+  // Its latest readout: by its bet, else by the opportunity, else the why chain's.
+  const readoutRef = (() => {
+    if (!detail) return null;
+    const bet = detail.bet?.proposal ?? detail.proposals.find((p) => p.bet)?.proposal ?? null;
+    const mine = latestReadouts(
+      readouts.filter((r) => (bet && r.proposal === bet) || r.opportunity === detail.id),
+    ).sort((a, b) => (b.day ?? 0) - (a.day ?? 0));
+    return mine[0]?.id ?? detail.why.find((w) => w.kind === "readout" && w.ref)?.ref ?? null;
+  })();
+  // Navigation is for everyone; the levers (plan, unpark, revive) only for operators.
   const main = (() => {
-    if (!detail || !canAct || !next) return null;
+    if (!detail || !next) return null;
     switch (next.action) {
+      case "decide":
+        return readoutRef ? (
+          <Button
+            size="sm"
+            onClick={() => onPeek(`readout:${readoutRef}`)}
+            data-testid="peek-readout"
+          >
+            {canAct ? next.label : "Open the readout"}
+          </Button>
+        ) : null;
       case "open_project":
         return next.project ? (
           <Button asChild size="sm">
@@ -468,23 +510,23 @@ export function OpportunityPeek({
           </Button>
         ) : null;
       case "plan":
-        return (
+        return canAct ? (
           <Button size="sm" onClick={() => void levers.plan(detail)} data-testid="peek-plan">
             {next.label}
           </Button>
-        );
+        ) : null;
       case "unpark":
-        return (
+        return canAct ? (
           <Button size="sm" onClick={() => void levers.unpark(detail)}>
             Unpark
           </Button>
-        );
+        ) : null;
       case "revive":
-        return (
+        return canAct ? (
           <Button size="sm" onClick={() => void levers.revive(detail)}>
             Revive
           </Button>
-        );
+        ) : null;
       case "open":
         return detail.mergedInto ? (
           <Button size="sm" onClick={() => onPeek(detail.mergedInto!)}>
@@ -595,7 +637,10 @@ export function OpportunityPeek({
             )}
           </>
         ) : detail ? (
-          <p className="text-sm text-muted-foreground">Ask an operator to change this.</p>
+          <>
+            {main}
+            <p className="text-sm text-muted-foreground">Ask an operator to change this.</p>
+          </>
         ) : undefined
       }
     >
@@ -623,6 +668,7 @@ export function OpportunityPeek({
           goalLabel={goalLabel}
           segmentLabel={segmentLabel}
           onPeek={onPeek}
+          weight={hunchWeight}
           research={
             researching ? (
               <div className="mt-3">

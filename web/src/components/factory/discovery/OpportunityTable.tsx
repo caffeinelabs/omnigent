@@ -188,6 +188,7 @@ function Row({
                 type="button"
                 size="sm"
                 variant="ghost"
+                aria-label={`Plan ${row.title}`}
                 title="Ask the portfolio lead to plan it (n)"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -203,6 +204,7 @@ function Row({
                 type="button"
                 size="sm"
                 variant="ghost"
+                aria-label={`Park ${row.title}`}
                 title="Park it (p)"
                 onClick={(e) => {
                   e.stopPropagation();

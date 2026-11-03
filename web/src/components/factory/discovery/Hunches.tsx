@@ -1,9 +1,10 @@
 /**
  * Hunches: each "I think … because …" from the factory's people (and the
  * leads' own ideas, counted as hunches), with what came of it; and the
- * composer. A hunch is stored next to the evidence with weight 0.1 and is
- * never mixed into user evidence; Scout looks for evidence and proposes the
- * cheapest test.
+ * composer. A hunch is stored next to the evidence with the rubric's hunch
+ * weight and is never mixed into user evidence; Scout looks for evidence and
+ * proposes the cheapest test. Hunch text is untrusted too: one that reads like
+ * instructions is struck through and excluded from scoring.
  */
 
 import { LightbulbIcon } from "lucide-react";
@@ -12,7 +13,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FAINT_TEXT, FOCUS_RING } from "../ui/statusTokens";
-import { type OpportunityRow, type SignalView, hunchOutcome } from "./discoveryModel";
+import {
+  HUNCH_WEIGHT_FALLBACK,
+  type OpportunityRow,
+  type SignalView,
+  hunchOutcome,
+  weightText,
+} from "./discoveryModel";
+import { ExcludedNote } from "./ExcludedNote";
 
 /** "I think … because …": a person's hunch, optionally on an opportunity. */
 export const HunchComposer = forwardRef<
@@ -66,6 +74,7 @@ export function Hunches({
   rows,
   loading,
   canAct,
+  weight = HUNCH_WEIGHT_FALLBACK,
   mayWithdraw,
   onOpen,
   onWithdraw,
@@ -75,7 +84,9 @@ export function Hunches({
   rows: readonly OpportunityRow[];
   loading: boolean;
   canAct: boolean;
-  /** Whether the viewer may withdraw this hunch (their own, or an owner). */
+  /** The rubric's hunch weight. */
+  weight?: number;
+  /** Whether the viewer may withdraw this hunch (a person's, their own or as an owner). */
   mayWithdraw: (hunch: SignalView) => boolean;
   onOpen: (ref: string) => void;
   onWithdraw: (ref: string) => void;
@@ -99,52 +110,67 @@ export function Hunches({
           </p>
         ) : (
           <ul className="m-0 list-none p-0">
-            {hunches.map((h) => (
-              <li
-                key={h.id}
-                data-testid={`hunch-${h.id}`}
-                className="flex min-w-0 gap-3 border-t border-border px-4 py-3 first:border-t-0"
-              >
-                <LightbulbIcon
-                  aria-hidden
-                  className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                />
-                <div className="flex min-w-0 grow flex-col gap-1">
-                  {h.text ? (
-                    <q className="text-sm break-words">{h.text}</q>
-                  ) : (
-                    <p className={cn("text-sm", FAINT_TEXT)}>Text {h.gone ?? "not kept"}.</p>
-                  )}
-                  <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                    {h.author && <span>{h.author}</span>}
-                    <span className="font-mono">{h.id}</span>
-                    <span>·</span>
-                    <span className="text-foreground">{hunchOutcome(h, rows)}</span>
-                    {h.links.map((l) => (
-                      <button
-                        key={l.opportunity}
-                        type="button"
-                        onClick={() => onOpen(l.opportunity)}
-                        className={cn("rounded font-mono underline decoration-dotted", FOCUS_RING)}
+            {hunches.map((h) => {
+              const flagged = h.injection || h.excluded != null;
+              return (
+                <li
+                  key={h.id}
+                  data-testid={`hunch-${h.id}`}
+                  data-injection={h.injection || undefined}
+                  className="flex min-w-0 gap-3 border-t border-border px-4 py-3 first:border-t-0"
+                >
+                  <LightbulbIcon
+                    aria-hidden
+                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                  />
+                  <div className="flex min-w-0 grow flex-col gap-1">
+                    {h.text ? (
+                      <q
+                        className={cn(
+                          "text-sm break-words",
+                          flagged && cn("line-through", FAINT_TEXT),
+                        )}
                       >
-                        {l.opportunity}
-                      </button>
-                    ))}
-                  </p>
-                </div>
-                {canAct && !h.gone && mayWithdraw(h) && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onWithdraw(h.id)}
-                    data-testid={`hunch-withdraw-${h.id}`}
-                  >
-                    Withdraw
-                  </Button>
-                )}
-              </li>
-            ))}
+                        {h.text}
+                      </q>
+                    ) : (
+                      <p className={cn("text-sm", FAINT_TEXT)}>Text {h.gone ?? "not kept"}.</p>
+                    )}
+                    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                      {h.author && <span>{h.author}</span>}
+                      <span className="font-mono">{h.id}</span>
+                      <span>·</span>
+                      <span className="text-foreground">{hunchOutcome(h, rows)}</span>
+                      {h.links.map((l) => (
+                        <button
+                          key={l.opportunity}
+                          type="button"
+                          onClick={() => onOpen(l.opportunity)}
+                          className={cn(
+                            "rounded font-mono underline decoration-dotted",
+                            FOCUS_RING,
+                          )}
+                        >
+                          {l.opportunity}
+                        </button>
+                      ))}
+                    </p>
+                    {flagged && <ExcludedNote signal={h} />}
+                  </div>
+                  {canAct && !h.gone && mayWithdraw(h) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onWithdraw(h.id)}
+                      data-testid={`hunch-withdraw-${h.id}`}
+                    >
+                      Withdraw
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -156,9 +182,9 @@ export function Hunches({
           Add a hunch
         </h2>
         <p className="text-sm text-muted-foreground">
-          A hunch is a person's conviction, stored next to the evidence with weight 0.1. Scout looks
-          for evidence and proposes the cheapest test. The ledger later shows how often hunches were
-          right.
+          A hunch is a person's conviction, stored next to the evidence with weight{" "}
+          {weightText(weight)}. Scout looks for evidence and proposes the cheapest test. The ledger
+          later shows how often hunches were right.
         </p>
         {canAct ? (
           <HunchComposer id="hunches" onAdd={onAdd} />
