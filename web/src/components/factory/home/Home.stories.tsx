@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { userEvent, waitFor, within } from "storybook/test";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { HomePage } from "@/pages/factory/HomePage";
 import { CockpitStory, type CockpitStoryOptions } from "../board/boardStoryKit";
@@ -19,7 +20,8 @@ import {
 // Home in the new cockpit over sample factories (every product word is the
 // sample's own data): the round-3 sample with discovery learning, nothing
 // waiting, many ready PRs, discovery off (in the factory, or on the server), a
-// cold start, and 12 projects with 60 agents; light, dark and a 390 px phone.
+// cold start, 12 projects with 60 agents, and an answer held for Undo (the
+// top bar's count leaves it out, as Home does); light, dark and a 390 px phone.
 
 function home(
   snapshot: FactorySnapshot,
@@ -72,6 +74,32 @@ export const LiveSampleLight = home(live.snapshot, LIVE);
 export const LiveSampleMobile = phone(home(live.snapshot, LIVE, { theme: "dark" }));
 
 export const LiveSampleMobileLight = phone(home(live.snapshot, LIVE));
+
+/**
+ * Answers the first question in place and holds its toast open: the row
+ * leaves Needs you, and the top bar's count drops with it until Undo.
+ */
+const answerHeld = (story: Story): Story => ({
+  ...story,
+  play: async ({ canvasElement }) => {
+    const option = await waitFor(() => {
+      const found = canvasElement.querySelector<HTMLElement>(
+        '[data-testid^="need-"][data-testid*="-option-"]',
+      );
+      if (!found) throw new Error("no answer in place yet");
+      return found;
+    });
+    await userEvent.click(option);
+    const toast = await within(canvasElement.ownerDocument.body).findByTestId("factory-toast");
+    await userEvent.hover(toast);
+  },
+});
+
+export const AnswerHeld = answerHeld(home(live.snapshot, LIVE, { theme: "dark" }));
+
+export const AnswerHeldLight = answerHeld(home(live.snapshot, LIVE));
+
+export const AnswerHeldMobile = phone(answerHeld(home(live.snapshot, LIVE, { theme: "dark" })));
 
 /** Nothing needs you: one calm line, and what the factory handled itself. */
 export const NothingNeedsYou = home(calmSnapshot(homeSnapshot()), {

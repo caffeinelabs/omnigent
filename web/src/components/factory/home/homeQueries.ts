@@ -49,6 +49,18 @@ export function useFactoryAsks(factoryId: string) {
   });
 }
 
+/**
+ * The Needs you list as Home last read it, from the cache only: it never
+ * fetches (the shell's count uses it while Home holds answers).
+ */
+export function useCachedFactoryAsks(factoryId: string): AsksResponse | undefined {
+  return useQuery<AsksResponse>({
+    queryKey: factoryAsksKey(factoryId),
+    queryFn: ({ signal }) => fetchFactoryAsks(factoryId, signal),
+    enabled: false,
+  }).data;
+}
+
 async function readOptional(path: string, signal?: AbortSignal): Promise<unknown> {
   const resp = await authenticatedFetch(path, { signal });
   if (resp.status === 404) return null;

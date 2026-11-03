@@ -2,8 +2,10 @@
  * Steer › Budgets and autonomy: money (per project, per day, the spend
  * alert), the loops' attempts and rounds, discovery's budget while it runs,
  * and who decides what (project proposals, bets from opportunities, the
- * engine's mode). Owners apply budget changes; editors propose them, and the
- * change column's preview says which. Every field stages.
+ * engine's mode). Lowering a money budget only reduces spend, so owners and
+ * editors apply it at once (spec §8.4); raising one, and the loops and
+ * autonomy, are owner changes that editors propose. The change column's
+ * preview says which. Every field stages.
  */
 
 import { SectionCard } from "../project/projectParts";
@@ -22,9 +24,10 @@ export function Budgets() {
   const bounds = steer.definition.bounds;
   return (
     <div data-testid="steer-budgets" className="flex min-w-0 flex-col gap-4">
-      <p className="text-sm text-muted-foreground">
-        Owners apply budget changes; editors propose them, and the preview says which. Every change
-        is one version you can undo.
+      <p data-testid="steer-budgets-who" className="text-sm text-muted-foreground">
+        Lowering a dollar budget applies at once, for editors too. Raising one, and other loop or
+        autonomy changes, wait for an owner: editors propose them. The preview says which, and every
+        change is one version you can undo.
       </p>
       <FieldGroups section="budgets" groups={BUDGET_GROUPS} testId="steer-budget-fields" />
       {steer.discoveryOn && (

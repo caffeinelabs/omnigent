@@ -15,6 +15,7 @@ import {
 import { ANSWER_UNDO_MS } from "@/components/factory/home/useDeferredAnswers";
 import { definitionResponse } from "@/components/factory/insights/__fixtures__/learnFixtures";
 import { notifyMe } from "@/components/factory/notify/__fixtures__/notifyFixtures";
+import { statusSummaryOf } from "@/components/factory/overview/__fixtures__/nowFixtures";
 import { roomProposals } from "@/components/factory/room/__fixtures__/roomFixtures";
 import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { resetCockpitChoiceCache } from "@/components/factory/shell/cockpitV2";
@@ -200,6 +201,87 @@ describe("Home", () => {
         },
       ]),
     );
+  });
+
+  it("leaves a held answer out of the top bar's count too, until Undo brings it back", async () => {
+    const snapshot = round3Snapshot("operator");
+    const built = asksOf(snapshot, { incidents: round3IssueList(), proposals: roomProposals() });
+    const summary = statusSummaryOf(snapshot, { incidents: round3IssueList() });
+    const total = built.counts.total;
+    serve({
+      snapshot,
+      extra: {
+        // The server counts the rows of the same list Home reads.
+        [`GET ${SNAPSHOT}/status-summary`]: () =>
+          json({ ...summary, counts: { ...summary.counts, needs_you: total } }),
+      },
+    });
+    renderAt("");
+    const badge = () => screen.getByTestId("cockpit-tab-home-count");
+    const count = () => within(screen.getByTestId("home-needs")).getByTestId("home-needs-count");
+    await screen.findByTestId("need-D-2");
+    await waitFor(() => expect(badge()).toHaveTextContent(String(total)));
+    expect(count()).toHaveTextContent(String(total));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    fireEvent.click(screen.getByTestId("need-D-2-option-a"));
+
+    // Held for Undo: the row left Home's list, and the top bar counts as Home does.
+    await waitFor(() => expect(screen.queryByTestId("need-D-2")).toBeNull());
+    expect(count()).toHaveTextContent(String(total - 1));
+    expect(badge()).toHaveTextContent(String(total - 1));
+    expect(badge()).toHaveAccessibleName(`${total - 1} need${total - 1 === 1 ? "s" : ""} you`);
+    fireEvent.click(
+      within(await screen.findByTestId("factory-toast")).getByRole("button", { name: "Undo" }),
+    );
+
+    expect(await screen.findByTestId("need-D-2")).toBeInTheDocument();
+    expect(count()).toHaveTextContent(String(total));
+    expect(badge()).toHaveTextContent(String(total));
+    expect(answers()).toEqual([]);
+  });
+
+  it("keeps the top bar and Home agreed once the answer is sent and leaves the list", async () => {
+    const snapshot = round3Snapshot("operator");
+    const built = asksOf(snapshot, { incidents: round3IssueList(), proposals: roomProposals() });
+    const summary = statusSummaryOf(snapshot, { incidents: round3IssueList() });
+    const total = built.counts.total;
+    let sent = false;
+    const left = () => ({
+      ...built,
+      asks: built.asks.filter((a) => a.id !== "D-2"),
+      counts: { ...built.counts, total: total - 1 },
+    });
+    serve({
+      snapshot,
+      asks: () => json(sent ? left() : built),
+      answer: () => {
+        sent = true;
+        return json({ decision: {} });
+      },
+      extra: {
+        [`GET ${SNAPSHOT}/status-summary`]: () =>
+          json({ ...summary, counts: { ...summary.counts, needs_you: sent ? total - 1 : total } }),
+      },
+    });
+    renderAt("");
+    const badge = () => screen.getByTestId("cockpit-tab-home-count");
+    const count = () => within(screen.getByTestId("home-needs")).getByTestId("home-needs-count");
+    await screen.findByTestId("need-D-2");
+    await waitFor(() => expect(badge()).toHaveTextContent(String(total)));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    fireEvent.click(screen.getByTestId("need-D-2-option-a"));
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_UNDO_MS + 100);
+    });
+
+    // Sent; the server's next reads no longer list it: still one count, never one off.
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    await waitFor(() => expect(reads("/asks").length).toBeGreaterThan(1));
+    await waitFor(() => expect(badge()).toHaveTextContent(String(total - 1)));
+    expect(count()).toHaveTextContent(String(total - 1));
+    expect(screen.queryByTestId("need-D-2")).toBeNull();
   });
 
   it("keeps Undo for a second answer while the first one goes out", async () => {

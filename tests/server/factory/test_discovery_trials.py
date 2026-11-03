@@ -356,6 +356,22 @@ async def test_a_busy_access_log_never_hides_a_guard_event(
     assert metrics.headline(found["privacy_events"]) == 1
 
 
+async def test_every_refused_quote_counts_as_a_quote_failure(cockpit: Cockpit) -> None:
+    trial, applied = await _trial(cockpit)
+    # A bet, an opportunity and Scout's paraphrase while coding signals.
+    for i, kind in enumerate(
+        ("bet.quote_refused", "opportunity.quote_refused", "signal.quote_refused")
+    ):
+        _event(cockpit, kind, applied + (i + 1) * DAY, code="quote_unverified")
+    window = metrics.Window(applied, trial.trial_until)
+
+    found = metrics.compute(
+        cockpit.deps, cockpit.fid, ["quote_failures"], window=window, use_cache=False
+    )
+
+    assert metrics.headline(found["quote_failures"]) == 3
+
+
 async def test_delivery_metrics_never_read_discovery_facts(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:

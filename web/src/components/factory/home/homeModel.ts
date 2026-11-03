@@ -361,6 +361,25 @@ export function needsView(
   return { shown, more: list.length - shown.length, total: list.length };
 }
 
+/**
+ * The top bar's Needs you count. While Home holds answers for Undo it is
+ * Home's own count (its list without the held rows), so the two agree; with
+ * nothing held, or before the list is read, it is the server's.
+ *
+ * @param serverCount - The status summary's `counts.needs_you`.
+ * @param held - Rows Home holds or sent and the list still shows.
+ * @param asks - The Needs you list (null until read).
+ */
+export function shellNeedsCount(
+  serverCount: number,
+  held: ReadonlySet<string>,
+  asks: readonly Ask[] | null | undefined,
+): number {
+  if (held.size === 0) return serverCount;
+  if (asks) return needsView(asks, "all", true, held).total;
+  return Math.max(0, serverCount - held.size);
+}
+
 /** `expires in 4h` (or `defaults now`) for a deadline still ahead. */
 export function deadlineText(at: number | null | undefined, nowS: number): string | null {
   if (at == null) return null;

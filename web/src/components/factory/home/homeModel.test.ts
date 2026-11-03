@@ -16,6 +16,7 @@ import {
   needsView,
   parseDiscoveryFacts,
   parseOpportunities,
+  shellNeedsCount,
   usersNeed,
   whyLine,
   yourMergeCount,
@@ -219,6 +220,20 @@ describe("needs you", () => {
       "D-1",
       "D-3",
     ]);
+  });
+
+  it("gives the top bar Home's count while answers are held, else the server's", () => {
+    const asks = [ask("D-1"), ask("D-2"), ask("D-3")];
+
+    // Nothing held: the server's count stands, even when the list says otherwise.
+    expect(shellNeedsCount(4, new Set(), asks)).toBe(4);
+    // Held (or sent and still listed): Home's list without them.
+    expect(shellNeedsCount(3, new Set(["D-2"]), asks)).toBe(2);
+    // Sent and gone from a newer list, while the server's count is older: still Home's.
+    expect(shellNeedsCount(3, new Set(["D-2"]), [ask("D-1"), ask("D-3")])).toBe(2);
+    // Before the list is read, the held rows come off the server's count.
+    expect(shellNeedsCount(3, new Set(["D-2"]), null)).toBe(2);
+    expect(shellNeedsCount(0, new Set(["D-2"]), null)).toBe(0);
   });
 
   it("states the row's facts: who, what waiting costs, age and deadline", () => {

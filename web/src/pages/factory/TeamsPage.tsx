@@ -2,8 +2,9 @@
  * Teams (`/factory/:factoryId/teams/{teams,bench,templates,agents}`), part of
  * the new cockpit: every team side by side (the lead seats, then one card per
  * project with each member on one line: ring, name, role, vendor · model,
- * state), the bench (track record by role × vendor · model with n), team
- * templates, and every agent in a table. A filter matches name, role, vendor,
+ * state), the bench (track record by role × vendor · model with n), a way
+ * to the team templates (Steer lists and changes them), and every agent in a
+ * table. A filter matches name, role, vendor,
  * model, state and project; the state counts are filters too. Any member
  * opens the agent panel (`?peek=agent:<handle>`).
  */
@@ -40,6 +41,7 @@ import {
   agentPageHref,
   agentsPageHref,
   projectPageHref,
+  steerPageHref,
   teamsPageHref,
 } from "@/components/factory/factoryRoutes";
 import { EmptyState } from "@/components/factory/project/projectParts";
@@ -541,8 +543,19 @@ export function TeamsPage() {
         <EmptyState
           testId="teams-templates"
           icon={<UsersIcon aria-hidden className="size-6 text-muted-foreground/50" />}
-          title="Team templates come with team specs"
-          body="Every project runs the team its project lead's bundle brings today. Templates (named shapes such as a standard team or a pair) arrive with team specs and are edited in Steer."
+          title="Team templates live in Steer"
+          body="Templates are the named team shapes new projects start from, such as a standard team or a pair. Steer › Team templates shows each one with its members, cost, use and locks, and is where they change. A project's own team changes on its team page."
+          action={
+            <Button asChild variant="outline" size="sm">
+              <Link
+                to={steerPageHref(fid, "templates")}
+                componentId="factory.teams.templates_steer"
+                data-testid="teams-templates-steer"
+              >
+                Open team templates
+              </Link>
+            </Button>
+          }
         />
       ) : agents.isLoading && !agents.data ? (
         <TeamsSkeleton />

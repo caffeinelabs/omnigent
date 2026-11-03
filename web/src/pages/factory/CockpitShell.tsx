@@ -19,6 +19,8 @@ import {
   useFactoryPaletteHotkey,
 } from "@/components/factory/cmdk/useFactoryPaletteHotkey";
 import { useFactoryServerNowS } from "@/components/factory/factoryClock";
+import { shellNeedsCount } from "@/components/factory/home/homeModel";
+import { useCachedFactoryAsks } from "@/components/factory/home/homeQueries";
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
 import { splitNeedsYou } from "@/components/factory/overview/needsYouModel";
 import { useFactoryStatusSummary } from "@/components/factory/overview/statusSummaryQuery";
@@ -53,6 +55,8 @@ export const COCKPIT_MAIN_ID = "factory-main";
 /** `?room=` and `?peek=`: the drawer and side panels the address opens. */
 export const ROOM_PARAM = "room";
 export const PEEK_PARAM = "peek";
+
+const NONE_HELD: ReadonlySet<string> = new Set();
 
 export function CockpitShell({
   snapshot,
@@ -94,11 +98,18 @@ export function CockpitShell({
   const summary = summaryQuery.data?.factory_id === fid ? summaryQuery.data : undefined;
   const productName = useFactoryDefinition(fid).data?.effective.product?.name ?? null;
   const split = useMemo(() => splitNeedsYou(snapshot), [snapshot]);
+  // Answers Home holds for Undo already left its list; the count leaves them out too.
+  const [held, setHeld] = useState<ReadonlySet<string>>(NONE_HELD);
+  // Home's own read of the list, from the cache only: the shell never fetches it.
+  const asks = useCachedFactoryAsks(fid);
   // One count: the rows of Needs you (older servers: what waits on the viewer).
-  const needsYou =
+  const needsYou = shellNeedsCount(
     summary?.counts.needs_you ??
-    summary?.counts.waiting_for_you ??
-    split.mine.length + split.role.length;
+      summary?.counts.waiting_for_you ??
+      split.mine.length + split.role.length,
+    held,
+    asks?.factory_id === fid ? asks.asks : null,
+  );
   // Until the server's verdict is in (or when the read fails, or an older
   // server has none) the snapshot's facts speak, and they never say green.
   const verdict =
@@ -144,6 +155,7 @@ export function CockpitShell({
       openPalette: () => setPalette(true),
       openAddProject: () => setAdding({ title: null }),
       openAddProjectTitled: (title: string | null) => setAdding({ title }),
+      holdAnswers: setHeld,
     }),
     [fid, snapshot, clockOffsetS, nowS, updatedAt, location],
   );

@@ -265,10 +265,10 @@ def _who(
     owner_only: bool,
     *,
     editors: bool = False,
-    narrows: str = "a team",
+    narrows: str = "narrows a team",
 ) -> str:
     if editors:
-        head = f"Owners and editors (class A: it only narrows {narrows})."
+        head = f"Owners and editors (class A: it only {narrows})."
     else:
         head = f"Owners (class {klass})." if klass else "Owners."
     if level >= LEVEL_MANAGE:
@@ -284,6 +284,15 @@ def _who(
         you = " You can look, not change."
     agents = " Agents can only propose it." if owner_only else ""
     return f"{head}{you}{agents}"
+
+
+def _narrows(diff: Sequence[Mapping[str, Any]]) -> str:
+    """What an editor's change does, in words: ``narrows a source``, ``lowers a budget``…"""
+    if definition.blocks.sources_narrow_only(diff):
+        return "narrows a source"
+    if definition.budgets_lower_only(diff):
+        return "lowers a budget"
+    return "narrows a team"
 
 
 def _refusals(exc: CockpitError) -> list[dict[str, Any]]:
@@ -418,7 +427,7 @@ def _preview(
             level,
             owner_only,
             editors=editor_applies,
-            narrows="a source" if definition.blocks.sources_narrow_only(diff) else "a team",
+            narrows=_narrows(diff),
         ),
         "owner_only": owner_only,
         "you_can_apply": can_apply and bool(diff) and not blocked,

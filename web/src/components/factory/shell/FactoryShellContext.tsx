@@ -27,6 +27,12 @@ export interface FactoryShellValue {
   openAddProject: () => void;
   /** Add project starting from a title (`/project new <title>` in the Room). */
   openAddProjectTitled: (title: string | null) => void;
+  /**
+   * Tell the shell which Needs you rows Home holds for Undo (or sent and
+   * not yet gone), so the top bar's count leaves them out as Home does.
+   * Only the new cockpit's shell counts them.
+   */
+  holdAnswers?: (held: ReadonlySet<string>) => void;
 }
 
 export const FactoryShellContext = createContext<FactoryShellValue | null>(null);

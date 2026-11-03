@@ -298,7 +298,12 @@ _EVENT_KINDS: Final = (
     PROMPT_SCAN_KIND,
 )
 _SPAN_KINDS: Final = ("task", "stage", "gate", "env", "preview")
-_DISCOVERY_EVENT_KINDS: Final = ("bet.quote_refused", "opportunity.quote_refused", "privacy.*")
+_DISCOVERY_EVENT_KINDS: Final = (
+    "bet.quote_refused",
+    "opportunity.quote_refused",
+    "signal.quote_refused",
+    "privacy.*",
+)
 _DISCOVERY_EVENT_LIMIT: Final = 10000
 _READOUT_LIMIT: Final = 2000
 SCOUT_ROLE: Final = "scout"
@@ -1808,7 +1813,7 @@ DISCOVERY_CATALOG: Final[dict[str, Metric]] = {
             "Quote failures",
             "count",
             "agent text refused because a quote matched no stored excerpt of a cited signal",
-            "bet.quote_refused, opportunity.quote_refused events",
+            "bet.quote_refused, opportunity.quote_refused, signal.quote_refused events",
             _quote_failures,
             agg_count,
         ),

@@ -21,6 +21,11 @@ SCANNED: tuple[str, ...] = (
     "web/src/pages/factory",
     "web/src/lib/__fixtures__",
     "web/src/lib/factory*",
+    # Every web story and story fixture (factory pages render shared components).
+    "web/src/**/*.stories.tsx",
+    "web/src/**/__fixtures__",
+    "web/src/**/*StoryFixtures.ts*",
+    "web/src/**/storyFixtures.ts",
     "docs/FACTORY.md",
     "docs/factory-demo",
     # Factory code.

@@ -628,6 +628,35 @@ export function previewRestore(): DefinitionPreviewResponse {
   };
 }
 
+/**
+ * The preview of a lower dollar budget (400 → 300 a day by default), as the
+ * server words it: class A, which owners and editors apply at once with Undo.
+ */
+export function previewBudgetLower(
+  role: "owner" | "editor" = "owner",
+  entry: { path: string; before: number; after: number } = {
+    path: "budgets.factory_usd_per_day",
+    before: 400,
+    after: 300,
+  },
+): DefinitionPreviewResponse {
+  const preview = previewWith([entry]);
+  const you =
+    role === "owner"
+      ? "You are an owner, so it applies when you press Apply."
+      : "You are an editor, so it applies when you press Apply (and you can Undo it for 10 minutes).";
+  return {
+    ...preview,
+    diff: preview.diff.map((d) => ({ ...d, class: "A" })),
+    class: "A",
+    approvers: ["owners", "editors"],
+    who: `Owners and editors (class A: it only lowers a budget). ${you} Agents can only propose it.`,
+    you_can_apply: true,
+    you_can_propose: true,
+    effects: [{ kind: "mail", text: "5 member(s) get the new values by mail.", count: 5 }],
+  };
+}
+
 /** An operator's change: it waits for the owners. */
 export function previewOperator(): DefinitionPreviewResponse {
   return {

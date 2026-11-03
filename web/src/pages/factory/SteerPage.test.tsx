@@ -11,6 +11,7 @@ import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFix
 import { COCKPIT_STORAGE_KEY, resetCockpitChoiceCache } from "@/components/factory/shell/cockpitV2";
 import {
   type SteerRouteOptions,
+  previewBudgetLower,
   previewFocus,
   previewOperator,
   previewRestore,
@@ -296,8 +297,9 @@ describe("Steer", () => {
     serve({ role: "operator", preview: previewOperator() });
     renderAt("/steer/budgets");
 
+    // A raise ($400 a day is in force) waits for an owner.
     fireEvent.change(await screen.findByTestId("steer-input-budgets.factory_usd_per_day"), {
-      target: { value: "300" },
+      target: { value: "500" },
     });
     fireEvent.click(await screen.findByTestId("steer-propose"));
     fireEvent.change(screen.getByTestId("steer-rationale"), {
@@ -308,12 +310,46 @@ describe("Steer", () => {
       expect(sent("POST", "/definition/proposals")).toEqual([
         {
           kind: "tuning",
-          changes: [{ op: "replace", path: "budgets.factory_usd_per_day", value: 300 }],
+          changes: [{ op: "replace", path: "budgets.factory_usd_per_day", value: 500 }],
           rationale: "More builds this week (sample).",
         },
       ]),
     );
     expect(screen.queryByTestId("steer-apply")).toBeNull();
+  });
+
+  it("lets an operator lower a budget at once, with Undo", async () => {
+    serve({ role: "operator", preview: previewBudgetLower("editor") });
+    renderAt("/steer/budgets");
+
+    expect(await screen.findByTestId("steer-budgets-who")).toHaveTextContent(
+      "Lowering a dollar budget applies at once, for editors too.",
+    );
+    fireEvent.change(await screen.findByTestId("steer-input-budgets.factory_usd_per_day"), {
+      target: { value: "300" },
+    });
+    const column = screen.getByTestId("steer-change-column");
+    await waitFor(() =>
+      expect(within(column).getByTestId("steer-who")).toHaveTextContent(
+        "Owners and editors (class A: it only lowers a budget). You are an editor",
+      ),
+    );
+    expect(within(column).queryByTestId("steer-propose")).toBeNull();
+    fireEvent.click(await within(column).findByTestId("steer-apply"));
+
+    await waitFor(() =>
+      expect(sent("PUT", "/definition")).toEqual([
+        {
+          changes: [{ op: "replace", path: "budgets.factory_usd_per_day", value: 300 }],
+          base_version: 12,
+        },
+      ]),
+    );
+    const toast = await screen.findByTestId("factory-toast");
+    expect(toast).toHaveTextContent("Applied as definition v13.");
+    fireEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(sent("POST", "/definition/pin")).toEqual([{ version: 12 }]));
+    expect(sent("POST", "/definition/proposals")).toEqual([]);
   });
 
   it("keeps a decimal being typed while it stages each step", async () => {

@@ -225,6 +225,18 @@ describe("Teams", () => {
     expect(within(table).getAllByRole("row")).toHaveLength(14);
     expect(table).toHaveTextContent("codex · gpt-5-codex");
   });
+
+  it("sends Templates to Steer, where team templates are listed and changed", async () => {
+    serve(true);
+    renderAt("/teams/templates");
+    const tab = await screen.findByTestId("teams-templates");
+    expect(tab).toHaveTextContent("Team templates live in Steer");
+    expect(tab).not.toHaveTextContent("come with team specs");
+    expect(within(tab).getByTestId("teams-templates-steer")).toHaveAttribute(
+      "href",
+      `${BASE}/steer/templates`,
+    );
+  });
 });
 
 describe("an agent's full page", () => {

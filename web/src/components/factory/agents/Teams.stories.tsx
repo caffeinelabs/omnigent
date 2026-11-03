@@ -137,8 +137,12 @@ export const BenchCostOnlyDark = teams({
 
 // ── Templates and All agents ───────────────────────────────────
 
-/** Templates arrive with team specs. */
+/** Templates live in Steer: the tab says so and links there. */
 export const Templates = teams({ tab: "templates" });
+
+export const TemplatesDark = teams({ tab: "templates", theme: "dark" });
+
+export const TemplatesMobile = phone(teams({ tab: "templates" }));
 
 /** Every agent in a table with a model column. */
 export const AllAgents = teams({ tab: "agents" });
