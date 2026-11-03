@@ -509,18 +509,33 @@ async def _ready_to_plan(
     last = await asyncio.to_thread(_last, deps, fid, KIND_READY)
     last_at = last.ts // 1000 if last is not None else 0
     synthesis = await asyncio.to_thread(_last_s, deps, fid, KIND_SYNTHESIS)
-    facts = await asyncio.to_thread(_ready_facts, deps, fid, doc, now)
     after_synthesis = (
         synthesis is not None and synthesis > last_at and now - synthesis >= SYNTHESIS_SETTLE_S
     )
+
+    def active() -> int:
+        return sum(1 for p in deps.factory_store.list_projects(fid) if p.status == "active")
+
     freed = last is not None and await asyncio.to_thread(
-        _capacity_freed, deps, fid, last_at, facts["active"], last
+        lambda: _capacity_freed(deps, fid, last_at, active(), last)
     )
     if not (after_synthesis or freed):
         return False
     if last is not None and now - last_at < READY_MIN_GAP_S and not freed:
         return False
+    # Only a due notice reads the opportunities (every minute would re-score them all).
+    facts = await asyncio.to_thread(_ready_facts, deps, fid, doc, now)
     if facts["offer"] <= 0 or not (facts["validated"] or facts["tests"] or facts["unmeasured"]):
+        # Recorded once, so the next pass waits for the next trigger instead of re-reading.
+        await events.emit(
+            app_state,
+            fid,
+            KIND_READY,
+            subject=SUBJECT,
+            summary="nothing to offer Atlas yet (no room for a bet, or nothing ready)",
+            data={"skipped": True, "offer": facts["offer"], "active": facts["active"]},
+            ts=now * 1000,
+        )
         return False
     text = ready_text(
         validated=facts["validated"],

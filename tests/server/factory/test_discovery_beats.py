@@ -260,6 +260,11 @@ async def test_no_room_for_a_bet_means_no_notice(cockpit: Cockpit, scout: str) -
     await _beat(cockpit, 25 * HOUR)
     assert await _beat(cockpit, 28 * HOUR) == []
     assert _texts(cockpit, cockpit.fid, "[Factory discovery · ready to plan") == []
+    # Recorded once: later passes wait for the next trigger.
+    [skipped] = cockpit.events(beats.KIND_READY)
+    assert skipped.data["skipped"] is True
+    assert await _beat(cockpit, 29 * HOUR) == []
+    assert len(cockpit.events(beats.KIND_READY)) == 1
 
 
 def test_ready_items_put_pinned_first_and_skip_recent_declines() -> None:
