@@ -98,6 +98,8 @@ def scopes_for(kind: str) -> list[str]:
         scopes.append("definition")
     if kind.startswith(("feedback.", "retro.", "metrics.")):
         scopes.append("insights")
+    if kind.startswith(("signal.", "opportunity.", "hunch.")):
+        scopes.append("discovery")
     return scopes
 
 

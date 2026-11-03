@@ -527,6 +527,8 @@ FEEDBACK_TARGETS: Final = (
     "factory",
     "issue",
     "proposal",
+    "signal",
+    "opportunity",
 )
 FEEDBACK_KINDS: Final = (
     "rating",
@@ -561,6 +563,25 @@ ROOT_CAUSES: Final = (
     "coordination",
     "platform_bug",
 )
+KILL_REASONS: Final = (
+    "off_strategy",
+    "weak_evidence",
+    "wrong_segment",
+    "too_costly",
+    "solved_elsewhere",
+    "harmful",
+    "duplicate",
+)
+"""Why people kill an opportunity (the ``closure`` tags of an ``opportunity``)."""
+DISCOVERY_CALIBRATIONS: Final = (
+    "merge",
+    "split",
+    "rename",
+    "move",
+    "attach",
+    "not_about_this",
+)
+"""People's corrections of discovery (the ``calibration`` tags of a signal or an opportunity)."""
 
 
 def thread_kind(key: object) -> str | None:

@@ -55,6 +55,7 @@ SERVER: FactorySupervisor — keepalive, heartbeats, alerts, reply notices
 | `OMNIGENT_FACTORY_MERGE_REPOS` | empty | `owner/repo` list (comma or space separated) the merge gate may merge in. Empty means the gate merges nowhere. Read by the gate inside the sandbox. |
 | `OMNIGENT_FACTORY_ARTIFACT_LOCATION` | unset | Where demo files (video, screenshots, `api.json`, HAR, traces) are written: `s3://<bucket>[/<prefix>]` (credentials from the standard AWS chain, IRSA included; `AWS_REGION` must be set for AWS S3; `AWS_ENDPOINT_URL_S3` for MinIO or R2) or a directory. Unset keeps them session files of the PL in the server's artifact store, shown in its Files panel. Each demo file records the location it was written to and is always read from there, so demos stored before a change keep playing. Files are still served only through `/v1/factory/demos/…` behind omnigent auth (a Range is a ranged read of the store, at most 4 MiB per response; no presigned links). A store that fails (unreachable, throttled, denied) answers 503 `artifact_store_unavailable` with `Retry-After`. A malformed location fails server start. |
 | `OMNIGENT_FACTORY_COCKPIT_V2` | unset | `1` lets each person switch to the new cockpit (Teams and the agent panel; `?cockpit=v2`, remembered per browser). Unset, every page and API behaves as before. |
+| `OMNIGENT_FACTORY_DISCOVERY` | unset | `1` runs discovery on this server: the discovery ledger's routes, Room hunches as team signals, the ledger's upkeep (retention, daily score snapshots) and the definition preview's re-rank. A factory also needs its own `discovery.enabled` (owners, off by default); until both are on every discovery route answers `404 discovery_off`. |
 | `OMNIGENT_FACTORY_STATE_SEGMENTS` | follows `OMNIGENT_FACTORY_COCKPIT_V2` | `1` records each agent's working and waiting stretches (the agent panel's strip); any other value turns recording off. Segments older than 30 days are pruned. One server process is assumed to see all of a session's status edges. |
 | `OMNIGENT_BUILTIN_AGENT_DIRS` | unset | Extra built-in bundles, seeded after the defaults. Used as the prompt hotfix lane (below). |
 | `OMNIGENT_FEATURES` | unset | `factory` in the list shows the cockpit (`/factory`, the sidebar entry, the Inbox's factory decisions). It is also on wherever `OMNIGENT_FACTORY_ENABLED=1`; list it explicitly to document it, drop it (with the factory off) to hide the UI. |
@@ -914,7 +915,8 @@ without) and one expected metric effect; at most 2 per agent per day.
   `C-n` applied at once. `POST …/definition/preview` (same body, or
   `{restore: K}`) is its dry run: the diff with each path's class, who can
   apply it, the effects, what blocks it, whether it may run as a trial, and
-  the re-rank of opportunities once the discovery ledger exists.
+  `rerank`: the open opportunities a strategy or rubric change moves, each
+  with its position, rank and band before and after.
 - **One trial per block.** A trial on one of the five blocks (`briefs`,
   `role_defaults`, …) refuses a second trial there with 409 `trial_overlap`
   naming the running one; applying directly stays possible. Today's settings
@@ -963,6 +965,60 @@ and a dedicated factory identity
 maintain rights. `GET /v1/factory/preflight` returns `tier2 {enabled,
 reason}`. While it is off, `kind=code` proposals are recorded with their
 evidence and never run.
+
+### Discovery ledger
+
+What the factory learns about its users is a ledger the server keeps
+(`omnigent/server/factory/discovery/`, tables `factory_signals`,
+`factory_signal_links`, `factory_opportunities`, `factory_score_snapshots`,
+`factory_source_state`). It is dark until `OMNIGENT_FACTORY_DISCOVERY=1` and
+the factory's `discovery.enabled`; no product knowledge lives in it.
+
+- **Signals** (`S-n`) are written only by `ledger.py` (Tier 0): redact
+  (`redact.py`: emails, phones, tokens and keys, IPs, secret-bearing URLs,
+  card-like numbers become `[email]` …), hash the account id with a salt per
+  factory, score the text for prompt injection (a suspect is flagged
+  `injection_suspect` and kept out of scoring), clip to the source's
+  `quote_max`, store. A `(source, pointer)` is stored once; the evidence never
+  changes. Labels (paraphrase, kind, intensity, force) are the only later
+  writes, and the server's kinds (`hunch`, `idea`, `behavior`, `test_result`,
+  `simulation`) never change. Text past the source's `keep_days` is dropped by
+  the hourly upkeep (`background/discovery_ledger.py`); the row and its counts
+  stay. A paused source, or a `personal`/`sensitive` one, stores nothing.
+- **The team source**: people's hunches (`POST …/hunches`, or `hunch: …` and
+  "I think … because …" in the Room) and Room requests in `#factory` ("we
+  need …") are `hunch` signals of the `team` source (weight 0.1); so are repo
+  items whose author is on the team.
+- **The evidence meter** (`evidence.py`): hunch, weak, moderate (≥ 5 accounts'
+  worth from ≥ 2 source kinds within 90 days), strong (plus "do" evidence),
+  proven (a won test). An account counts once per opportunity; evidence
+  decays with a 60-day half-life; counter-evidence of a third lowers it a
+  level; votes, pins, simulations and suspects never count. Every number is
+  a `discovery.rubric` field.
+- **The rank** (`rubric.py`): `reach_s × intensity × fit × confidence`, bands
+  Now ≥ 0.20, Next ≥ 0.10, Later; each part with its input and reason. The
+  formula is code, the numbers are rubric fields.
+- **Opportunities** (`O-n`, `opportunities.py`): status is derived (idea,
+  validated, proposed, building, shipped, measured, kept, dropped, parked,
+  merged) from the evidence, the `C-n` that name them and their projects'
+  `charter.why`. An agent's opportunity must be a need in job form that names
+  no solution, with two different solutions, cited ids that resolve, and
+  quotes that match a stored excerpt (`quotes.py`, also the bets' quote check).
+- **People's levers** (`levers.py`, `api/discovery.py`, prefix
+  `/v1/factory/factories/{fid}`; reads READ, writes EDIT and human origin):
+  `GET /discovery`, `GET /opportunities`, `GET /opportunities/{O-n}`,
+  `PATCH /opportunities/{O-n}` (`vote`, `pin`, `park`, `unpark`, `kill` with a
+  seeded reason, `revive`, `merge`, `split`, `rename`, `move`,
+  `cancel_research`, `undo`), `POST …/research`, `POST …/plan` (the person's
+  own `#factory` message asking Atlas, so the bet counts as requested),
+  `GET /signals`, `GET /signals/{S-n}`, `POST /signals/{S-n}/attach|detach`,
+  `POST /hunches`, `DELETE /hunches/{S-n}`. Killing an opportunity with a
+  running bet and `bet_anyway` are for owners. Each act writes an
+  `opportunity.*`, `signal.*` or `hunch.*` event naming who did it and, within
+  10 minutes, `{op: "undo", action}` puts it back (409 `undo_stale` once it
+  changed again). Merges, splits, renames, moves and detaches are kept as
+  `calibration` feedback on the `opportunity` or `signal`; a kill's reason as
+  `closure`.
 
 ### Learning
 
@@ -1483,6 +1539,7 @@ with a managed sandbox launcher configured.
 | Slack DMs | `omnigent/server/factory/slackdm/`, `background/slack_dm.py`, `api/slack_dm.py`, `web/src/components/factory/settings/{NotificationsSettings,SlackAppCard,TeamReachability}.tsx` | `tests/server/factory/test_slack_dm_*.py` (a fake Slack behind `httpx.MockTransport`, a fake clock), web `notify*.test.tsx` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
+| Discovery ledger | `omnigent/server/factory/discovery/`, `api/discovery.py`, `background/discovery_ledger.py`, `omnigent/stores/factory_store/discovery.py`, `sqlalchemy_discovery.py` | `tests/server/factory/test_{ledger_append_only,redact,evidence_meter,rubric_example,opportunity_status,quote_check,discovery_routes,preview_rerank,team_signals,discovery_ledger_upkeep}.py`, `tests/stores/test_factory_store_discovery.py` |
 | Learning reads | `omnigent/server/factory/learn_view.py`, `human_tuning.py`, `api/learn.py` | `tests/server/factory/test_learn_routes.py` |
 | Learning UI | `web/src/components/factory/{insights,improvements,settings,feedback}/`, `web/src/pages/factory/{Insights,Improvements,Proposal,Settings}Page.tsx` | `web/src/pages/factory/LearnPages.test.tsx` and the component tests; stories under Factory/Insights, Improvements, Settings and Feedback |
 | End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM); `tests/e2e_ui/factory_round3/` (multi-user browser run) |

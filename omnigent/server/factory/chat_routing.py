@@ -19,6 +19,10 @@ the factory's routable members (:class:`Members`, built by
 - A responder that is paused or gone is replaced by Atlas, with a system line
   saying so. When Atlas cannot answer either, the line says the message will
   not be delivered (it is never queued for a resume).
+
+:func:`team_signal` says which of a person's messages discovery keeps as a
+hunch (the ``team`` source): ``hunch: …``, "I think … because …", and
+requests like "we need …" in ``#factory``.
 """
 
 from __future__ import annotations
@@ -284,6 +288,37 @@ def routes(
     )
 
 
+_HUNCH_RE: Final = re.compile(r"^\s*hunch\s*:\s*(\S.*)$", re.IGNORECASE | re.DOTALL)
+_THINK_RE: Final = re.compile(r"^\s*i\s+think\b.+\bbecause\b", re.IGNORECASE | re.DOTALL)
+_REQUEST_RE: Final = re.compile(
+    r"^\s*(?:(?:we|i)\s+(?:really\s+)?(?:need|should\s+(?:have|add|build|make))\b"
+    r"|(?:can|could)\s+(?:we|you)\s+(?:add|build|make|get|have|support)\b"
+    r"|it\s+would\s+be\s+(?:nice|great|good)\s+(?:to|if)\b"
+    r"|please\s+(?:add|build|make)\b)",
+    re.IGNORECASE,
+)
+_LEADING_MENTIONS_RE: Final = re.compile(rf"^(?:\s*@(?:atlas|sentinel|pl:{_SLUG})\b[,:]?)+", re.I)
+
+
+def team_signal(thread: str, body: str) -> tuple[str, str] | None:
+    """
+    Whether a person's Room message is a hunch the ``team`` source keeps.
+
+    :returns: ``("hunch", text)`` for ``hunch: …`` (anywhere) or "I think …
+        because …"; ``("request", text)`` for "we need …", "can we add …" and
+        the like in ``#factory``; ``None`` otherwise.
+    """
+    text = _LEADING_MENTIONS_RE.sub("", body or "").strip()
+    match = _HUNCH_RE.match(text)
+    if match is not None:
+        return "hunch", match.group(1).strip()
+    if _THINK_RE.match(text):
+        return "hunch", text
+    if thread_kind(thread) == THREAD_FACTORY and _REQUEST_RE.match(text):
+        return "request", text
+    return None
+
+
 __all__ = [
     "MAX_MENTIONS",
     "STATE_DEAD",
@@ -302,4 +337,5 @@ __all__ = [
     "normalize_mention",
     "parse_mentions",
     "routes",
+    "team_signal",
 ]

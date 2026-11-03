@@ -356,6 +356,8 @@ FACTORY_FEEDBACK_TARGET: dict[str, int] = {
     "factory": 6,
     "issue": 7,
     "proposal": 8,
+    "signal": 9,
+    "opportunity": 10,
 }
 
 FACTORY_FEEDBACK_KIND: dict[str, int] = {
@@ -365,6 +367,60 @@ FACTORY_FEEDBACK_KIND: dict[str, int] = {
     "closure": 4,
     "calibration": 5,
     "root_cause": 6,
+}
+
+# ── Discovery ledger (factory_signals, factory_signal_links) ───
+
+FACTORY_SIGNAL_KIND: dict[str, int] = {
+    "request": 1,
+    "pain": 2,
+    "praise": 3,
+    "bug": 4,
+    "churn_reason": 5,
+    "behavior": 6,
+    "market": 7,
+    "test_result": 8,
+    "hunch": 9,
+    "idea": 10,
+    "simulation": 11,
+}
+
+FACTORY_SOURCE_KIND: dict[str, int] = {
+    "repo": 1,
+    "team": 2,
+    "web": 3,
+    "analytics": 4,
+    "observability": 5,
+    "chat": 6,
+    "tracker": 7,
+    "reviews": 8,
+    "feedback": 9,
+    "flags": 10,
+    "mcp": 11,
+    "factory": 12,
+}
+
+FACTORY_PRIVACY: dict[str, int] = {
+    "public": 1,
+    "internal": 2,
+    "personal": 3,
+    "sensitive": 4,
+}
+
+FACTORY_SAY_DO: dict[str, int] = {"say": 1, "do": 2}
+
+FACTORY_INTENSITY: dict[str, int] = {
+    "blocker": 1,
+    "workaround": 2,
+    "annoyance": 3,
+    "nice": 4,
+}
+
+FACTORY_FORCE: dict[str, int] = {
+    "push": 1,
+    "pull": 2,
+    "anxiety": 3,
+    "habit": 4,
 }
 
 
@@ -428,6 +484,12 @@ for _factory_table in (
     FACTORY_DEFINITION_VIA,
     FACTORY_FEEDBACK_TARGET,
     FACTORY_FEEDBACK_KIND,
+    FACTORY_SIGNAL_KIND,
+    FACTORY_SOURCE_KIND,
+    FACTORY_PRIVACY,
+    FACTORY_SAY_DO,
+    FACTORY_INTENSITY,
+    FACTORY_FORCE,
 ):
     _CODE_TO_NAME[id(_factory_table)] = _invert(_factory_table)
 
@@ -868,3 +930,63 @@ def encode_factory_feedback_kind(name: str) -> int:
 def decode_factory_feedback_kind(code: int) -> str:
     """Decode a stored ``factory_feedback.kind`` code to its name."""
     return _decode(FACTORY_FEEDBACK_KIND, code, field="factory_feedback.kind")
+
+
+def encode_factory_signal_kind(name: str) -> int:
+    """Encode a ``factory_signals.kind`` name to its stable code."""
+    return _encode(FACTORY_SIGNAL_KIND, name, field="factory_signals.kind")
+
+
+def decode_factory_signal_kind(code: int) -> str:
+    """Decode a stored ``factory_signals.kind`` code to its name."""
+    return _decode(FACTORY_SIGNAL_KIND, code, field="factory_signals.kind")
+
+
+def encode_factory_source_kind(name: str) -> int:
+    """Encode a ``factory_signals.source_kind`` name to its stable code."""
+    return _encode(FACTORY_SOURCE_KIND, name, field="factory_signals.source_kind")
+
+
+def decode_factory_source_kind(code: int) -> str:
+    """Decode a stored ``factory_signals.source_kind`` code to its name."""
+    return _decode(FACTORY_SOURCE_KIND, code, field="factory_signals.source_kind")
+
+
+def encode_factory_privacy(name: str) -> int:
+    """Encode a ``factory_signals.privacy`` name to its stable code."""
+    return _encode(FACTORY_PRIVACY, name, field="factory_signals.privacy")
+
+
+def decode_factory_privacy(code: int) -> str:
+    """Decode a stored ``factory_signals.privacy`` code to its name."""
+    return _decode(FACTORY_PRIVACY, code, field="factory_signals.privacy")
+
+
+def encode_factory_say_do(name: str) -> int:
+    """Encode a ``factory_signals.say_do`` name to its stable code."""
+    return _encode(FACTORY_SAY_DO, name, field="factory_signals.say_do")
+
+
+def decode_factory_say_do(code: int) -> str:
+    """Decode a stored ``factory_signals.say_do`` code to its name."""
+    return _decode(FACTORY_SAY_DO, code, field="factory_signals.say_do")
+
+
+def encode_factory_intensity(name: str) -> int:
+    """Encode a ``factory_signals.intensity`` name to its stable code."""
+    return _encode(FACTORY_INTENSITY, name, field="factory_signals.intensity")
+
+
+def decode_factory_intensity(code: int) -> str:
+    """Decode a stored ``factory_signals.intensity`` code to its name."""
+    return _decode(FACTORY_INTENSITY, code, field="factory_signals.intensity")
+
+
+def encode_factory_force(name: str) -> int:
+    """Encode a ``factory_signals.force`` name to its stable code."""
+    return _encode(FACTORY_FORCE, name, field="factory_signals.force")
+
+
+def decode_factory_force(code: int) -> str:
+    """Decode a stored ``factory_signals.force`` code to its name."""
+    return _decode(FACTORY_FORCE, code, field="factory_signals.force")
