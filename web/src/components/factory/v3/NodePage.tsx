@@ -1,13 +1,14 @@
 // One node's page in cockpit v3: the level strip (or the phone's level row),
 // the header, then its children in one lens, or one level under it grouped
 // under parents. One parent per node and one level per view: nothing here is
-// drawn between nodes. The chat column joins this page as its right column.
+// drawn between nodes. The node's chat is the page's right column (`chat`).
 
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { NodeChat } from "./chat/NodeChat";
 import { ChildrenView } from "./Children";
 import { LevelStrip, PhoneLevelRow } from "./LevelStrip";
 import { LevelView } from "./LevelView";
@@ -277,8 +278,8 @@ export interface NodePageProps {
   actions?: Omit<NodeActions, "factoryId" | "prefetch" | "aboveId">;
   /** Says the data is not this factory's, with a way back. */
   notice?: ReactNode;
-  /** The node's chat column (beside the page; below it on a phone). */
-  aside?: ReactNode;
+  /** The node's chat (a column beside the page, or a box pinned at the bottom of a narrow one); off when absent. */
+  chat?: { sample?: boolean };
 }
 
 function Missing({ nodeRef }: { nodeRef: string }) {
@@ -329,7 +330,7 @@ function LoadedNodePage({
   level = null,
   actions,
   notice,
-  aside,
+  chat,
   page,
 }: NodePageProps & { page: Page }) {
   const prefetch = usePrefetchNode(factoryId);
@@ -364,12 +365,7 @@ function LoadedNodePage({
               <LevelStrip page={page} shown={shown} />
             </div>
           )}
-          <div
-            className={cn(
-              "grid min-w-0 gap-6",
-              aside && "lg:grid-cols-[minmax(0,1fr)_minmax(340px,40%)]",
-            )}
-          >
+          <div className={cn("grid min-w-0 gap-6", chat && "lg:grid-cols-[minmax(0,1fr)_auto]")}>
             <div ref={body} className="min-w-0">
               {notice}
               <NodeHeader page={page} whyOpen={whyOpen} onWhyChange={setWhyOpen} />
@@ -377,7 +373,7 @@ function LoadedNodePage({
               <Below page={page} level={shown} explicit={Boolean(level)} />
               <KeysLine stops={stops} out={Boolean(parent)} why={why} />
             </div>
-            {aside}
+            {chat && <NodeChat page={page} sample={chat.sample} />}
           </div>
         </div>
       </AboveProvider>

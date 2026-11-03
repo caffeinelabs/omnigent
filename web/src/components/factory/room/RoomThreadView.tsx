@@ -4,6 +4,11 @@
  * `before_seq`), cards for every structured object, "Atlas is working… · n
  * queued", notes from slash commands, and the composer. Reading the thread
  * marks it read here, in this browser's other tabs and on the server.
+ *
+ * Cockpit v3's node chat passes `node`: its own title (no bus toggle or Room
+ * page link), lines above the messages (children with news), cards only the
+ * viewer sees after them, the cards the Room does not draw, and the
+ * composer's node options.
  */
 
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -34,7 +39,7 @@ import { PresenceFace } from "../shell/FactoryPresence";
 import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 import { roomCandidateList } from "./roomCandidates";
-import { RoomComposer } from "./RoomComposer";
+import { RoomComposer, type RoomComposerNodeOptions } from "./RoomComposer";
 import { foldRoomItems, namesRepos, supersededIssueCards } from "./roomFold";
 import { BaseMovesLine, IssueRepeats } from "./RoomFolds";
 import { BusRow, RoomMessage } from "./RoomMessage";
@@ -141,6 +146,25 @@ function SkeletonRows() {
   );
 }
 
+/** Cockpit v3's node chat around one Room thread. */
+export interface RoomThreadNodeOptions {
+  /** The header's title; the bus toggle, the responder chip and the Room page link are left out. */
+  title: ReactNode;
+  /** Under the header, outside the scroller (a run's "this is its task's thread"). */
+  lead?: ReactNode;
+  /** Inside the scroller, above the messages (children with news). */
+  top?: ReactNode;
+  /** List items after the messages: cards only this viewer sees. */
+  bottom?: ReactNode;
+  /** Grows with `bottom`, so the thread keeps to its newest line. */
+  bottomCount?: number;
+  /** What an empty thread says instead of "Nothing in #x yet". */
+  empty?: ReactNode;
+  /** Cards the Room does not draw (`why`, `closed_alarm`, `offer`); `fallback` when it cannot draw one. */
+  card?: (message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode;
+  composer?: RoomComposerNodeOptions;
+}
+
 export interface RoomThreadViewProps {
   snapshot: FactorySnapshot;
   clockOffsetS: number;
@@ -154,6 +178,8 @@ export interface RoomThreadViewProps {
   headerStart?: ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  /** Cockpit v3's node chat (absent elsewhere). */
+  node?: RoomThreadNodeOptions;
 }
 
 export function RoomThreadView({
@@ -165,11 +191,13 @@ export function RoomThreadView({
   headerStart,
   className,
   style,
+  node,
 }: RoomThreadViewProps) {
   const fid = snapshot.factory.id;
   const queryClient = useQueryClient();
   const shell = useOptionalFactoryShell();
-  const dock = variant === "dock";
+  const dock = variant === "dock" || node != null;
+  const nodeCard = node?.card ?? null;
   const title = threadTitle(snapshot, thread);
   const threads = useRoomThreads(fid);
   const messagesQuery = useRoomMessages(fid, thread);
@@ -190,7 +218,9 @@ export function RoomThreadView({
     enabled: trigger === "T-",
     retry: false,
   });
-  const [showBus, setShowBus] = useState(loadBus);
+  const [busOn, setShowBus] = useState(loadBus);
+  // The node chat has no bus toggle, so it never interleaves the bus.
+  const showBus = busOn && !node;
   const busEvents = useFactoryEvents(showBus ? fid : null, {
     kinds: ["message.queued", "message.bounced"],
     limit: 200,
@@ -245,8 +275,19 @@ export function RoomThreadView({
       issues: issues.data ?? null,
       people: people.data?.data ?? null,
       compact: dock,
+      nodeCard,
     }),
-    [fid, snapshot, clockOffsetS, proposals.data, loops.data, issues.data, people.data, dock],
+    [
+      fid,
+      snapshot,
+      clockOffsetS,
+      proposals.data,
+      loops.data,
+      issues.data,
+      people.data,
+      dock,
+      nodeCard,
+    ],
   );
   const candidates = useMemo(
     () =>
@@ -286,7 +327,7 @@ export function RoomThreadView({
       el.scrollTop = el.scrollHeight;
     }
     // Messages too: an older page can fold into the first line without adding an item.
-  }, [items.length, messages.length, notes.length]);
+  }, [items.length, messages.length, notes.length, node?.bottomCount]);
   useLayoutEffect(() => {
     atBottom.current = true;
     const el = scrollerRef.current;
@@ -351,7 +392,7 @@ export function RoomThreadView({
             dock ? "flex-nowrap pb-2" : "flex-wrap border-b border-border px-3 py-2",
           )}
         >
-          {headerStart ?? (
+          {node?.title ?? headerStart ?? (
             <h2 className="flex min-w-0 items-center gap-1.5 text-ui font-semibold">
               <MessagesSquareIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
               <span className="truncate font-mono" data-testid="room-thread-title">
@@ -359,7 +400,7 @@ export function RoomThreadView({
               </span>
             </h2>
           )}
-          {status.name && (
+          {status.name && !node && (
             <span
               data-testid="room-responder"
               data-state={status.state}
@@ -385,24 +426,26 @@ export function RoomThreadView({
                 ))}
               </span>
             )}
-            <label
-              className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground"
-              title="Interleave the agents' messages (message.* events) as one-liners"
-            >
-              <NetworkIcon aria-hidden className="size-3.5" />
-              <span className={cn(dock && "sr-only")}>Bus view</span>
-              <Switch
-                size="sm"
-                checked={showBus}
-                onCheckedChange={(on) => {
-                  setShowBus(on);
-                  saveBus(on);
-                }}
-                data-testid="room-bus-toggle"
-                aria-label="Bus view"
-              />
-            </label>
-            {dock && (
+            {!node && (
+              <label
+                className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground"
+                title="Interleave the agents' messages (message.* events) as one-liners"
+              >
+                <NetworkIcon aria-hidden className="size-3.5" />
+                <span className={cn(dock && "sr-only")}>Bus view</span>
+                <Switch
+                  size="sm"
+                  checked={showBus}
+                  onCheckedChange={(on) => {
+                    setShowBus(on);
+                    saveBus(on);
+                  }}
+                  data-testid="room-bus-toggle"
+                  aria-label="Bus view"
+                />
+              </label>
+            )}
+            {dock && !node && (
               <Link
                 to={roomPageHref(fid, thread)}
                 componentId="factory.room.open_page"
@@ -417,6 +460,7 @@ export function RoomThreadView({
           </span>
         </header>
 
+        {node?.lead}
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scrollerRef}
@@ -439,6 +483,7 @@ export function RoomThreadView({
                 />
               </div>
             )}
+            {node?.top}
             {messagesQuery.isLoading && <SkeletonRows />}
             {messagesQuery.hasNextPage && (
               <div className="flex justify-center py-2">
@@ -459,7 +504,8 @@ export function RoomThreadView({
                 </Button>
               </div>
             )}
-            {messagesQuery.isSuccess && messages.length === 0 && (
+            {messagesQuery.isSuccess && messages.length === 0 && node?.empty}
+            {messagesQuery.isSuccess && messages.length === 0 && !node?.empty && (
               <div
                 data-testid="room-empty"
                 className="flex flex-col items-center gap-1.5 px-4 py-10 text-center text-sm text-muted-foreground"
@@ -522,6 +568,7 @@ export function RoomThreadView({
                   onDismiss={() => setNotes((prev) => prev.filter((n) => n.id !== note.id))}
                 />
               ))}
+              {node?.bottom}
             </ol>
           </div>
           {showJump && (
@@ -572,6 +619,7 @@ export function RoomThreadView({
             }}
             onTrigger={setTrigger}
             compact={dock}
+            node={node?.composer}
           />
         </div>
       </section>

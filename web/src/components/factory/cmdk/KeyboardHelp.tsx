@@ -1,7 +1,8 @@
 /**
  * `?` in the new cockpit: the keys that work, in one short table. Phones have
  * no keyboard layer, so nothing there opens it. Cockpit v3 adds the node
- * page's keys (move, step in, step out, why).
+ * page's keys (move, step in, step out, why), and `/`, `c` and `r` talk in
+ * the node's chat.
  */
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -11,7 +12,8 @@ import { isMacPlatform } from "@/lib/hotkeys";
  * The key list, in the order people reach for them. Each is bound somewhere:
  * ⌘K, `/`, the `g` chords, `?` and `r` by `useFactoryPaletteHotkey`; `e` by
  * the project page's team (`useEditKey` in `TeamSection`); `u` by the toast
- * that offers Undo; the node keys by `useNodeKeys` on a v3 node page.
+ * that offers Undo; the node keys by `useNodeKeys` on a v3 node page, and
+ * `c` by its chat (the shell sends `/` and `r` there under v3).
  */
 export function cockpitKeyList(mac = isMacPlatform(), nodes = false): [string, string][] {
   const nodeKeys: [string, string][] = nodes
@@ -20,15 +22,16 @@ export function cockpitKeyList(mac = isMacPlatform(), nodes = false): [string, s
         ["Enter · l", "Step into the focused node"],
         ["h", "Step out to the parent"],
         ["w", "Why it is not moving"],
+        ["/ · c · r", "Talk in the node's chat"],
       ]
     : [];
   return [
     ...nodeKeys,
-    [`${mac ? "⌘K" : "Ctrl K"} or /`, "Search or run a command"],
+    [nodes ? (mac ? "⌘K" : "Ctrl K") : `${mac ? "⌘K" : "Ctrl K"} or /`, "Search or run a command"],
     ["g h · g d · g p · g t · g s", "Home, Discovery, Projects, Teams, Steer"],
     ["e", "Edit the team (on a project)"],
     ["u", "Undo, while a change offers it"],
-    ["r", "Open the Room"],
+    ...(nodes ? [] : ([["r", "Open the Room"]] as [string, string][])),
     ["Esc", "Close a panel, menu or dialog"],
     ["?", "This list"],
   ];

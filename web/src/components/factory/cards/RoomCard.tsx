@@ -1,7 +1,8 @@
 /**
  * The live card a system message carries (`card {type, ref, id}`): the
  * proposal, decision, loop, PR, demo or issue it mirrors, read from the
- * thread's data. An object the viewer's lists don't have (yet) shows the
+ * thread's data, or a node card (why, closed alarm, offer) the cockpit draws
+ * (cockpit v3). An object the viewer's lists don't have (yet) shows the
  * message's own line, so a card never renders empty.
  */
 
@@ -97,6 +98,13 @@ export function RoomCard({
       return (
         <IssueCard factoryId={factoryId} issue={issue} meta={meta} clockOffsetS={clockOffsetS} />
       );
+    }
+    case "why":
+    case "closed_alarm":
+    case "offer": {
+      // The cockpit's card shows the line itself when it cannot draw.
+      const fallback = attached ? null : line;
+      return data.nodeCard ? data.nodeCard(message, attached, fallback) : fallback;
     }
     default:
       return attached ? null : line;

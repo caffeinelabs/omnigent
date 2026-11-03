@@ -81,7 +81,20 @@ export type EngineMode = "observe" | "assist" | "enforce";
 export type ActorKind = "human" | "agent" | "server";
 export type ChatAuthorKind = "human" | "agent" | "system";
 export type ChatCardType =
-  "decision" | "proposal" | "control" | "pr" | "demo" | "loop" | "issue" | "system";
+  | "decision"
+  | "proposal"
+  | "control"
+  | "pr"
+  | "demo"
+  | "loop"
+  | "issue"
+  | "system"
+  // Cockpit v3's node threads (S11): "why it is not moving", an alarm the
+  // server closed with its cause, and an offer ("it can start now"). Other
+  // cockpits show these as the message's own line.
+  | "why"
+  | "closed_alarm"
+  | "offer";
 /** `discovery` is Scout's thread; the server lists it only while discovery runs. */
 export type ThreadKind = "factory" | "improvements" | "discovery" | "project" | "pr";
 export type ProposalKind = "projects" | "tuning" | "rules" | "code";
@@ -1196,6 +1209,25 @@ export interface BaseMovesMeta {
   moves: BaseMoveView[];
 }
 
+/** What a `closed_alarm` card holds: the alarm, why the server closed it, and the real ask. */
+export interface ClosedAlarmMeta {
+  kind: "closed_alarm";
+  /** The alarm as it was raised ("T-16 stalled: what next?"). */
+  was: string;
+  /** Why the server closed it ("T-16 is held on purpose for C-16 …"). */
+  cause: string;
+  /** The ask that holds the work instead ("D-45 (Apply C-16)"). */
+  real_ask?: string | null;
+}
+
+/** What an `offer` card holds: the verb it offers on the card's node (`start`) and its words. */
+export interface OfferMeta {
+  kind: "offer";
+  verb: string;
+  /** The offer's headline ("It can start now"); the message body explains it. */
+  title?: string | null;
+}
+
 /** A structured object mirrored into a thread as a live card. */
 export interface ChatCardView {
   type: ChatCardType;
@@ -1203,7 +1235,7 @@ export interface ChatCardView {
   ref: string | null;
   id: string | null;
   /** What an incident's live card or a batched base line holds (older servers: absent). */
-  meta?: IssueCardMeta | BaseMovesMeta | null;
+  meta?: IssueCardMeta | BaseMovesMeta | ClosedAlarmMeta | OfferMeta | null;
 }
 
 /** Delivery of one message to one agent. */
@@ -1575,6 +1607,12 @@ export interface Preflight {
   cockpit_v2?: boolean;
   /** The server serves the work-levels node API (`GET …/n/{ref}`); cockpit v3 reads it. */
   node_api?: boolean;
+  /**
+   * The server routes a thread per node (`need:`, `feature:`, `study:`,
+   * `task:` keys, with the node's header in each agent turn); until it does,
+   * cockpit v3's chat posts in the Room thread that covers the node.
+   */
+  node_threads?: boolean;
 }
 
 // ── Requests ───────────────────────────────────────────────────

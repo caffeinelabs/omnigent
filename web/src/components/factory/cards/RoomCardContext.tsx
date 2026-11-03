@@ -1,11 +1,13 @@
 /**
  * What the Room's cards read besides their message: the factory, its
  * snapshot, the proposals, loops and issues lists (each read once per
- * thread view), and whether they render compact (the dock).
+ * thread view), whether they render compact (the dock), and the cards a
+ * cockpit draws itself (cockpit v3's node cards).
  */
 
-import { createContext, useContext } from "react";
+import { type ReactNode, createContext, useContext } from "react";
 import type {
+  ChatMessageView,
   FactorySnapshot,
   IssueView,
   LoopView,
@@ -24,6 +26,13 @@ export interface RoomCardData {
   people: readonly PersonView[] | null;
   /** The dock's narrow column: cards fold their long parts. */
   compact: boolean;
+  /**
+   * Cards the Room does not draw (cockpit v3's `why`, `closed_alarm` and
+   * `offer`). A card it cannot draw renders `fallback` (the message's own
+   * line, null under a message), so it never renders empty. Absent elsewhere.
+   */
+  nodeCard?:
+    ((message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode) | null;
 }
 
 export const RoomCardContext = createContext<RoomCardData | null>(null);

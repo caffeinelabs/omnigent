@@ -8,6 +8,10 @@
 // "hunch: …", "ask scout: …", "plan O-7", "research O-7: …" and "pause
 // source …" run discovery's own levers (hidden while discovery is off);
 // "toggle theme"; and "Ask Atlas" when nothing else matches.
+//
+// Cockpit v3's node chat lists the node's own verbs after `/` (the answer to
+// its ask, "why", then the verbs that open a preview), before the Room's
+// commands: `nodeVerbCommands` and `matchingNodeVerbs`.
 
 import type {
   CatalogResponse,
@@ -561,4 +565,51 @@ export function askAtlasVerb(query: string, ctx: Pick<VerbContext, "can">): Pale
   const text = query.trim();
   if (!text || !ctx.can.post) return null;
   return verb("atlas", `Ask Atlas: “${text}”`, "posts to #factory", { kind: "ask_atlas", text });
+}
+
+// ── Cockpit v3: a node's verbs after `/` ───────────────────────
+
+/** One row of a node chat's `/` menu. */
+export interface NodeVerbCommand {
+  /** `answer:<decision id>`, `why`, or `verb:<verb>`. */
+  id: string;
+  label: string;
+  /** What picking it does, in a few words. */
+  detail: string;
+}
+
+export interface NodeVerbSource {
+  /** The node's verbs (`NodePage.verbs`); disabled ones and Talk are left out. */
+  verbs: readonly { verb: string; label: string; enabled: boolean }[];
+  /** The node's status explains itself ("why" posts the numbered card). */
+  why: boolean;
+  /** The ask its status line ends at: picking it opens its card (answers stay a click). */
+  decision?: { id: string; verb: string; external_url?: string } | null;
+}
+
+/** The `/` menu of a node chat: its ask first, then "why", then its verbs. */
+export function nodeVerbCommands(source: NodeVerbSource): NodeVerbCommand[] {
+  const out: NodeVerbCommand[] = [];
+  const d = source.decision;
+  if (d && !d.external_url) {
+    out.push({ id: `answer:${d.id}`, label: d.verb, detail: `opens ${d.id}: answer with a click` });
+  }
+  if (source.why) out.push({ id: "why", label: "Why is it not moving?", detail: "posts the path" });
+  for (const v of source.verbs) {
+    if (!v.enabled || v.verb === "talk") continue;
+    out.push({ id: `verb:${v.verb}`, label: v.label, detail: "opens a preview" });
+  }
+  return out;
+}
+
+/** The rows whose words contain what follows the `/` (every row after a bare `/`). */
+export function matchingNodeVerbs(
+  query: string,
+  commands: readonly NodeVerbCommand[],
+): NodeVerbCommand[] {
+  const typed = query.replace(/^\//, "").trim().toLowerCase();
+  if (!typed) return [...commands];
+  return commands.filter(
+    (c) => c.label.toLowerCase().includes(typed) || c.id.toLowerCase().includes(typed),
+  );
 }

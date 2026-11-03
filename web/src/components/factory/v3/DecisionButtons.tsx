@@ -12,7 +12,7 @@ const BTN =
   "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[7px] border font-semibold leading-[1.6] outline-none focus-visible:ring-2 focus-visible:ring-status-blue focus-visible:ring-offset-1 focus-visible:ring-offset-background";
 
 /** Enter never answers a decision. */
-function swallowEnter(event: KeyboardEvent) {
+export function swallowEnter(event: KeyboardEvent) {
   if (event.key === "Enter") {
     event.preventDefault();
     event.stopPropagation();
@@ -24,8 +24,11 @@ export function DecisionButtons({
   variant,
 }: {
   decision: DecisionRef;
-  /** `header`: the answer and "Open …"; `tile`: the answer, small; `ghost`: every option, small. */
-  variant: "header" | "tile" | "ghost";
+  /**
+   * `header`: the answer and "Open …"; `tile`: the answer, small; `ghost`:
+   * every option, small; `card`: every option, the first in amber (its card in the chat).
+   */
+  variant: "header" | "tile" | "ghost" | "card";
 }) {
   const { onAnswer, onOpenDecision } = useNodeActions();
   const small = variant !== "header";
@@ -46,7 +49,8 @@ export function DecisionButtons({
     );
   }
   if (!first) return null;
-  if (variant === "ghost") {
+  if (variant === "ghost" || variant === "card") {
+    const ghost = variant === "ghost";
     return (
       <span className="flex flex-wrap items-center gap-1.5">
         {decision.actions.map((action, i) => (
@@ -61,14 +65,16 @@ export function DecisionButtons({
               BTN,
               size,
               i === 0
-                ? "border-foreground bg-foreground text-background hover:opacity-90"
+                ? ghost
+                  ? "border-foreground bg-foreground text-background hover:opacity-90"
+                  : AMBER.button
                 : "border-border-strong bg-card-solid text-foreground hover:border-status-blue",
             )}
           >
             {action.label}
           </button>
         ))}
-        <span className="text-[11.5px] text-foreground-tertiary">{decision.id}</span>
+        {ghost && <span className="text-[11.5px] text-foreground-tertiary">{decision.id}</span>}
       </span>
     );
   }

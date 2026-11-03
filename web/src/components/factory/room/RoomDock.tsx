@@ -108,9 +108,11 @@ export function useDockThread(
 export function DockResizeHandle({
   width,
   onWidth,
+  label = "Resize the Room",
 }: {
   width: number;
   onWidth: (px: number) => void;
+  label?: string;
 }) {
   const start = useRef<{ x: number; width: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -137,7 +139,7 @@ export function DockResizeHandle({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize the Room"
+      aria-label={label}
       aria-valuenow={width}
       tabIndex={0}
       data-testid="room-dock-resize"

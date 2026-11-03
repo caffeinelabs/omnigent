@@ -103,12 +103,13 @@ function loadSample(): Promise<NodeSource> {
 /**
  * The source this page reads: a provider's, else the server's node API when
  * preflight says it serves one, else the sample factory. Null while preflight
- * or the sample loads.
+ * or the sample loads, and when `enabled` is false (the shell of another
+ * cockpit: nothing is read).
  */
-export function useNodeSource(): NodeSource | null {
+export function useNodeSource(enabled = true): NodeSource | null {
   const given = useContext(NodeSourceContext);
-  const preflight = usePreflight({ enabled: given == null });
-  const wantSample = !given && !preflight.isPending && preflight.data?.node_api !== true;
+  const preflight = usePreflight({ enabled: enabled && given == null });
+  const wantSample = enabled && !given && !preflight.isPending && preflight.data?.node_api !== true;
   const [loaded, setLoaded] = useState(sample);
   useEffect(() => {
     if (!wantSample || loaded) return;
@@ -120,6 +121,7 @@ export function useNodeSource(): NodeSource | null {
       live = false;
     };
   }, [wantSample, loaded]);
+  if (!enabled) return null;
   if (given) return given;
   if (preflight.isPending) return null;
   if (preflight.data?.node_api === true) return liveNodeSource;

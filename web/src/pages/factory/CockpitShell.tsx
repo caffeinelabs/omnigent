@@ -7,9 +7,14 @@
  * phone the five places sit in a bottom bar. ⌘K (or `/`), Share and Add
  * project open from anywhere; `g` chords jump between the five places, `r`
  * opens the Room and `?` lists the keys.
+ *
+ * Cockpit v3 has no Room drawer: every node page carries its chat, so `/`,
+ * `r`, the Room button and a `?room=` link focus (or go to) the chat of the
+ * node a thread is about.
  */
 
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AddProjectDialog } from "@/components/factory/controls/AddProjectDialog";
 import { CockpitPalette } from "@/components/factory/cmdk/CockpitPalette";
 import { KeyboardHelp } from "@/components/factory/cmdk/KeyboardHelp";
@@ -47,6 +52,16 @@ import { HealthPeek } from "@/components/factory/shell/HealthPeek";
 import { CockpitPhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
 import { factoryLocation } from "@/components/factory/shell/shellRoutes";
 import { ViewerBanner } from "@/components/factory/shell/ViewerBanner";
+import { pageThread } from "@/components/factory/room/roomModel";
+import {
+  CHAT_PARAM,
+  NodeChatSlotContext,
+  createNodeChatSlot,
+} from "@/components/factory/v3/chat/chatLayout";
+import { DISCOVERY_THREAD, chatNodeRef } from "@/components/factory/v3/chat/nodeThread";
+import { NODE_STALE_MS, nodeQueryKeys } from "@/components/factory/v3/nodeQueries";
+import { PRODUCT_REF, nodeHref } from "@/components/factory/v3/nodeRoutes";
+import { useNodeSource } from "@/components/factory/v3/nodeSource";
 import { DecisionsPage } from "./DecisionsPage";
 
 /** The id of the page's main region (the skip link's target). */
@@ -130,6 +145,50 @@ export function CockpitShell({
     );
   const room = params.get(ROOM_PARAM);
   const peek = params.get(PEEK_PARAM);
+  const v3 = variant === "v3";
+  const [chatSlot] = useState(createNodeChatSlot);
+  const queryClient = useQueryClient();
+  const nodeSource = useNodeSource(v3);
+  /**
+   * v3: the node page whose chat shows a thread, with its chat open (on
+   * sample data, the product's: sample nodes have no threads). #discovery
+   * reads the product's page for a need to open.
+   */
+  const nodeChatHref = useCallback(
+    async (thread: string): Promise<string> => {
+      const sample = nodeSource?.kind !== "live";
+      const root =
+        !sample && thread === DISCOVERY_THREAD && nodeSource
+          ? await queryClient
+              .fetchQuery({
+                queryKey: nodeQueryKeys.node(fid, nodeSource.kind, PRODUCT_REF),
+                queryFn: ({ signal }) => nodeSource.node(fid, PRODUCT_REF, signal),
+                staleTime: NODE_STALE_MS,
+              })
+              .catch(() => null)
+          : null;
+      const ref = chatNodeRef(thread, { snapshot, sample, root });
+      return `${nodeHref(fid, ref)}?${CHAT_PARAM}=1`;
+    },
+    [fid, nodeSource, queryClient, snapshot],
+  );
+  const openThreadChat = useCallback(
+    (thread: string, replace = false) => {
+      void nodeChatHref(thread).then((href) => navigate(href, { replace }));
+    },
+    [navigate, nodeChatHref],
+  );
+  /** v3: focus the chat on this page, else open the chat of the page's thread. */
+  const openChat = useCallback(() => {
+    if (chatSlot.focus()) return;
+    openThreadChat(pageThread(snapshot, location, null));
+  }, [chatSlot, location, openThreadChat, snapshot]);
+  // An old `?room=` link under v3 opens that thread's node with its chat
+  // (once the shell knows whether the nodes are this factory's or the sample's).
+  const sourceKnown = nodeSource != null;
+  useEffect(() => {
+    if (v3 && room != null && sourceKnown) openThreadChat(room || "factory", true);
+  }, [openThreadChat, room, sourceKnown, v3]);
 
   const setParam = useCallback(
     (key: string, value: string | null) =>
@@ -145,9 +204,11 @@ export function CockpitShell({
     [setParams],
   );
   useCockpitKeys({
-    onPalette: () => setPalette(true),
+    onPalette: () => {
+      if (!(v3 && chatSlot.focus())) setPalette(true);
+    },
     onHelp: () => setKeys(true),
-    onRoom: () => setParam(ROOM_PARAM, room ?? ""),
+    onRoom: v3 ? openChat : () => setParam(ROOM_PARAM, room ?? ""),
     onGo: (place) => navigate(PLACE_HREF[place](fid)),
   });
   const shell: FactoryShellValue = useMemo(
@@ -200,7 +261,7 @@ export function CockpitShell({
           phone={phone}
           onHealth={() => setParam(PEEK_PARAM, "health")}
           onPalette={() => setPalette(true)}
-          onRoom={() => setParam(ROOM_PARAM, room ?? "")}
+          onRoom={v3 ? openChat : () => setParam(ROOM_PARAM, room ?? "")}
           onShare={() => setSharing(true)}
           onAddProject={() => setAdding({ title: null })}
           onClassic={onClassic}
@@ -215,7 +276,9 @@ export function CockpitShell({
         >
           {/* The cockpit toast (Undo after Apply) outlives the page that showed it. */}
           <FactoryToastProvider>
-            {children}
+            <NodeChatSlotContext.Provider value={v3 ? chatSlot : null}>
+              {children}
+            </NodeChatSlotContext.Provider>
             {/* Inside the toast's reach: a verb's Undo shows there. Both are portals. */}
             <CockpitPalette
               snapshot={snapshot}
@@ -223,21 +286,23 @@ export function CockpitShell({
               onOpenChange={setPalette}
               onShare={() => setSharing(true)}
               onAddProject={() => setAdding({ title: null })}
-              onRoom={(thread) => setParam(ROOM_PARAM, thread)}
+              onRoom={(thread) => (v3 ? openThreadChat(thread) : setParam(ROOM_PARAM, thread))}
             />
             <KeyboardHelp open={keys} onOpenChange={setKeys} nodes={variant === "v3"} />
           </FactoryToastProvider>
         </main>
       </div>
-      <RoomDrawer
-        snapshot={snapshot}
-        location={location}
-        clockOffsetS={clockOffsetS}
-        open={room != null}
-        thread={room || null}
-        onOpenChange={(open) => !open && setParam(ROOM_PARAM, null)}
-        onThread={(thread) => setParam(ROOM_PARAM, thread)}
-      />
+      {!v3 && (
+        <RoomDrawer
+          snapshot={snapshot}
+          location={location}
+          clockOffsetS={clockOffsetS}
+          open={room != null}
+          thread={room || null}
+          onOpenChange={(open) => !open && setParam(ROOM_PARAM, null)}
+          onThread={(thread) => setParam(ROOM_PARAM, thread)}
+        />
+      )}
       <HealthPeek
         open={peek === "health"}
         onOpenChange={(open) => !open && setParam(PEEK_PARAM, null)}
