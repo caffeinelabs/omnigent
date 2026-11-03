@@ -459,6 +459,20 @@ class DiscoveryStore(ABC):
     def list_source_states(self, factory_id: str) -> builtins.list[FactorySourceState]:
         """:returns: Every source's state, by source id."""
 
+    @abstractmethod
+    def charge_source_call(
+        self, factory_id: str, source: str, *, day: str, limit: int, calls: int = 1
+    ) -> tuple[FactorySourceState, bool]:
+        """
+        Count *calls* against a source's daily cap, atomically.
+
+        ``calls_today`` starts again when ``usage_day`` is not *day*.
+
+        :param day: Today, UTC (``YYYY-MM-DD``).
+        :returns: ``(state, charged)``; nothing is written when the calls
+            would pass *limit*.
+        """
+
 
 # ── In memory ──────────────────────────────────────────────────
 
@@ -884,6 +898,22 @@ class InMemoryDiscoveryStore:
             ]
         rows.sort(key=lambda r: r.source)
         return rows
+
+    def charge_source_call(
+        self, factory_id: str, source: str, *, day: str, limit: int, calls: int = 1
+    ) -> tuple[FactorySourceState, bool]:
+        key = (current_workspace_id(), norm_id(factory_id), source)
+        tables = self._tables()
+        with self._lock:
+            row = tables.sources.get(key) or FactorySourceState(
+                factory_id=key[1], source=source, workspace_id=key[0]
+            )
+            used = row.calls_today if row.usage_day == day else 0
+            if used + calls > limit:
+                return _copy(row), False
+            row = replace(row, usage_day=day, calls_today=used + calls, updated_at=now_s())
+            tables.sources[key] = row
+            return _copy(row), True
 
 
 __all__ = [

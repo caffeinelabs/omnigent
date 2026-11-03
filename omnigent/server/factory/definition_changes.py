@@ -252,9 +252,16 @@ def _trial_info(
     }
 
 
-def _who(klass: str | None, level: int, owner_only: bool, *, editors: bool = False) -> str:
+def _who(
+    klass: str | None,
+    level: int,
+    owner_only: bool,
+    *,
+    editors: bool = False,
+    narrows: str = "a team",
+) -> str:
     if editors:
-        head = "Owners and editors (class A: it only narrows a team)."
+        head = f"Owners and editors (class A: it only narrows {narrows})."
     else:
         head = f"Owners (class {klass})." if klass else "Owners."
     if level >= LEVEL_MANAGE:
@@ -371,7 +378,7 @@ def _preview(
     owner_only = any(e["owner_only"] for e in entries)
     level = people.viewer_level(deps, root.id, user_id)
     # A restore goes through the owners' restore route, whatever it changes.
-    editor_applies = body.restore is None and definition.team_spec.editor_may_apply(diff)
+    editor_applies = body.restore is None and tuning.editor_may_apply(diff)
     can_apply = level >= LEVEL_MANAGE or (level >= LEVEL_EDIT and editor_applies)
     effects = _effects(
         deps,
@@ -399,7 +406,13 @@ def _preview(
         "lines": definition.diff_lines(diff, 50),
         "class": klass,
         "approvers": ["owners", "editors"] if editor_applies else ["owners"],
-        "who": _who(klass, level, owner_only, editors=editor_applies),
+        "who": _who(
+            klass,
+            level,
+            owner_only,
+            editors=editor_applies,
+            narrows="a source" if definition.blocks.sources_narrow_only(diff) else "a team",
+        ),
         "owner_only": owner_only,
         "you_can_apply": can_apply and bool(diff) and not blocked,
         "you_can_propose": level >= LEVEL_EDIT,

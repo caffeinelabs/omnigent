@@ -198,7 +198,8 @@ SERVER_REF: Final = SourceRef(
 )
 
 
-def _ref(found: Mapping[str, Any]) -> SourceRef:
+def ref_of(found: Mapping[str, Any]) -> SourceRef:
+    """:returns: A ``discovery.sources[]`` entry as the ledger reads it."""
     privacy = found.get("privacy") or {}
     return SourceRef(
         id=str(found["id"]),
@@ -215,7 +216,7 @@ def _ref(found: Mapping[str, Any]) -> SourceRef:
 def sources_of(deps: FactoryDeps, factory_id: str) -> list[SourceRef]:
     """:returns: The factory's ``discovery.sources`` as :class:`SourceRef` rows."""
     found = definition.value(deps, factory_id, "discovery.sources", []) or []
-    return [_ref(s) for s in found if isinstance(s, Mapping) and s.get("id")]
+    return [ref_of(s) for s in found if isinstance(s, Mapping) and s.get("id")]
 
 
 def source_ref(deps: FactoryDeps, factory_id: str, source_id: str) -> SourceRef | None:
@@ -632,6 +633,7 @@ __all__ = [
     "ingest",
     "injection_score",
     "label",
+    "ref_of",
     "source_ref",
     "sources_of",
     "team_source",

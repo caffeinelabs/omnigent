@@ -251,7 +251,7 @@ class FactoryDecision:
 @dataclass(frozen=True)
 class EventDraft:
     """
-    An event to append to the log (the store assigns ``id`` and, if unset, ``ts``).
+    An event to append to the log (the store assigns ``id`` and ``ts`` when unset).
 
     :param factory_id: Root lead session id.
     :param kind: Stable kind, e.g. ``"pr.ready"``.
@@ -263,6 +263,8 @@ class EventDraft:
     :param subject: e.g. ``"pr:caffeinelabs/app#9630"`` or ``"decision:D-3"``.
     :param data: JSON payload.
     :param ts: Epoch milliseconds, or ``None`` for now.
+    :param id: A uuid7 hex the caller handed out already (records written
+        before the event name it), or ``None`` for a new one.
     """
 
     factory_id: str
@@ -275,6 +277,7 @@ class EventDraft:
     subject: str | None = None
     data: dict[str, Any] | None = None
     ts: int | None = None
+    id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """:returns: A JSON-ready copy."""

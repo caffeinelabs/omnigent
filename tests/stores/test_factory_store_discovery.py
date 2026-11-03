@@ -245,6 +245,42 @@ def test_snapshots_and_source_state_round_trip(store: FactoryStore) -> None:
     assert [s.source for s in store.list_source_states(FID)] == ["web"]
 
 
+def test_source_calls_are_charged_against_a_daily_cap(store: FactoryStore) -> None:
+    first, ok = store.charge_source_call(FID, "web", day="2026-11-03", limit=2)
+    assert ok and (first.calls_today, first.usage_day) == (1, "2026-11-03")
+    store.put_source_state(FID, "web", data={"cursor": "kept"})
+    second, ok = store.charge_source_call(FID, "web", day="2026-11-03", limit=2)
+    assert ok and second.calls_today == 2 and second.data == {"cursor": "kept"}
+    refused, ok = store.charge_source_call(FID, "web", day="2026-11-03", limit=2)
+    assert not ok and refused.calls_today == 2
+    # A new day starts the count again; a cap of 0 refuses every call.
+    fresh, ok = store.charge_source_call(FID, "web", day="2026-11-04", limit=2)
+    assert ok and (fresh.calls_today, fresh.usage_day) == (1, "2026-11-04")
+    none, ok = store.charge_source_call(FID, "repo", day="2026-11-04", limit=0)
+    assert not ok and none.calls_today == 0
+    assert store.get_source_state(FID, "repo") is None
+    _other, ok = store.charge_source_call(OTHER, "web", day="2026-11-04", limit=1)
+    assert ok
+
+
+def test_source_calls_never_pass_the_cap_under_racing_callers(store: FactoryStore) -> None:
+    charged: list[bool] = []
+
+    def call() -> None:
+        _state, ok = store.charge_source_call(FID, "web", day="2026-11-03", limit=5)
+        charged.append(ok)
+
+    threads = [threading.Thread(target=call) for _ in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert charged.count(True) == 5
+    state = store.get_source_state(FID, "web")
+    assert state is not None and state.calls_today == 5
+
+
 def test_signal_counts_are_counted_without_reading_rows(store: FactoryStore) -> None:
     signal(store, ingested_at=10, segments=["teams"])  # S-1: old, unsorted
     signal(store, ingested_at=100, segments=["new_user", "teams"])  # S-2: attached

@@ -1427,6 +1427,23 @@ async def _keep(
     return row
 
 
+def _editor_path(path: str) -> bool:
+    """Whether an editor may apply a change of *path* when it only narrows (team or source)."""
+    return definition.team_spec.is_project_path(path) or definition.blocks.under(
+        path, "discovery.sources"
+    )
+
+
+def editor_may_apply(diff: Sequence[Mapping[str, Any]]) -> bool:
+    """
+    Whether editors apply *diff* (class A): it only narrows project teams, or
+    only narrows sources (a pause, a lower budget, fewer roles, stricter privacy).
+    """
+    return definition.team_spec.editor_may_apply(diff) or definition.blocks.sources_narrow_only(
+        diff
+    )
+
+
 def projects_name(actor: Actor) -> str:
     from omnigent.server.factory.projects import actor_name
 
@@ -1606,10 +1623,9 @@ async def human_edit(
     body = parse_body(DefinitionEditIn, payload if payload is not None else {})
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
-    # Editors apply a team change that only narrows a team (class A); owners everything.
+    # Editors apply a change that only narrows a team or a source (class A); owners everything.
     team_only = all(
-        definition.team_spec.is_project_path(definition.normalize_path(str(c.get("path") or "")))
-        for c in body.changes
+        _editor_path(definition.normalize_path(str(c.get("path") or ""))) for c in body.changes
     )
     await control.require(deps, user_id, root.id, LEVEL_EDIT if team_only else LEVEL_MANAGE)
     actor = await asyncio.to_thread(human_actor, deps, user_id, root.id)
@@ -1627,7 +1643,7 @@ async def human_edit(
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
-    if team_only and not definition.team_spec.editor_may_apply(diff):
+    if team_only and not editor_may_apply(diff):
         level = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id)
         if level < LEVEL_MANAGE:
             raise CockpitError(
@@ -1635,7 +1651,7 @@ async def human_edit(
                 "owners_only",
                 "adding a member, a vendor or model change, more builders, a higher budget "
                 "and briefs are owner changes (class B); an editor applies removals, fewer "
-                "builders, a lower budget and handles",
+                "builders, a lower budget and handles, and pauses or narrows a source",
             )
     if body.trial:
         from omnigent.server.factory import evaluate
@@ -1732,15 +1748,13 @@ async def pin_version(
             undo
             and current is not None
             and current.created_by == actor.id
-            and definition.team_spec.editor_may_apply(
-                definition.diff(dict(target.doc or {}), dict(current.doc or {}))
-            )
+            and editor_may_apply(definition.diff(dict(target.doc or {}), dict(current.doc or {})))
         ):
             raise CockpitError(
                 403,
                 "owners_only",
-                "owners pin versions; an editor may only Undo their own team change within "
-                f"{definition.UNDO_WINDOW_S // 60} minutes",
+                "owners pin versions; an editor may only Undo their own team or source "
+                f"change within {definition.UNDO_WINDOW_S // 60} minutes",
             )
         await asyncio.to_thread(definition.pin, deps, root.id, version)
         await deliver(

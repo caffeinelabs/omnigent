@@ -941,6 +941,21 @@ def source_class(before: Any, after: Any) -> Literal["A", "B"]:
     return "A" if _narrower_source(before, after) else "B"
 
 
+def sources_narrow_only(entries: Any) -> bool:
+    """
+    Whether diff *entries* (``{path, before, after}``) only narrow sources:
+    each is one ``discovery.sources.<id>`` that :func:`source_class` calls A
+    (a pause, a lower budget, fewer roles, stricter privacy). Editors apply
+    those at once, with Undo (mechanism §4.5).
+    """
+    found = list(entries)
+    return bool(found) and all(
+        str(e.get("path") or "").startswith("discovery.sources.")
+        and source_class(e.get("before"), e.get("after")) == "A"
+        for e in found
+    )
+
+
 def off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
     """Turning something off is A (cheaper and safer); turning it on is B."""
     return "A" if after is False and before is True else "B"
@@ -1001,6 +1016,7 @@ __all__ = [
     "seq_of",
     "slower_or_off_is_a",
     "source_class",
+    "sources_narrow_only",
     "under",
     "upgrade",
 ]

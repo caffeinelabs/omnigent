@@ -338,6 +338,17 @@ def test_append_event_round_trips(store: FactoryStore) -> None:
         store.append_event(EventDraft(factory_id=FID, kind="x", summary="x", severity="loud"))
 
 
+def test_an_event_keeps_an_id_handed_out_before_it(store: FactoryStore) -> None:
+    given = new_event_id(5_000)
+
+    ev = store.append_event(
+        EventDraft(factory_id=FID, kind="source.query", summary="s", ts=5_000, id=given)
+    )
+
+    assert ev.id == given and ev.ts == 5_000
+    assert [e.id for e in store.list_events(FID)] == [given]
+
+
 def test_event_ids_are_time_ordered() -> None:
     ids = [new_event_id(1_000) for _ in range(50)] + [new_event_id(1_001)]
     assert ids == sorted(ids)

@@ -1317,7 +1317,7 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, FactoryStore):
 
         def write(session: Session) -> FactoryEvent:
             row = SqlFactoryEvent(
-                id=new_event_id(ts),
+                id=draft.id or new_event_id(ts),
                 factory_id=norm_id(draft.factory_id),
                 ts=ts,
                 kind=draft.kind,
