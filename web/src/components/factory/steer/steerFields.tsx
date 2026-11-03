@@ -143,7 +143,8 @@ export function NumberField({
   const [draft, setDraft] = useState(shown);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    setDraft(shown);
+    // Follow the staged value (Discard, Undo), but keep what is being typed ("1." of "1.5").
+    setDraft((prev) => (prev.trim() !== "" && Number(prev) === Number(shown) ? prev : shown));
     setError(null);
   }, [shown]);
   const staged = steer.isStaged(path);

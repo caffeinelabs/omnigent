@@ -272,6 +272,20 @@ describe("Steer", () => {
     expect(screen.queryByTestId("steer-apply")).toBeNull();
   });
 
+  it("keeps a decimal being typed while it stages each step", async () => {
+    serve();
+    renderAt("/steer/budgets");
+
+    const input = await screen.findByTestId("steer-input-budgets.usd_per_hour_alert");
+    fireEvent.change(input, { target: { value: "12." } });
+    expect(input).toHaveValue("12.");
+    fireEvent.change(input, { target: { value: "12.5" } });
+    expect(input).toHaveValue("12.5");
+    expect(await screen.findByTestId("steer-staged-budgets.usd_per_hour_alert")).toHaveTextContent(
+      "12.5",
+    );
+  });
+
   it("shows a viewer every value and no lever", async () => {
     serve({ role: "viewer" });
     renderAt("/steer/strategy");
