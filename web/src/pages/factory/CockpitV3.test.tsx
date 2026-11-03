@@ -229,3 +229,32 @@ describe("cockpit v3 · the switch and routes", () => {
     expect(localStorage.getItem(COCKPIT_STORAGE_KEY)).toBeNull();
   });
 });
+
+describe("cockpit v3 · the node chat in the shell", () => {
+  it("replaces the Room drawer: the Room button opens the node's chat", async () => {
+    serve();
+    renderAt("?cockpit=v3");
+    expect(await screen.findByTestId("v3-chat-pinned")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("cockpit-room"));
+
+    const full = await screen.findByTestId("v3-chat-full");
+    expect(screen.queryByTestId("room-drawer")).toBeNull();
+    // Sample nodes have no threads: the chat is this factory's #factory, and says so.
+    expect(within(full).getByTestId("room-thread")).toHaveAttribute("data-thread", "factory");
+    expect(within(full).getByTestId("v3-chat-title")).toHaveTextContent(
+      "this factory’s #factory: the sample’s nodes have no threads",
+    );
+    await waitFor(() => expect(location).toBe(`${BASE}?chat=1`));
+  });
+
+  it("sends an old ?room= link to the node the thread is about, with its chat open", async () => {
+    serve({ choice: null });
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    renderAt("?room=factory");
+
+    expect(await screen.findByTestId("v3-chat-full")).toBeInTheDocument();
+    await waitFor(() => expect(location).toBe(`${BASE}/n/product?chat=1`));
+    expect(screen.queryByTestId("room-drawer")).toBeNull();
+  });
+});

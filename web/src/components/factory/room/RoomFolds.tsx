@@ -1,8 +1,10 @@
 /**
  * Room noise, folded but never hidden: a base's moves as one line ("base
  * main moved 7 times since 14:12 → 0c8a4e1", each move a click away and all
- * of them in Activity), and an incident's older cards as one quiet line above
- * its live card. Times carry their date when it is not today.
+ * of them in Activity), an incident's older cards as one quiet line above
+ * its live card, and other threads with news as one line each (cockpit v3's
+ * node chat: "assistant-core · 1 new · …"). Times carry their date when it
+ * is not today.
  */
 
 import { useId, useState } from "react";
@@ -222,6 +224,65 @@ export function IssueRepeats({
             <li key={message.id}>{row(message)}</li>
           ))}
         </ol>
+      )}
+    </div>
+  );
+}
+
+/** Another thread with unread messages, as one line that opens it. */
+export interface ThreadNewsLine {
+  key: string;
+  title: string;
+  unread: number;
+  /** The newest unread message that mentions the viewer. */
+  text?: string | null;
+}
+
+/**
+ * Threads with news as one line each ("assistant-core · 1 new · …"), each a
+ * link to `href`; past `shown` lines the rest are one "Show each" away.
+ */
+export function ThreadNewsLines({
+  lines,
+  shown = 3,
+}: {
+  lines: readonly (ThreadNewsLine & { href: string })[];
+  shown?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  if (!lines.length) return null;
+  const visible = open ? lines : lines.slice(0, shown);
+  const hidden = lines.length - visible.length;
+  return (
+    <div data-testid="room-thread-news" className="flex min-w-0 flex-col gap-1 pb-2">
+      <ul id={listId} className="flex min-w-0 flex-col gap-1">
+        {visible.map((line) => (
+          <li key={line.key} data-testid={`room-thread-news-${line.key}`} className="min-w-0">
+            <Link
+              to={line.href}
+              componentId="factory.room.thread_news"
+              className="flex min-w-0 items-baseline gap-2 rounded-lg border border-border bg-card-solid px-2.5 py-1.5 text-[12.5px] hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              <b className="shrink-0 font-semibold">{line.title}</b>
+              <span className="shrink-0 text-status-blue-fg">{line.unread} new</span>
+              {line.text && (
+                <span className="min-w-0 truncate text-muted-foreground">{line.text}</span>
+              )}
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {(hidden > 0 || open) && lines.length > shown && (
+        <p className="px-1 text-xs text-muted-foreground">
+          {hidden > 0 ? `${hidden} more with news · ` : ""}
+          <Toggle
+            open={open}
+            onToggle={() => setOpen((v) => !v)}
+            controls={listId}
+            testId="room-thread-news-toggle"
+          />
+        </p>
       )}
     </div>
   );

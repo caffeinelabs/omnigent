@@ -125,6 +125,15 @@ export interface VerbAvail {
   reason?: string;
 }
 
+/** What a verb's preview starts from, when words in the chat named it ("plan Google Ads"). (client) */
+export interface VerbArgs {
+  /** A new child's title. */
+  title?: string;
+  /** "swap luz to codex": the member, and what to swap to. */
+  member?: string;
+  to?: string;
+}
+
 /** The node's own chat thread. */
 export interface ThreadRef {
   key: string;

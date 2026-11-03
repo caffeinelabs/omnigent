@@ -3,7 +3,7 @@
 // page's actions (answer, open an ask, use a verb, prefetch a node).
 
 import { type ReactNode, createContext, useContext, useMemo } from "react";
-import type { DecisionAction, DecisionRef, VerbAvail } from "./nodeTypes";
+import type { DecisionAction, DecisionRef, VerbArgs, VerbAvail } from "./nodeTypes";
 
 export interface NodeActions {
   factoryId: string;
@@ -15,8 +15,8 @@ export interface NodeActions {
   onAnswer?: (decision: DecisionRef, action: DecisionAction) => void;
   /** "Open C-16": the ask with its full text. */
   onOpenDecision?: (decision: DecisionRef) => void;
-  /** A verb button. */
-  onVerb?: (verb: VerbAvail) => void;
+  /** A verb button, a quick verb or words in the chat (with what they named). */
+  onVerb?: (verb: VerbAvail, args?: VerbArgs) => void;
 }
 
 const NodeContext = createContext<NodeActions>({ factoryId: "" });

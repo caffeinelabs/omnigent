@@ -3,10 +3,12 @@
  * `/n/<ref>/<level>` (one level under it, grouped under parents); Home is the
  * product's node page. Someone on the classic or v2 cockpit who opens a v3
  * link lands on the closest page of their cockpit. On sample data an answer
- * changes only the sample, and says so.
+ * changes only the sample, and says so. Every node page carries its chat; a
+ * verb named in the address (`?verb=start`, from words in another node's
+ * chat) opens once the page is in.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate } from "react-router-dom";
 import {
@@ -18,9 +20,11 @@ import {
 import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { useFactoryToast } from "@/components/factory/ui/Toast";
+import { useNodeChatSlot } from "@/components/factory/v3/chat/chatLayout";
 import type { NodeActions } from "@/components/factory/v3/NodeContext";
 import { NodePage } from "@/components/factory/v3/NodePage";
-import { useAnswerDecision } from "@/components/factory/v3/nodeQueries";
+import { useAnswerDecision, useNode } from "@/components/factory/v3/nodeQueries";
+import type { VerbArgs } from "@/components/factory/v3/nodeTypes";
 import { PRODUCT_REF } from "@/components/factory/v3/nodeRoutes";
 import { useNodeSource } from "@/components/factory/v3/nodeSource";
 import type { FactorySnapshot, TaskView } from "@/lib/factoryApi";
@@ -91,13 +95,17 @@ function SampleNotice({ label, onBack }: { label: string; onBack: () => void }) 
   );
 }
 
+/** What a verb's preview starts from, as the address names it (`?verb=add&title=…`). */
+const VERB_ARGS: (keyof VerbArgs)[] = ["title", "member", "to"];
+
 function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
   const { factoryId } = useFactoryShell();
   const cockpit = useCockpitV2();
   const source = useNodeSource();
   const toast = useFactoryToast();
+  const chatSlot = useNodeChatSlot();
   const { mutate: answer } = useAnswerDecision(factoryId);
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const sample = source?.kind === "sample";
   const actions = useMemo<Omit<NodeActions, "factoryId" | "prefetch" | "aboveId">>(
     () => ({
@@ -132,12 +140,38 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
           { replace: true },
         );
       },
-      onVerb: (verb) => {
-        toast.show({ message: `${verb.label} shows a preview here soon; nothing changed.` });
+      onVerb: (verb, args) => {
+        if (verb.verb === "talk" && chatSlot?.focus()) return;
+        const named = args?.title ? ` “${args.title}”` : args?.member ? ` ${args.member}` : "";
+        toast.show({
+          message: `${verb.label}${named} shows a preview here soon; nothing changed.`,
+        });
       },
     }),
-    [answer, sample, setParams, toast],
+    [answer, chatSlot, sample, setParams, toast],
   );
+  // `?verb=start`: words in another node's chat asked for this node's preview.
+  const page = useNode(nodeRef, factoryId).data;
+  const pending = params.get("verb");
+  useEffect(() => {
+    if (!pending || !page) return;
+    const args: VerbArgs = {};
+    for (const key of VERB_ARGS) {
+      const value = params.get(key);
+      if (value) args[key] = value;
+    }
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const key of ["verb", ...VERB_ARGS]) next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
+    const verb = page.verbs.find((v) => v.verb === pending && v.enabled);
+    if (verb) actions.onVerb?.(verb, args);
+    else toast.show({ message: `${page.node.title} offers no “${pending}” here.` });
+  }, [actions, page, params, pending, setParams, toast]);
   return (
     <NodePage
       factoryId={factoryId}
@@ -149,6 +183,7 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
           <SampleNotice label={source.label} onBack={() => cockpit.choose("v2")} />
         ) : null
       }
+      chat={{ sample }}
     />
   );
 }
