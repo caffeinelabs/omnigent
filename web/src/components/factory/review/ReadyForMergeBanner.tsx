@@ -5,7 +5,8 @@
  * `card` (the board's PR row): the demo thumbnail and summary, the preview
  * pill, and the two ways forward (review here, merge on GitHub), with a
  * warning when the PR touches a path the product profile says needs a demo
- * and has no demo of its head.
+ * and has no demo of its head. A PR into an owner-set auto-merge target says
+ * the server merges it when its checks pass: nobody has to.
  */
 
 import { ExternalLinkIcon, PlayIcon, StarIcon, TriangleAlertIcon } from "lucide-react";
@@ -19,7 +20,7 @@ import { PreviewPill } from "../board/PreviewPill";
 import { mergeUrl } from "../board/PrRow";
 import { useFactoryNow } from "../factoryClock";
 import { plural, readyForHuman, shortSha } from "../factoryFormat";
-import { demoMissing, demoPathsTouched, mergePolicyText } from "./deliveryModel";
+import { AUTO_MERGE_LABEL, demoMissing, demoPathsTouched, mergePolicyText } from "./deliveryModel";
 import { IMergedItButton } from "./ReviewActions";
 import { gateTally, sentinelVerifiedHead } from "./reviewModel";
 import { DotParts } from "./reviewParts";
@@ -43,6 +44,9 @@ export interface ReadyForMergeBannerProps {
   /** The product profile's delivery settings (`null`: none); the shell snapshot's when omitted. */
   delivery?: DeliveryDef | null;
 }
+
+/** The headline of a ready PR the server merges itself (an owner-set auto-merge target). */
+export const AUTO_LABEL = AUTO_MERGE_LABEL;
 
 function Headline({ pr, nowS, label }: { pr: PrView; nowS: number; label: string }) {
   const tally = gateTally(pr);
@@ -108,7 +112,11 @@ export function ReadyForMergeBanner({
         data-variant="line"
         className="flex flex-col gap-1 rounded-lg bg-success/10 px-3 py-1.5 text-sm"
       >
-        <Headline pr={pr} nowS={nowS} label="Ready for human merge" />
+        <Headline
+          pr={pr}
+          nowS={nowS}
+          label={pr.auto_merge ? AUTO_LABEL : "Ready for human merge"}
+        />
         <DemoMissing pr={pr} delivery={delivery} />
       </div>
     );
@@ -133,7 +141,11 @@ export function ReadyForMergeBanner({
           />
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <Headline pr={pr} nowS={nowS} label="Ready for your review" />
+          <Headline
+            pr={pr}
+            nowS={nowS}
+            label={pr.auto_merge ? AUTO_LABEL : "Ready for your review"}
+          />
           {demo && (
             <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground">
               <span className="text-foreground">Demo</span>
@@ -181,11 +193,11 @@ export function ReadyForMergeBanner({
                 </a>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{mergePolicyText(delivery)}</TooltipContent>
+            <TooltipContent>{mergePolicyText(delivery, pr)}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <span id={`merge-policy-${pr.number}`} className="sr-only">
-          {mergePolicyText(delivery)}
+          {mergePolicyText(delivery, pr)}
         </span>
         {factoryId && (
           <IMergedItButton factoryId={factoryId} pr={pr} testId={`i-merged-it-${pr.number}`} />

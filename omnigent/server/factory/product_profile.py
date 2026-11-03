@@ -19,8 +19,13 @@ repo gets them: in v1 when its default repo matches (:func:`seed_into`), or
 once, as a seed version, when it is from before the profile and its default
 repo or a project repo matches (:func:`seed_existing`). A factory on any
 other repo starts with an empty profile. Owners edit it afterwards like any
-other definition change. Repos no factory ever writes are not delivery
-settings: they are :data:`omnigent.policies.builtins.factory.ALWAYS_DENY_ENV`.
+other definition change. The seed may carry ``auto_merge`` targets too, e.g.
+``{"sample-org/sample-app": {"auto_merge": [{"repo": "sample-org/sample-app",
+"base": "staging"}]}}`` (the server merges ready PRs into them, see
+:mod:`.auto_merge`); a factory whose profile was already seeded or set
+takes new targets only from an owner in Steer, never from a later seed.
+Repos no factory ever writes are not delivery settings: they are
+:data:`omnigent.policies.builtins.factory.ALWAYS_DENY_ENV`.
 While ``preview_domain`` is unset, the deployment's env domain applies
 (:func:`.env_urls.env_domain`).
 
@@ -170,11 +175,18 @@ def seed_into(doc: dict[str, Any], repo: str | None) -> dict[str, Any]:
 
 
 def _block_set(doc: Mapping[str, Any] | None, seed: ProfileSeed) -> bool:
-    """Whether a stored version sets a field of *seed*'s block (versions store blocks sparsely)."""
-    found: Any = doc or {}
+    """Whether a stored version sets a field of *seed*'s block (versions store blocks sparsely).
+
+    A field a version leaves out reads as its default (see ``definition.SPARSE_FIELDS``),
+    and one it keeps under its own key is read where it belongs (``blocks.upgrade``).
+    """
+    from omnigent.server.factory import definition_blocks
+
+    found: Any = definition_blocks.upgrade(dict(doc or {}))
     for part in seed.path.split("."):
         found = found.get(part) if isinstance(found, Mapping) else None
-    return isinstance(found, Mapping) and dict(found) != seed.default()
+    defaults = seed.default()
+    return isinstance(found, Mapping) and {**defaults, **found} != defaults
 
 
 def ever_set(deps: FactoryDeps, factory_id: str, seed: ProfileSeed = DELIVERY) -> bool:

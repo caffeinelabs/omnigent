@@ -2,23 +2,31 @@
  * Steer › Product profile: what the product is (name, kind, summary, links),
  * who uses it (segments, each with the rule a source can recognise it by),
  * its areas (paths and events), its competitors, how work reaches users
- * (merge policy, protected repos, paths that need a demo, preview domain,
- * what "released" means, feature flags) and how its dev env and previews run
+ * (merge policy, auto-merge targets, protected repos, paths that need a demo,
+ * preview domain, what "released" means, feature flags) and how its dev env and previews run
  * (the environment: services, tooling, repo conventions, protected branches,
  * demo sign-in). All of it is data the factory reads; none of it is code.
  * When an agent drafted a profile, a banner offers to stage the draft. The
  * profile applies as a version (never a trial).
  */
 
-import { FileTextIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import { FileTextIcon, PlusIcon, Trash2Icon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { AreaDef, CompetitorDef, ProposalView, SegmentDef } from "@/lib/factoryApi";
+import type {
+  AreaDef,
+  AutoMergeTarget,
+  CompetitorDef,
+  ProposalView,
+  SegmentDef,
+} from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../project/projectParts";
+import { useGithubRepos } from "../start/RepoPicker";
 import { FOCUS_RING, MEANING } from "../ui/statusTokens";
 import { useFactoryToast } from "../ui/Toast";
+import { autoMergeWarnings, formatAutoMerge, parseAutoMerge } from "./autoMerge";
 import { useSteer } from "./SteerContext";
 import {
   formatLines,
@@ -143,6 +151,42 @@ function ReleaseField() {
           )}
         </span>
       )}
+    </div>
+  );
+}
+
+/** Repo and base pairs the server merges ready, green PRs into, with a default-branch warning. */
+function AutoMergeField() {
+  const steer = useSteer();
+  const repos = useGithubRepos();
+  const targets = (steer.value("product.delivery.auto_merge") as AutoMergeTarget[] | null) ?? [];
+  const defaults = new Map<string, string>();
+  for (const r of repos.data?.connected ? repos.data.repos : []) {
+    if (r.default_branch) defaults.set(r.full_name.toLowerCase(), r.default_branch);
+  }
+  const warnings = autoMergeWarnings(targets, defaults);
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-testid="steer-auto-merge">
+      <TextField
+        section="product"
+        path="product.delivery.auto_merge"
+        label="Auto-merge targets"
+        placeholder="owner/name#branch, owner/name#branch"
+        help="The factory's server merges a ready PR into these once every check on its head is green. Owners set them; agents never merge."
+        parse={parseAutoMerge}
+        format={formatAutoMerge}
+        effect="Ready PRs into these bases merge without a person."
+      />
+      {warnings.map((warning) => (
+        <p
+          key={warning}
+          data-testid="steer-auto-merge-warning"
+          className="flex min-w-0 items-start gap-1 text-xs text-warning"
+        >
+          <TriangleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0 break-words">{warning}</span>
+        </p>
+      ))}
     </div>
   );
 }
@@ -792,10 +836,11 @@ export function ProductProfile({ proposals }: { proposals: readonly ProposalView
           section="product"
           path="product.delivery.merge_policy"
           label="Merge policy"
-          help="Who merges pull requests, in words. The factory never merges, whatever this says."
+          help="Who merges pull requests, in words. Agents never merge, whatever this says."
           multiline
           maxLength={300}
         />
+        <AutoMergeField />
         <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
           <TextField
             section="product"

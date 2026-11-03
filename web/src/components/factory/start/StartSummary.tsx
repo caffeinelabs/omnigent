@@ -155,7 +155,7 @@ export function StartSummaryCard({
                 into <span className="font-mono break-words">{summary.repos.join(", ")}</span>
               </>
             )}
-            ; the factory never merges
+            ; agents never merge
           </li>
           <li>Deny-only policy hooks on every agent</li>
           <li>At most {FACTORY_MAX_PODS} pods</li>

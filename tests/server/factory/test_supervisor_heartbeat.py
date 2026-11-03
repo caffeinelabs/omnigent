@@ -369,7 +369,8 @@ async def test_factory_services_run_the_supervisor_only_when_enabled(
         stop = await start_factory_services(world.app_state)
     started = [r.getMessage() for r in caplog.records if "factory services started" in r.message]
     assert started == [
-        "factory services started: supervisor, delivery_seed, discovery_beats, discovery_ledger, "
+        "factory services started: supervisor, auto_merger, delivery_seed, discovery_beats, "
+        "discovery_ledger, "
         "discovery_readouts, discovery_seat, discovery_sync, env_prober, pr_poller, "
         "proposals_sweep, prune, "
         "reconcile, slack_dm"

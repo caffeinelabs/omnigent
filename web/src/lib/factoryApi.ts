@@ -712,6 +712,11 @@ export interface PrView {
   gates: GatesView;
   ready: boolean;
   ready_since: number | null;
+  /**
+   * The server merges it when green: its repo and base are an owner-set auto-merge
+   * target, it comes from a factory branch of an active project, and the merger runs.
+   */
+  auto_merge?: boolean;
   sentinel: SentinelView | null;
   human_review: HumanReviewView | null;
   preview: PreviewView | null;
@@ -2831,9 +2836,17 @@ export interface CompetitorDef {
   changelog: string | null;
 }
 
+/** A repo and base whose ready factory PRs the server merges (names only; owners set it). */
+export interface AutoMergeTarget {
+  repo: string;
+  base: string;
+}
+
 export interface DeliveryDef {
-  /** Who merges pull requests, in words. The factory never merges. */
+  /** Who merges pull requests, in words. Agents never merge. */
   merge_policy: string | null;
+  /** Owner-set targets the server merges ready, green PRs into (absent on older servers). */
+  auto_merge?: AutoMergeTarget[];
   protected_repos: string[];
   /** Paths whose changes need a demo. */
   demo_paths: string[];

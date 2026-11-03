@@ -198,6 +198,10 @@ export function showValue(value: unknown, names?: ReadonlyMap<string, string>): 
       return `${n}${role}${who ? ` (${who})` : ""}`;
     }
     if (typeof item.id === "string") return item.id;
+    // An auto-merge target.
+    if (typeof item.repo === "string" && typeof item.base === "string") {
+      return `${item.repo}#${item.base}`;
+    }
     return Object.entries(item)
       .filter(([, v]) => v != null && v !== "")
       .map(([k, v]) => `${k} ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)

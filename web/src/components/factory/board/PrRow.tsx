@@ -288,7 +288,7 @@ export function PrRow({
 }) {
   // Tracked here: the row swaps layouts when the PR merges, and only that swap pulses.
   const changed = useChangedSinceMount(pr.state);
-  const mergePolicy = mergePolicyText(useDelivery(undefined));
+  const mergePolicy = mergePolicyText(useDelivery(undefined), pr);
   if (pr.state !== "open") return <ClosedPrRow pr={pr} nowS={nowS} pulse={changed !== null} />;
   const review = () => onReview(pr.number);
   const badges = prBadges(pr);

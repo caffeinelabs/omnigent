@@ -315,6 +315,14 @@ def check_agent_paths(seat: str, changes: Sequence[definition.Change]) -> None:
         path = change.full_path
         if definition.blocks.agent_may_propose(seat, path):
             continue
+        if definition.blocks.agent_never(path):
+            raise CockpitError(
+                403,
+                "path_not_allowed",
+                f"{seat} may not propose {path}: {definition.blocks.AGENT_NEVER_REASON}",
+                field="changes",
+                path=path,
+            )
         team = definition.team_spec.is_team_path(path)
         paths = definition.blocks.AGENT_PATHS.get(seat, ())
         if seat in definition.blocks.ALLOWLIST_SEATS:
@@ -1217,6 +1225,8 @@ async def _apply(
     floor = await asyncio.to_thread(definition.rule_floor, deps, root.id)
     goal_floor = await asyncio.to_thread(definition.goal_floor, deps, root.id)
     changes = _changes(row.ops)
+    if row.author_kind == "agent":
+        await _refuse_agent_never(deps, row, changes, expect)
     after = definition.apply_changes(
         resolved.stored,
         changes,
@@ -1328,6 +1338,36 @@ async def _apply(
             outcome_text(ref, what, "The definition changed; record it in the ledger."),
         )
     return row
+
+
+async def _refuse_agent_never(
+    deps: FactoryDeps,
+    row: FactoryProposal,
+    changes: Sequence[definition.Change],
+    expect: str | Sequence[str],
+) -> None:
+    """
+    Refuse an agent's proposal that changes a path no agent may (approval cannot widen it).
+
+    :raises CockpitError: 403 ``path_not_allowed`` (the proposal is marked refused).
+    """
+    never = [c.full_path for c in changes if definition.blocks.agent_never(c.full_path)]
+    if not never:
+        return
+    await _update(
+        deps,
+        row,
+        expect,
+        status="refused",
+        result={**(row.result or {}), "reason": "path_not_allowed"},
+    )
+    raise CockpitError(
+        403,
+        "path_not_allowed",
+        f"{proposal_ref(row.number)} changes {', '.join(never)}: "
+        f"{definition.blocks.AGENT_NEVER_REASON}",
+        path=never[0],
+    )
 
 
 async def _refuse_stale(

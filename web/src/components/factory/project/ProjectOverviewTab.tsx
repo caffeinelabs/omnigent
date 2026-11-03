@@ -290,7 +290,8 @@ function PullRequests({
 }
 
 function ReadyForMerge({ snapshot, prs }: { snapshot: FactorySnapshot; prs: PrView[] }) {
-  const ready = prs.filter((pr) => pr.state === "open" && pr.ready);
+  // A PR into an owner-set auto-merge target is the server's to merge, not the viewer's.
+  const ready = prs.filter((pr) => pr.state === "open" && pr.ready && !pr.auto_merge);
   if (ready.length === 0) return null;
   const policy = snapshot.factory.product?.delivery?.merge_policy ?? null;
   return (
@@ -301,7 +302,7 @@ function ReadyForMerge({ snapshot, prs }: { snapshot: FactorySnapshot; prs: PrVi
     >
       <p className="text-sm text-muted-foreground">
         {policy ? `${policy.replace(/\.?$/, ".")} ` : "A person merges. "}
-        The factory never merges.
+        Agents never merge.
       </p>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {ready.map((pr) => (

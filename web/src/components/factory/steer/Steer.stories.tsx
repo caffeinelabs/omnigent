@@ -226,6 +226,24 @@ export const ProductProfileStaged = steer("/steer/product", {
     ),
 });
 
+/** An owner stages auto-merge targets; one is the repo's default branch, so Steer warns. */
+export const ProductProfileAutoMerge = steer("/steer/product", {
+  staging: () =>
+    stageEdit(
+      EMPTY_STEER,
+      replaceEdit(
+        "product",
+        "product.delivery.auto_merge",
+        "Auto-merge targets",
+        [],
+        [
+          { repo: "sample-org/sample-app", base: "staging" },
+          { repo: "sample-org/sample-app", base: "main" },
+        ],
+      ),
+    ),
+});
+
 /** A factory with an empty profile. */
 export const ProductProfileEmpty = steer("/steer/product", {
   discovery: false,

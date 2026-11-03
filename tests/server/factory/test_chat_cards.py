@@ -56,9 +56,14 @@ def test_every_listed_event_family_maps_to_a_card_type() -> None:
         "decision.answered",
         "decision.escalated",
     } == chat_cards.DECISION_KINDS
-    assert {"pr.ready", "pr.merged", "pr.closed", "pr.discovered", "pr.human_review"} == set(
-        chat_cards.PR_KINDS
-    )
+    assert {
+        "pr.ready",
+        "pr.auto_merged",
+        "pr.merged",
+        "pr.closed",
+        "pr.discovered",
+        "pr.human_review",
+    } == set(chat_cards.PR_KINDS)
     assert chat_cards.mirror_event in events._listeners
 
 

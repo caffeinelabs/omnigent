@@ -446,7 +446,7 @@ describe("Home", () => {
     await waitFor(() => expect(location).toBe(`${BASE}?peek=merge`));
     const peek = await screen.findByTestId("merge-peek");
     expect(within(peek).getAllByRole("listitem")).toHaveLength(11);
-    expect(peek).toHaveTextContent("The factory never merges.");
+    expect(peek).toHaveTextContent("Agents never merge.");
   });
 
   it("shows five rows, then and N more", async () => {

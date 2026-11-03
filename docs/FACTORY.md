@@ -727,10 +727,11 @@ transcript folds.
 | Variable | Default | Effect |
 |---|---|---|
 | `OMNIGENT_FACTORY_PR_POLL_S` | `60` | GitHub poll interval for tracked PRs; `0` turns the poller off. |
+| `OMNIGENT_FACTORY_AUTO_MERGE_S` | `60` | How often the server's auto-merger looks at ready PRs into the owners' auto-merge targets (`product.delivery.auto_merge`); `0` turns it off. A PR into a target that turns ready wakes it at once. |
 | `OMNIGENT_FACTORY_ENV_PROBE_S` / `OMNIGENT_FACTORY_PREVIEW_PROBE_S` | `60` / `300` | Dev env and preview probe intervals. |
 | `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | unset | The deployment's env domain: the only domain env and preview URLs may use (SSRF guard) for a factory whose product profile sets no `product.delivery.preview_domain`. `OMNIGENT_ENV_DOMAIN` (the sandboxes' env domain) is read when it is unset. With neither, no env URL is accepted. |
 | `OMNIGENT_FACTORY_PREVIEW_DOMAINS` | the env domain | Tier 0: comma-separated domains a product profile may name as its `product.delivery.preview_domain` (the env domain is always one). A definition change to any other domain is refused (422 `tier0`); a stored one the deployment no longer lists is ignored with a warning, and the env domain applies. |
-| `OMNIGENT_FACTORY_DELIVERY_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<product.delivery fields>}}` (`merge_policy`, `protected_repos`, `demo_paths`, `preview_domain`, `release`, `flags`): the profile a factory on that repo starts from. A new factory whose default repo is listed gets it in v1; a factory from before the product profile whose default or project repo is listed gets it once as a seed version at boot. A factory on another repo starts with an empty profile. Owners edit it afterwards. |
+| `OMNIGENT_FACTORY_DELIVERY_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<product.delivery fields>}}` (`merge_policy`, `auto_merge`, `protected_repos`, `demo_paths`, `preview_domain`, `release`, `flags`): the profile a factory on that repo starts from. A new factory whose default repo is listed gets it in v1; a factory from before the product profile whose default or project repo is listed gets it once as a seed version at boot. A factory on another repo starts with an empty profile. Owners edit it afterwards; a factory whose profile was already seeded or set takes new `auto_merge` targets only from an owner in Steer. Example: `{"sample-org/sample-app": {"auto_merge": [{"repo": "sample-org/sample-app", "base": "staging"}]}}`. |
 | `OMNIGENT_FACTORY_ENVIRONMENT_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<environment fields>}}` (`summary`, `services`, `tooling`, `registry`, `base_image`, `pull_secret`, `notes`, `conventions`, `protected_branches`, `demo`): the environment profile a factory on that repo starts from, seeded like `OMNIGENT_FACTORY_DELIVERY_SEED` (in v1, or once at boot for a factory from before it). The seed's `repo` is its key unless it names one, so it reaches only that repo's projects. An invalid value seeds nothing (logged). |
 | `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` | unset | Tier 0: comma-separated `owner/repo` values no factory agent ever writes, whatever a spec, a project or a profile says. Read once at boot. Unset, the server logs an error at start and the cockpit health strip shows "Config: no always-deny repos configured". |
 | `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.example.com`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
@@ -1626,11 +1627,50 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   (`tilt up|down|ci`, `pnpm factory:up|down|preview` or
   `scripts/factory.ts up|down|preview`, `kubectl delete ns`) for anyone but
   `env_keeper` (and its PL, whose guard its sub-agents also pass).
-- **Humans merge.** The factory never merges, on any repo. A PR is done
+- **Humans merge.** No agent merges, on any repo. A PR is done
   for the factory when it is ready for human merge (not a draft, CI green, an
   APPROVE review marker and a PASS verify marker for the head). The PL posts
   `READY FOR HUMAN MERGE <url>` to its lead, Sentinel verifies the claim, and
   Atlas lists it for the human.
+- **Auto-merge targets (owners only).** An owner may name repo and base pairs
+  in Steer › Product profile › Repo and delivery (`product.delivery.auto_merge`,
+  e.g. `[{"repo": "sample-org/sample-app", "base": "staging"}]`; names only,
+  class B, a person's edit, never an agent's proposal). Steer warns when a
+  target is the repo's default branch. The server's auto-merger
+  (`server/factory/background/auto_merger.py`) then squash-merges a factory PR
+  into a target, with the owner's GitHub connection, only when
+  - its head is a factory branch of its project (`factory/<slug>/<task>`) and
+    the project is active; the factory is not paused and the project's lead is
+    not paused (the owner's brakes hold merges too);
+  - the factory marks it ready (the merge ask's condition: every gate passed on
+    its head, no change request on it);
+  - GitHub, read just before, reports the same head in the same repository
+    (never a fork), open, not a draft, `MERGEABLE`, no change request, nothing
+    changed since the poller's last read (else the poller reads it again
+    first), every check on the head completed as success, skipped or neutral
+    (optional checks too), and the review and verify markers that pass the
+    head written by a repo owner, member or collaborator, or by the factory
+    owner's login the agents act as (an outsider's marker never decides);
+  - the stored row, the targets and the brakes, read again right before the
+    merge, still allow it.
+
+  The merge names that head as the expected one, so a later push is refused.
+  It records `pr.auto_merged` (the Room shows it in the PR's and the project's
+  threads), and the poller's merged flow runs as for any merge. Those PRs leave
+  Needs you while the merger runs (`OMNIGENT_FACTORY_AUTO_MERGE_S > 0`): they
+  read "merges automatically when checks pass". Nothing waits silently: a
+  GitHub error backs the PR off (5 min, doubling to an hour) and raises
+  `pr.auto_merge_failed`; a ready PR that does not merge for a reason a person
+  must fix (a failing check, no checks, a fork's head, an untrusted marker, a
+  change request, GitHub not connected) at once, or for any reason for 30 min,
+  raises `pr.auto_merge_waiting`, which replaces the "merges automatically"
+  line with a Needs you row. Both are owners' incidents; they clear when the
+  PR merges or closes, leaves the targets, is no longer ready or gets a new
+  head. The PL's charter says "PRs into `<repo>#<base>` are merged by the
+  factory's server when ready; never merge yourself". A version stores the
+  targets under their own top-level key (`auto_merge_targets`), so a server
+  from before them drops only the targets on a rollback and keeps the rest of
+  the profile (`protected_repos` included).
 - **Merge gate.** `python -m omnigent.factory_merge <pr-url> [--admin-fallback] [--dry-run]`
   is a verdict tool for agents: the guard admits it only with `--dry-run`
   (see Invariants). Run by a human, it
@@ -1662,7 +1702,7 @@ enforced in code.
 
 | Invariant | Enforced by |
 |---|---|
-| The factory never merges (any repo, a test base included). | The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
+| No agent merges (any repo, a test base included); only the server merges, into the owners' auto-merge targets. | The merger reads its targets only from `product.delivery.auto_merge`, which only an owner's edit changes (`AGENT_NEVER`: no agent proposal names it, and approving one never applies it). The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
 | Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. Protected branches are `main`, `master` and `staging` plus the environment profile's `protected_branches`, which the server passes as `factory_protected_branches`. |
 | No writes to the always-deny repos; none to a protected repo of the product profile unless a human made it a project's repo (or under the `smith` profile). | The server passes the profile's `product.delivery.protected_repos` as `factory_protected_repos`; `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` (read at boot) is denied whatever a spec passes; an explicit spec `deny_repos` binds too. A project's repo is lifted from the protected repos and the default `deny_repos` (empty) for the members that write it (next row). The `smith` profile (no `write_repos` of its own: as a member it writes its project's repo, the deployment's omnigent fork; `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
 | A member writes only the repos of its factory projects: a PL and its sub-agents their own project's repo, a lead (and the planner) every project's. Pushes, `gh pr create/edit/comment/review/…`, `gh issue` writes, `gh api` writes and `GH_REPO` all check the same set. | The server resolves the set whenever it builds a member's policy engine (`server/factory/guard_repos.py`, registered in `runtime/policies/builder.SERVER_POLICY_ARGUMENTS`) and passes it as `factory_repos` to `factory_role_guard` and `factory_invariants`. It replaces the bundle's `write_repos` (bundles pass none; outside a factory the guard writes only the repos a spec names). It reads only the server-stamped membership labels (`id`, `role`, `project`) and the factory's project rows, never tool input, `session_state`, charters or other labels; a row reconcile backfilled from a PL's sandbox (its repo came from a lead's spawn) does not count, nor do cancelled or merged-away projects. An agent's project proposal on a repo outside the same set (plus the default repo) needs the owner, so no agent can grow it. Rows are read on every build, so a project added later extends the set at once. A store error, or a sub-agent whose root cannot be loaded, leaves the member no writable repo. The runner-side gate keeps the bundle defaults; no factory bundle declares an MCP server, so every GitHub write is a shell command the server decides. |

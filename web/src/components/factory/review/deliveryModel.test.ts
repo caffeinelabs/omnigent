@@ -17,18 +17,31 @@ function pr(number: number) {
 const delivery = (fields: Parameters<typeof sampleProduct>[0]) => sampleProduct(fields).delivery;
 
 describe("merge policy", () => {
-  it("says the profile's words, and that the factory never merges", () => {
+  it("says the profile's words, and that agents never merge", () => {
     expect(mergePolicyText(null)).toBe(DEFAULT_MERGE_POLICY);
     expect(mergePolicyText(delivery({ merge_policy: "  " }))).toBe(DEFAULT_MERGE_POLICY);
     expect(mergePolicyText(delivery({ merge_policy: "Release managers merge after QA" }))).toBe(
-      "Release managers merge after QA. The factory never merges.",
+      "Release managers merge after QA. Agents never merge.",
     );
     expect(
       mergePolicyText(delivery({ merge_policy: "Maintainers merge; the factory never merges." })),
     ).toBe("Maintainers merge; the factory never merges.");
+    expect(mergePolicyText(delivery({ merge_policy: "Owners merge; agents never merge" }))).toBe(
+      "Owners merge; agents never merge.",
+    );
     // Another "never merge" is not the factory's clause.
     expect(mergePolicyText(delivery({ merge_policy: "Never merge before QA sign-off" }))).toBe(
-      "Never merge before QA sign-off. The factory never merges.",
+      "Never merge before QA sign-off. Agents never merge.",
+    );
+  });
+
+  it("says the server merges a PR into an owner-set auto-merge target", () => {
+    const policy = delivery({ merge_policy: "Owners merge" });
+    expect(mergePolicyText(policy, { auto_merge: true, base_ref: "staging" })).toBe(
+      "The factory's server merges it into staging when every check passes. Agents never merge.",
+    );
+    expect(mergePolicyText(policy, { auto_merge: false, base_ref: "staging" })).toBe(
+      "Owners merge. Agents never merge.",
     );
   });
 

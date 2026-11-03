@@ -112,6 +112,7 @@ def test_without_a_deployment_seed_v1_holds_no_delivery(factory: FactoryWorld) -
     assert "product" not in resolved.stored
     assert product_profile.delivery(factory.deps, _fid(factory)) == {
         "merge_policy": None,
+        "auto_merge": [],
         "protected_repos": [],
         "demo_paths": [],
         "preview_domain": None,
@@ -128,10 +129,10 @@ def test_a_new_factory_starts_from_the_deployment_seed(
     resolved = definition.definition_for(factory.deps, _fid(factory), fresh=True)
     assert resolved is not None and resolved.version == 1
     assert resolved.created_via == "seed"
-    assert resolved.stored["product"]["delivery"] == {
-        **resolved.doc["product"]["delivery"],
-        **SEED,
-    }
+    # Empty auto-merge targets are left out of the stored version (see SPARSE_FIELDS).
+    delivery = resolved.doc["product"]["delivery"]
+    stored_defaults = {k: v for k, v in delivery.items() if k != "auto_merge"}
+    assert resolved.stored["product"]["delivery"] == {**stored_defaults, **SEED}
     assert product_profile.protected_repos(factory.deps, _fid(factory)) == {
         "acme/infra",
         "acme/platform",

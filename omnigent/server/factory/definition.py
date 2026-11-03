@@ -733,6 +733,9 @@ def set_path(doc: dict[str, Any], path: str, value: Any) -> None:
 
 SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq", team_spec.TEAM)
 """Keys a version stores only once they differ from their defaults (see :func:`stored_form`)."""
+SPARSE_FIELDS: Final = ("product.delivery.auto_merge",)
+"""Fields inside a stored block left out while they hold their defaults, so a server
+from before them still reads the block (see :func:`stored_form`)."""
 
 
 @functools.cache
@@ -751,7 +754,25 @@ def stored_form(doc: Mapping[str, Any]) -> dict[str, Any]:
     """
     defaults = _code_defaults()
     out = {k: v for k, v in doc.items() if not (k in SPARSE_KEYS and v == defaults.get(k))}
-    return blocks.downgrade(out)
+    return blocks.downgrade(_without_default_fields(out, defaults))
+
+
+def _without_default_fields(doc: Mapping[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """:returns: *doc* without the :data:`SPARSE_FIELDS` that hold their defaults."""
+    out = dict(doc)
+    for path in SPARSE_FIELDS:
+        *parents, leaf = path.split(".")
+        node = out
+        for key in parents:
+            child = node.get(key)
+            if not isinstance(child, Mapping):
+                break
+            # Copied on the way down: the caller's doc stays as it was.
+            node[key] = node = dict(child)
+        else:
+            if leaf in node and node[leaf] == get_path(defaults, path):
+                del node[leaf]
+    return out
 
 
 def _with_defaults(stored: Mapping[str, Any]) -> dict[str, Any]:
@@ -1999,6 +2020,7 @@ __all__ = [
     "LIST_PATHS",
     "OWNER_ONLY_PREFIXES",
     "QUIET_BLOCKS",
+    "SPARSE_FIELDS",
     "SPARSE_KEYS",
     "TIER0",
     "TIER0_REASONS",

@@ -59,6 +59,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import (
     activity_now,
+    auto_merge,
     definition,
     detectors,
     identity,
@@ -986,7 +987,12 @@ def project_demo_view(
     return _lenient(schemas.ProjectDemoView, view)
 
 
-def _pr_view(pr: FactoryPr, demos: Sequence[FactoryDemo], titles: Mapping[str, str]) -> dict:
+def _pr_view(
+    pr: FactoryPr,
+    demos: Sequence[FactoryDemo],
+    titles: Mapping[str, str],
+    auto: bool = False,
+) -> dict:
     # Newest first; a demo of the current head wins a same-second tie.
     demos = sorted(demos, key=lambda d: (d.created_at, d.head_sha == pr.head_sha), reverse=True)
     merged = None
@@ -1012,6 +1018,7 @@ def _pr_view(pr: FactoryPr, demos: Sequence[FactoryDemo], titles: Mapping[str, s
         "gates": _lenient(schemas.GatesView, pr.gates or {}) or schemas.GatesView().model_dump(),
         "ready": ready_for_human(pr),
         "ready_since": pr.ready_at,
+        "auto_merge": auto,
         "sentinel": _lenient(schemas.SentinelView, pr.sentinel),
         "human_review": _lenient(schemas.HumanReviewView, pr.human_review),
         "preview": _preview_view(pr),
@@ -1433,8 +1440,21 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     demos_by_pr: dict[tuple[str, int], list[FactoryDemo]] = {}
     for demo in loaded.demos:  # newest first
         demos_by_pr.setdefault((demo.repo, demo.pr_number), []).append(demo)
+    # Only while this server runs the merger: otherwise a person merges as before.
+    targets = (
+        auto_merge.targets_of(((loaded.product or {}).get("delivery")) or {})
+        if auto_merge.merger_on(app_state)
+        else frozenset()
+    )
+    projects_by_slug = {p.slug: p for p in loaded.projects}
     pr_views = [
-        _pr_view(pr, demos_by_pr.get((pr.repo, pr.number), []), titles) for pr in loaded.prs
+        _pr_view(
+            pr,
+            demos_by_pr.get((pr.repo, pr.number), []),
+            titles,
+            auto_merge.merges_itself(pr, targets, projects_by_slug.get(pr.project_slug or "")),
+        )
+        for pr in loaded.prs
     ]
     loop_summaries, loop_chips = await asyncio.to_thread(
         loops.snapshot_fields, deps, factory_id, loaded.prs

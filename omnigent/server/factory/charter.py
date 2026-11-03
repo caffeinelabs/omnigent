@@ -405,9 +405,9 @@ def render_pl_charter(
         *_optional_lines(charter),
         *_update_lines(),
         # Before the profile's lists: a brief cut at its length limit keeps it.
-        f"Merge policy: {_merge_policy(repo, delivery or {})} Report READY FOR HUMAN MERGE "
-        "<url> to your lead once every gate is green; never run `gh pr merge` or the merge "
-        "gate.",
+        f"Merge policy: {_merge_policy(repo, delivery or {}, project_base_branch(project))} "
+        "Report READY FOR HUMAN MERGE <url> to your lead once every gate is green; never run "
+        "`gh pr merge` or the merge gate.",
         *_delivery_lines(project, charter, delivery or {}),
         *charter_lines(environment, project.repo, env_needed=charter["env_needed"]),
     ]
@@ -473,13 +473,23 @@ def why_lines(charter: Mapping[str, Any]) -> list[str]:
 
 
 FACTORY_NEVER_MERGES: Final = "The factory never merges."
-"""Added to a profile's merge policy unless it already says so (the cockpit adds it too)."""
+"""Added to a profile's merge policy unless it already says so (the cockpit adds it too),
+except for a base the owners made an auto-merge target (:mod:`.auto_merge`)."""
 DELIVERY_LIST_MAX: Final = 8
 """Entries of a profile list a charter line shows; ``sys_factory_rules`` lists them all."""
 
 
-def _merge_policy(repo: str, delivery: Mapping[str, Any]) -> str:
-    """The charter's merge policy: the product profile's words, else humans merge *repo*."""
+def _merge_policy(repo: str, delivery: Mapping[str, Any], base: str | None = None) -> str:
+    """
+    The charter's merge policy: the product profile's words, else humans merge *repo*.
+
+    A *base* the owners made an auto-merge target is merged by the server
+    when ready; agents still never merge.
+    """
+    from omnigent.server.factory.auto_merge import is_target, policy_text, targets_of
+
+    if base and is_target(targets_of(delivery), repo, base):
+        return policy_text(repo, base)
     policy = _text(delivery.get("merge_policy"))
     if policy is None:
         return f"human. Humans merge {repo}; the factory never merges."
