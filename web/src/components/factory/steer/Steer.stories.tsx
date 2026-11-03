@@ -45,7 +45,8 @@ import { resetSteerStaging, writeSteerStaging } from "./steerStaging";
 // with an undone one and a staged restore, Undo of the version in force, a
 // change staged on a version no longer in force, an operator's raise that
 // waits for an owner and their lower budget that applies at once, a viewer,
-// discovery off, empty sections, light, and a 390 px phone. A story's staging is staged on v12 unless it says otherwise.
+// discovery off, empty sections, the environment profile, light, and a 390 px
+// phone. A story's staging is staged on v12 unless it says otherwise.
 
 interface SteerStoryOptions extends SteerRouteOptions {
   role?: ViewerRole;
@@ -230,6 +231,38 @@ export const ProductProfileEmpty = steer("/steer/product", {
   discovery: false,
   proposals: [],
 });
+
+/** The environment profile, scrolled into view, with a protected branch staged. */
+function environment(options: SteerStoryOptions = {}): Story {
+  const story = steer("/steer/product", {
+    proposals: [],
+    staging: () =>
+      stageEdit(
+        EMPTY_STEER,
+        replaceEdit(
+          "product",
+          "environment.protected_branches",
+          "Protected branches",
+          doc().environment!.protected_branches,
+          ["develop", "release/*"],
+        ),
+      ),
+    ...options,
+  });
+  return {
+    ...story,
+    play: async ({ canvasElement }) => {
+      const body = within(canvasElement.ownerDocument.body);
+      (await body.findByTestId("steer-environment")).scrollIntoView({ block: "start" });
+    },
+  };
+}
+
+export const ProductProfileEnvironment = environment();
+
+export const ProductProfileEnvironmentLight = environment(light);
+
+export const ProductProfileEnvironmentMobile = phone(environment());
 
 // ── Sources ────────────────────────────────────────────────────
 

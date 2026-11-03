@@ -397,6 +397,11 @@ export const STEER_SECTION_LABEL: Record<SteerSection, string> = Object.fromEntr
   STEER_SECTIONS.map((section) => [section, SECTION_INFO[section].label]),
 ) as Record<SteerSection, string>;
 
+/** Words a Steer section is found by besides its name (blocks it edits as a whole). */
+const STEER_SECTION_WORDS: Partial<Record<SteerSection, readonly string[]>> = {
+  product: ["environment", "delivery", "services", "conventions", "protected branches"],
+};
+
 const SETTING_SECTIONS: readonly [SteerSection, readonly FieldGroup[]][] = [
   ["budgets", [...BUDGET_GROUPS, ...AUTONOMY_GROUPS]],
   ["alerts", ALERT_GROUPS],
@@ -639,7 +644,7 @@ export function placeItems(
         "steer",
         STEER_SECTION_LABEL[section],
         steerPageHref(factoryId, section),
-        [section, "steer"],
+        [section, "steer", ...(STEER_SECTION_WORDS[section] ?? [])],
         "Steer",
       ),
     ),

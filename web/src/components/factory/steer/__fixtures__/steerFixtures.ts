@@ -134,6 +134,28 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
       flags: { provider: "none", convention: null },
     },
   };
+  effective.environment = {
+    repo: "sample-org/sample-app",
+    summary:
+      "`pnpm factory:up` in the dev env worktree starts Tilt on the sandbox cluster and waits " +
+      "for sample-ux and sample-api (up to 20 min cold).",
+    services: [
+      { id: "app", name: "sample-ux", port: 3000, health: null },
+      { id: "api", name: "sample-api", port: 3001, health: "/ready" },
+    ],
+    tooling: "The preview tooling is on main since sample-org/sample-app#9640 (sample).",
+    registry: "registry.envs.example.com",
+    base_image: "ghcr.io/sample-org/sample-app/sample-db",
+    pull_secret: "github-registry-sample",
+    notes: ["sample-db runs the database migrations in an init container (sample)."],
+    conventions: [
+      "sync by merge, never rebase",
+      "no conventional-commit prefixes in PR titles",
+      "run `pnpm check:fix` before you report READY_FOR_REVIEW",
+    ],
+    protected_branches: ["develop"],
+    demo: { storage: { userId: "{user_id}", sampleAuthTransport: "cookie" }, clear: ["jwt"] },
+  };
   effective.strategy = {
     goals: options.noGoal
       ? []
@@ -200,6 +222,7 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
       "budgets.",
       "models.",
       "product.",
+      "environment.",
       "strategy.",
       "discovery.",
       "briefs.",
@@ -207,6 +230,7 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
     ],
     not_trialable: [
       "product",
+      "environment",
       "strategy",
       "discovery",
       "briefs.scout",
@@ -215,6 +239,7 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
     ],
     not_trialable_why: {
       product: "judged on outcomes",
+      environment: "facts, not a way of working",
       strategy: "judged on outcomes",
       discovery: "needs discovery guards",
       "briefs.scout": "needs discovery guards",

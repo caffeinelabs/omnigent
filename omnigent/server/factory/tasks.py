@@ -772,16 +772,22 @@ def card_text(
     pl_id: str | None,
     attempt: int,
     rules: Sequence[str] = (),
+    environment: Mapping[str, Any] | None = None,
 ) -> str:
     """
     The task card a worker gets, rendered by the server.
 
     It carries the card itself, the base (``Base: <base>``; the worker branches
-    from ``origin/<base>``), the acceptance commands to run verbatim, the
-    factory definition's rules for the role, and the budget left.
+    from ``origin/<base>``), the repo's conventions from the environment
+    profile, the acceptance commands to run verbatim, the factory definition's
+    rules for the role, and the budget left.
 
     :param attempt: The attempt this card is for (1-based).
+    :param environment: The factory's ``environment`` profile (its conventions
+        render when it applies to the project's repo).
     """
+    from omnigent.server.factory.environment import card_lines
+
     card = task.card or {}
     slug = task.project_slug
     base = project_base_branch(project) if project is not None else "main"
@@ -797,6 +803,7 @@ def card_text(
         f"Repo: {repo} · Base: {base} (branch from origin/{base}; open the PR with --base {base})",
         f"Worktree: {WORKTREE_ROOT}/{task.key} · Branch: factory/{slug}/{task.key}",
         f"Scope: {scope}; do not touch anything else",
+        *card_lines(environment, project.repo if project is not None else None),
         f"Do: {card.get('text') or task.title}",
         "Acceptance (run verbatim, all must pass):",
         _bullets(acceptance) if acceptance else "- (none given: show the change works)",
@@ -840,11 +847,14 @@ def dispatch_item(
 
     :param attempt: The attempt to render (default: the next one).
     """
+    from omnigent.server.factory.environment import environment
+
     attempt = attempt if attempt is not None else task.attempts + 1
     harness = harness_of(task)
     left = budget_left(task, ctx.project)
     pl_id = _pl_id(deps, ctx.factory_id, ctx.project)
     rules = role_rules(deps, ctx.factory_id, "ic", ctx.slug)
+    env = environment(deps, ctx.factory_id)
     if harness == "ic_codex":
         # Rules for the Codex builder ride its cards (its sessions report role ic).
         rules += role_rules(deps, ctx.factory_id, "ic_codex", ctx.slug)
@@ -861,6 +871,7 @@ def dispatch_item(
             pl_id=pl_id,
             attempt=attempt,
             rules=sorted(set(rules), key=_rule_number),
+            environment=env,
         ),
         "budget_left": left,
         "preview": bool((task.card or {}).get("preview")),

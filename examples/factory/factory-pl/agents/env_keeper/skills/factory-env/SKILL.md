@@ -7,7 +7,21 @@ description: env_keeper reference for the project's Tilt envs on the sandbox clu
 
 Two kinds of env, both yours. `<base>` is the project's base branch: the
 charter's `Base branch:` (default `main`), which the PL sends as `base=<base>`
-on UP, PREVIEW and MERGED. Every factory PR targets it.
+on UP, PREVIEW and MERGED. Every factory PR targets it. `<owner/repo>` is the
+project's GitHub repo: `environment.repo` (below), else
+`gh repo view --json nameWithOwner -q .nameWithOwner` in `<repo>`.
+
+This skill is the factory's env protocol. The facts of this product's env
+are data in its environment profile: `sys_factory_rules()` returns them as
+`environment` (call it on your first turn and after a sandbox wake):
+`summary` (how the dev env starts), `services` (each `{id, name, port,
+health}`: `id` is its key in `urls`, `name` its Deployment and Service in the
+env namespace), `tooling` (where the env tooling lives and known tooling
+fixes), `registry`, `base_image`, `pull_secret` and `notes` (facts to read
+before you fix a failed env). Below, `<api service>`, `<api port>` and
+`<api health>` are the `name`, `port` and `health` of the service whose `id`
+is `api` (`app` likewise). `environment: null` means the profile names none
+for this repo: run the protocol as written and report what fails.
 
 | | Dev env | Factory preview |
 |---|---|---|
@@ -26,7 +40,7 @@ the PR in the dev env, then go back to the base" any more.
 
 | Command | What it does |
 |---|---|
-| `pnpm factory:up` | Idempotent. Logs in to ghcr, ensures namespace `env-<id>`, starts `tilt up` detached (log `/tmp/tilt.log`; reuses a running tilt), waits for `caffeine-ux` and `caffeine-api` (up to 20 min cold), writes `~/factory/env.json`. |
+| `pnpm factory:up` | Idempotent. Logs in to the image registries, ensures namespace `env-<id>`, starts `tilt up` detached (log `/tmp/tilt.log`; reuses a running tilt), waits for the `environment.services` (up to 20 min cold), writes `~/factory/env.json`. |
 | `pnpm -s factory:status` | env.json, then one line per Tilt resource, then the pods. |
 | `pnpm -s factory:urls` | The URLs as JSON. |
 | `pnpm factory:down` | `tilt down`, deletes the namespace, removes env.json. |
@@ -45,7 +59,7 @@ UP base=<base> [tooling=<ref>]:
    If it exists, move it to the current head (the base may have moved, or it
    was made for another base); the reset drops an earlier tooling fix:
    `git -C /home/omnigent/workspace/wt/env reset -q --hard && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`.
-2. **Tooling fix.** `tooling=<ref>` is the branch of an open caffeinelabs/app
+2. **Tooling fix.** `tooling=<ref>` is the branch of an open `<owner/repo>`
    PR that fixes the env tooling under `deploy/tilt/` (failure table: stale
    base image). Keep it: `echo '<ref>' >| ~/factory/env-tooling`
    (`tooling=main` empties the file instead). While that PR is open, every UP
@@ -53,10 +67,11 @@ UP base=<base> [tooling=<ref>]:
    under `deploy/tilt/`, in ONE Bash call:
    ```bash
    cd /home/omnigent/workspace/wt/env
+   R=<owner/repo>
    REF=$(cat ~/factory/env-tooling 2>/dev/null)
    if [ -n "$REF" ]; then
-     STATE=$(gh pr view "$REF" --repo caffeinelabs/app --json state -q .state)
-     FIX=$(gh pr diff "$REF" --repo caffeinelabs/app --name-only | grep '^deploy/tilt/')
+     STATE=$(gh pr view "$REF" --repo "$R" --json state -q .state)
+     FIX=$(gh pr diff "$REF" --repo "$R" --name-only | grep '^deploy/tilt/')
      if [ "$STATE" = MERGED ] || [ "$STATE" = CLOSED ]; then
        : >| ~/factory/env-tooling; echo "tooling fix $REF dropped: its PR is $STATE"
      elif [ "$STATE" != OPEN ] || [ -z "$FIX" ]; then
@@ -88,10 +103,10 @@ fail, `"failed"` when it is unusable (put the diagnosis in `note`), and
 
 ## Factory previews (run in the preview worktree)
 
-The preview CLI is `scripts/factory.ts preview` in caffeinelabs/app, on main
-since caffeinelabs/app#9640. A PR head whose history includes it (current
-main, or a base branch cut from it) has it, and the `factory:preview` script
-with it (`-s` keeps stdout pure JSON):
+The preview CLI is `scripts/factory.ts preview` in the project's repo, on its
+main (`environment.tooling` says since when). A PR head whose history
+includes it (current main, or a base branch cut from it) has it, and the
+`factory:preview` script with it (`-s` keeps stdout pure JSON):
 
 ```bash
 pnpm -s factory:preview up --name p<n> --pr <n> --sha <40-char sha>
@@ -111,7 +126,7 @@ Below, `FP` stands for `pnpm -s factory:preview` in a checkout whose
 type it out in full. `FP` needs a checkout with the preview tooling, that is
 one where `grep -q "case 'preview'" scripts/factory.ts` succeeds: a preview
 worktree after step 4, or `wt/env` once it is at an origin/<base> that includes
-caffeinelabs/app#9640. A `wt/env` created before that stays on its old commit
+the preview tooling. A `wt/env` created before that stays on its old commit
 until the next MERGED, and there `FP` prints usage and exits 1; move it first
 as MERGED does (fetch, reset, checkout, then UP step 2; Tilt live-updates the
 dev env; report it with the new `deployed.sha`).
@@ -121,21 +136,21 @@ preview tooling, creates the namespace and the
 `factory-env-secrets` Secret (synthetic session secret, also written to
 `~/factory/previews/p<n>/synthetic-secret`, mode 0600, never printed), runs
 `tilt ci`, waits until `<app>/__factory/preview` serves the sha and
-`<api>/ready` answers, then writes and prints `preview.json` (progress goes to
+`<api><api health>` answers, then writes and prints `preview.json` (progress goes to
 stderr; stdout is only JSON):
 
 ```json
-{"name": "p9630", "pr": 9630, "repo": "caffeinelabs/app", "sha": "<40>",
+{"name": "p9630", "pr": 9630, "repo": "sample-org/sample-app", "sha": "<40>",
  "env_id": "<id>-p9630", "namespace": "env-<id>-p9630",
  "urls": {"app": "https://app-…", "api": "https://api-…", "minio": "https://minio-…"},
- "tiers": ["core"], "resources": [{"name": "caffeine-api", "ready": true, "restarts": 0}],
+ "tiers": ["core"], "resources": [{"name": "sample-api", "ready": true, "restarts": 0}],
  "deployed_at": "…", "timings_s": {"total": 101}, "tooling_overlay": null | "<sha>",
  "synthetic_secret_file": "/home/omnigent/factory/previews/p9630/synthetic-secret"}
 ```
 
 ### PREVIEW pr=<n> head=<sha> base=<base> [checks=[...]] [tooling=<ref>]
 
-1. **Head.** `gh pr view <n> --repo caffeinelabs/app --json headRefOid,state,baseRefName -q '.state + " " + .headRefOid + " " + .baseRefName'`.
+1. **Head.** `gh pr view <n> --repo <owner/repo> --json headRefOid,state,baseRefName -q '.state + " " + .headRefOid + " " + .baseRefName'`.
    Use the sha as `<sha>` (full 40 chars); if it differs from `head`, say
    "head moved from <head7>" in the result. Use `baseRefName` as `<base>`
    below (for a factory PR it is the command's `base=`). A PR that is not
@@ -157,10 +172,10 @@ stderr; stdout is only JSON):
    `node_modules` stay.
 4. **Tooling and deploy, in ONE Bash call** (shell variables do not survive
    between calls), with the longest Bash timeout. The tooling ref is `main`
-   (caffeinelabs/app#9640 merged the preview tooling there); only a
-   `tooling=<ref>` in the command replaces it (drop a leading `origin/`). A
-   `tooling=factory/preview-tooling` names the deleted pre-#9640 branch and
-   means `main`.
+   (the preview tooling is merged there); only a `tooling=<ref>` in the
+   command replaces it (drop a leading `origin/`). A
+   `tooling=factory/preview-tooling` names the deleted branch that carried the
+   tooling before main had it, and means `main`.
    ```bash
    cd /home/omnigent/workspace/wt/preview-p<n>
    BASE=<base>   # the PR's baseRefName (step 1)
@@ -175,7 +190,7 @@ stderr; stdout is only JSON):
        && git checkout "$TOOLING" -- "${P[@]}" || { echo "tooling-fetch-failed"; exit 4; }
    elif [ "$REF" != main ]; then
      # A tooling fix (failure table: stale base image): only the deploy/tilt files of its PR.
-     FIX=$(gh pr diff "$REF" --repo caffeinelabs/app --name-only | grep '^deploy/tilt/')
+     FIX=$(gh pr diff "$REF" --repo <owner/repo> --name-only | grep '^deploy/tilt/')
      if [ -z "$FIX" ]; then echo "tooling-fix-empty: $REF"; exit 5; fi
      OWN=$(git diff --name-only "origin/$BASE...HEAD" -- $FIX)
      if [ -n "$OWN" ]; then echo "tooling-fix-overlap: $OWN"; exit 5; fi
@@ -228,7 +243,7 @@ stderr; stdout is only JSON):
      resources=<preview.json resources>)
    ```
 7. **Checks.** Always check that `/__factory/preview` serves the sha and that
-   `<urls.api>/ready` answers 200. Then run the PL's checks verbatim against
+   `<urls.api><api health>` answers 200. Then run the PL's checks verbatim against
    the preview URLs: `{app}`, `{api}` and `{minio}` (or dev env URLs) stand
    for the preview's. Use `curl -fsS -o /tmp/v.out -w '%{http_code}' <url>`
    and keep the status plus a trimmed body.
@@ -236,8 +251,8 @@ stderr; stdout is only JSON):
    client's `X-Request-Id`: a header pass-through check cannot pass there.
    A check marked `in-cluster:` runs only against the Service, and any check
    that fails through the public URL runs once more in-cluster:
-   `kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' http://caffeine-api:3001/ready`
-   (`caffeine-ux:3000` for the app). Report both results. A check that fails
+   `kubectl -n <namespace> exec deploy/<api service> -- curl -si -H 'X-Request-Id: f-1' http://<api service>:<api port><api health>`
+   (`<app service>:<app port>` for the app). Report both results. A check that fails
    through the public URL but passes in-cluster is gateway behaviour, not a
    FAIL, and stays out of PASS/FAIL, unless the PR changes routes or gateway
    config (`deploy/tilt/routes.yaml`, an `HTTPRoute`): then it is a FAIL.
@@ -245,7 +260,7 @@ stderr; stdout is only JSON):
    ```
    <!-- factory:verify sha=<sha> result=PASS env=<urls.api> preview=<urls.app> -->
    Verified in factory preview p<n> (`<env_id>`) at `<sha7>`:
-   - `/__factory/preview` → sha <sha7> ✓ · `<api>/ready` → 200
+   - `/__factory/preview` → sha <sha7> ✓ · `<api><api health>` → 200
    - `<check>` → 200 <trimmed body>
    - gateway: `<check>` → public <what came back> · in-cluster ✓ <what came back>
    Preview: <urls.app> · API <urls.api> (Tailscale)
@@ -316,10 +331,11 @@ the PL redeploys the ones that are not ready with PREVIEW.
 | Symptom | Fix |
 |---|---|
 | `tilt` or `kubectl` not found | `mkdir -p ~/.local/bin && curl -fsSL https://github.com/tilt-dev/tilt/releases/download/v0.37.8/tilt.0.37.8.linux.x86_64.tar.gz \| tar -xz -C ~/.local/bin tilt`; kubectl: `curl -fsSLo ~/.local/bin/kubectl https://dl.k8s.io/release/v1.35.9/bin/linux/amd64/kubectl && chmod +x ~/.local/bin/kubectl`. Put `~/.local/bin` on PATH. |
-| Base image pull `denied` or `unauthorized` (ghcr.io) | Re-run `pnpm factory:up` (it logs in to ghcr). Never print tokens. |
-| Image push to `registry.envs.sandbox.caffeinelabs.io` fails | `docker info` (DinD sidecar) and `curl -fsS https://registry.envs.sandbox.caffeinelabs.io/v2/`, then retry. |
-| `ImagePullBackOff` | `kubectl -n <ns> describe pod <p>`; check `kubectl -n <ns> get secret github-registry-caffeine`; image pulls on a new node take about a minute. |
-| caffeine-db migrations fail | `kubectl -n <ns> logs <db pod> -c <init container>`; postgres Ready? Then redeploy. |
+| Base image pull `denied` or `unauthorized` | Re-run `pnpm factory:up` (it logs in to the registries). Never print tokens. |
+| Image push to `environment.registry` fails | `docker info` (DinD sidecar) and `curl -fsS https://<registry>/v2/`, then retry. |
+| `ImagePullBackOff` | `kubectl -n <ns> describe pod <p>`; check `kubectl -n <ns> get secret <environment.pull_secret>`; image pulls on a new node take about a minute. |
+| Database migrations fail | `kubectl -n <ns> logs <db pod> -c <init container>`; is the database Ready? Then redeploy. |
+| Anything `environment.notes` names | Do what the note says. |
 | `OOMKilled` | Note container and limit; resource changes go through a PR: report it to the PL. |
 | `pnpm install` or a lib's `prepare` fails on files or imports the checkout no longer has (`TS2307`, `ENOENT`) | A stale base image: suspect the tooling, not the PR and not a missing image. See "Stale base image" below. |
 | `exceeded quota: env-budget` | `kubectl -n <ns> describe resourcequota`; each env and preview has its own 12 CPU / 32 Gi quota, so one preview never hits it: look for stray Jobs and Pods. |
@@ -342,9 +358,9 @@ the evidence. Do not edit the repo.
 ### Stale base image
 
 `deploy/tilt/Dockerfile` copies the checkout over the newest published
-`ghcr.io/caffeinelabs/app/caffeine-db:<image sha>` within 50 first-parent
-commits. Files deleted or moved since `<image sha>` survive in that image
-unless the Dockerfile prunes them (caffeinelabs/app#9832 adds that).
+`<environment.base_image>:<image sha>` within 50 first-parent commits. Files
+deleted or moved since `<image sha>` survive in that image unless the
+Dockerfile prunes them (`environment.tooling` names the fix that does).
 
 1. Take `<image sha>` from the build log (or `images.json` in the env's dir)
    and list every path the checkout no longer has, the old side of a move
@@ -353,12 +369,12 @@ unless the Dockerfile prunes them (caffeinelabs/app#9832 adds that).
    git diff --name-only --no-renames --diff-filter=D <image sha>..HEAD
    ```
    The failing paths in that list confirm the stale base.
-2. A fix is the branch of a caffeinelabs/app PR that changes `deploy/tilt/`
-   (for #9832, `factory-tilt-prune-before-install`; a branch, never a sha).
+2. A fix is the branch of an `<owner/repo>` PR that changes `deploy/tilt/`
+   (`environment.tooling` names known ones; a branch, never a sha).
    Sent as `tooling=<branch>`, PREVIEW step 4 and UP step 2 overlay only the
    files that PR changes under `deploy/tilt/`. Candidates:
    ```bash
-   gh pr list --repo caffeinelabs/app --state open --limit 100 --json number,headRefName,files \
+   gh pr list --repo <owner/repo> --state open --limit 100 --json number,headRefName,files \
      --jq '.[] | select(any(.files[]; .path | startswith("deploy/tilt/"))) | "#\(.number) \(.headRefName)"'
    ```
 3. Report the failing paths, `<image sha7>`, the candidate fixes and what you

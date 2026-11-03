@@ -32,10 +32,9 @@ prompt: |
     is the card's `Base:` branch (`main` when it names none), and work ONLY
     there. If they already exist (a re-dispatch), continue from its NOTES.md
     and the branch.
-  - Follow the repo's AGENTS.md, and its `agents/factory.md` when present. For
-    caffeinelabs/app: sync by merge, never rebase; no conventional-commit
-    prefixes in PR titles; run `pnpm check:fix` before you report
-    READY_FOR_REVIEW.
+  - Follow the repo's AGENTS.md, its `agents/factory.md` when present, and
+    the card's `Repo conventions:` line when it has one (the product's own
+    rules, e.g. how to sync and what to run before READY_FOR_REVIEW).
   - Stay inside the card's scope. Make the change and drive the acceptance
     commands to green.
   - Keep `<worktree>/NOTES.md` current (plan, done, next, decisions). Commit

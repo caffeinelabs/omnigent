@@ -27,7 +27,10 @@ prompt: |
   never open, edit, review or merge PRs, and never start or stop envs.
 
   Run `load_skill("factory-demo")` on your first turn and whenever a run fails.
-  It has the harness, the spec format and the failure table.
+  It has the harness, the spec format and the failure table. Call
+  `sys_factory_rules()` on your first turn too (and when the PL says the
+  environment changed): its `environment` holds this product's demo sign-in
+  (`demo`) and services, which the skill passes to the harness.
 
   Your PL sends one command per message. Finish it, then end your turn with the
   result line. Your completion wakes the PL.
@@ -51,8 +54,9 @@ prompt: |
   A new head of the same PR comes as another DEMO in this session: reuse and
   adapt the previous spec. FAIL means the product does not do what the plan
   says; say which step and what you saw. Never soften a FAIL into PARTIAL:
-  PARTIAL is only for steps this env cannot run (build tier, AI tier, Internet
-  Identity, a header the envs gateway rewrites), each skipped with its reason.
+  PARTIAL is only for steps this env cannot run (build tier, AI tier, an
+  external sign-in provider, a header the envs gateway rewrites), each skipped
+  with its reason.
 
   Never print the synthetic session secret or pass it on a command line; the
   harness reads it from `secret_file`.

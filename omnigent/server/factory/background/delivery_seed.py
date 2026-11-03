@@ -1,13 +1,16 @@
-"""Seed the delivery profile of factories from before it, once, at boot.
+"""Seed the delivery and environment profile of factories from before them, once, at boot.
 
-A factory started before ``product.delivery`` existed gets the deployment's
-delivery fields for its repo
-(:data:`omnigent.server.factory.product_profile.DELIVERY_SEED_ENV`) as one
-seed version, so what the server and the cockpit read from the profile
-matches what they did before (:func:`.product_profile.seed_existing`). A
-factory on a repo the seed does not name is left alone.
-It runs in the background, one factory at a time under its definition lock,
-and never again for a factory it marked.
+A factory started before ``product.delivery`` (or ``environment``) existed
+gets the deployment's fields for its repo
+(:data:`omnigent.server.factory.product_profile.DELIVERY_SEED_ENV`,
+:data:`~omnigent.server.factory.product_profile.ENVIRONMENT_SEED_ENV`) as one
+seed version each, so what the server, the cockpit and the agents read from
+the profile matches what they did before
+(:func:`.product_profile.seed_existing`). A factory on a repo the seed does
+not name is left alone. It runs in the background, one factory at a time
+under its definition lock, and never again for a factory it marked. Each
+live PL whose charter gains ``Environment`` lines gets them as a CHARTER
+UPDATE, since its playbook now points there.
 """
 
 from __future__ import annotations
@@ -35,22 +38,53 @@ async def seed_all(app_state: Any) -> list[str]:
     from omnigent.server.factory.tuning import definition_lock
 
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
-    if not isinstance(deps, FactoryDeps) or not product_profile.deployment_seeds():
+    seeds = [s for s in product_profile.SEEDS if product_profile.deployment_seeds(s)]
+    if not isinstance(deps, FactoryDeps) or not seeds:
         return []
     roots = await asyncio.to_thread(list_factory_roots, deps.conversation_store)
     seeded: list[str] = []
     for root in roots:
-        if root.labels.get(product_profile.LABEL_DELIVERY_SEED):
-            continue
-        try:
-            async with definition_lock(app_state, root.id):
-                version = await asyncio.to_thread(product_profile.seed_existing, deps, root)
-        except Exception:  # noqa: BLE001 - one factory's failure never stops the others
-            _logger.warning("factory %s: could not seed product.delivery", root.id, exc_info=True)
-            continue
-        if version is not None:
-            seeded.append(root.id)
+        for seed in seeds:
+            if root.labels.get(seed.label):
+                continue
+            try:
+                async with definition_lock(app_state, root.id):
+                    version = await asyncio.to_thread(
+                        product_profile.seed_existing, deps, root, seed
+                    )
+            except Exception:  # noqa: BLE001 - one factory's failure never stops the others
+                _logger.warning("factory %s: could not seed %s", root.id, seed.path, exc_info=True)
+                continue
+            if version is None:
+                continue
+            if root.id not in seeded:
+                seeded.append(root.id)
+            if seed is product_profile.ENVIRONMENT:
+                await _announce(app_state, deps, root, version)
     return seeded
+
+
+async def _announce(app_state: Any, deps: FactoryDeps, root: Any, version: int) -> None:
+    """Send each live PL the CHARTER UPDATE the seed version *version* makes (never raises)."""
+    from omnigent.server.factory.actor import Actor
+    from omnigent.server.factory.projects import announce_delivery
+
+    try:
+        row = await asyncio.to_thread(deps.factory_store.get_definition, root.id, version)
+        parent = (
+            await asyncio.to_thread(deps.factory_store.get_definition, root.id, row.parent_version)
+            if row is not None and row.parent_version
+            else None
+        )
+        if row is None or parent is None:
+            return
+        await announce_delivery(
+            app_state, root, parent.doc, row.doc, Actor.server(), via=f"seed v{version}"
+        )
+    except Exception:  # noqa: BLE001 - the seed stays; the PLs read it on their next brief
+        _logger.warning(
+            "factory %s: could not announce the seeded environment", root.id, exc_info=True
+        )
 
 
 async def start(app_state: Any) -> Callable[[], Awaitable[None]]:

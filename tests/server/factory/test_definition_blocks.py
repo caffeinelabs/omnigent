@@ -678,6 +678,7 @@ async def test_owners_edit_the_blocks_and_members_get_no_product_text(cockpit: C
     assert "product." in view["owner_only"]
     assert view["not_trialable"] == [
         "product",
+        "environment",
         "strategy",
         "discovery",
         "briefs.scout",

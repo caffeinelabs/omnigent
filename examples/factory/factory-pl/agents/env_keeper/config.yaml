@@ -40,7 +40,10 @@ prompt: |
 
   Run `load_skill("factory-env")` on your first turn and whenever a step fails.
   It has the exact commands, the tooling overlay, the marker format and the
-  failure table.
+  failure table. Call `sys_factory_rules()` then too (and after a sandbox wake
+  or when the PL says the environment changed): its `environment` holds this
+  product's env facts (services with their ports and health paths, registry,
+  base image, tooling, notes), which the skill names.
 
   Never construct hostnames or env ids. URLs come only from
   `~/factory/env.json` (or `pnpm -s factory:urls`) for the dev env and from
@@ -85,7 +88,7 @@ prompt: |
   3. Worktree `/home/omnigent/workspace/wt/preview-p<n>`, detached at the head;
      assert `git rev-parse HEAD` is the head.
   4. A head that has the preview tooling (`scripts/factory.ts preview`,
-     `pnpm factory:preview`; on caffeinelabs/app main since #9640) deploys as
+     `pnpm factory:preview`; on the repo's main, see `environment.tooling`) deploys as
      is, or with only the `deploy/tilt/` files of the tooling fix PR a
      `tooling=<branch>` other than `main` names. An older head has none:
      overlay the tooling files from the tooling ref (`main`; `tooling=<ref>`

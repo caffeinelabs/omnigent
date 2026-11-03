@@ -1,0 +1,8 @@
+Environment (the product profile; sys_factory_rules() returns it in full):
+- Dev env: `pnpm factory:up` in the dev env worktree logs in to ghcr, ensures namespace `env-<id>`, starts `tilt up` on the sandbox cluster and waits for sample-ux and sample-api (up to 20 min cold).
+- Services: app sample-ux:3000 · api sample-api:3001 (health /ready); write a check against a Service as `in-cluster: <curl … http://sample-api:3001/…>`
+- Env tooling: The preview tooling (`scripts/factory.ts preview`, `pnpm factory:preview`) is on main since sample-org/sample-app#9640. Known tooling fix: sample-org/sample-app#9832 (branch `factory-tilt-prune-before-install`) makes `deploy/tilt/Dockerfile` prune files deleted since the base image.
+- Repo conventions (on every task card): sync by merge, never rebase; no conventional-commit prefixes in PR titles; run `pnpm check:fix` before you report READY_FOR_REVIEW
+- Protected branches: develop (no agent pushes them)
+
+Repo conventions: sync by merge, never rebase; no conventional-commit prefixes in PR titles; run `pnpm check:fix` before you report READY_FOR_REVIEW

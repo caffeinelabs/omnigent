@@ -313,6 +313,28 @@ describe('scrubbing published files', () => {
     const local = lib.sessionCookies('http://127.0.0.1:1', 'http://127.0.0.1:1', tokens);
     assert.ok(local.every((c) => c.sameSite === 'Lax' && !c.secure));
   });
+
+  test('the sign-in storage comes from the environment profile, never from the harness', () => {
+    assert.deepEqual(lib.parseStorage(undefined), { storage: {}, clear: [] });
+    assert.deepEqual(lib.parseStorage(''), { storage: {}, clear: [] });
+    // (sample) A product that keeps its user id and a transport flag in localStorage.
+    const demo = lib.parseStorage(
+      JSON.stringify({ storage: { userId: '{user_id}', sampleTransport: 'cookie' }, clear: ['jwt'] }),
+    );
+    assert.deepEqual(lib.storageEntries(demo, 'u1'), {
+      clear: ['jwt'],
+      set: [
+        ['userId', 'u1'],
+        ['sampleTransport', 'cookie'],
+      ],
+    });
+    // A session without an id skips what needs one and keeps the rest.
+    assert.deepEqual(lib.storageEntries(demo, ''), { clear: ['jwt'], set: [['sampleTransport', 'cookie']] });
+    assert.deepEqual(lib.storageEntries(lib.parseStorage(''), 'u1'), { clear: [], set: [] });
+    for (const bad of ['not json', '[]', '{"storage": []}', '{"clear": "jwt"}', '{"storage": {"a b": "x"}}', '{"storage": {"k": 1}}']) {
+      assert.throws(() => lib.parseStorage(bad), /--storage/, bad);
+    }
+  });
 });
 
 describe('helpers', () => {
@@ -391,6 +413,15 @@ describe('run.mjs before the browser starts', () => {
     const { code, output } = await runCli(['--spec', spec, '--out', join(root, 'x'), '--app', 'http://127.0.0.1:9', '--pr', '1', '--sha', 'abc']);
     assert.equal(code, 2);
     assert.match(output, /--sha must be the full 40-character head sha/);
+  });
+  test('a bare PR number needs --repo, and --storage must parse', async () => {
+    const base = ['--spec', spec, '--out', join(root, 'x'), '--app', 'http://127.0.0.1:9', '--sha', SHA];
+    const bare = await runCli([...base, '--pr', '9630']);
+    assert.equal(bare.code, 2);
+    assert.match(bare.output, /--pr must be a GitHub PR URL \(or a number with --repo\)/);
+    const storage = await runCli([...base, '--pr', 'https://github.com/sample-org/sample-app/pull/9630', '--storage', '{"storage": 1}']);
+    assert.equal(storage.code, 2);
+    assert.match(storage.output, /--storage is JSON/);
   });
   test('a preview that serves another commit exits 3 and writes no demo.json', async () => {
     const server = await startFixtureServer({ sha: OTHER, secret: 'unused' });

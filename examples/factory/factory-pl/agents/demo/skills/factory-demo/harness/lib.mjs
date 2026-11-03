@@ -445,6 +445,53 @@ export async function syntheticSession(api, secret, { fetchImpl = fetch, timeout
   return { userId: body?.user?.userId ?? '', accessToken, refreshToken };
 }
 
+const STORAGE_KEY = /^[A-Za-z0-9_.:-]{1,64}$/;
+export const USER_ID = '{user_id}';
+const STORAGE_USAGE = '--storage is JSON like {"storage": {"key": "value"}, "clear": ["key"]}';
+
+/**
+ * Read the product's demo sign-in storage (`--storage`, the environment profile's `demo`):
+ * localStorage entries the app needs once signed in, and keys it must not keep.
+ * @returns {{storage: Record<string, string>, clear: string[]}}
+ */
+export function parseStorage(text) {
+  if (text == null || String(text).trim() === '') return { storage: {}, clear: [] };
+  let value;
+  try {
+    value = JSON.parse(String(text));
+  } catch {
+    throw new Error(STORAGE_USAGE);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(STORAGE_USAGE);
+  const storage = value.storage ?? {};
+  const clear = value.clear ?? [];
+  if (!storage || typeof storage !== 'object' || Array.isArray(storage) || !Array.isArray(clear)) {
+    throw new Error(STORAGE_USAGE);
+  }
+  const entries = Object.entries(storage);
+  const keys = [...entries.map(([key]) => key), ...clear];
+  const bad = keys.find((key) => typeof key !== 'string' || !STORAGE_KEY.test(key));
+  if (bad !== undefined) throw new Error(`--storage: ${JSON.stringify(bad)} is not a storage key`);
+  const nonText = entries.find(([, v]) => typeof v !== 'string');
+  if (nonText) throw new Error(`--storage: the value of ${nonText[0]} is not a string`);
+  return { storage: Object.fromEntries(entries), clear: [...clear] };
+}
+
+/**
+ * What the browser writes after the synthetic login: `{user_id}` filled in; an
+ * entry that needs the user's id is left out when the session has none.
+ * @returns {{clear: string[], set: [string, string][]}}
+ */
+export function storageEntries({ storage = {}, clear = [] } = {}, userId = '') {
+  const set = [];
+  for (const [key, raw] of Object.entries(storage)) {
+    const value = String(raw);
+    if (value.includes(USER_ID) && !userId) continue;
+    set.push([key, value.split(USER_ID).join(userId)]);
+  }
+  return { clear: [...clear], set };
+}
+
 /**
  * The session cookies for the app and API hosts (SameSite=None when the API is cross-site over https).
  * @returns {{name: string, value: string, domain: string, path: string, httpOnly: boolean, secure: boolean, sameSite: 'Lax' | 'None'}[]}

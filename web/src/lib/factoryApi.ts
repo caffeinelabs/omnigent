@@ -2843,6 +2843,40 @@ export interface DeliveryDef {
   flags: { provider: string | null; convention: string | null };
 }
 
+/** One service of the product's env: its `urls` key, Deployment and Service, port, health path. */
+export interface EnvironmentServiceDef {
+  id: string;
+  name: string;
+  port: number;
+  health: string | null;
+}
+
+/**
+ * How the product's dev env and previews run (`environment`): the facts the
+ * PL's charter, task cards and `sys_factory_rules()` carry to the agents.
+ * Owners change it; agents never propose it.
+ */
+export interface EnvironmentDef {
+  /** The repo whose projects run it; `null`: every project's. */
+  repo: string | null;
+  /** How the dev env starts, in words. */
+  summary: string | null;
+  services: EnvironmentServiceDef[];
+  /** Where the env tooling lives and known tooling fixes. */
+  tooling: string | null;
+  registry: string | null;
+  base_image: string | null;
+  pull_secret: string | null;
+  /** Facts env_keeper reads before it fixes a failed env. */
+  notes: string[];
+  /** Repo conventions every builder follows (on every task card). */
+  conventions: string[];
+  /** Branches no agent pushes, besides `main`, `master` and `staging`. */
+  protected_branches: string[];
+  /** localStorage a demo's synthetic session needs; `{user_id}` is the signed-in user. */
+  demo: { storage: Record<string, string>; clear: string[] };
+}
+
 export interface ProductDef {
   name: string | null;
   kind: string | null;
@@ -2966,6 +3000,7 @@ export type RoleDefaultsDef = Record<RoleDefaultRole, RoleDefaultDef>;
 export type DefinitionDoc = Record<string, unknown> & {
   rules?: DefinitionRule[];
   product?: ProductDef;
+  environment?: EnvironmentDef;
   strategy?: StrategyDef;
   discovery?: DiscoveryDef;
   briefs?: BriefsDef;

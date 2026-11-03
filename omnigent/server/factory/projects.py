@@ -35,6 +35,8 @@ from omnigent.server.factory.charter import (
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError, human_name
+from omnigent.server.factory.environment import charter_lines, environment_of
+from omnigent.server.factory.environment import environment as factory_environment
 from omnigent.server.factory.telemetry import spans
 from omnigent.stores.factory_store import norm_id, now_s
 
@@ -567,11 +569,12 @@ async def announce_delivery(
     via: str | None,
 ) -> list[str]:
     """
-    Send each live PL the CHARTER UPDATE a ``product.delivery`` change makes.
+    Send each live PL the CHARTER UPDATE a profile change makes.
 
-    The profile's merge policy, protected repos and paths that need a demo are
-    charter lines, so a new definition version that changes them reaches every
-    PL like a charter edit does (a PL whose charter reads the same gets none).
+    The profile's merge policy, protected repos, paths that need a demo and
+    environment are charter lines, so a new definition version that changes
+    them reaches every PL like a charter edit does (a PL whose charter reads
+    the same gets none).
 
     :param before_doc: The definition document before the change.
     :param after_doc: The document now in force.
@@ -580,7 +583,13 @@ async def announce_delivery(
     """
     old = product_profile.delivery_of(before_doc)
     new = product_profile.delivery_of(after_doc)
-    if old == new:
+    old_env, new_env = environment_of(before_doc), environment_of(after_doc)
+    changed = [
+        path
+        for path, moved in (("product.delivery", old != new), ("environment", old_env != new_env))
+        if moved
+    ]
+    if not changed:
         return []
     deps = factory_deps(app_state)
     rows = await asyncio.to_thread(deps.factory_store.list_projects, root.id)
@@ -595,12 +604,18 @@ async def announce_delivery(
             row,
             actor,
             via=via,
-            fields=["product.delivery"],
+            fields=changed,
             delivery=(old, new),
+            environment=(old_env, new_env),
         )
         if mail_id is not None:
             told.append(row.slug)
     return told
+
+
+def _env_lines(row: FactoryProject, env: Mapping[str, Any]) -> list[str]:
+    """:returns: The ``Environment`` lines of *row*'s charter under *env*."""
+    return charter_lines(env, row.repo, env_needed=normalize_charter(row.charter)["env_needed"])
 
 
 async def _announce_charter(
@@ -614,28 +629,37 @@ async def _announce_charter(
     fields: Sequence[str],
     inherited: Sequence[int] = (),
     delivery: tuple[Mapping[str, Any], Mapping[str, Any]] | None = None,
+    environment: tuple[Mapping[str, Any], Mapping[str, Any]] | None = None,
 ) -> tuple[str, str | None]:
     """
     Tell the PL what changed (and what it inherited); :returns: ``(diff, mail id)``.
 
     :param delivery: The product profile's ``product.delivery`` before and after
         (a profile change); the factory's current one for both when omitted.
+    :param environment: The ``environment`` profile before and after, likewise.
     """
     deps = factory_deps(app_state)
     slug = after_row.slug
     if delivery is None:
         current = await asyncio.to_thread(product_profile.delivery, deps, root.id)
         delivery = (current, current)
-    before = render_pl_charter(before_row, delivery[0])
-    after = render_pl_charter(after_row, delivery[1])
+    if environment is None:
+        env = await asyncio.to_thread(factory_environment, deps, root.id)
+        environment = (env, env)
+    before = render_pl_charter(before_row, delivery[0], environment=environment[0])
+    after = render_pl_charter(after_row, delivery[1], environment=environment[1])
     diff = start.charter_diff(before, after) if before != after else ""
     if not diff and not inherited:
         return "", None
+    env_changed = _env_lines(before_row, environment[0]) != _env_lines(after_row, environment[1])
     by = actor_name(actor) + (f" ({via})" if via else "")
     pl = await asyncio.to_thread(control.find_project_pl, deps, root.id, slug)
     mail_id = (
         control.send_text(
-            app_state, pl.id, start.charter_update_text(by, diff, inherited), kind="request"
+            app_state,
+            pl.id,
+            start.charter_update_text(by, diff, inherited, environment_changed=env_changed),
+            kind="request",
         )
         if pl is not None
         else None

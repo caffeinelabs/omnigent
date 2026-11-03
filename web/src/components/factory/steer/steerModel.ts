@@ -31,7 +31,7 @@ export const SECTION_INFO: Record<SteerSection, SectionInfo> = {
   overview: { label: "Overview", hint: "the loop, who owns each stage" },
   cadence: { label: "Cadence and previews", hint: "heartbeats, supervisor, mail, previews" },
   strategy: { label: "Strategy and goals", hint: "goals, focus, non-goals, mix" },
-  product: { label: "Product profile", hint: "what it is, who uses it, delivery" },
+  product: { label: "Product profile", hint: "what it is, who uses it, delivery, environment" },
   sources: { label: "Sources", hint: "where evidence comes from" },
   rubric: { label: "Scoring rubric", hint: "how opportunities rank" },
   roles: { label: "Roles and briefs", hint: "models, briefs, rules per role" },
@@ -75,6 +75,7 @@ export function visibleGroups(discoveryOn: boolean) {
 const PREFIX_SECTION: readonly [string, SteerSection][] = [
   ["strategy", "strategy"],
   ["product", "product"],
+  ["environment", "product"],
   ["discovery.sources", "sources"],
   ["discovery.rubric", "rubric"],
   ["discovery.thresholds", "rubric"],

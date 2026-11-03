@@ -2,7 +2,8 @@
 // Record one demo of a PR head against its factory preview and write demo.json.
 //
 //   node run.mjs --spec <dir>/demo.spec.ts --out <dir> --app <url> --api <url> \
-//     --pr <pr url> --sha <40-char head> [--synthetic-secret-file <path>] [--summary <text>]
+//     --pr <pr url> --sha <40-char head> [--synthetic-secret-file <path>] [--storage <json>] \
+//     [--summary <text>]
 //
 // Exit codes: 0 PASS or PARTIAL, 1 FAIL, 2 ERROR (harness, browser or spec), 3 stale preview.
 // `node run.mjs --selftest` records demos of a local fixture page (no network needed but npm ci).
@@ -33,6 +34,7 @@ import {
   exitCodeFor,
   firstLine,
   isFullSha,
+  parseStorage,
   prNumber,
   redactHar,
   scrubText,
@@ -42,7 +44,8 @@ import {
 import { HARNESS, PLAYWRIGHT_CLI, browserEnv, ensureDeps, makeGif, runLogged } from './setup.mjs';
 const USAGE =
   'usage: node run.mjs --spec <demo.spec.ts> --out <dir> --app <url> --api <url> --pr <pr url> ' +
-  '--sha <40-char sha> [--synthetic-secret-file <path>] [--summary <text>] [--plan-source pr-body|derived] ' +
+  '--sha <40-char sha> [--synthetic-secret-file <path>] [--storage <json>] [--summary <text>] ' +
+  '[--plan-source pr-body|derived] [--repo <owner/repo> (with a bare --pr number)] ' +
   '[--tilt-snapshot <path>] [--skip-stale-check] [--mp4]  |  node run.mjs --selftest [--keep]';
 // Only a failed run publishes its trace; every published file is scrubbed of credentials.
 const TRACE_PUBLISHED = new Set(['FAIL', 'ERROR']);
@@ -75,6 +78,8 @@ function parse(argv) {
       pr: { type: 'string' },
       sha: { type: 'string' },
       'synthetic-secret-file': { type: 'string' },
+      storage: { type: 'string' },
+      repo: { type: 'string' },
       summary: { type: 'string' },
       'plan-source': { type: 'string' },
       'tilt-snapshot': { type: 'string' },
@@ -110,7 +115,7 @@ function validate(values) {
   const sha = values.sha.trim().toLowerCase();
   if (!isFullSha(sha)) throw new UsageError('--sha must be the full 40-character head sha');
   const pr = prNumber(values.pr);
-  if (!pr) throw new UsageError('--pr must be a GitHub PR URL (or number)');
+  if (!pr) throw new UsageError('--pr must be a GitHub PR URL (or a number with --repo)');
   const spec = resolve(expandHome(values.spec));
   if (!existsSync(spec)) throw new UsageError(`--spec ${spec} does not exist`);
   const out = resolve(expandHome(values.out));
@@ -124,7 +129,19 @@ function validate(values) {
   if (!['pr-body', 'derived'].includes(planSource)) {
     throw new UsageError('--plan-source is pr-body or derived');
   }
-  const prUrl = /^https?:\/\//.test(values.pr) ? values.pr.trim() : `https://github.com/caffeinelabs/app/pull/${pr}`;
+  const repo = values.repo?.trim() || '';
+  if (repo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+    throw new UsageError('--repo is owner/repo');
+  }
+  const isUrl = /^https?:\/\//.test(values.pr);
+  if (!isUrl && !repo) throw new UsageError('--pr must be a GitHub PR URL (or a number with --repo)');
+  const prUrl = isUrl ? values.pr.trim() : `https://github.com/${repo}/pull/${pr}`;
+  let storage;
+  try {
+    storage = parseStorage(values.storage);
+  } catch (error) {
+    throw new UsageError(error.message);
+  }
   const tiltDefault = join(homedir(), 'factory', 'previews', `p${pr}`, 'tilt-snapshot.json');
   return {
     spec,
@@ -136,6 +153,7 @@ function validate(values) {
     sha,
     secretFile,
     summary: values.summary?.trim() || '',
+    storage,
     planSource,
     tiltSnapshot: values['tilt-snapshot'] ? resolve(expandHome(values['tilt-snapshot'])) : tiltDefault,
     skipStaleCheck: values['skip-stale-check'],
@@ -391,6 +409,7 @@ async function record(args) {
         FACTORY_DEMO_PR_URL: args.prUrl,
         FACTORY_DEMO_SHA: args.sha,
         FACTORY_DEMO_SECRET_FILE: args.secretFile,
+        FACTORY_DEMO_STORAGE: JSON.stringify(args.storage),
       },
       log,
     );

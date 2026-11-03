@@ -225,6 +225,7 @@ async def send_follow_up(
     :returns: The queued mail id, or ``None`` while the brief is on its way.
     """
     from omnigent.server.factory import definition, product_profile, spawn, team
+    from omnigent.server.factory.environment import environment
 
     deps = factory_deps(app_state)
     factory_id = conv.labels.get(LABEL_ID)
@@ -240,6 +241,7 @@ async def send_follow_up(
                 definition.rule_texts, deps, factory_id, ROLE_PROJECT_LEAD, slug
             )
             delivery = await asyncio.to_thread(product_profile.delivery, deps, factory_id)
+            env = await asyncio.to_thread(environment, deps, factory_id)
             team_block = await asyncio.to_thread(team.charter_team, deps, factory_id, project)
             mail_id = new_mail_id()
             get_mailer(app_state).submit(
@@ -257,6 +259,7 @@ async def send_follow_up(
                         rules=rules,
                         delivery=delivery,
                         team=team_block,
+                        environment=env,
                     ),
                     kind="brief",
                     factory_id=factory_id,

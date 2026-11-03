@@ -305,6 +305,14 @@ describe("hitItems", () => {
     expect(steer(false)).toEqual(expect.arrayContaining(["strategy", "product", "versions"]));
   });
 
+  it("finds the environment profile in Steer's product profile", () => {
+    const product = placeItems(TFID, { discoveryOn: false }).find(
+      (i) => i.key === "page:steer:product",
+    );
+    expect(product?.keywords).toEqual(expect.arrayContaining(["environment", "conventions"]));
+    expect(settingTarget("environment.services")?.section).toBe("product");
+  });
+
   it("hides discovery's kinds while discovery is off, and keeps the strategy's goals", () => {
     const hits = [
       hit("opportunity", "O-7", "Own domain (sample)"),

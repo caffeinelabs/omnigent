@@ -544,6 +544,7 @@ async def test_the_server_passes_the_profiles_protected_repos_to_the_guards(
     assert resolve(lead, lead) == {
         "factory_repos": ["acme/app", "acme/platform"],
         "factory_protected_repos": ["acme/infra", "acme/platform"],
+        "factory_protected_branches": [],
     }
     uninstall = guard_repos.install(factory.app_state)
     try:

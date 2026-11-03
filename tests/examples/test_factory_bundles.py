@@ -836,10 +836,10 @@ def test_env_build_failures_suspect_the_stale_base_image_first(pl: AgentSpec) ->
         _command_section(skill, "## Failure table", ("## After a sandbox wake",)).split()
     )
     for token in (
-        "`ghcr.io/caffeinelabs/app/caffeine-db:<image sha>` within 50 first-parent commits",
+        "`<environment.base_image>:<image sha>` within 50 first-parent commits",
         # A move shows only its new path without --no-renames; the image keeps the old one.
         "git diff --name-only --no-renames --diff-filter=D <image sha>..HEAD",
-        "`factory-tilt-prune-before-install`; a branch, never a sha",
+        "(`environment.tooling` names known ones; a branch, never a sha)",
         "PREVIEW step 4 and UP step 2 overlay only the files that PR changes",
         "Suggest that humans publish a fresh base image only once the tooling is ruled out",
     ):
@@ -869,9 +869,9 @@ def test_header_checks_run_in_cluster_behind_the_envs_gateway(pl: AgentSpec) -> 
     for token in (
         "replaces a client's `X-Request-Id`",
         "any check that fails through the public URL runs once more in-cluster",
-        # caffeine-api serves / and /ready only.
-        "`kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' "
-        "http://caffeine-api:3001/ready`",
+        # The api service and its health path come from the environment profile.
+        "`kubectl -n <namespace> exec deploy/<api service> -- curl -si -H 'X-Request-Id: f-1' "
+        "http://<api service>:<api port><api health>`",
         "Report both results.",
         "is gateway behaviour, not a FAIL",
         "unless the PR changes routes or gateway config "
@@ -884,7 +884,8 @@ def test_header_checks_run_in_cluster_behind_the_envs_gateway(pl: AgentSpec) -> 
         (env.instructions or "").split()
     )
     playbook = _folded(_PL_DIR / "skills/factory-pl-playbook/SKILL.md")
-    assert "check as `in-cluster: <curl … http://caffeine-api:3001/…>`" in playbook
+    assert "check as `in-cluster: <curl … http://<service>:<port>/…>`" in playbook
+    assert "your charter's `Environment` lines (it shows the exact form)" in playbook
     assert "while it passes in-cluster is the envs gateway's doing, not the author's" in playbook
     assert "counts it as a FAIL only when the PR changes routes or gateway config" in playbook
     # Pipeline step 3, where the PL reads a VERIFY FAIL, points at the table.
@@ -903,7 +904,7 @@ def test_the_demo_port_forward_is_checked_and_stopped(pl: AgentSpec) -> None:
     demo_skill = _skill_dir(_sub_agent(pl, "demo")) / "factory-demo" / "SKILL.md"
     [block] = [b for b in _shell_blocks(demo_skill) if "port-forward" in b]
     lines = block.splitlines()
-    assert lines[1].startswith("kubectl -n x port-forward svc/caffeine-api 13001:3001 ")
+    assert lines[1].startswith("kubectl -n x port-forward svc/sample-api 13001:3001 ")
     assert lines[1].endswith("& PF=$!")
     assert "grep -q 'Forwarding from 127.0.0.1:13001' /tmp/pf.log" in lines[2]
     assert "node ~/factory/demo-harness/run.mjs" in lines[3] and lines[3].endswith("RC=$?")
@@ -1001,6 +1002,11 @@ def test_leads_keep_titles_plain(lead: AgentSpec) -> None:
 # The fenced shell blocks the skills document, run through the guards that will see them.
 _PLACEHOLDERS = (
     (re.compile(r"<40-char sha>|<sha>"), "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16"),
+    # The environment profile's values (sys_factory_rules() → environment).
+    (re.compile(r"<owner/repo>"), "sample-org/sample-app"),
+    (re.compile(r"<api service>"), "sample-api"),
+    (re.compile(r"<api port>"), "3001"),
+    (re.compile(r"<api health>"), "/ready"),
     (re.compile(r"<n>"), "9630"),
     (re.compile(r"<sha7>"), "7767f0d"),
     (re.compile(r"<repo>"), "/home/omnigent/workspace/app"),
@@ -1145,7 +1151,10 @@ def test_preview_tooling_ref_is_app_main() -> None:
     deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
     assert re.search(r"^REF=main\b", deploy, re.M)
     env_text = " ".join(env_skill.read_text(encoding="utf-8").split())
-    alias = "`tooling=factory/preview-tooling` names the deleted pre-#9640 branch and means `main`"
+    alias = (
+        "`tooling=factory/preview-tooling` names the deleted branch that carried the tooling "
+        "before main had it, and means `main`"
+    )
     assert env_text.count("factory/preview-tooling") == 1 and alias in env_text
     texts = [
         env_text.replace(alias, ""),
@@ -1368,7 +1377,8 @@ def test_preview_deploy_block_overlays_only_the_files_of_a_tooling_fix(
     assert (clone / "Tiltfile").read_text() == "new\n"
     assert not (clone / "docs/fix.md").exists()
     assert (
-        "gh pr diff tilt-fix --repo caffeinelabs/app --name-only" in Path(f"{log}.gh").read_text()
+        "gh pr diff tilt-fix --repo sample-org/sample-app --name-only"
+        in Path(f"{log}.gh").read_text()
     )
 
     # A PR that changes the fix's files itself keeps them: nothing is deployed.
@@ -2247,46 +2257,40 @@ def test_there_are_three_benchmarks() -> None:
 
 # ── Product-agnostic bundles ─────────────────────────────────────────────────
 
-# A factory learns its product from its definition (``product`` block), never
-# from bundle text.
+# A factory learns its product from its definition (``product`` and
+# ``environment`` blocks), never from bundle text.
 _PRODUCT_NAMES = FORBIDDEN_SAMPLE_PATTERN
-# Env tooling and repo conventions of one product that still live in skills
-# until the environment profile replaces them: the line counts may only shrink.
-_PRODUCT_TEXT_LEFT = {
-    "factory-pl/agents/demo/skills/factory-demo/SKILL.md": 1,
-    "factory-pl/agents/demo/skills/factory-demo/harness/explore.mjs": 1,
-    "factory-pl/agents/demo/skills/factory-demo/harness/fixtures.ts": 1,
-    "factory-pl/agents/demo/skills/factory-demo/harness/run.mjs": 1,
-    "factory-pl/agents/env_keeper/config.yaml": 1,
-    "factory-pl/agents/env_keeper/skills/factory-env/SKILL.md": 21,
-    "factory-pl/agents/ic/config.yaml": 1,
-    "factory-pl/agents/ic_codex/config.yaml": 1,
-    "factory-pl/skills/factory-pl-playbook/SKILL.md": 3,
-}
 
 
-def _product_lines() -> dict[str, int]:
-    """:returns: Bundle file (relative to ``examples/factory``) -> lines naming a product."""
-    files = [
+def _bundle_paths() -> list[Path]:
+    """Every bundle file (benchmarks excepted: they are one product's data)."""
+    return [
         path
         for path in sorted(_FACTORY_DIR.rglob("*"))
-        if not path.relative_to(_FACTORY_DIR).as_posix().startswith("benchmarks/")
+        if path.is_file()
+        and "node_modules" not in path.parts
+        and not path.relative_to(_FACTORY_DIR).as_posix().startswith("benchmarks/")
     ]
-    return token_lines(files, root=_FACTORY_DIR)
 
 
 def test_no_product_names_in_bundles() -> None:
-    """The lead, PL and sub-agent prompts and skills name no product (benchmarks excepted)."""
-    found = _product_lines()
-    grown = {rel: n for rel, n in found.items() if n > _PRODUCT_TEXT_LEFT.get(rel, 0)}
-    assert grown == {}, f"product names in bundle text (put them in the definition): {grown}"
+    """The lead, PL and sub-agent prompts, skills and harness name no product."""
+    found = token_lines(_bundle_paths(), root=_FACTORY_DIR)
+    assert found == {}, f"product names in bundle text (put them in the definition): {found}"
 
 
-def test_the_product_text_left_only_shrinks() -> None:
-    """A file cleaned of product text leaves the list, so it cannot come back."""
-    found = _product_lines()
-    stale = {rel: n for rel, n in _PRODUCT_TEXT_LEFT.items() if found.get(rel, 0) < n}
-    assert stale == {}, f"lower these counts in _PRODUCT_TEXT_LEFT: {stale} (now {found})"
+def test_no_product_name_hides_across_a_line_break() -> None:
+    """A token wrapped over two lines (``Internet`` / ``Identity``) counts too."""
+    found = {}
+    for path in _bundle_paths():
+        try:
+            folded = " ".join(path.read_text(encoding="utf-8").split())
+        except UnicodeDecodeError:
+            continue
+        hits = _PRODUCT_NAMES.findall(folded)
+        if hits:
+            found[path.relative_to(_FACTORY_DIR).as_posix()] = hits
+    assert found == {}, f"product names in bundle text: {found}"
 
 
 def test_lead_and_pl_prompts_leave_repos_to_the_charter(lead: AgentSpec, pl: AgentSpec) -> None:

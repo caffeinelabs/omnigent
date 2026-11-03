@@ -15,7 +15,9 @@ passes them to both policies as ``factory_repos``
 
 With them goes ``factory_protected_repos``: the protected repos of the
 factory's product profile (``product.delivery.protected_repos``), which the
-guards deny unless a human made one a project's repo.
+guards deny unless a human made one a project's repo; and
+``factory_protected_branches``, the environment profile's protected branches
+(``environment.protected_branches``), which join the guards' default ones.
 
 Only server state counts. Membership comes from the labels the server stamps
 at spawn (``omnigent.factory.id``, ``role`` and ``project``), which no agent
@@ -59,7 +61,11 @@ from omnigent.factory import (
     LABEL_ROLE,
     ROLE_LEAD,
 )
-from omnigent.policies.builtins.factory import FACTORY_PROTECTED_ARG, FACTORY_REPOS_ARG
+from omnigent.policies.builtins.factory import (
+    FACTORY_BRANCHES_ARG,
+    FACTORY_PROTECTED_ARG,
+    FACTORY_REPOS_ARG,
+)
 from omnigent.policies.builtins.factory_invariants import HANDLER as INVARIANTS_HANDLER
 from omnigent.policies.builtins.github import _normalize_repo
 from omnigent.server.bundles import FACTORY_GUARD_HANDLER
@@ -165,12 +171,13 @@ def guard_arguments(
 
     :param deps: The app's factory stores.
     :returns: ``resolve(conversation, root)``: ``{"factory_repos": [...],
-        "factory_protected_repos": [...]}`` for a factory member, ``None`` for
-        any other session. When the store or the definition cannot be read
-        it fails closed with no writable repos.
+        "factory_protected_repos": [...], "factory_protected_branches": [...]}``
+        for a factory member, ``None`` for any other session. When the store
+        or the definition cannot be read it fails closed with no writable repos.
     """
 
     def _resolve(conversation: Conversation, root: Conversation) -> Mapping[str, object] | None:
+        from omnigent.server.factory.environment import protected_branches
         from omnigent.server.factory.product_profile import protected_repos
 
         try:
@@ -178,6 +185,7 @@ def guard_arguments(
             factory_id = member_factory_id(conversation, root) if repos is not None else None
             # Reads the definition itself: an error here denies, never drops the protected repos.
             protected = protected_repos(deps, factory_id) if factory_id else frozenset()
+            branches = protected_branches(deps, factory_id) if factory_id else frozenset()
         except Exception:  # noqa: BLE001 - a store or definition error must deny, not widen
             _logger.warning(
                 "factory: could not resolve the project repos of session %s; "
@@ -188,7 +196,11 @@ def guard_arguments(
             return {FACTORY_REPOS_ARG: []}
         if repos is None:
             return None
-        return {FACTORY_REPOS_ARG: sorted(repos), FACTORY_PROTECTED_ARG: sorted(protected)}
+        return {
+            FACTORY_REPOS_ARG: sorted(repos),
+            FACTORY_PROTECTED_ARG: sorted(protected),
+            FACTORY_BRANCHES_ARG: sorted(branches),
+        }
 
     return _resolve
 
