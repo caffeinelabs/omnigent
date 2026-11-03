@@ -2017,6 +2017,7 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, FactoryStore):
         *,
         project_slug: str | None = None,
         states: Sequence[str] | None = None,
+        newest: int | None = None,
     ) -> builtins.list[FactoryTask]:
         model = SqlFactoryTask
         stmt = select(model).where(
@@ -2027,9 +2028,13 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, FactoryStore):
             stmt = stmt.where(model.project_slug == project_slug)
         if states is not None:
             stmt = stmt.where(model.state.in_([encode_factory_task_state(s) for s in states]))
+        if newest is not None and newest > 0:
+            stmt = stmt.order_by(model.number.desc()).limit(newest)
+        else:
+            stmt = stmt.order_by(model.number)
         with self._session("list_factory_tasks") as session:
-            rows = session.execute(stmt.order_by(model.number)).scalars().all()
-            return [_task(r) for r in rows]
+            rows = [_task(r) for r in session.execute(stmt).scalars().all()]
+        return sorted(rows, key=lambda r: r.number) if newest else rows
 
     def count_tasks_closed(
         self, factory_id: str, since: int, until: int, *, states: Sequence[str] = ("done",)

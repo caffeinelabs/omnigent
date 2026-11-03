@@ -473,6 +473,31 @@ describe("the new cockpit · the shell", () => {
     expect(drawer.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([]);
   });
 
+  it("opens the palette on / and moves between places with g chords, r and ?", async () => {
+    serve();
+    renderAt("/projects");
+    await screen.findByTestId("cockpit-topbar");
+
+    fireEvent.keyDown(window, { key: "/" });
+    const palette = await screen.findByTestId("factory-palette");
+    expect(palette).toHaveAttribute("data-cockpit", "v2");
+    fireEvent.keyDown(palette, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("factory-palette")).toBeNull());
+
+    fireEvent.keyDown(window, { key: "g" });
+    fireEvent.keyDown(window, { key: "t" });
+    await waitFor(() => expect(location).toBe(`${BASE}/teams`));
+
+    fireEvent.keyDown(window, { key: "r" });
+    expect(await screen.findByTestId("room-drawer")).toBeInTheDocument();
+    expect(location).toBe(`${BASE}/teams?room=`);
+    fireEvent.keyDown(screen.getByTestId("room-drawer"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("room-drawer")).toBeNull());
+
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(await screen.findByTestId("cockpit-keys")).toHaveTextContent("g h · g d");
+  });
+
   it("puts the five places in a bottom bar on a phone", async () => {
     setWidth({ wide: false, phone: true });
     serve();

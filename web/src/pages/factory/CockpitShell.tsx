@@ -4,14 +4,20 @@
  * the page at full width. The Room is a drawer (`?room=<thread>`), the
  * Health panel and the interim Needs you list are side panels
  * (`?peek=health`, `?peek=needs`), so a link opens the exact view. On a
- * phone the five places sit in a bottom bar. ⌘K, Share and Add project open
- * from anywhere, as in the classic shell.
+ * phone the five places sit in a bottom bar. ⌘K (or `/`), Share and Add
+ * project open from anywhere; `g` chords jump between the five places, `r`
+ * opens the Room and `?` lists the keys.
  */
 
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { AddProjectDialog } from "@/components/factory/controls/AddProjectDialog";
-import { FactoryCommandPalette } from "@/components/factory/cmdk/FactoryCommandPalette";
-import { useFactoryPaletteHotkey } from "@/components/factory/cmdk/useFactoryPaletteHotkey";
+import { CockpitPalette } from "@/components/factory/cmdk/CockpitPalette";
+import { KeyboardHelp } from "@/components/factory/cmdk/KeyboardHelp";
+import {
+  PLACE_HREF,
+  useCockpitKeys,
+  useFactoryPaletteHotkey,
+} from "@/components/factory/cmdk/useFactoryPaletteHotkey";
 import { useFactoryServerNowS } from "@/components/factory/factoryClock";
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
 import { splitNeedsYou } from "@/components/factory/overview/needsYouModel";
@@ -29,7 +35,7 @@ import {
 } from "@/hooks/useFactoryNotifications";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import type { FactorySnapshot } from "@/lib/factoryApi";
-import { useSearchParams } from "@/lib/routing";
+import { useNavigate, useSearchParams } from "@/lib/routing";
 import {
   FactoryShellContext,
   type FactoryShellValue,
@@ -71,7 +77,9 @@ export function CockpitShell({
   const location = useMemo(() => factoryLocation(rest), [rest]);
   const [sharing, setSharing] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [keys, setKeys] = useState(false);
   const [adding, setAdding] = useState<{ title: string | null } | null>(null);
+  const navigate = useNavigate();
   const togglePalette = useCallback(() => setPalette((open) => !open), []);
   useFactoryPaletteHotkey(togglePalette);
   const threads = useRoomThreads(fid).data?.data;
@@ -115,6 +123,12 @@ export function CockpitShell({
       ),
     [setParams],
   );
+  useCockpitKeys({
+    onPalette: () => setPalette(true),
+    onHelp: () => setKeys(true),
+    onRoom: () => setParam(ROOM_PARAM, room ?? ""),
+    onGo: (place) => navigate(PLACE_HREF[place](fid)),
+  });
   const shell: FactoryShellValue = useMemo(
     () => ({
       factoryId: fid,
@@ -177,7 +191,19 @@ export function CockpitShell({
           className="min-w-0 pt-1 outline-none"
         >
           {/* The cockpit toast (Undo after Apply) outlives the page that showed it. */}
-          <FactoryToastProvider>{children}</FactoryToastProvider>
+          <FactoryToastProvider>
+            {children}
+            {/* Inside the toast's reach: a verb's Undo shows there. Both are portals. */}
+            <CockpitPalette
+              snapshot={snapshot}
+              open={palette}
+              onOpenChange={setPalette}
+              onShare={() => setSharing(true)}
+              onAddProject={() => setAdding({ title: null })}
+              onRoom={(thread) => setParam(ROOM_PARAM, thread)}
+            />
+            <KeyboardHelp open={keys} onOpenChange={setKeys} />
+          </FactoryToastProvider>
         </main>
       </div>
       <RoomDrawer
@@ -213,13 +239,6 @@ export function CockpitShell({
         open={sharing}
         onOpenChange={setSharing}
         nowS={nowS}
-      />
-      <FactoryCommandPalette
-        snapshot={snapshot}
-        open={palette}
-        onOpenChange={setPalette}
-        onShare={() => setSharing(true)}
-        onAddProject={() => setAdding({ title: null })}
       />
       <AddProjectDialog
         key={adding ? `add:${adding.title ?? ""}` : "add"}
