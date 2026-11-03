@@ -166,6 +166,15 @@ async def test_the_budget_line_then_the_stop_and_the_queued_ask(
 
     _spend(cockpit, 2.0)
     assert await _beat(cockpit, 3 * HOUR) == ["budget_stop"]
+    # The Room does not wake Scout either: Atlas answers in #discovery until tomorrow.
+    posted = await cockpit.post(
+        base(cockpit, "/chat"), {"thread": "discovery", "body": "Who exports? (sample)"}
+    )
+    assert posted.status_code == 201, posted.text
+    assert posted.json()["routed"] == ["Atlas"]
+    assert "Scout reached today's budget; Atlas will answer" in [
+        m.body for m in cockpit.store.list_chat(cockpit.fid, "discovery", limit=20)
+    ]
     assert _texts(cockpit, scout, "[Factory discovery · sweep") == []  # stopped
     [stop] = cockpit.events(beats.KIND_BUDGET_STOP)
     assert stop.data["cap_usd"] == 10.0
@@ -185,6 +194,28 @@ async def test_the_budget_line_then_the_stop_and_the_queued_ask(
     assert ask.startswith(f"[Factory discovery · research · {row.ref}]")
     found = cockpit.store.get_opportunity(cockpit.fid, row.number)
     assert found is not None and found.research["state"] == "asked"
+
+
+async def test_a_zero_budget_means_scout_spends_nothing(cockpit: Cockpit, scout: str) -> None:
+    signals = ingest(cockpit, "repo-issues", ["Exports time out (sample)"])
+    row = make_opportunity(cockpit, signals)
+    _set(cockpit, {"discovery.budgets.usd_per_day": 0})
+
+    assert await _beat(cockpit, 30 * HOUR) == ["budget_stop"]
+    assert cockpit.mailer.texts_to(scout) == []  # no sweep, no synthesis
+    asked = await cockpit.post(
+        base(cockpit, f"/opportunities/{row.ref}/research"), {"question": "Who exports? (sample)"}
+    )
+    assert asked.status_code == 200, asked.text
+    assert asked.json()["research"]["state"] == "queued"
+    assert "asks" not in await _beat(cockpit, 31 * HOUR)
+    assert _texts(cockpit, scout, "[Factory discovery · research") == []
+
+
+def test_the_budget_cap_reads_the_definition() -> None:
+    assert beats.budget_cap({}) == 10.0  # the starter's default
+    assert beats.budget_cap({"discovery": {"budgets": {"usd_per_day": 0}}}) == 0.0
+    assert beats.budget_cap({"discovery": {"budgets": {"usd_per_day": 25}}}) == 25.0
 
 
 # ── Ready to plan (Atlas) ──────────────────────────────────────
@@ -222,9 +253,15 @@ async def test_ready_to_plan_follows_a_synthesis_with_what_atlas_needs(
     head = notice.splitlines()[0]
     assert head == "[Factory discovery · ready to plan · 1 validated · capacity 9 of 10]"
     assert "Plan at most 3 bet(s) now." in notice
-    assert f"1. {row.ref} Show a draft before it goes live (sample) · moderate" in notice
-    assert "bet note: solutions: A private link (sample)" in notice
-    assert "cheapest test: A fake door on publish (sample)" in notice
+    assert f"Validated, pinned first then by rank: {row.ref}." in notice
+    # Scout's title and bet note reach Atlas as untrusted text, under a server line.
+    assert "[Factory source data · opportunities · titles and bet notes written by Scout" in notice
+    lines = notice.splitlines()
+    server_line = next(line for line in lines if line.startswith(f"{row.ref} · #1 · moderate"))
+    at = lines.index(server_line)
+    assert lines[at + 1] == "> Show a draft before it goes live (sample)"
+    assert lines[at + 2].startswith("> bet note: solutions: A private link (sample)")
+    assert "cheapest test: A fake door on publish (sample)" in lines[at + 2]
     assert "Goals with no metric" in notice and "- G-1 " in notice
     assert "Mix (target → now): outcome 60% → 0%" in notice
     assert 'sys_factory_project(op="decline"' in notice
@@ -235,22 +272,57 @@ async def test_ready_to_plan_follows_a_synthesis_with_what_atlas_needs(
     assert await _beat(cockpit, 29 * HOUR) == []
 
 
+def _finish(cockpit: Cockpit, slug: str, after_s: int) -> None:
+    """*slug*'s work reaches done (it keeps its row but frees its slot), as the server records."""
+    project = cockpit.store.get_project(cockpit.fid, slug)
+    assert project is not None
+    cockpit.store.update_project(project.id, stage=F.STAGE_DONE)
+    cockpit.store.append_event(
+        EventDraft(
+            factory_id=cockpit.fid,
+            kind="stage.changed",
+            summary=f"{slug}: ready → done (sample)",
+            subject=f"project:{slug}",
+            data={"from": "ready", "to": "done"},
+            ts=(T0 + after_s) * 1000,
+        )
+    )
+
+
 async def test_freed_capacity_brings_ready_to_plan_again(cockpit: Cockpit, scout: str) -> None:
     _validated(cockpit)
     await _beat(cockpit, 25 * HOUR)
     assert await _beat(cockpit, 28 * HOUR) == ["ready_to_plan"]
+    # Two projects consolidated is no freed capacity.
     cockpit.store.append_event(
         EventDraft(
             factory_id=cockpit.fid,
             kind="project.merged",
-            summary="api-version merged (sample)",
+            summary="two projects consolidated (sample)",
             subject="project:api-version",
-            ts=(T0 + 28 * HOUR + 30) * 1000,
+            ts=(T0 + 28 * HOUR + 10) * 1000,
         )
     )
+    assert await _beat(cockpit, 28 * HOUR + 20) == []
+    _finish(cockpit, "api-version", 28 * HOUR + 30)
 
     assert await _beat(cockpit, 28 * HOUR + 60) == ["ready_to_plan"]
     assert cockpit.events(beats.KIND_READY)[-1].data["why"] == "capacity"
+
+
+async def test_finished_work_holds_no_slot(cockpit: Cockpit, scout: str) -> None:
+    """A project whose work is done keeps status active, but it frees its cap slot."""
+    _validated(cockpit)
+    _set(cockpit, {"caps.max_projects": 1})
+    for project in cockpit.store.list_projects(cockpit.fid):
+        _finish(cockpit, project.slug, 0)
+    assert {p.status for p in cockpit.store.list_projects(cockpit.fid)} == {"active"}
+
+    await _beat(cockpit, 25 * HOUR)
+    assert await _beat(cockpit, 28 * HOUR) == ["ready_to_plan"]
+    [notice] = _texts(cockpit, cockpit.fid, "[Factory discovery · ready to plan")
+    assert notice.splitlines()[0].endswith("· capacity 1 of 1]")
+    assert "Plan at most 1 bet(s) now." in notice
 
 
 async def test_no_room_for_a_bet_means_no_notice(cockpit: Cockpit, scout: str) -> None:

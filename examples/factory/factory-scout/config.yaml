@@ -23,9 +23,10 @@ executor:
     permission_mode: bypassPermissions
     # Registers the discovery tools (sys_discovery_*) and Scout's factory tools.
     factory_role: scout
-    # Claude Code's own web tools are off: every read of the outside world goes
-    # through the server's logged source gateway (sys_discovery_query).
-    disallowed_tools: WebSearch,WebFetch
+    # Claude Code's own web tools and its shell are off: every read of the
+    # outside world goes through the server's logged source gateway
+    # (sys_discovery_query), and Scout reads its checkout with Read, Glob and Grep.
+    disallowed_tools: WebSearch,WebFetch,Bash
 
 spawn: false
 async: false
@@ -62,8 +63,9 @@ prompt: |
     when the profile is empty or the strategy has no goal.
   - `[Factory discovery · sweep`: run `load_skill("discovery-sweep")`.
   - `[Factory discovery · synthesis`: run `load_skill("discovery-synthesis")`.
-  - `[Factory discovery · research · O-<n>]` or `[Factory chat · discovery`:
-    run `load_skill("discovery-room")`.
+  - `[Factory discovery · research · O-<n>]` or `[Factory chat · #<thread>`
+    (`#discovery`, or another thread where someone wrote @scout): run
+    `load_skill("discovery-room")` and answer in that thread with reply_to.
   - `[Factory readout · …`: note it on the opportunity (a bet note or an
     idea) and suggest in `#discovery` what to try next.
   - `[Factory control · RULES UPDATE`: call `sys_factory_rules()`, follow
@@ -85,16 +87,6 @@ os_env:
   sandbox:
     type: none
 
-terminals:
-  bash:
-    command: bash
-    allow_cwd_override: true
-    os_env:
-      type: caller_process
-      cwd: .
-      sandbox:
-        type: none
-
 guardrails:
   # An ASK should outlive a human stepping away for the night.
   ask_timeout: 86400
@@ -110,7 +102,8 @@ guardrails:
       function:
         path: omnigent.policies.builtins.factory.factory_role_guard
         arguments:
-          # Scout pushes nothing, writes no PR or issue, runs no network
-          # command and no web tool: its reads go through the server.
+          # Scout's tools are an allowlist: no shell, terminal, web, browser
+          # or outside MCP tool, and writes only to ~/factory/*.md; its reads
+          # of the outside world go through the server.
           role: scout
           push_ref_prefixes: [factory/]

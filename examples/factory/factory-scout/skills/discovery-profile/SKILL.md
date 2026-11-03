@@ -19,7 +19,7 @@ owner applies it, and every word of it is data the owners can change.
 
 1. The repo checkout in your workspace, if there is one: `README*`, `docs/`,
    the top-level layout, route or page definitions, the changelog. Read with
-   `ls`, `cat`, `head`, `grep`; change nothing.
+   `Glob`, `Read` and `Grep` (you have no shell); change nothing.
 2. The repo's own source (`kind: repo`): recent releases and the most
    discussed issues (`tool="releases"`, `tool="issues"`).
 3. The public site, when the README or the profile links it and a `web`
@@ -54,7 +54,7 @@ A field error names its path: fix it and call again.
 ## 4. Suggest a first goal
 
 From the profile and the signals so far, suggest one goal (two at most) in
-users' terms, e.g. "More new users finish their first project in week one".
+users' terms, e.g. "More teams are still active in their second month".
 Leave `metric` empty unless a source can measure it; the factory plans an
 enabler that measures it later.
 `sys_factory_propose(kind="tuning", title="A first goal (suggested)", changes=[{op: "add", path: "strategy.goals", value: {statement: "…", weight: 1}}], rationale="Why this goal: what the signals show (S-…).", evidence=["S-…"])`.

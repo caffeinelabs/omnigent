@@ -35,16 +35,17 @@ Omnigent terminal) and denies:
   read the way gh and git read them (any host case, a root dot, ``www.``), and
   one that names no GitHub repo (``-R $R``, ``git push $URL``, another host,
   ``..`` segments) is denied rather than assumed to be allowed;
-- per role: any push or PR creation (CLI or API) by a lead, reviewer, planner,
-  the demo agent or Scout, every PR write but ``gh pr comment`` by the demo agent,
-  every PR or issue write by the planner, every network command (``curl``,
-  ``wget``, any ``gh``, ``git clone|fetch|pull``, …) and Claude Code's own
-  WebSearch and WebFetch for Scout (it reads only through the server's logged
-  source gateway), and env lifecycle
+- per role: any push or PR creation (CLI or API) by a lead, reviewer, planner
+  or the demo agent, every PR write but ``gh pr comment`` by the demo agent,
+  every PR or issue write by the planner, and env lifecycle
   (``tilt up|down|ci``, ``pnpm factory:up|down|preview`` or the script behind
   it, ``kubectl delete ns``) for anyone but env_keeper and the project lead.
   A sub-agent is also held to its parent's guardrails (stricter wins), so the
   project lead's fence must admit what its env_keeper runs.
+- for Scout, which reads users' text, every tool outside an allowlist: no
+  shell or terminal at all, no web or browser tool, no MCP server but
+  Omnigent's, and file writes only to its memory (``~/factory/*.md``). It
+  reads the outside world only through the server's logged source gateway.
 
 Line continuations are joined and heredoc bodies and single-quoted text are
 treated as data, so multi-line commands are checked as the shell runs them.
@@ -183,8 +184,31 @@ _NETWORK_HEADS: frozenset[str] = frozenset(
 _GIT_NETWORK_SUBCOMMANDS: frozenset[str] = frozenset(
     {"clone", "fetch", "pull", "ls-remote", "submodule"}
 )
-# Claude Code's own web tools: off in Scout's bundle, and denied here too.
-_WEB_TOOLS: frozenset[str] = frozenset({"WebSearch", "WebFetch"})
+# ``git remote update|show|prune`` and ``git archive --remote`` reach a remote too.
+_GIT_REMOTE_NETWORK: frozenset[str] = frozenset({"update", "show", "prune"})
+
+# Scout's tools are an allowlist (Claude Code's local file tools and the Omnigent
+# tools it needs); everything else is denied, whatever its arguments.
+_OMNIGENT_MCP_PREFIX = "mcp__omnigent__"
+_SCOUT_NATIVE_TOOLS: frozenset[str] = frozenset(
+    {"Read", "Glob", "Grep", "LS", "NotebookRead", "TodoWrite", "TodoRead", "ToolSearch", "Skill"}
+)
+_SCOUT_WRITE_TOOLS: frozenset[str] = frozenset(
+    {"Write", "Edit", "MultiEdit", "sys_os_write", "sys_os_edit"}
+)
+_SCOUT_OMNIGENT_TOOLS: frozenset[str] = frozenset(
+    {
+        "load_skill",
+        "read_skill_file",
+        "sys_os_read",
+        "sys_session_rename",
+        "sys_cancel_task",
+        "list_comments",
+        "update_comment",
+    }
+)
+_SCOUT_OMNIGENT_PREFIXES: tuple[str, ...] = ("sys_discovery_", "sys_factory_")
+_SCOUT_MEMORY_DIR = "factory"
 
 # Commands whose arguments are data, not commands (``echo git push`` is no push).
 _INERT_HEADS: frozenset[str] = frozenset(
@@ -1561,7 +1585,12 @@ class _RoleGuard:
         configs, index = _git_global_options(args)
         sub = args[index] if index < len(args) else ""
         rest = args[index + 1 :]
-        if sub in _GIT_NETWORK_SUBCOMMANDS and (reason := self._network_reason(f"git {sub}")):
+        networked = (
+            sub in _GIT_NETWORK_SUBCOMMANDS
+            or (sub == "remote" and bool(rest) and rest[0] in _GIT_REMOTE_NETWORK)
+            or (sub == "archive" and any(a.startswith("--remote") for a in rest))
+        )
+        if networked and (reason := self._network_reason(f"git {sub}")):
             return reason
         reason = self._git_inline_config_reason(configs, sub)
         if reason:
@@ -1864,11 +1893,46 @@ def _is_mcp_merge(event: _Json) -> bool:
     )
 
 
-def _is_web_tool(event: _Json) -> bool:
-    """:returns: Whether *event* calls Claude Code's own WebSearch or WebFetch."""
+def _scout_memory_path(path: object) -> bool:
+    """Whether *path* is a Markdown file directly in a ``factory`` directory, none hidden."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    parts = [p for p in re.split(r"[\\/]+", path.strip()) if p not in ("", ".")]
+    if len(parts) < 2 or any(p == ".." or p.startswith(".") for p in parts):
+        return False
+    return parts[-2] == _SCOUT_MEMORY_DIR and parts[-1].endswith(".md")
+
+
+def scout_tool_reason(event: _Json) -> str | None:
+    """
+    Scout's tool allowlist: a DENY reason for any tool call outside it.
+
+    :param event: A V0 policy event.
+    :returns: ``None`` for an allowed call (or no tool call), else what to do instead.
+    """
+    if event.get("type") != "tool_call":
+        return None
     data = event.get("data")
     name = data.get("name") if isinstance(data, dict) else None
-    return event.get("type") == "tool_call" and isinstance(name, str) and name in _WEB_TOOLS
+    if not isinstance(name, str) or not name:
+        return f"Scout calls only its allowed tools: {_SCOUT_HINT}."
+    args = data.get("arguments") if isinstance(data, dict) else None
+    bare = name[len(_OMNIGENT_MCP_PREFIX) :] if name.startswith(_OMNIGENT_MCP_PREFIX) else name
+    if bare in _SCOUT_WRITE_TOOLS:
+        target = args.get("file_path", args.get("path")) if isinstance(args, dict) else None
+        if _scout_memory_path(target):
+            return None
+        return (
+            f"Scout writes only its memory, ~/{_SCOUT_MEMORY_DIR}/scout.md (`{name}` "
+            f"elsewhere is blocked): {_SCOUT_HINT}."
+        )
+    if bare != name or bare.startswith("sys_") or bare in _SCOUT_OMNIGENT_TOOLS:
+        if bare in _SCOUT_OMNIGENT_TOOLS or bare.startswith(_SCOUT_OMNIGENT_PREFIXES):
+            return None
+        return f"`{name}` is blocked for Scout: {_SCOUT_HINT}."
+    if name in _SCOUT_NATIVE_TOOLS:
+        return None
+    return f"`{name}` is blocked for Scout (it has no shell, web or outside tool): {_SCOUT_HINT}."
 
 
 def _command_of(event: _Json) -> str | None:
@@ -2019,8 +2083,8 @@ def guard_evaluator(
         """
         if not isinstance(event, dict):
             return _ALLOW
-        if guard.role == ROLE_SCOUT and _is_web_tool(event):
-            return _decision(f"{prefix}Claude Code's web tools are off for Scout: {_SCOUT_HINT}.")
+        if guard.role == ROLE_SCOUT and (reason := scout_tool_reason(event)):
+            return _decision(f"{prefix}{reason}")
         if _is_mcp_merge(event):
             return _decision(f"{prefix}GitHub MCP merges are blocked: {MERGE_GATE_HINT}.")
         if budgeted is not None and (reason := _dispatch_reason(event, budgeted)):
@@ -2218,9 +2282,9 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "HEAD, deletes, tags, protected branches), writes to repos outside write_repos (for "
         "a factory member: outside its factory projects' repos, set by the server), and "
         "role-restricted actions (lead, reviewer, planner, demo and Scout pushes, demo PR "
-        "writes other than comments, planner PR and issue writes, Scout's network commands "
-        "and web tools, env lifecycle including factory "
-        "previews outside env_keeper).",
+        "writes other than comments, planner PR and issue writes, every Scout tool outside "
+        "its allowlist (no shell, web, browser or outside MCP tool), env lifecycle including "
+        "factory previews outside env_keeper).",
         "params_schema": {
             "type": "object",
             "properties": {

@@ -6,7 +6,8 @@ Every :data:`TICK_S` seconds, while the server runs discovery
 - **Budget.** Scout's spend today (the cost ledger, role ``scout``) against
   ``discovery.budgets.usd_per_day``: at :data:`BUDGET_LINE_SHARE` one line in
   ``#discovery``; at 100 % one ``discovery.budget_stop`` and no more beats or
-  asks for Scout until the next UTC day (asks wait, queued).
+  asks for Scout until the next UTC day (asks wait, queued). A budget of $0
+  means Scout spends nothing: no beats and no asks at all.
 - **Sweep** (``discovery.cadence.sweep_h``, default daily): ``[Factory discovery ·
   sweep · …]`` to Scout, only when signals arrived since the last one (an idle
   sweep is skipped, like the retro's idle skip).
@@ -17,15 +18,19 @@ Every :data:`TICK_S` seconds, while the server runs discovery
 - **Asks**: research asks people made while Scout was off or over budget
   (``research.state = queued``) go to Scout once it can take them.
 - **Ready to plan**: ``[Factory discovery · ready to plan · …]`` to Atlas when
-  capacity frees up (a project merged or was cancelled) or a while after a
-  synthesis, with the top validated opportunities (pinned first) and their bet
-  notes, the goals without a metric, the mix gap and the free capacity, at
-  most ``thresholds.bets_per_week`` minus the bets filed in the last 7 days.
+  capacity frees up (a project's work reached merged or done, or it was
+  cancelled, so it no longer takes a slot under ``caps.max_projects``) or a
+  while after a synthesis, with the top validated opportunities (pinned first)
+  and their bet notes, the goals without a metric, the mix gap and the free
+  capacity, at most ``thresholds.bets_per_week`` minus the bets filed in the
+  last 7 days. Scout's titles and notes reach Atlas inside the untrusted
+  envelope: they paraphrase outside text.
 - **Discovery retro**: ``[Factory discovery · retro · window 30d · …]`` to
   Sentinel every :data:`RETRO_EVERY_S`, skipped when nothing happened.
 
 Each beat is a ``discovery.*`` event, so the cadence survives a restart.
 Signal text never goes into a beat: it carries ids, counts and Scout's titles.
+One pass reads the seat and the day's spend once per factory.
 """
 
 from __future__ import annotations
@@ -36,11 +41,18 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
-from omnigent.factory import LABEL_STATE, STATE_ACTIVE, THREAD_DISCOVERY
+from omnigent.factory import (
+    LABEL_STATE,
+    STAGE_DONE,
+    STAGE_MERGED,
+    STATE_ACTIVE,
+    THREAD_DISCOVERY,
+)
 from omnigent.server.factory import control, definition, events
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps, factory_deps
 from omnigent.server.factory.definition_blocks import discovery_server_on
-from omnigent.server.factory.envelope import quote_spoofed_lines
+from omnigent.server.factory.envelope import UntrustedItem, format_untrusted
+from omnigent.server.factory.projects import cap_slots, holds_cap_slot
 from omnigent.stores.factory_store import now_s
 
 if TYPE_CHECKING:
@@ -58,6 +70,9 @@ KIND_RETRO: Final = "discovery.retro"
 KIND_BUDGET_LINE: Final = "discovery.budget_line"
 KIND_BUDGET_STOP: Final = "discovery.budget_stop"
 KIND_ASK: Final = "discovery.ask_sent"
+KIND_RESEARCH: Final = "opportunity.research"
+"""What a person's "Research this" (or its cancel) records; a queued ask is one of these."""
+FREED_EVENTS: Final = ("stage.changed", "project.cancelled")
 BUDGET_LINE_SHARE: Final = 0.8
 FIRST_SWEEP_S: Final = 2 * 3600
 FIRST_SYNTHESIS_S: Final = 24 * 3600
@@ -87,7 +102,7 @@ def _day(now: int) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(now))
 
 
-def _last(deps: FactoryDeps, fid: str, kind: str, subject: str = SUBJECT) -> Any:
+def _last(deps: FactoryDeps, fid: str, kind: str, subject: str | None = SUBJECT) -> Any:
     found = deps.factory_store.find_events(fid, kind, 0, subject, limit=1, newest_first=True)
     return found[0] if found else None
 
@@ -127,17 +142,25 @@ def _cadence(doc: Mapping[str, Any]) -> tuple[int, int]:
 # ── Budget ─────────────────────────────────────────────────────
 
 
-async def _budget(app_state: Any, root: Conversation, doc: Mapping[str, Any], now: int) -> bool:
+def budget_cap(doc: Mapping[str, Any]) -> float:
+    """:returns: ``discovery.budgets.usd_per_day`` (default when unset; ``0``: spend nothing)."""
+    from omnigent.server.factory.discovery.seat import daily_cap
+
+    return daily_cap(((doc.get("discovery") or {}).get("budgets") or {}).get("usd_per_day"))
+
+
+async def _budget(
+    app_state: Any, root: Conversation, doc: Mapping[str, Any], now: int, spent: float
+) -> bool:
     """Post the 80 % line and the stop once a day. :returns: Whether Scout is stopped today."""
     from omnigent.server.factory import chat
-    from omnigent.server.factory.discovery import seat
 
     deps = factory_deps(app_state)
     fid = root.id
-    cap = float(((doc.get("discovery") or {}).get("budgets") or {}).get("usd_per_day") or 0)
+    cap = budget_cap(doc)
     if cap <= 0:
-        return False
-    spent = await asyncio.to_thread(seat.spent_today, deps, fid, now)
+        # The owners gave Scout nothing to spend: it is never woken.
+        return True
     day = _day(now)
     subject = f"{SUBJECT}:{day}"
     if (
@@ -205,9 +228,21 @@ def synthesis_text(signals: int, unsorted: int, spent: float, cap: float) -> str
 
 
 def _research_due(deps: FactoryDeps, fid: str) -> list[Any]:
+    """
+    :returns: The opportunities with a queued research ask. Read only when a person
+        asked since the last pass that passed asks on (a ``discovery.ask_sent``).
+    """
+    store = deps.factory_store
+    last = _last(deps, fid, KIND_ASK, None)
+    since = last.ts if last is not None else 0
+    newest: dict[str | None, Any] = {}
+    for event in store.find_events(fid, KIND_RESEARCH, since, None, limit=200, newest_first=True):
+        newest.setdefault(event.subject, event)
+    if not any((e.data or {}).get("state") in (None, "queued") for e in newest.values()):
+        return []
     return [
         row
-        for row in deps.factory_store.list_opportunities(fid)
+        for row in store.list_opportunities(fid)
         if isinstance(row.research, Mapping) and row.research.get("state") == "queued"
     ]
 
@@ -251,9 +286,13 @@ async def _asks(app_state: Any, root: Conversation, scout: Conversation, now: in
 
 
 async def _scout_beats(
-    app_state: Any, root: Conversation, scout: Conversation, doc: Mapping[str, Any], now: int
+    app_state: Any,
+    root: Conversation,
+    scout: Conversation,
+    doc: Mapping[str, Any],
+    now: int,
+    spent: float,
 ) -> list[str]:
-    from omnigent.server.factory.discovery import seat
     from omnigent.server.factory.discovery.ledger import SUSPECT_AT
     from omnigent.stores.factory_store.discovery import SignalFilter, is_unsorted
 
@@ -264,8 +303,7 @@ async def _scout_beats(
         sent.append("asks")
     sweep_h, synthesis_h = _cadence(doc)
     seated = await asyncio.to_thread(_seated_at, deps, fid, scout)
-    cap = float(((doc.get("discovery") or {}).get("budgets") or {}).get("usd_per_day") or 0)
-    spent = await asyncio.to_thread(seat.spent_today, deps, fid, now)
+    cap = budget_cap(doc)
     last_sweep = await asyncio.to_thread(_last_s, deps, fid, KIND_SWEEP)
     if _due(last_sweep, sweep_h, seated, FIRST_SWEEP_S, now):
         since = last_sweep if last_sweep is not None and last_sweep >= seated else None
@@ -330,7 +368,7 @@ def _mix(deps: FactoryDeps, fid: str, doc: Mapping[str, Any]) -> list[dict[str, 
     counts = dict.fromkeys(MIX_KEYS.values(), 0)
     active = 0
     for project in deps.factory_store.list_projects(fid):
-        if project.status != "active":
+        if not holds_cap_slot(project):
             continue
         why = (project.charter or {}).get("why")
         key = MIX_KEYS.get(str(why.get("kind"))) if isinstance(why, Mapping) else None
@@ -430,33 +468,55 @@ def ready_text(
             f"- {g.get('id')} {control.clip(str(g.get('statement') or ''), 140)}"
             for g in unmeasured
         ]
-    body: list[str] = []
+    items: list[UntrustedItem] = []
     if validated:
-        body.append("Validated, pinned first then by rank (titles and notes written by Scout):")
-        for i, e in enumerate(validated[:READY_ITEMS_MAX], 1):
-            body.append(
-                f"{i}. {e.row.ref} {control.clip(e.row.title, 120)} · {e.meter.level} · "
-                f"rank {e.score.rank:.2f} · goal {e.row.goal or 'unassigned'}"
-                + (" · pinned" if e.row.pinned_by else "")
-            )
-            note = _note_line(e.row.bet_note)
-            if note:
-                body.append(f"   bet note: {note}")
+        lines.append(
+            "Validated, pinned first then by rank: "
+            + ", ".join(e.row.ref for e in validated[:READY_ITEMS_MAX])
+            + "."
+        )
+        items += [
+            _ready_item(e, f"#{i}", e.score.rank, pinned=bool(e.row.pinned_by))
+            for i, e in enumerate(validated[:READY_ITEMS_MAX], 1)
+        ]
     if tests:
-        body.append("Test first (high value, low confidence: only a test bet fits):")
-        for e in tests[:TESTS_MAX]:
-            note = _note_line(e.row.bet_note)
-            body.append(
-                f"- {e.row.ref} {control.clip(e.row.title, 120)} · {e.meter.level}"
-                + (f" · {note}" if note else "")
+        lines.append(
+            "Test first (high value, low confidence: only a test bet fits): "
+            + ", ".join(e.row.ref for e in tests[:TESTS_MAX])
+            + "."
+        )
+        items += [_ready_item(e, "test first") for e in tests[:TESTS_MAX]]
+    body = (
+        [
+            format_untrusted(
+                origin="opportunities · titles and bet notes written by Scout", items=items
             )
+        ]
+        if items
+        else []
+    )
     tail = (
         'Run load_skill("factory-planning") and follow "From an opportunity": file each bet '
         'with sys_factory_project(opportunity="O-<n>", bet={…}), or decline one with '
         'sys_factory_project(op="decline", opportunity="O-<n>", reason="…"). Read an '
         'opportunity with sys_discovery_read(kind="opportunity", ids=["O-<n>"]).'
     )
-    return "\n".join([head, *lines, quote_spoofed_lines("\n".join(body)), tail])
+    return "\n".join([head, *lines, *body, tail])
+
+
+def _ready_item(
+    e: Evaluated, place: str, rank: float | None = None, *, pinned: bool = False
+) -> UntrustedItem:
+    """One opportunity in the notice: server-written tags; Scout's title and note as text."""
+    tags = [place, e.meter.level]
+    if rank is not None:
+        tags.append(f"rank {rank:.2f}")
+    tags.append(f"goal {e.row.goal or 'unassigned'}")
+    if pinned:
+        tags.append("pinned")
+    note = _note_line(e.row.bet_note)
+    text = control.clip(e.row.title, 120) + (f"\nbet note: {note}" if note else "")
+    return UntrustedItem(ref=e.row.ref, text=text, tags=tuple(tags))
 
 
 def _ready_facts(deps: FactoryDeps, fid: str, doc: Mapping[str, Any], now: int) -> dict[str, Any]:
@@ -471,7 +531,8 @@ def _ready_facts(deps: FactoryDeps, fid: str, doc: Mapping[str, Any], now: int) 
     ]
     thresholds = (doc.get("discovery") or {}).get("thresholds") or {}
     slots = int((doc.get("caps") or {}).get("max_projects") or 0)
-    active = sum(1 for p in deps.factory_store.list_projects(fid) if p.status == "active")
+    # Finished work (merged or done) keeps its row but no longer takes a slot.
+    active = cap_slots(deps.factory_store.list_projects(fid))
     week, open_now = _bets_filed(deps, fid, now)
     per_week = int(thresholds.get("bets_per_week", 3) or 0)
     max_open = int(thresholds.get("max_open_bets", 3) or 0)
@@ -494,11 +555,14 @@ def _ready_facts(deps: FactoryDeps, fid: str, doc: Mapping[str, Any], now: int) 
 
 
 def _capacity_freed(deps: FactoryDeps, fid: str, since: int, active: int, last: Any) -> bool:
-    ended = deps.factory_store.find_events(
-        fid, ["project.merged", "project.cancelled"], since * 1000
+    """Whether a slot freed since *since*: work reached merged or done, or a project ended."""
+    rows = deps.factory_store.find_events(fid, list(FREED_EVENTS), since * 1000)
+    ended = any(
+        e.kind == "project.cancelled" or (e.data or {}).get("to") in (STAGE_MERGED, STAGE_DONE)
+        for e in rows
     )
     was = (last.data or {}).get("active") if last is not None else None
-    return bool(ended) or (isinstance(was, int) and active < was)
+    return ended or (isinstance(was, int) and active < was)
 
 
 async def _ready_to_plan(
@@ -514,7 +578,7 @@ async def _ready_to_plan(
     )
 
     def active() -> int:
-        return sum(1 for p in deps.factory_store.list_projects(fid) if p.status == "active")
+        return cap_slots(deps.factory_store.list_projects(fid))
 
     freed = last is not None and await asyncio.to_thread(
         lambda: _capacity_freed(deps, fid, last_at, active(), last)
@@ -596,17 +660,16 @@ def _discovery_activity(deps: FactoryDeps, fid: str, since: int) -> int:
     )
 
 
-async def _retro(app_state: Any, root: Conversation, now: int) -> bool:
+async def _retro(
+    app_state: Any, root: Conversation, now: int, rows: Sequence[Conversation]
+) -> bool:
     from omnigent.server.factory.retro import sentinel_of
 
     deps = factory_deps(app_state)
     fid = root.id
-    last = await asyncio.to_thread(_last_s, deps, fid, KIND_RETRO)
-    from omnigent.server.factory.discovery.seat import scouts
-
-    rows = await asyncio.to_thread(scouts, deps, fid)
     if not rows:
         return False
+    last = await asyncio.to_thread(_last_s, deps, fid, KIND_RETRO)
     baseline = last if last is not None else int(min(c.created_at for c in rows))
     if now - baseline < RETRO_EVERY_S:
         return False
@@ -650,15 +713,18 @@ async def beat_factory(app_state: Any, root: Conversation, *, now: int | None = 
 
     doc, _version = await asyncio.to_thread(effective_doc, deps, fid)
     sent: list[str] = []
-    stopped = await _budget(app_state, root, doc, when)
+    # Read once per pass: the seat (any state) and Scout's spend today.
+    rows = await asyncio.to_thread(seat.scouts, deps, fid)
+    scout = next((c for c in rows if seat.spawn.holds_pod(c)), None)
+    spent = await asyncio.to_thread(seat.spent_today, deps, fid, when)
+    stopped = await _budget(app_state, root, doc, when, spent)
     if stopped:
         sent.append("budget_stop")
-    scout = await asyncio.to_thread(seat.live_scout, deps, fid)
     if scout is not None and scout.labels.get(LABEL_STATE) == STATE_ACTIVE and not stopped:
-        sent += await _scout_beats(app_state, root, scout, doc, when)
+        sent += await _scout_beats(app_state, root, scout, doc, when, spent)
     if await _ready_to_plan(app_state, root, doc, when):
         sent.append("ready_to_plan")
-    if await _retro(app_state, root, when):
+    if await _retro(app_state, root, when, rows):
         sent.append("retro")
     return sent
 
@@ -698,8 +764,10 @@ async def start(app_state: Any) -> Callable[[], Awaitable[None]]:
         while True:
             try:
                 done = await run_once(app_state)
-                if done:
-                    _logger.info("factory discovery: beats %s", done)
+                # A stopped budget repeats every pass; log only what went out.
+                news = {k: v for k, v in done.items() if v != ["budget_stop"]}
+                if news:
+                    _logger.info("factory discovery: beats %s", news)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -724,6 +792,7 @@ __all__ = [
     "KIND_SYNTHESIS",
     "TICK_S",
     "beat_factory",
+    "budget_cap",
     "ready_items",
     "ready_text",
     "retro_text",

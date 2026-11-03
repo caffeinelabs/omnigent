@@ -14,7 +14,7 @@ Cheap and incremental: only the new signals, no digest, no new opportunities
    statements only; do not re-read old signals).
 2. For each new signal, decide:
    - **paraphrase**: one line, your words, what the person needs or did
-     ("can't tell why the build failed"), never a quote;
+     ("can't find where to change the export format"), never a quote;
    - **kind**: `request`, `pain`, `praise`, `bug`, `churn_reason` or `market`;
    - **intensity**: `blocker` (cannot continue), `workaround` (found a way
      around it), `annoyance`, `nice` (nice to have);

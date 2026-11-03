@@ -208,13 +208,19 @@ function discoveryRoom(): RoomRouteOptions {
           "and O-12. Ready to plan: O-3 (moderate), O-12 (moderate). Not hearing from: teams. " +
           "Spent $4.10 of $10 today. (sample)",
       ),
-      message(9002, 12, "person", "Why do new users drop after their first build? (sample)"),
+      message(
+        9002,
+        12,
+        "person",
+        "@scout why do teams stop exporting after a week? Answer in #discovery (sample)",
+      ),
       message(
         9003,
         8,
         "scout",
-        "O-3 holds it: 23 accounts, moderate. Most say they cannot tell why a build failed " +
-          "(S-1042, S-1107). Cheapest next test: a clearer error summary behind a flag. (sample)",
+        "O-3 holds it: 23 accounts, moderate. Most say they cannot find where to change the " +
+          "export format (S-1042, S-1107). Cheapest next test: a format picker behind a flag; " +
+          "@atlas it is ready to plan. (sample)",
       ),
     ],
   };

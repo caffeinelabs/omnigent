@@ -316,12 +316,16 @@ def check_agent_paths(seat: str, changes: Sequence[definition.Change]) -> None:
         if definition.blocks.agent_may_propose(seat, path):
             continue
         team = definition.team_spec.is_team_path(path)
-        allowed = [a for a in definition.blocks.AGENT_PATHS.get(seat, ()) if (a == "team") == team]
-        may = (
-            f"it may propose {', '.join(allowed)} there"
-            if allowed
-            else "people change it in the cockpit"
-        )
+        paths = definition.blocks.AGENT_PATHS.get(seat, ())
+        if seat in definition.blocks.ALLOWLIST_SEATS:
+            may = f"it proposes only {', '.join(paths)}; people change it in the cockpit"
+        else:
+            allowed = [a for a in paths if (a == "team") == team]
+            may = (
+                f"it may propose {', '.join(allowed)} there"
+                if allowed
+                else "people change it in the cockpit"
+            )
         raise CockpitError(
             403,
             "path_not_allowed",

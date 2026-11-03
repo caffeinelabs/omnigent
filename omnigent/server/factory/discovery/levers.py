@@ -891,7 +891,12 @@ async def research(
         }
         work = _Work("opportunity.research", f"{_name(actor)} asked Scout to research {row.ref}")
         await asyncio.to_thread(_set, deps, root.id, work, row, research=research)
-        work.data = {"question": body.question, "budget_usd": research["budget_usd"], "due": due}
+        work.data = {
+            "question": body.question,
+            "budget_usd": research["budget_usd"],
+            "due": due,
+            "state": research["state"],
+        }
         if scout is not None:
             control.send_text(
                 app_state,

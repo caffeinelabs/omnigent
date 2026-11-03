@@ -17,13 +17,16 @@ discovery and the factory's ``discovery.enabled`` is on.
   "not about this" is never undone by an agent.
 - :func:`opportunity` (Scout: create, rephrase, merge, split, bet_note, idea;
   the leads: idea). The server validates each write: job form, no named
-  solution, two different alternatives, and quoted words that match a stored
-  excerpt of a cited signal (a refused quote is logged as
+  solution, two different alternatives, no text that reads like instructions
+  to an agent (logged as ``opportunity.text_refused``), and quoted words that
+  match a stored excerpt of a cited signal (a refused quote is logged as
   ``opportunity.quote_refused``). An idea is an ``idea`` signal: it weighs
-  like a hunch and starts no work.
+  like a hunch and starts no work, and a flagged one is never attached.
 
-People can Undo what Scout changes on an opportunity for 10 minutes, like
-their own acts (:mod:`.levers`).
+People's corrections win: Scout does not rephrase what a person renamed, merge
+back what a person split, split what a person merged, or reshape what people
+pinned (409 ``changed_by_a_person``). People can Undo what Scout changes on an
+opportunity for 10 minutes, like their own acts (:mod:`.levers`).
 """
 
 from __future__ import annotations
@@ -91,6 +94,8 @@ SCAN_MAX: Final = 2000
 CODE_MAX: Final = 100
 IDEAS_PER_DAY: Final = 5
 """Ideas one agent may file per 24 h (each competes in the ranking like a hunch)."""
+CORRECTION_HOLD_S: Final = 30 * 86400
+"""How long a person's rename or merge stands against Scout reshaping it again."""
 _WINDOW_RE: Final = re.compile(r"^([1-9][0-9]{0,3})([hd])$")
 _DUPLICATE_RE: Final = re.compile(r"^duplicate_of:S-[1-9][0-9]{0,8}$")
 NOTE: Final = (
@@ -787,6 +792,18 @@ async def _quote_refused(app_state: Any, caller: AgentCaller, kind: str, what: s
     )
 
 
+async def _text_refused(app_state: Any, caller: AgentCaller, op: str, field: str | None) -> None:
+    await events.emit(
+        app_state,
+        caller.factory_id,
+        "opportunity.text_refused",
+        severity="warning",
+        from_id=caller.session.id,
+        summary=f"{caller.title}: text that reads like instructions was refused (op {op})",
+        data={"op": op, "field": field, "by": caller.session.id, "by_kind": "agent"},
+    )
+
+
 def _texts(body: OpportunityIn) -> list[tuple[str, str | None]]:
     texts: list[tuple[str, str | None]] = [
         ("title", body.title),
@@ -795,6 +812,7 @@ def _texts(body: OpportunityIn) -> list[tuple[str, str | None]]:
         ("text", body.text),
         ("reason", body.reason),
     ]
+    texts += [(f"alternatives[{i}]", a) for i, a in enumerate(body.alternatives)]
     if body.bet_note is not None:
         note = body.bet_note
         texts += [(f"bet_note.solutions[{i}]", t) for i, t in enumerate(note.solutions)]
@@ -822,6 +840,58 @@ def _open_row(deps: FactoryDeps, fid: str, ref: str | None) -> Any:
     if found is None or found.status in CLOSED:
         raise CockpitError(409, "closed", f"{row.ref} is {found.status if found else 'gone'}")
     return row
+
+
+def _people_corrected(deps: FactoryDeps, fid: str, row: Any, tag: str, note: str | None) -> bool:
+    """Whether a person's recent calibration on *row* (or naming it, by *note*) is *tag*."""
+    since = now_s() - CORRECTION_HOLD_S
+    if note is None:
+        found = deps.factory_store.list_feedback(
+            fid, target_kind="opportunity", target_id=row.ref, kinds=["calibration"], since=since
+        )
+    else:
+        found = deps.factory_store.list_feedback(
+            fid, target_kind="opportunity", kinds=["calibration"], since=since, limit=500
+        )
+    return any(
+        f.author_kind == "human" and tag in f.tags and (note is None or f.body == note)
+        for f in found
+    )
+
+
+def _split_by_person(part: Any, other: Any) -> bool:
+    """Whether *part* came out of a person's split of *other* (or of the same source)."""
+    return (
+        part.created_kind == "human"
+        and part.split_from is not None
+        and part.split_from in (other.number, other.split_from)
+    )
+
+
+def _check_corrections(deps: FactoryDeps, fid: str, row: Any, body: OpportunityIn) -> None:
+    """
+    People's corrections win: Scout does not undo a person's rename, split or merge, and
+    reshapes nothing people pinned.
+
+    :raises CockpitError: 409 ``changed_by_a_person``.
+    """
+    why: str | None = None
+    if row.pinned_by:
+        why = f"people pinned {row.ref}"
+    elif body.op == "rephrase" and _people_corrected(deps, fid, row, "rename", None):
+        why = f"a person renamed {row.ref}; their wording stands"
+    elif body.op == "merge":
+        target = levers._row(deps, fid, body.into or "")
+        if target.pinned_by:
+            why = f"people pinned {target.ref}"
+        elif _split_by_person(row, target) or _split_by_person(target, row):
+            why = f"a person split {row.ref} and {target.ref} apart; they stay apart"
+    elif body.op == "split" and _people_corrected(deps, fid, row, "merge", f"into {row.ref}"):
+        why = f"a person merged into {row.ref}; it stays one opportunity"
+    if why is not None:
+        raise CockpitError(
+            409, "changed_by_a_person", f"{why}. Suggest the change in #discovery instead"
+        )
 
 
 def _bet_note(note: opportunities.BetNote) -> dict[str, Any]:
@@ -873,6 +943,8 @@ async def opportunity(app_state: Any, caller: AgentCaller, payload: Any) -> dict
     except CockpitError as exc:
         if exc.code == "quote_unverified":
             await _quote_refused(app_state, caller, "opportunity.quote_refused", f"op {body.op}")
+        elif exc.code == "text_refused":
+            await _text_refused(app_state, caller, body.op, exc.field)
         raise
     found = await asyncio.to_thread(opportunities.evaluate_one, deps, fid, row.number)
     created = [f"O-{n}" for n in work.created]
@@ -888,6 +960,7 @@ def _shape(
     deps: FactoryDeps, fid: str, body: OpportunityIn, actor: Actor
 ) -> tuple[Any, levers._Work]:
     """Validate and apply one shaping op (synchronous, under the factory's discovery lock)."""
+    opportunities.check_agent_text(_texts(body))
     if body.op == "create":
         fields = body.model_dump(
             include={
@@ -913,6 +986,8 @@ def _shape(
         work.snapshot.append(row.number)
         return row, work
     row = _open_row(deps, fid, body.id)
+    if body.op in ("rephrase", "merge", "split"):
+        _check_corrections(deps, fid, row, body)
     cited = _linked_refs(deps, fid, row.number)
     if body.op == "rephrase":
         fields = {
@@ -972,11 +1047,14 @@ async def _idea(
             raise CockpitError(
                 429, "daily_quota", f"at most {IDEAS_PER_DAY} ideas per agent per day"
             )
-        target = levers._row(deps, fid, body.id) if body.id else None
+        target = _open_row(deps, fid, body.id) if body.id else None
         quotes.check(deps, fid, [("text", body.text)])
         signal, _existed = ledger.add_conviction(
             deps, fid, text=body.text or "", author=actor.id, author_kind="agent", kind="idea"
         )
+        if INJECTION_SUSPECT in signal.flags:
+            # Stored and shown to people as flagged, but never attached as evidence.
+            return signal, None
         if target is not None:
             deps.factory_store.put_link(
                 fid, signal.number, target.number, attached_by=actor.id, attached_kind="agent"
@@ -1003,13 +1081,19 @@ async def _idea(
             "opportunity": target.ref if target is not None else None,
         },
     )
+    flagged = INJECTION_SUSPECT in signal.flags
     return {
         "op": "idea",
         "signal": signal.ref,
         "opportunity": target.ref if target is not None else None,
         "weight": "hunch",
-        "flagged": INJECTION_SUSPECT in signal.flags,
-        "note": "an idea weighs like a hunch (0.1) and starts no work; it competes in the ranking",
+        "flagged": flagged,
+        "note": (
+            "the idea reads like instructions to an agent: it is kept flagged, attached to "
+            "nothing and out of every score; write it plainly"
+            if flagged
+            else "an idea weighs like a hunch (0.1) and starts no work; it competes in the ranking"
+        ),
     }
 
 

@@ -168,15 +168,90 @@ async def test_the_server_switch_off_stops_every_seat(
 async def test_a_changed_seat_model_reaches_the_live_scout(
     env: tuple[Cockpit, FakeCreates],
 ) -> None:
+    cockpit, creates = env
+    await _reconcile(cockpit)
+
+    _set(cockpit, discovery__seat__model="opus")
+    assert await _reconcile(cockpit) == "on"
+
+    # Switched the way a person's /model is: the session route, so the live terminal too.
+    patch = creates.calls[-1]
+    assert patch["method"] == "PATCH" and patch["path"] == f"/v1/sessions/{_scout(cockpit).id}"
+    assert patch["body"] == {"model_override": "opus"}
+    assert _scout(cockpit).model_override == "opus"
+    [event] = [e for e in cockpit.events(seat.EVENT_SEAT) if e.data["state"] == "model"]
+    assert event.data["model"] == "opus" and event.data["applied"] == "now"
+    assert await _reconcile(cockpit) == "on"
+    assert len(creates.calls) == 2  # in step: nothing more
+
+    # Cleared: the override the server set goes, and the bundle's alias applies again.
+    _set(cockpit, discovery__seat__model=None)
+    assert await _reconcile(cockpit) == "on"
+    assert creates.calls[-1]["body"] == {"model_override": "default"}
+    assert _scout(cockpit).model_override is None
+
+
+async def test_a_persons_own_model_choice_stands(env: tuple[Cockpit, FakeCreates]) -> None:
+    cockpit, creates = env
+    await _reconcile(cockpit)
+    cockpit.world.store.update_conversation(_scout(cockpit).id, model_override="haiku")
+
+    assert await _reconcile(cockpit) == "on"
+
+    assert _scout(cockpit).model_override == "haiku"
+    assert len(creates.calls) == 1
+
+
+async def test_without_a_runner_client_the_model_waits_for_the_next_start(
+    env: tuple[Cockpit, FakeCreates], monkeypatch: pytest.MonkeyPatch
+) -> None:
     cockpit, _creates = env
     await _reconcile(cockpit)
+    monkeypatch.setattr(spawn, "mint_token", lambda _deps, _user: None)
 
     _set(cockpit, discovery__seat__model="opus")
     assert await _reconcile(cockpit) == "on"
 
     assert _scout(cockpit).model_override == "opus"
     [event] = [e for e in cockpit.events(seat.EVENT_SEAT) if e.data["state"] == "model"]
-    assert event.data["model"] == "opus"
+    assert event.data["applied"] == "next_start"
+
+
+async def test_an_error_after_the_create_puts_the_session_away(
+    env: tuple[Cockpit, FakeCreates], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cockpit, creates = env
+
+    def broken(*_args: Any) -> dict[str, str]:
+        raise RuntimeError("labels unavailable (sample)")
+
+    monkeypatch.setattr(seat, "seat_labels", broken)
+
+    assert await _reconcile(cockpit) == "failed"
+
+    [call] = creates.calls
+    assert call["method"] == "POST"
+    [event] = cockpit.events(seat.EVENT_FAILED)
+    assert "after the create" in event.data["reason"]
+    # The unlabelled session is archived, and the next pass backs off instead of creating more.
+    orphan = cockpit.world.store.get_conversation(call["created_id"])
+    assert orphan is not None and orphan.archived
+    assert await _reconcile(cockpit) == "waiting"
+    assert len(creates.calls) == 1
+
+
+async def test_a_factory_that_never_seated_scout_reads_no_members(
+    env: tuple[Cockpit, FakeCreates], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cockpit, _creates = env
+    _set(cockpit, discovery__enabled=False)
+
+    def unread(*_args: Any) -> list[Any]:
+        raise AssertionError("no member read while discovery is off and nothing was seated")
+
+    monkeypatch.setattr(seat, "scouts", unread)
+
+    assert await _reconcile(cockpit) == "off"
 
 
 async def test_scout_counts_against_the_pod_cap(

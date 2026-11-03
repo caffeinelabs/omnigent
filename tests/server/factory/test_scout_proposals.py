@@ -117,6 +117,27 @@ async def test_scout_suggests_a_first_goal(
             403,
             "path_not_allowed",
         ),
+        # Outside the discovery blocks Scout proposes nothing either: an allowlist.
+        (
+            {"changes": [{"op": "replace", "path": "caps.max_projects", "value": 2}]},
+            403,
+            "path_not_allowed",
+        ),
+        (
+            {"changes": [{"op": "replace", "path": "budgets.factory_usd_per_day", "value": 500}]},
+            403,
+            "path_not_allowed",
+        ),
+        (
+            {"changes": [{"op": "replace", "path": "autonomy.projects", "value": "grace"}]},
+            403,
+            "path_not_allowed",
+        ),
+        (
+            {"changes": [{"op": "replace", "path": "discovery.budgets.usd_per_day", "value": 99}]},
+            403,
+            "path_not_allowed",
+        ),
         ({"kind": "rules", "rule": {"role": "scout", "text": "x (sample)"}}, 403, "not_allowed"),
         ({"kind": "code", "changes": []}, 403, "not_allowed"),
         ({"op": "cosign", "id": "C-1"}, 403, "not_allowed"),

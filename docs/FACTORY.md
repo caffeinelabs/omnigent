@@ -1265,17 +1265,23 @@ knowledge: it reads the profile, the strategy, `briefs.scout` and the signals.
   brief. It counts against `factory_max_pods` (owners get one decision a day
   when it does not fit); failed creates back off and open a `discovery.seat`
   incident. With the server env off there is no loop; a pass at start stops
-  leftover seats. Its heartbeat is off: the beats below wake it.
+  leftover seats. Its heartbeat is off: the beats below wake it. A changed
+  `discovery.seat.model` is switched on the live Scout the way a person's
+  `/model` is (`PATCH /v1/sessions/{id}`); clearing it drops the override the
+  server set. A session the server created but could not label is archived.
 - **Tools** (runner, `factory_role: scout`): `sys_discovery_read`,
   `sys_discovery_query`, `sys_discovery_code`, `sys_discovery_opportunity`,
   the roster, its beacon, the rules, `sys_factory_ask`, `sys_factory_chat`
-  (`#discovery` only) and `sys_factory_propose` (`kind=tuning` under
-  `product`, `strategy` and `discovery.sources`, owners decide, 2 a day). No
-  messaging, PR, project, task or spawn tool. The bundle switches Claude Code's
-  WebSearch and WebFetch off (`executor.config.disallowed_tools`), and the
-  guard denies pushes, PR, issue and comment writes, every network command
-  (`curl`, `wget`, any `gh`, `git clone|fetch|pull`, `ssh`, …) and the web
-  tools for role `scout`. Leads get `sys_discovery_read` and
+  (`#discovery`, and elsewhere only a reply where an `@scout` reached it;
+  it mentions only `@atlas` and `@sentinel`, never a project lead) and
+  `sys_factory_propose` (`kind=tuning` under `product`, `strategy` and
+  `discovery.sources` only, an allowlist whatever the block, owners decide, 2
+  a day). No messaging, PR, project, task or spawn tool, and no shell: the
+  bundle has no terminal and switches Claude Code's Bash, WebSearch and
+  WebFetch off (`executor.config.disallowed_tools`), and for role `scout` the
+  guard is an allowlist (Claude Code's Read, Glob, Grep and the like, writes
+  only to `~/factory/*.md`, and the Omnigent discovery and factory tools;
+  every shell, terminal, web, browser or other MCP tool is denied). Leads get `sys_discovery_read` and
   `sys_discovery_opportunity(op="idea")`; nobody else gets a discovery tool,
   and a sub-agent running Scout's spec is an `ic`.
 - **Agent routes** (`api/discovery_agent.py`, `discovery/agent.py`):
@@ -1287,26 +1293,36 @@ knowledge: it reads the profile, the strategy, `briefs.scout` and the signals.
   attach or "not about this" stands, a flagged signal is never attached) and
   `…/opportunity` (Scout: `create`, `rephrase`, `merge`, `split`, `bet_note`;
   everyone with the tool: `idea`, an `idea` signal of weight 0.1, 5 per agent
-  a day). Refused quotes are logged as `opportunity.quote_refused` and
-  `signal.quote_refused`; people can Undo Scout's opportunity edits for 10
+  a day; a flagged idea is never attached). Refused quotes are logged as
+  `opportunity.quote_refused` and `signal.quote_refused`; any agent text on an
+  opportunity (title, statement, alternatives, bet note, parts, reason) that
+  reads like instructions is refused (`422 text_refused`, logged as
+  `opportunity.text_refused`). People's corrections win: Scout may not
+  rephrase what a person renamed, merge back a person's split, split what a
+  person merged (30 days) or reshape a pinned opportunity (`409
+  changed_by_a_person`). People can Undo Scout's opportunity edits for 10
   minutes, and an agent's acts are never calibration.
 - **Room**: `#discovery` is Scout's thread (Atlas answers while no Scout is
-  seated), listed only while discovery runs; `@scout` routes only then.
-  "I think … because …" and "we need …" there are team hunches too.
+  seated, and while it is over today's budget), listed only while discovery
+  runs; `@scout` routes only then. While discovery is off, `#discovery` still
+  names a project of that name. "I think … because …" and "we need …" there
+  are team hunches too.
 - **Beats** (`background/discovery_beats.py`, every minute, each a
   `discovery.*` event): `[Factory discovery · sweep · …]` to Scout per
   `discovery.cadence.sweep_h` when signals arrived (idle sweeps are skipped),
   `[Factory discovery · synthesis · …]` per `synthesis_h` (a seat's first
   ones come 2 h and 24 h after it is seated), queued research asks once Scout
   can take them, `[Factory discovery · ready to plan · …]` to Atlas a while
-  after a synthesis or when a project merges or is cancelled (validated
-  opportunities pinned first with their bet notes, test-first ones, goals
-  without a metric, the mix gap, free capacity, at most
-  `thresholds.bets_per_week` minus the week's bets), and a monthly
-  `[Factory discovery · retro · …]` to Sentinel when something happened.
-  Scout's spend today (the cost ledger, role `scout`) posts one line in
-  `#discovery` at 80 % of `discovery.budgets.usd_per_day` and stops every beat
-  and ask at 100 % until the next UTC day (`discovery.budget_stop`).
+  after a synthesis or when capacity frees up (a project's work reaches
+  merged or done, or it is cancelled: the slots of `caps.max_projects`)
+  with validated opportunities pinned first, their titles and bet notes inside
+  the untrusted envelope, test-first ones, goals without a metric, the mix
+  gap, free capacity, at most `thresholds.bets_per_week` minus the week's
+  bets, and a monthly `[Factory discovery · retro · …]` to Sentinel when
+  something happened. Scout's spend today (the cost ledger, role `scout`)
+  posts one line in `#discovery` at 80 % of `discovery.budgets.usd_per_day`
+  and stops every beat, ask and Room wake at 100 % until the next UTC day
+  (`discovery.budget_stop`); a budget of $0 means Scout is never woken.
 - **Rollout**: the role, the tools, the guard and the bundle option are runner
   code. On a host from before this, Scout's guard does not know role `scout`
   and denies every tool call, so turn `OMNIGENT_FACTORY_DISCOVERY` on only once

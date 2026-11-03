@@ -15,8 +15,12 @@
   and the server stamps them right after.
 - **off, a live Scout**: it is stopped (``state=done``); its idle sandbox is
   released by the launch watch and nothing wakes it until discovery is on again.
-- A changed ``discovery.seat.model`` is stamped as the live Scout's model
-  override; it takes effect at its next start.
+- A changed ``discovery.seat.model`` is applied to the live Scout the way a
+  person's model switch is (``PATCH /v1/sessions/{id}`` as the creator: the
+  row, and the running terminal at once); without a runner client it is
+  stamped on the row for its next start. Clearing the setting clears the
+  override the server set (a person's own choice stands).
+- With discovery off and no seat ever started, a pass reads no members.
 
 Scout counts against the factory's pod cap: over the cap, owners get one
 decision a day and the next pass retries. Failed creates back off and, after
@@ -43,6 +47,7 @@ from omnigent.factory import (
 from omnigent.factory_spawn import member_create_body, member_labels
 from omnigent.server.factory import definition, events, issues, spawn
 from omnigent.server.factory.context import factory_deps
+from omnigent.server.factory.definition_blocks import DiscoveryBudgetsDef
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import MailItem, get_mailer
 from omnigent.server.factory.membership import factory_members
@@ -94,10 +99,24 @@ def spent_today(deps: FactoryDeps, factory_id: str, now: int | None = None) -> f
     return round(sum(c.cost_usd for c in cells if c.role == ROLE_SCOUT), 4)
 
 
+def daily_cap(raw: object) -> float:
+    """:returns: A ``discovery.budgets.usd_per_day`` value as a cap (its default when unset)."""
+    default = DiscoveryBudgetsDef().usd_per_day
+    if raw is None or isinstance(raw, bool):
+        return default
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def budget_stopped(deps: FactoryDeps, factory_id: str, now: int | None = None) -> bool:
-    """Whether Scout spent ``discovery.budgets.usd_per_day`` today (nothing wakes it then)."""
-    cap = definition.value(deps, factory_id, "discovery.budgets.usd_per_day", 0) or 0
-    return float(cap) > 0 and spent_today(deps, factory_id, now) >= float(cap)
+    """
+    Whether Scout may spend nothing more today (nothing wakes it then): it spent
+    ``discovery.budgets.usd_per_day``, or that budget is $0.
+    """
+    cap = daily_cap(definition.value(deps, factory_id, "discovery.budgets.usd_per_day"))
+    return cap <= 0 or spent_today(deps, factory_id, now) >= cap
 
 
 def awake_scout(deps: FactoryDeps, factory_id: str) -> Conversation | None:
@@ -195,6 +214,8 @@ async def reconcile(app_state: Any, root: Conversation) -> str:
     deps = factory_deps(app_state)
     fid = root.id
     want = _open(root) and await asyncio.to_thread(definition.discovery_enabled, deps, fid)
+    if not want and not await asyncio.to_thread(_maybe_seated, deps, fid):
+        return "off"
     rows = await asyncio.to_thread(scouts, deps, fid)
     live = [c for c in rows if spawn.holds_pod(c)]
     if not want:
@@ -220,6 +241,17 @@ async def reconcile(app_state: Any, root: Conversation) -> str:
         _inflight.discard(fid)
 
 
+def _maybe_seated(deps: FactoryDeps, factory_id: str) -> bool:
+    """Whether a Scout may hold a pod: one the server seated that it did not stop since."""
+    newest: dict[object, str | None] = {}
+    for event in deps.factory_store.find_events(
+        factory_id, EVENT_SEAT, 0, SUBJECT, limit=200, newest_first=True
+    ):
+        data = event.data or {}
+        newest.setdefault(data.get("session_id"), data.get("state"))
+    return any(state != "stopped" for state in newest.values())
+
+
 def _wakeable(conv: Conversation) -> bool:
     from omnigent.server.factory.control import is_closed
 
@@ -241,22 +273,79 @@ async def _stop(app_state: Any, factory_id: str, conv: Conversation, why: str) -
     )
 
 
+def _server_model(deps: FactoryDeps, factory_id: str, session_id: str) -> str | None:
+    """:returns: The model override the server last gave *session_id* (at its seat or since)."""
+    rows = deps.factory_store.find_events(
+        factory_id, EVENT_SEAT, 0, SUBJECT, limit=50, newest_first=True
+    )
+    for event in rows:
+        data = event.data or {}
+        if data.get("session_id") == session_id and data.get("state") in ("spawned", "model"):
+            model = data.get("model")
+            return model if isinstance(model, str) and model else None
+    return None
+
+
+async def _patch_model(
+    app_state: Any, factory_id: str, conv: Conversation, model: str | None
+) -> bool:
+    """
+    Switch the session's model as a person's switch does: the row, and the live terminal.
+
+    :returns: Whether the session route took it (``False``: no runner client, or it failed).
+    """
+    from omnigent.server.factory.control import get_conv
+
+    deps = factory_deps(app_state)
+    root = await get_conv(deps, factory_id)
+    creator = await asyncio.to_thread(spawn.creator_of, deps, root) if root else None
+    token = spawn.mint_token(deps, creator)
+    client = spawn._client_factory(app_state, token) if token else None
+    if client is None:
+        return False
+    try:
+        async with client:
+            resp = await client.patch(
+                f"/v1/sessions/{conv.id}", json={"model_override": model or "default"}
+            )
+    except Exception:  # noqa: BLE001 - the row is stamped instead
+        _logger.warning("factory %s: Scout model switch failed", factory_id, exc_info=True)
+        return False
+    return resp.status_code < 400
+
+
 async def _sync_model(app_state: Any, factory_id: str, conv: Conversation) -> None:
     deps = factory_deps(app_state)
     model = await asyncio.to_thread(wanted_model, deps, factory_id)
-    if model is None or conv.model_override == model:
+    current = conv.model_override
+    if model == current:
         return
-    await asyncio.to_thread(
-        deps.conversation_store.update_conversation, conv.id, model_override=model
-    )
+    if model is None and current != await asyncio.to_thread(
+        _server_model, deps, factory_id, conv.id
+    ):
+        return  # A person chose this session's model; the definition names none.
+    now = await _patch_model(app_state, factory_id, conv, model)
+    if not now:
+        await asyncio.to_thread(
+            lambda: deps.conversation_store.update_conversation(
+                conv.id, model_override=model, _unset_model_override=model is None
+            )
+        )
+    shown = model or "the bundle's default"
     await events.emit(
         app_state,
         factory_id,
         EVENT_SEAT,
         to_id=conv.id,
         subject=SUBJECT,
-        summary=f"Scout's model is now {model} (from its next start)",
-        data={"state": "model", "session_id": conv.id, "model": model, "by": "server"},
+        summary=f"Scout's model is now {shown}" + ("" if now else " (from its next start)"),
+        data={
+            "state": "model",
+            "session_id": conv.id,
+            "model": model,
+            "applied": "now" if now else "next_start",
+            "by": "server",
+        },
     )
 
 
@@ -439,10 +528,15 @@ async def _spawn(app_state: Any, root: Conversation) -> str:
     new_id = created.get("id") if isinstance(created, dict) else None
     if resp.status_code >= 400 or not isinstance(new_id, str) or not new_id:
         return await _failed(app_state, root, f"create returned {resp.status_code}")
-    labels = await asyncio.to_thread(seat_labels, deps, root, agent.id)
-    await asyncio.to_thread(deps.conversation_store.set_labels, new_id, labels)
-    conv = await asyncio.to_thread(deps.conversation_store.get_conversation, new_id)
-    await spawn._mirror_people(app_state, conv)
+    try:
+        labels = await asyncio.to_thread(seat_labels, deps, root, agent.id)
+        await asyncio.to_thread(deps.conversation_store.set_labels, new_id, labels)
+        conv = await asyncio.to_thread(deps.conversation_store.get_conversation, new_id)
+        await spawn._mirror_people(app_state, conv)
+    except Exception as exc:  # noqa: BLE001 - recorded, and the orphan put away
+        _logger.warning("factory %s: could not seat the new Scout", fid, exc_info=True)
+        await _put_away(deps, new_id)
+        return await _failed(app_state, root, f"error after the create: {type(exc).__name__}")
     if conv is None:
         return await _failed(app_state, root, "the new session is gone")
     mail_id = await asyncio.to_thread(_send_brief, app_state, fid, conv, revived=False)
@@ -476,6 +570,16 @@ async def _spawn(app_state: Any, root: Conversation) -> str:
     )
     await issues.clear_issue(app_state, fid, INCIDENT_RULE, SUBJECT, reason="Scout is seated")
     return "spawned"
+
+
+async def _put_away(deps: FactoryDeps, session_id: str) -> None:
+    """Archive a session the server created but could not seat, so no pass counts it."""
+    try:
+        await asyncio.to_thread(
+            deps.conversation_store.update_conversation, session_id, archived=True
+        )
+    except Exception:  # noqa: BLE001 - the failure is recorded either way
+        _logger.warning("factory: could not archive the unseated Scout %s", session_id)
 
 
 def factory_roots(deps: FactoryDeps) -> list[Conversation]:
@@ -516,6 +620,7 @@ __all__ = [
     "brief_text",
     "budget_stopped",
     "create_body",
+    "daily_cap",
     "factory_roots",
     "live_scout",
     "reconcile",

@@ -14,7 +14,9 @@ the factory's routable members (:class:`Members`, built by
 
 - ``@atlas``, ``@sentinel``, ``@scout`` and ``@pl:<slug>`` pick the responders
   instead of the thread's default (mention the default too to add to it);
-  ``@scout`` routes only while discovery runs for the factory.
+  ``@scout`` routes only while discovery runs for the factory (and Scout,
+  which posts only in ``#discovery``, may answer such a message where it was
+  written); while Scout is over its daily budget Atlas answers instead.
 - ``@<person>`` only notifies; it never routes.
 - A message an agent wrote reaches other agents only through such a mention,
   never through a thread default, so agents talking in the Room never loop.
@@ -101,8 +103,9 @@ class Members:
     :param pls: Project slug -> its current PL (a slug without one is absent).
     :param pr_projects: PR thread key (``pr:<id>``) -> its project slug.
     :param pr_numbers: PR thread key -> PR number, for notes.
-    :param scout: The discovery seat, if one is seated.
+    :param scout: The discovery seat, if one is seated and may be woken.
     :param discovery: Whether discovery runs for the factory (``@scout`` routes only then).
+    :param scout_away: Why Scout cannot answer now (e.g. over today's budget), for the note.
     """
 
     atlas: Agent | None
@@ -112,6 +115,7 @@ class Members:
     pr_numbers: Mapping[str, int] = field(default_factory=dict)
     scout: Agent | None = None
     discovery: bool = False
+    scout_away: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,7 +241,7 @@ def _mentioned(mention: str, members: Members) -> tuple[Agent | None, str, str |
 
 def _scout(members: Members) -> tuple[Agent | None, str, str | None]:
     if members.scout is None:
-        return None, "Scout", "Scout is not seated; Atlas will answer"
+        return None, "Scout", members.scout_away or "Scout is not seated; Atlas will answer"
     return members.scout, members.scout.name, None
 
 

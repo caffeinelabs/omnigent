@@ -26,8 +26,8 @@ digest. The server then offers Atlas what is ready to plan.
 - **Create** an opportunity for each cluster of unsorted signals that shows a
   need, even a single strong one:
   `sys_discovery_opportunity(op="create", title="…", statement="When I …, I want …, so I can …", problem="…", goal="G-1", segments=["…"], area="…", alternatives=["…", "…", "…"], signals=[{signal: "S-41"}, {signal: "S-57", counter: true}])`.
-  The statement is the user's need, never a feature ("When I share a draft…",
-  not "Add a share button"); `alternatives` are at least two different ways
+  The statement is the user's need, never a feature ("When I hand work to a
+  colleague…", not "Add a handover button"); `alternatives` are at least two different ways
   to meet it. Place it under a goal when it serves one; leave `goal` out when
   none fits (people see it as unassigned).
 - **Merge** two that are one need: `sys_discovery_opportunity(op="merge", id="O-7", into="O-3", reason="…")`.

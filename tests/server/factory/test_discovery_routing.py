@@ -3,12 +3,15 @@
 ``#discovery`` routes to the seated Scout (to Atlas while it has none); it is
 listed, and resolves, only while the server env and the factory's
 ``discovery.enabled`` are on. ``@scout`` routes only then too. Scout posts in
-``#discovery`` and nowhere else. Every product word is sample data.
+``#discovery``, elsewhere only replies where an ``@scout`` reached it, and hands
+messages only to the leads (never to a project lead). Every product word is
+sample data.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -189,3 +192,89 @@ async def test_scout_posts_in_discovery_and_nowhere_else(
     assert lead.status_code == 200  # type: ignore[attr-defined]
     pl = await _agent_post(cockpit, cockpit.world.id("pl"), "discovery")
     assert pl.status_code == 403  # type: ignore[attr-defined]
+
+
+async def test_scout_hands_messages_only_to_the_leads(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scout's words never reach a project lead: PLs never read text that started in signals."""
+    scout = add_scout(cockpit, monkeypatch)
+
+    for body, mentions in (
+        ("@pl:api-version please build this (sample)", []),
+        ("Found 3 (sample)", ["@pl:api-version"]),
+        ("@scout note to self (sample)", []),
+    ):
+        refused = await cockpit.client.post(
+            "/v1/factory/agent/chat",
+            json={
+                "from_session_id": scout,
+                "thread": "discovery",
+                "message": body,
+                "mentions": mentions,
+            },
+            headers={"X-Test-User": "alice"},
+        )
+        assert refused.status_code == 403, refused.text
+        assert error_code(refused) == "mention_not_allowed"
+    stored = cockpit.store.list_chat(cockpit.fid, "discovery", limit=20)
+    assert [m for m in stored if m.author_kind == "agent"] == []
+
+    ok = await cockpit.client.post(
+        "/v1/factory/agent/chat",
+        json={"from_session_id": scout, "thread": "discovery", "message": "@atlas O-3 (sample)"},
+        headers={"X-Test-User": "alice"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["routed"] == ["Atlas"]
+
+
+async def test_scout_answers_where_an_at_scout_reached_it(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scout = add_scout(cockpit, monkeypatch)
+    asked = await cockpit.post(
+        base(cockpit, "/chat"), {"thread": "factory", "body": "@scout what do teams say? (sample)"}
+    )
+    assert asked.status_code == 201, asked.text
+    assert asked.json()["routed"] == ["Scout (sample)"]
+    other = await cockpit.post(
+        base(cockpit, "/chat"), {"thread": "factory", "body": "hi (sample)"}
+    )
+    assert other.status_code == 201, other.text
+
+    async def reply(reply_to: str | None) -> Any:
+        return await cockpit.client.post(
+            "/v1/factory/agent/chat",
+            json={
+                "from_session_id": scout,
+                "thread": "factory",
+                "message": "Teams ask for exports (O-3, sample)",
+                **({"reply_to": reply_to} if reply_to else {}),
+            },
+            headers={"X-Test-User": "alice"},
+        )
+
+    answered = await reply(asked.json()["message"]["id"])
+    assert answered.status_code == 200, answered.text
+    # Elsewhere only as such a reply: not a fresh post, nor a reply to a message for Atlas.
+    for reply_to in (None, other.json()["message"]["id"]):
+        refused = await reply(reply_to)
+        assert refused.status_code == 403 and error_code(refused) == "thread_not_allowed"
+
+
+async def test_hash_discovery_still_names_a_project_while_discovery_is_off(
+    cockpit: Cockpit,
+) -> None:
+    cockpit.store.upsert_project(cockpit.fid, "discovery", title="Discovery (sample)")
+    definition.set_values(
+        cockpit.deps, cockpit.fid, {"discovery.enabled": False}, created_by="alice"
+    )
+    definition.invalidate(cockpit.fid)
+
+    thread = chat.resolve_thread(cockpit.deps, cockpit.fid, "#discovery")
+
+    assert (thread.key, thread.project) == ("project:discovery", "discovery")
+    with pytest.raises(CockpitError) as raised:
+        chat.resolve_thread(cockpit.deps, cockpit.fid, "discovery")
+    assert raised.value.code == "discovery_off"

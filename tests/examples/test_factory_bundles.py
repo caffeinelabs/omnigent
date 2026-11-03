@@ -2351,26 +2351,28 @@ def test_scout_bundle_is_the_discovery_seat(scout: AgentSpec) -> None:
     assert scout.os_env.sandbox is not None and scout.os_env.sandbox.type == "none"
 
 
-def test_scout_has_websearch_and_webfetch_disabled(
+def test_scout_has_websearch_webfetch_and_bash_disabled(
     scout: AgentSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Claude Code's own web tools are off: every outside read goes through the gateway."""
+    """Claude Code's web tools and shell are off: every outside read goes through the gateway."""
     monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._TRUSTED_PARENT", tmp_path)
     monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._BRIDGE_ROOT", tmp_path)
     off = disallowed_tools_from_config(scout.executor.config)
-    assert off == ("WebSearch", "WebFetch")
+    assert off == ("WebSearch", "WebFetch", "Bash")
     args = augment_claude_args(
         ("--permission-mode", "bypassPermissions"),
         bridge_dir=tmp_path,
         disallowed_tools=off,
     )
     flag = args.index("--disallowedTools")
-    assert args[flag + 1].split(",") == ["WebSearch", "WebFetch"]
+    assert args[flag + 1].split(",") == ["WebSearch", "WebFetch", "Bash"]
     # The guard denies them too (a host that ignores the bundle option).
     guard = factory_role_guard(role=ROLE_SCOUT)
     for name in off:
-        event = {"type": "tool_call", "data": {"name": name, "arguments": {"query": "x"}}}
+        event = {"type": "tool_call", "data": {"name": name, "arguments": {"command": "ls"}}}
         assert guard(event, {})["result"] == "DENY", name
+    # No Omnigent terminal either: Scout runs no code.
+    assert not scout.terminals
     # No other factory bundle switches tools off.
     for spec in (load(_LEAD_DIR, expand_env=False), load(_PL_DIR, expand_env=False)):
         assert disallowed_tools_from_config(spec.executor.config) == (), spec.name
@@ -2449,6 +2451,24 @@ def test_scout_text_names_only_its_tools_with_real_arguments(scout: AgentSpec) -
             if allowed is not None:
                 assert value in allowed, (tool, keyword, value)
     assert checked > 15
+
+
+# The live sample factory's seeded goal and hunches: data a person enters, which Scout
+# must find on its own, so no example in its bundle may prime it toward them.
+_SEED_PHRASES = re.compile(
+    r"build fail|failed build|publish|draft app|first week|week one|working app|blank prompt"
+    r"|from an example|trying to build|show a draft|share a draft",
+    re.IGNORECASE,
+)
+
+
+def test_scout_examples_carry_no_seeded_hunch(scout: AgentSpec) -> None:
+    texts = {"factory-scout": _scout_text(scout)}
+    retro = _LEAD_DIR / "skills/discovery-retro/SKILL.md"
+    texts[str(retro)] = retro.read_text(encoding="utf-8")
+    for where, text in texts.items():
+        found = _SEED_PHRASES.findall(text)
+        assert not found, (where, found)
 
 
 def test_scout_learns_the_product_only_from_data(scout: AgentSpec) -> None:

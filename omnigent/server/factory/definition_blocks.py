@@ -885,6 +885,9 @@ AGENT_PATHS: Final[dict[str, tuple[str, ...]]] = {
 """What each agent seat may propose in :data:`BLOCKS` and ``team`` (others: nothing)."""
 AGENT_GATED: Final = (*BLOCKS, "team")
 """Blocks an agent proposes only by :data:`AGENT_PATHS` (teams: Atlas and Sentinel)."""
+ALLOWLIST_SEATS: Final = frozenset({"scout"})
+"""Seats that may propose only their :data:`AGENT_PATHS`, in any block (Scout reads users'
+text, so it never proposes caps, budgets, autonomy or any other setting)."""
 
 
 def under(path: str, prefix: str) -> bool:
@@ -899,9 +902,10 @@ def in_blocks(path: str, blocks: tuple[str, ...] = BLOCKS) -> bool:
 
 def agent_may_propose(seat: str, path: str) -> bool:
     """Whether an agent in *seat* (``scout``, ``sentinel``, ``atlas``, …) may propose *path*."""
-    if not in_blocks(path, AGENT_GATED):
+    allowed = AGENT_PATHS.get(seat, ())
+    if seat not in ALLOWLIST_SEATS and not in_blocks(path, AGENT_GATED):
         return True
-    return any(under(path, allowed) for allowed in AGENT_PATHS.get(seat, ()))
+    return any(under(path, prefix) for prefix in allowed)
 
 
 def discovery_server_on() -> bool:
@@ -981,6 +985,7 @@ def slower_or_off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
 __all__ = [
     "AGENT_GATED",
     "AGENT_PATHS",
+    "ALLOWLIST_SEATS",
     "BLOCKS",
     "BRIEF_MAX",
     "CONSENT",

@@ -214,7 +214,8 @@ def resolve_thread(deps: FactoryDeps, factory_id: str, raw: object) -> Thread:
         ``"pr:<id or number>"`` (``#…``, ``p:<slug>`` and ``!<n>`` too).
     :raises CockpitError: 400 ``invalid_thread``, 404 ``unknown_project`` /
         ``unknown_pr`` / ``discovery_off`` (``#discovery`` exists while discovery
-        runs), 409 ``ambiguous_pr`` (one number in several repos).
+        runs; while it is off ``#discovery`` still names a project called that),
+        409 ``ambiguous_pr`` (one number in several repos).
     """
     if not isinstance(raw, str) or not raw.strip():
         raise CockpitError(400, "invalid_thread", "thread is required", field="thread")
@@ -225,7 +226,15 @@ def resolve_thread(deps: FactoryDeps, factory_id: str, raw: object) -> Thread:
     if key == THREAD_DISCOVERY:
         from omnigent.server.factory.discovery import require_on
 
-        require_on(deps, factory_id)
+        try:
+            require_on(deps, factory_id)
+        except CockpitError:
+            # Before discovery, ``#discovery`` named a project of that name; while
+            # discovery is off it still does.
+            if raw.strip().startswith("#") and store.get_project(factory_id, key) is not None:
+                project_key = f"{THREAD_PROJECT_PREFIX}{key}"
+                return Thread(project_key, "project", thread_title(project_key), project=key)
+            raise
         return Thread(key, key, thread_title(key))
     if key.startswith(THREAD_PROJECT_PREFIX):
         slug = key[len(THREAD_PROJECT_PREFIX) :]
@@ -297,19 +306,31 @@ def _sentinel(deps: FactoryDeps, root: Conversation) -> Conversation | None:
     return leads[0] if leads else None
 
 
-def _scout(deps: FactoryDeps, root: Conversation) -> tuple[Conversation | None, bool]:
-    """:returns: ``(the seated Scout, whether discovery runs)`` (no Scout while it is off)."""
+SCOUT_OVER_BUDGET: Final = "Scout reached today's budget; Atlas will answer"
+
+
+def _scout(deps: FactoryDeps, root: Conversation) -> tuple[Conversation | None, bool, str | None]:
+    """
+    :returns: ``(the seated Scout, whether discovery runs, why it cannot answer)``: no
+        Scout while discovery is off, and none (with :data:`SCOUT_OVER_BUDGET`) while it
+        is over today's discovery budget, so the Room never wakes it then.
+    """
     from omnigent.server.factory import definition
+    from omnigent.server.factory.discovery.seat import budget_stopped
 
     if not definition.discovery_enabled(deps, root.id):
-        return None, False
+        return None, False, None
     seats = [
         m
         for m in factory_members(root.id, deps.conversation_store)
         if m.labels.get(LABEL_ROLE) == ROLE_SCOUT
     ]
     seats.sort(key=lambda c: (member_state(c) != chat_routing.STATE_LIVE, -c.created_at))
-    return (seats[0] if seats else None), True
+    seat = seats[0] if seats else None
+    if seat is not None and member_state(seat) == chat_routing.STATE_LIVE:
+        if budget_stopped(deps, root.id):
+            return None, True, SCOUT_OVER_BUDGET
+    return seat, True, None
 
 
 def room_members(
@@ -336,7 +357,7 @@ def members_of(
         if pl is not None:
             pls[slug] = _agent(pl, f"PL · {slug}")
     sentinel = _sentinel(deps, root)
-    scout, discovery = _scout(deps, root)
+    scout, discovery, scout_away = _scout(deps, root)
     prs = [t for t in threads if t.pr is not None]
     return Members(
         atlas=_agent(root, "Atlas"),
@@ -346,6 +367,7 @@ def members_of(
         pr_numbers={t.key: t.pr.number for t in prs if t.pr},
         scout=_agent(scout, "Scout") if scout is not None else None,
         discovery=discovery,
+        scout_away=scout_away,
     )
 
 
@@ -1389,7 +1411,8 @@ def allowed_thread(role: str | None, own_project: str | None, thread: Thread) ->
     Whether an agent of *role* may post in *thread*.
 
     Leads post anywhere; a project lead in ``#factory``, its project's thread
-    and its project's PR threads; Scout in ``#discovery``.
+    and its project's PR threads; Scout in ``#discovery`` (elsewhere only a reply
+    to a message that reached it, which :func:`post_agent` checks).
     """
     if role == ROLE_LEAD:
         return True
@@ -1400,6 +1423,40 @@ def allowed_thread(role: str | None, own_project: str | None, thread: Thread) ->
     if thread.kind == THREAD_FACTORY:
         return True
     return thread.kind in ("project", "pr") and thread.project == own_project
+
+
+SCOUT_MENTIONS: Final = frozenset({chat_routing.MENTION_ATLAS, chat_routing.MENTION_SENTINEL})
+"""The agents Scout may hand a message to: the leads. Project leads and their teams never
+get text that started in signals, so Scout's own words never reach them."""
+
+
+def _check_scout_mentions(mentions: Sequence[str]) -> None:
+    """
+    Refuse a Scout message that mentions an agent other than the leads.
+
+    :raises CockpitError: 403 ``mention_not_allowed``.
+    """
+    barred = [m for m in mentions if chat_routing.is_agent_mention(m) and m not in SCOUT_MENTIONS]
+    if barred:
+        raise CockpitError(
+            403,
+            "mention_not_allowed",
+            f"Scout hands a message only to @atlas or @sentinel, not {', '.join(barred)}; "
+            "project leads get work through Atlas's bets",
+            field="mentions",
+        )
+
+
+def _reached_by(
+    deps: FactoryDeps, factory_id: str, thread: str, reply_to: object, session_id: str
+) -> bool:
+    """Whether *reply_to* names a message of *thread* that was routed to *session_id*."""
+    message_id = parse_chat_ref(reply_to) if isinstance(reply_to, str) else None
+    row = deps.factory_store.get_chat_message(message_id) if message_id else None
+    if row is None or norm_id(row.factory_id) != norm_id(factory_id) or row.thread != thread:
+        return False
+    me = _key(session_id)
+    return any(isinstance(r, Mapping) and r.get("session_id") == me for r in row.routed or [])
 
 
 async def post_agent(
@@ -1415,8 +1472,9 @@ async def post_agent(
     :param payload: ``{thread, message, reply_to?, mentions?, refs?}``.
     :param via_user: The person whose credential posted it, when no runner did.
     :returns: ``{id: "chat_…", seq, thread, routed: [names], notes}``.
-    :raises CockpitError: 403 ``not_allowed`` / ``thread_not_allowed``, 400/404/413 on a
-        bad body, 429 ``rate_limited``.
+    :raises CockpitError: 403 ``not_allowed`` / ``thread_not_allowed`` /
+        ``mention_not_allowed`` (Scout mentions an agent other than the leads),
+        400/404/413 on a bad body, 429 ``rate_limited``.
     """
     membership = caller.membership
     roles = (ROLE_LEAD, ROLE_PROJECT_LEAD, ROLE_SCOUT)
@@ -1431,10 +1489,17 @@ async def post_agent(
     if root is None:
         raise CockpitError(404, "not_a_factory", "the factory root is gone")
     thread = await asyncio.to_thread(resolve_thread, deps, root.id, payload.get("thread"))
-    if not allowed_thread(membership.role, membership.project, thread):
+    scout = membership.role == ROLE_SCOUT
+    if not allowed_thread(membership.role, membership.project, thread) and not (
+        scout
+        and await asyncio.to_thread(
+            _reached_by, deps, root.id, thread.key, payload.get("reply_to"), caller.session.id
+        )
+    ):
         who = (
-            "Scout posts in #discovery"
-            if membership.role == ROLE_SCOUT
+            "Scout posts in #discovery, and elsewhere only replies (reply_to) to a message "
+            "that reached it with @scout"
+            if scout
             else "a project lead posts in #factory and its own project's threads"
         )
         raise CockpitError(403, "thread_not_allowed", f"{who}, not {thread.title}", field="thread")
@@ -1444,6 +1509,8 @@ async def post_agent(
     )
     raw_mentions = _strings(payload.get("mentions"))[: chat_routing.MAX_MENTIONS]
     mentions = chat_routing.parse_mentions(body, raw_mentions)
+    if scout:
+        _check_scout_mentions(mentions)
     raw_refs = _strings(payload.get("refs"))[: chat_routing.MAX_MENTIONS]
     extra_refs = [r.text for r in map(parse_ref, raw_refs) if r is not None]
     sender = f"chat:{_key(caller.session.id)}"
