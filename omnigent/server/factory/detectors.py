@@ -167,6 +167,8 @@ RULES: Final[dict[str, Rule]] = {
         Rule(issues.HUMAN_RULE, _INC, "notice", ("open_agent",), auto_resolve=False),
         # Raised by the Slack DM engine; saving a working token resolves it.
         Rule("slack.bot", _INC, "warning", (), assignee=issues.ASSIGN_OWNERS),
+        # Raised by the source gateway after repeated failures; a resume resolves it.
+        Rule("source.failed", _INC, "warning", (), assignee=issues.ASSIGN_OWNERS),
     )
 }
 """The rules table (spec §13.4)."""

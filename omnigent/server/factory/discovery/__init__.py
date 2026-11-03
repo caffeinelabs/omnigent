@@ -8,7 +8,10 @@
   derived status; :mod:`.levers`: people's levers with Undo;
 - :mod:`.quotes`: quoted words must match a stored excerpt;
 - :mod:`.team`: the factory's own people's Room hunches and requests;
-- :mod:`.views`: what the cockpit reads (``api/discovery.py``).
+- :mod:`.views`: what the cockpit reads (``api/discovery.py``);
+- :mod:`.sources`, :mod:`.gateway`, :mod:`.kinds`: the source gateway, the
+  only path from an agent to a source (``repo``, ``web`` and ``team`` need no
+  secret), and the server's sync (``background/discovery_sync.py``).
 
 Everything is dark until both the server env ``OMNIGENT_FACTORY_DISCOVERY``
 and the factory's ``discovery.enabled`` are on (:func:`require_on`). No
@@ -47,19 +50,22 @@ def require_on(deps: FactoryDeps, factory_id: str) -> None:
 def install(_app_state: Any = None) -> Callable[[], None]:
     """
     Wire the ledger into the factory for one server lifespan: bets resolve
-    opportunities and verify quotes against it, and the Room's hunches and
-    requests become team signals.
+    opportunities and verify quotes against it, the Room's hunches and
+    requests become team signals, and definition versions that add, remove,
+    pause or resume a source become ``source.*`` events (a pause stops its sync).
 
     :returns: A callable that unwires it.
     """
     from omnigent.server.factory import bets
-    from omnigent.server.factory.discovery import opportunities, quotes, team
+    from omnigent.server.factory.discovery import gateway, opportunities, quotes, team
 
     bets.register_opportunities(opportunities.lookup, on_decline=opportunities.record_decline)
     bets.register_quote_check(quotes.unmatched)
     stop_team = team.install()
+    stop_sources = gateway.install()
 
     def uninstall() -> None:
+        stop_sources()
         stop_team()
         bets.register_opportunities(None)
         bets.register_quote_check(None)

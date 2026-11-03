@@ -56,6 +56,7 @@ SERVER: FactorySupervisor — keepalive, heartbeats, alerts, reply notices
 | `OMNIGENT_FACTORY_ARTIFACT_LOCATION` | unset | Where demo files (video, screenshots, `api.json`, HAR, traces) are written: `s3://<bucket>[/<prefix>]` (credentials from the standard AWS chain, IRSA included; `AWS_REGION` must be set for AWS S3; `AWS_ENDPOINT_URL_S3` for MinIO or R2) or a directory. Unset keeps them session files of the PL in the server's artifact store, shown in its Files panel. Each demo file records the location it was written to and is always read from there, so demos stored before a change keep playing. Files are still served only through `/v1/factory/demos/…` behind omnigent auth (a Range is a ranged read of the store, at most 4 MiB per response; no presigned links). A store that fails (unreachable, throttled, denied) answers 503 `artifact_store_unavailable` with `Retry-After`. A malformed location fails server start. |
 | `OMNIGENT_FACTORY_COCKPIT_V2` | unset | `1` lets each person switch to the new cockpit (Teams and the agent panel; `?cockpit=v2`, remembered per browser). Unset, every page and API behaves as before. |
 | `OMNIGENT_FACTORY_DISCOVERY` | unset | `1` runs discovery on this server: the discovery ledger's routes, Room hunches as team signals, the ledger's upkeep (retention, daily score snapshots) and the definition preview's re-rank. A factory also needs its own `discovery.enabled` (owners, off by default); until both are on every discovery route answers `404 discovery_off`. |
+| `OMNIGENT_FACTORY_WEB_SEARCH` | unset | The keyless search backend of `web` sources: `keenable` (its public, keyless endpoint; no key, no account). Unset or `none`, `web` sources fetch only (their `search` tool is not offered). Turn one on only where the server can reach it. |
 | `OMNIGENT_FACTORY_STATE_SEGMENTS` | follows `OMNIGENT_FACTORY_COCKPIT_V2` | `1` records each agent's working and waiting stretches (the agent panel's strip); any other value turns recording off. Segments older than 30 days are pruned. One server process is assumed to see all of a session's status edges. |
 | `OMNIGENT_BUILTIN_AGENT_DIRS` | unset | Extra built-in bundles, seeded after the defaults. Used as the prompt hotfix lane (below). |
 | `OMNIGENT_FEATURES` | unset | `factory` in the list shows the cockpit (`/factory`, the sidebar entry, the Inbox's factory decisions). It is also on wherever `OMNIGENT_FACTORY_ENABLED=1`; list it explicitly to document it, drop it (with the factory off) to hide the UI. |
@@ -1028,6 +1029,60 @@ the factory's `discovery.enabled`; no product knowledge lives in it.
   `calibration` feedback on the `opportunity` or `signal`; a kill's reason as
   `closure`; an undo takes that feedback back too.
 
+### Source gateway
+
+Only the server reads a source (`discovery/gateway.py`, `discovery/sources.py`,
+`discovery/kinds/`); it is the one path from an agent to one, dark like the
+rest of discovery. A source is an owner-approved `discovery.sources[]` entry
+(class B to add or widen); nothing in code enables one.
+
+- **Kinds without a secret**: `repo` reads issues, discussions and releases of
+  the source's `params.repos` (else the repos of the factory's projects) with
+  the factory owner's GitHub connection, like the PR poller, through fixed
+  read-only GraphQL documents; an author GitHub calls `OWNER`, `MEMBER` or
+  `COLLABORATOR`, and a release of the factory's own repo, is the team's and
+  becomes a hunch; bots are skipped; searches lose every qualifier and stay in
+  the source's repos. `web` fetches public pages (`web_io.py`: `http(s)` on
+  default ports, every address public and pinned across redirects, no
+  cookies, no credentials, no proxy or `.netrc` from the environment, text
+  types only, 1 MB cap, pages kept as a few chunk signals) and searches only
+  when `OMNIGENT_FACTORY_WEB_SEARCH` names a keyless backend. `team` reads the
+  Room's hunches already in the ledger. Other kinds answer `422
+  kind_not_supported` until secret-backed sources exist.
+- **Agents** (`/v1/factory/agent/discovery/*`, scoped like every agent route):
+  `POST …/query {from_session_id, source, tool, args}` and `GET …/sources`.
+  The factory and the seat (`lead`, or the discovery seat `scout`) come from
+  the caller's session labels; a body naming a factory is refused. The
+  gateway refuses, before any call counts: a seat the source does not list
+  (`403 role_not_allowed`), a paused source (`409 source_paused`) or one on
+  hold (`409 source_failing`), a tool it does not offer or one that looks like
+  a write (`403 tool_not_allowed`), bad arguments (`400 invalid_args`), a URL
+  or repo outside the source (`400 url_refused`, `403 repo_not_allowed`); a
+  spent daily cap answers `429 over_budget` (queries, sync requests and tests
+  all count, per UTC day, atomically).
+- **Storing and answering**: raw items go to the ledger, which alone writes
+  signal text (redact, hash, injection score, clip). Each read writes one
+  `source.query` (or `source.sync`) event: who, seat, tool, an argument
+  digest, the search words, the URLs read, items, new, flagged, redactions,
+  calls, cost, duration and outcome; every signal it stored keeps that
+  event's id. The answer lists signal ids and labels; their excerpts come
+  only inside the untrusted-text envelope (`envelope.format_untrusted`: a
+  server header and rule, every outside line quoted between markers with a
+  fresh nonce). A signal flagged `injection_suspect` is withheld from agents.
+- **Sync** (`background/discovery_sync.py`, every minute): each source with
+  `interval_min` above 0 whose interval passed, as the server. Three failures
+  in a row put a source on hold and open a `source.failed` incident for the
+  owners; `POST …/sources/{id}/resume` (an editor) lifts the hold.
+- **People** (prefix `/v1/factory/factories/{fid}`; writes carry human
+  origin): `POST /sources/{id}/test` (EDIT; one call, stores nothing),
+  `POST /sources/{id}/pause` (EDIT; a class-A definition version applied at
+  once, which stops a running sync; its Undo is `POST …/definition/pin` of the
+  version before, theirs for 10 minutes), `POST /sources/{id}/resume` (owners
+  resume a paused source to the state it was paused from), `GET
+  /sources/{id}/log` (READ; status and every `source.*` event, newest first).
+  Any version that adds, removes, pauses or resumes a source also writes
+  `source.added|removed|paused|resumed`.
+
 ### Learning
 
 - **Metrics** (`telemetry/metrics.py`): the catalog (flow, loops, quality,
@@ -1548,6 +1603,7 @@ with a managed sandbox launcher configured.
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
 | Discovery ledger | `omnigent/server/factory/discovery/`, `api/discovery.py`, `background/discovery_ledger.py`, `omnigent/stores/factory_store/discovery.py`, `sqlalchemy_discovery.py` | `tests/server/factory/test_{ledger_append_only,redact,evidence_meter,rubric_example,opportunity_status,quote_check,discovery_routes,preview_rerank,team_signals,discovery_ledger_upkeep}.py`, `tests/stores/test_factory_store_discovery.py` |
+| Source gateway | `omnigent/server/factory/discovery/{gateway,sources,web_io}.py`, `discovery/kinds/`, `api/discovery_sources.py`, `background/discovery_sync.py`, `envelope.py` (`format_untrusted`) | `tests/server/factory/test_{gateway_scope,source_repo,source_web,source_pause_undo,injection_envelope}.py` |
 | Learning reads | `omnigent/server/factory/learn_view.py`, `human_tuning.py`, `api/learn.py` | `tests/server/factory/test_learn_routes.py` |
 | Learning UI | `web/src/components/factory/{insights,improvements,settings,feedback}/`, `web/src/pages/factory/{Insights,Improvements,Proposal,Settings}Page.tsx` | `web/src/pages/factory/LearnPages.test.tsx` and the component tests; stories under Factory/Insights, Improvements, Settings and Feedback |
 | End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM); `tests/e2e_ui/factory_round3/` (multi-user browser run) |

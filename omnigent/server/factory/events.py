@@ -98,7 +98,7 @@ def scopes_for(kind: str) -> list[str]:
         scopes.append("definition")
     if kind.startswith(("feedback.", "retro.", "metrics.")):
         scopes.append("insights")
-    if kind.startswith(("signal.", "opportunity.", "hunch.")):
+    if kind.startswith(("signal.", "opportunity.", "hunch.", "source.")):
         scopes.append("discovery")
     return scopes
 
@@ -126,6 +126,7 @@ async def emit(
     summary: str,
     data: dict[str, Any] | None = None,
     ts: int | None = None,
+    event_id: str | None = None,
 ) -> FactoryEvent | None:
     """
     Append an event to the factory log and announce the change. Never raises.
@@ -141,6 +142,8 @@ async def emit(
     :param summary: One line (clipped to 300 chars).
     :param data: JSON payload.
     :param ts: Epoch milliseconds, for callers on their own clock; defaults to now.
+    :param event_id: An id handed out already (``new_event_id(ts)``), when records
+        written before the event name it (a signal names its ``source.query``).
     :returns: The stored event, or ``None`` when it could not be stored.
     """
     event: FactoryEvent | None = None
@@ -160,6 +163,7 @@ async def emit(
             subject=_clip(subject, _SUBJECT_MAX),
             data=payload or None,
             ts=ts,
+            id=event_id,
         )
         event = await asyncio.to_thread(store.append_event, draft)
     except Exception:  # noqa: BLE001 - emit never raises; a lost event is only logged

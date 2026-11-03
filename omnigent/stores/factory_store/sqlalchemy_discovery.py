@@ -763,5 +763,39 @@ class SqlDiscoveryStore:
         with self._session("list_factory_source_states") as session:
             return [_source_state(r) for r in session.execute(stmt).scalars()]
 
+    def charge_source_call(
+        self, factory_id: str, source: str, *, day: str, limit: int, calls: int = 1
+    ) -> tuple[FactorySourceState, bool]:
+        fid = norm_id(factory_id)
+
+        def write(session: Session) -> tuple[FactorySourceState, bool]:
+            key = (current_workspace_id(), fid, source)
+            row = session.get(SqlFactorySourceState, key, with_for_update=True)
+            if row is None:
+                if calls > limit:
+                    return FactorySourceState(factory_id=fid, source=source), False
+                row = SqlFactorySourceState(
+                    factory_id=fid,
+                    source=source,
+                    usage_day=day,
+                    calls_today=calls,
+                    failures=0,
+                    signals_total=0,
+                    updated_at=now_s(),
+                )
+                session.add(row)
+                session.flush()
+                return _source_state(row), True
+            used = row.calls_today if row.usage_day == day else 0
+            if used + calls > limit:
+                return _source_state(row), False
+            row.usage_day = day
+            row.calls_today = used + calls
+            row.updated_at = now_s()
+            session.flush()
+            return _source_state(row), True
+
+        return self._write("charge_factory_source_call", write)
+
 
 __all__ = ["OPPORTUNITY_LOCK_NS", "SIGNAL_LOCK_NS", "SqlDiscoveryStore"]

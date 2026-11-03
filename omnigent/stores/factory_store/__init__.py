@@ -2044,7 +2044,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
         check_name(FACTORY_EVENT_SEVERITY, draft.severity, "factory_events.severity")
         ts = now_ms() if draft.ts is None else draft.ts
         row = FactoryEvent(
-            id=new_event_id(ts),
+            id=draft.id or new_event_id(ts),
             factory_id=norm_id(draft.factory_id),
             ts=ts,
             kind=draft.kind,
