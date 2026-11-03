@@ -7,7 +7,6 @@
 // nothing here names a product. Pure; `discoveryModel.test.ts` pins it.
 
 import type {
-  DefinitionChange,
   DefinitionDoc,
   FactorySnapshot,
   ProjectView,
@@ -15,6 +14,12 @@ import type {
   SourceDef,
 } from "@/lib/factoryApi";
 import { keyOwnedByTarget } from "../cmdk/useFactoryPaletteHotkey";
+import {
+  STARTER_SWEEP_H,
+  STARTER_SYNTHESIS_H,
+  STARTER_USD_PER_DAY,
+  missingStarterSources,
+} from "./discoveryStarter";
 import { plural } from "../factoryFormat";
 import {
   EVIDENCE_LEVELS,
@@ -66,7 +71,7 @@ function level(value: unknown): EvidenceLevel | "none" {
 
 // ── The summary (`GET …/discovery`) ────────────────────────────
 
-export type SourceState = "trial" | "active" | "paused";
+export type SourceState = "trial" | "active" | "paused" | "pending";
 
 export interface SourceView {
   id: string;
@@ -840,8 +845,9 @@ export function chainCells(
   ];
 }
 
-/** A source's state in words: `on`, `trial`, `paused`, `on hold after failures`. */
+/** A source's state in words: `on`, `trial`, `paused`, `waits for an owner`, `on hold after failures`. */
 export function sourceStateWord(source: Pick<SourceView, "state" | "health">): string {
+  if (source.state === "pending") return "waits for an owner";
   if (source.health === "failing") return "on hold after failures";
   if (source.state === "paused") return "paused";
   if (source.state === "trial") return "trial";
@@ -1446,7 +1452,8 @@ export function flowModel(input: FlowInput): FlowModel {
       lane: 0,
       title: s.label,
       detail: `${s.kind} · ${sourceStateWord(s)}`,
-      look: s.state === "paused" ? "dashed" : "plain",
+      // One that waits for an owner's approval is drawn as a pending one (amber).
+      look: s.state === "pending" ? "amber" : s.state === "paused" ? "dashed" : "plain",
       peek: id,
       project: null,
     });
@@ -1683,29 +1690,15 @@ export function pendingSources(proposals: readonly ProposalView[]): PendingSourc
 }
 
 // ── Turning discovery on: the discovery starter ────────────────
+// The starter itself (its sources and changes) is `discoveryStarter.ts`,
+// shared with Steer › Overview; here are its plain words.
 
-/**
- * The starter's sources: none needs a secret. The factory's own repos
- * (issues, discussions and releases of the last 90 days; team authors count
- * as hunches), the open web (30 queries a day, public pages), and the
- * factory's people (hunches, with the rubric's hunch weight). Each starts in
- * its trial state.
- */
-export interface StarterSource extends Pick<SourceDef, "id" | "label" | "kind"> {
-  params?: Record<string, unknown>;
-  budget?: { calls_per_day: number };
-}
-
-export const STARTER_SOURCES: readonly StarterSource[] = [
-  {
-    id: "repo",
-    label: "The factory's repositories",
-    kind: "repo",
-    params: { since_days: 90 },
-  },
-  { id: "web", label: "The open web", kind: "web", params: {}, budget: { calls_per_day: 30 } },
-  { id: "team", label: "The factory's people", kind: "team" },
-];
+export {
+  STARTER_SOURCES,
+  type StarterSource,
+  starterChanges,
+  starterWaiting,
+} from "./discoveryStarter";
 
 /** What each starter source lets Scout read, in plain words (hunches with the rubric's weight). */
 export function starterReads(kind: string, weight: number = HUNCH_WEIGHT_FALLBACK): string | null {
@@ -1713,7 +1706,7 @@ export function starterReads(kind: string, weight: number = HUNCH_WEIGHT_FALLBAC
     case "repo":
       return "issues, discussions and releases of the factory's own repositories from the last 90 days (the team's own posts count as hunches)";
     case "web":
-      return "up to 30 web searches a day and the public pages they find, plus competitors' changelogs once the product profile lists them";
+      return "up to 30 web searches a day and the public pages they find, plus a weekly read of competitors' changelogs once the product profile lists them";
     case "team":
       return `hunches from the factory's people ("I think … because …"), counted with weight ${weightText(weight)}, never as user evidence`;
     default:
@@ -1721,26 +1714,10 @@ export function starterReads(kind: string, weight: number = HUNCH_WEIGHT_FALLBAC
   }
 }
 
-/**
- * The definition changes that turn discovery on with the starter: the switch,
- * then each starter source the factory does not have yet (by id or kind).
- */
-export function starterChanges(definition: DefinitionDoc | null | undefined): DefinitionChange[] {
-  const have = definition?.discovery?.sources ?? [];
-  const changes: DefinitionChange[] = [];
-  if (definition?.discovery?.enabled !== true) {
-    changes.push({ op: "replace", path: "discovery.enabled", value: true });
-  }
-  for (const source of STARTER_SOURCES) {
-    if (have.some((s) => s.id === source.id || s.kind === source.kind)) continue;
-    changes.push({ op: "add", path: "discovery.sources", value: { ...source } });
-  }
-  return changes;
-}
-
 /** The starter in plain words: what Scout reads, what it costs, how often it runs. */
 export function starterSummary(definition: DefinitionDoc | null | undefined): {
-  reads: { label: string; text: string }[];
+  /** Each source Scout would read; `added` when the starter adds it (else the factory has it). */
+  reads: { id: string; label: string; text: string; added: boolean }[];
   usdPerDay: number | null;
   perAsk: number | null;
   sweepH: number | null;
@@ -1751,19 +1728,25 @@ export function starterSummary(definition: DefinitionDoc | null | undefined): {
   const weight = hunchWeight(definition);
   const reads = [
     ...have.map((s) => ({
+      id: s.id,
       label: s.label,
       text: starterReads(s.kind, weight) ?? `a ${s.kind} source`,
+      added: false,
     })),
-    ...STARTER_SOURCES.filter((s) => !have.some((h) => h.id === s.id || h.kind === s.kind)).map(
-      (s) => ({ label: s.label, text: starterReads(s.kind, weight) ?? "" }),
-    ),
+    ...missingStarterSources(definition).map((s) => ({
+      id: s.id,
+      label: s.label,
+      text: starterReads(s.kind, weight) ?? "",
+      added: true,
+    })),
   ];
+  // As applied: the factory's own budget and cadence, else the starter's.
   return {
     reads,
-    usdPerDay: num(discovery?.budgets?.usd_per_day),
+    usdPerDay: num(discovery?.budgets?.usd_per_day) ?? STARTER_USD_PER_DAY,
     perAsk: num(discovery?.budgets?.per_ask),
-    sweepH: num(discovery?.cadence?.sweep_h),
-    synthesisH: num(discovery?.cadence?.synthesis_h),
+    sweepH: num(discovery?.cadence?.sweep_h) ?? STARTER_SWEEP_H,
+    synthesisH: num(discovery?.cadence?.synthesis_h) ?? STARTER_SYNTHESIS_H,
   };
 }
 

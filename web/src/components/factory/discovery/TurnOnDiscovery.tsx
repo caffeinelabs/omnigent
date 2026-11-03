@@ -3,8 +3,10 @@
  * costs, and what an owner must approve. On a server that runs discovery an
  * owner reviews the discovery starter (the switch and three sources that need
  * no secret) as a staged change and applies it as a new definition version,
- * with Undo. Everyone else reads who turns it on; nothing is ever on by
- * default.
+ * with Undo. The repos and the web reach outside the factory, so the owner
+ * ticks each one Scout may read now; one left unticked is added waiting for
+ * an owner (nothing reads it) and shows in Needs you until it is approved.
+ * Everyone else reads who turns it on; nothing is ever on by default.
  */
 
 import { CompassIcon, Loader2Icon } from "lucide-react";
@@ -19,9 +21,10 @@ import {
 } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { useFactoryToast } from "../ui/Toast";
-import { MEANING } from "../ui/statusTokens";
-import { cadenceWord, starterChanges, starterSummary } from "./discoveryModel";
+import { FOCUS_RING, MEANING } from "../ui/statusTokens";
+import { cadenceWord, starterChanges, starterSummary, starterWaiting } from "./discoveryModel";
 import { useRefreshDiscovery } from "./discoveryQueries";
+import { STARTER_NEEDS_APPROVAL, type StarterSourceId } from "./discoveryStarter";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -44,8 +47,21 @@ export function TurnOnDiscovery({
   const refresh = useRefreshDiscovery(factoryId);
   const effective = definition?.effective ?? null;
   const summary = starterSummary(effective);
-  const changes = starterChanges(effective);
+  // The sources the owner ticked: approved in the same apply, the rest wait for an owner.
+  const [approved, setApproved] = useState<ReadonlySet<string>>(() => new Set());
+  const changes = starterChanges(effective, approved);
+  const waiting = starterWaiting(effective, approved);
   const [preview, setPreview] = useState<DefinitionPreviewResponse | null>(null);
+  const canApprove = serverOn && isOwner;
+  const toggle = (id: string, on: boolean) => {
+    setPreview(null);
+    setApproved((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cost = summary.usdPerDay != null ? `$${summary.usdPerDay} a day` : "its daily budget";
@@ -79,8 +95,9 @@ export function TurnOnDiscovery({
       });
       setPreview(null);
       refresh();
+      const waits = waiting.map((s) => s.label).join(" and ");
       toast.show({
-        message: `Discovery is on${result.def_version != null ? ` (definition v${result.def_version})` : ""}.`,
+        message: `Discovery is on${result.def_version != null ? ` (definition v${result.def_version})` : ""}.${waits ? ` ${waits} ${waiting.length === 1 ? "waits" : "wait"} for your approval in Needs you.` : ""}`,
         undo:
           before != null
             ? () => {
@@ -129,15 +146,45 @@ export function TurnOnDiscovery({
             What Scout would read
           </h3>
           <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-sm">
-            {summary.reads.map((r) => (
-              <li key={r.label}>
-                <b>{r.label}</b>: {r.text}.
-              </li>
-            ))}
+            {summary.reads.map((r) =>
+              r.added && STARTER_NEEDS_APPROVAL.has(r.id as StarterSourceId) ? (
+                <li key={r.id} data-testid={`discovery-starter-source-${r.id}`}>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={approved.has(r.id)}
+                      disabled={!canApprove || busy != null}
+                      onChange={(e) => toggle(r.id, e.target.checked)}
+                      aria-describedby={`discovery-starter-${r.id}-state`}
+                      data-testid={`discovery-starter-approve-${r.id}`}
+                      className={cn("mt-1 accent-status-blue", FOCUS_RING)}
+                    />
+                    <span>
+                      <b>{r.label}</b>: {r.text}.{" "}
+                      <span
+                        id={`discovery-starter-${r.id}-state`}
+                        className={cn(
+                          "text-xs",
+                          approved.has(r.id) ? "text-muted-foreground" : MEANING.needsYou.text,
+                        )}
+                      >
+                        {approved.has(r.id)
+                          ? "Approved: Scout reads it from the start."
+                          : "Not approved: added waiting for an owner; nothing reads it."}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              ) : (
+                <li key={r.id}>
+                  <b>{r.label}</b>: {r.text}.
+                </li>
+              ),
+            )}
           </ul>
           <p className="text-sm text-muted-foreground">
-            None of these needs a secret. Text is redacted before anyone reads it, and signal text
-            is treated as untrusted data.
+            None of these needs a secret. Tick each outside source Scout may read now. Text is
+            redacted before anyone reads it, and signal text is treated as untrusted data.
           </p>
         </section>
         <section className="flex flex-col gap-1.5">
@@ -170,9 +217,10 @@ export function TurnOnDiscovery({
             minutes and restore at any time.
           </li>
           <li>
-            Every source needs an owner. The starter's sources need no secret and start in a 14-day
-            trial; a source that needs a read-only key (product analytics, a tracker) is approved
-            one at a time later. Nothing is read until an owner approves it.
+            Every source needs an owner. The repos and the web start in a 14-day trial once you tick
+            them; one you leave unticked waits in Needs you for an owner, and nothing reads it until
+            then. A source that needs a read-only key (product analytics, a tracker) is approved one
+            at a time later.
           </li>
           <li>
             Pause any source at once, or turn discovery off again: Scout stops and sources pause.
@@ -212,6 +260,15 @@ export function TurnOnDiscovery({
                 <li key={`${e.kind}:${e.text}`}>{e.text}</li>
               ))}
             </ul>
+          )}
+          {waiting.length > 0 && (
+            <p
+              data-testid="discovery-starter-waiting"
+              className={cn("text-sm", MEANING.needsYou.text)}
+            >
+              Waits for an owner's approval: {waiting.map((s) => s.label).join(", ")}. Nothing reads{" "}
+              {waiting.length === 1 ? "it" : "them"} until an owner approves in Needs you.
+            </p>
           )}
           <p className="text-sm text-muted-foreground">{preview.who}</p>
           {preview.blocked.length > 0 && (

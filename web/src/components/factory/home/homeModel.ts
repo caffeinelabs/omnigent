@@ -6,14 +6,15 @@
 // nothing here names a product. Pure; `homeModel.test.ts` pins it.
 
 import type { Ask } from "@/lib/factoryAsksApi";
-import type {
-  AgentRowView,
-  DefinitionDoc,
-  FactorySnapshot,
-  FactoryStage,
-  MemberView,
-  ProjectView,
-  PrView,
+import {
+  type AgentRowView,
+  type DefinitionDoc,
+  type FactorySnapshot,
+  type FactoryStage,
+  type MemberView,
+  type ProjectView,
+  type PrView,
+  sourcesOn,
 } from "@/lib/factoryApi";
 import { type TeamMember, groupTeams, modelLabel, teamRows } from "../agents/teamsModel";
 import { formatElapsed, formatUsd, plural, primaryPr, projectPrs } from "../factoryFormat";
@@ -457,14 +458,22 @@ export function parseDiscoveryFacts(raw: unknown): DiscoveryHomeFacts | null {
   const opps = obj(body.opportunities) ?? {};
   const bets = obj(body.bets) ?? {};
   const readouts = obj(body.readouts) ?? {};
+  const bands = obj(body.bands) ?? {};
   const learned = Array.isArray(body.learned) ? body.learned : [];
   return {
-    signalsWeek: num(body.signals_week, signals.week, chain.signals),
+    // The ledger's summary (A4/A7): `chain.signals_week`, `bands.now`, `readouts.written`.
+    signalsWeek: num(body.signals_week, signals.week, chain.signals_week, chain.signals),
     signalsUnsorted: num(body.signals_unsorted, signals.unsorted),
     opportunities: num(body.opportunities_open, opps.open, chain.opportunities, body.opportunities),
-    opportunitiesNow: num(body.opportunities_now, opps.now),
+    opportunitiesNow: num(body.opportunities_now, opps.now, bands.now),
     bets: num(body.bets_open, bets.open, chain.bets, body.bets),
-    readouts: num(body.readouts_total, readouts.total, chain.measured, body.readouts),
+    readouts: num(
+      body.readouts_total,
+      readouts.total,
+      readouts.written,
+      chain.measured,
+      body.readouts,
+    ),
     readoutsWon: num(body.readouts_won, readouts.won),
     nextSynthesisAt: num(body.next_synthesis_at, obj(body.cadence)?.next_synthesis_at),
     learned: learned
@@ -607,8 +616,7 @@ export function homeLoop({
   leads,
   hrefs,
 }: LoopInput): HomeLoop {
-  const sources = definition?.discovery?.sources ?? [];
-  const on = sources.filter((s) => s.state !== "paused").length;
+  const on = sourcesOn(definition?.discovery?.sources);
   const sourceAsks = countKind(asks, "source");
   const goals = definition?.strategy?.goals ?? [];
   const first = goals[0] ?? null;

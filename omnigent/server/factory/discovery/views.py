@@ -241,9 +241,10 @@ def _quote(deps: FactoryDeps, signal: FactorySignal) -> dict[str, Any]:
 
 
 def _pick(signals: Iterable[FactorySignal], limit: int) -> list[FactorySignal]:
+    """One quote per account, people's words first (newest first), then pages with no account."""
     seen: set[str] = set()
     out: list[FactorySignal] = []
-    for signal in sorted(signals, key=lambda s: s.seen_at, reverse=True):
+    for signal in sorted(signals, key=lambda s: (s.account is None, -s.seen_at)):
         key = signal.account or signal.ref
         if key in seen or not signal.excerpt or _excluded(signal) is not None:
             continue
@@ -522,9 +523,99 @@ def summary(
     }
 
 
+# ── What the factory learned this week ─────────────────────────
+
+LEARNED_MAX: Final = 6
+"""Lines Home's "Learned this week" and the Slack digest's discovery section show."""
+_VERDICT_WORDS: Final = {
+    "won": "won",
+    "flat": "no clear change",
+    "lost": "lost",
+    "inconclusive": "not enough data yet",
+}
+
+
+def _short(text: str | None, limit: int = 80) -> str:
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def learned(
+    deps: FactoryDeps, factory_id: str, items: Sequence[Evaluated], *, now: int
+) -> list[dict[str, Any]]:
+    """
+    What discovery learned in the last 7 days, newest first, as ids and titles
+    (never a user's words): readouts written, bets approved, new opportunities.
+
+    :returns: ``[{text, ref, kind}]``, at most :data:`LEARNED_MAX`; ``ref`` is
+        what the line is about (``O-n``, else ``C-n``).
+    """
+    return [line for _at, line in learned_dated(deps, factory_id, items, now=now)]
+
+
+def learned_dated(
+    deps: FactoryDeps, factory_id: str, items: Sequence[Evaluated], *, now: int
+) -> list[tuple[int, dict[str, Any]]]:
+    """:returns: :func:`learned`'s lines, each with when it happened (epoch seconds)."""
+    since = now - _WEEK_S
+    titles = {e.row.ref: e.row.title for e in items}
+    store = deps.factory_store
+    dated: list[tuple[int, dict[str, Any]]] = []
+    for row in store.list_readouts(factory_id, statuses=("written", "decided"), limit=5000):
+        if (row.written_at or 0) < since:
+            continue
+        opp = f"O-{row.opportunity}" if row.opportunity else None
+        about = f" on {opp} {_short(titles.get(opp))}".rstrip() if opp else ""
+        verdict = _VERDICT_WORDS.get(row.verdict or "", row.verdict or "written")
+        dated.append(
+            (
+                int(row.written_at or 0),
+                {
+                    "text": f"{row.bet} · day {row.day} readout: {verdict}{about}",
+                    "ref": opp or row.bet,
+                    "kind": "readout",
+                },
+            )
+        )
+    bets = store.list_proposals(factory_id, status=["applied", "kept"], kind="projects", limit=200)
+    for row in bets:
+        if not isinstance(row.bet, Mapping) or (row.applied_at or 0) < since:
+            continue
+        what = _short(str(row.bet.get("outcome") or row.title))
+        opp = row.opportunity
+        dated.append(
+            (
+                int(row.applied_at or 0),
+                {
+                    "text": f"Bet C-{row.number} approved: {what}"
+                    + (f" (from {opp})" if opp else ""),
+                    "ref": opp or f"C-{row.number}",
+                    "kind": "bet",
+                },
+            )
+        )
+    new = [e for e in items if e.row.created_at >= since and e.status not in CLOSED]
+    for e in sorted(new, key=lambda e: -e.score.rank)[:3]:
+        dated.append(
+            (
+                int(e.row.created_at),
+                {
+                    "text": f"New opportunity {e.row.ref}: {_short(e.row.title)}",
+                    "ref": e.row.ref,
+                    "kind": "opportunity",
+                },
+            )
+        )
+    dated.sort(key=lambda pair: -pair[0])
+    return dated[:LEARNED_MAX]
+
+
 __all__ = [
+    "LEARNED_MAX",
     "SCOUT_ROLE",
     "author_name",
+    "learned",
+    "learned_dated",
     "lifecycle",
     "next_step",
     "opportunity_detail",

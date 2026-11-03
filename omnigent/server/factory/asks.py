@@ -13,7 +13,8 @@ same facts.
 **Kinds.** ``decision`` (a question an agent or the server asked), ``merge``
 (ready pull requests), ``bet`` (a projects proposal that carries a bet),
 ``source``, ``profile`` and ``goal`` (definition proposals that change the
-discovery sources, the product profile or the goals), ``readout`` (keeping or
+discovery sources, the product profile or the goals; ``source`` also for a
+listed source that waits for an owner's approval), ``readout`` (keeping or
 dropping a measured bet, or answering "did it help?"), ``broken``
 (something stopped that only a person can restart or close) and ``proposal``
 (any other proposal a person approves).
@@ -269,6 +270,8 @@ class AskInputs:
         dicts: ``number``, ``kind``, ``status``, ``title``, ``before``, ``after``,
         ``author_kind``, ``opportunity``, ``bet``, ``case_against``, ...).
     :param owners: Project slug -> its ``human_owner`` on the roster.
+    :param pending_sources: Discovery sources that wait for an owner's approval
+        (``{id, label, kind, since}``, see :func:`.status_summary.pending_sources`).
     """
 
     snapshot: Mapping[str, Any]
@@ -277,6 +280,7 @@ class AskInputs:
     incidents: Sequence[FactoryIssue] = ()
     proposals: Sequence[Mapping[str, Any]] = ()
     owners: Mapping[str, str] = field(default_factory=dict)
+    pending_sources: Sequence[Mapping[str, Any]] = ()
 
     @classmethod
     def from_status(cls, inputs: summary_mod.StatusInputs) -> AskInputs:
@@ -288,6 +292,7 @@ class AskInputs:
             incidents=inputs.incidents,
             proposals=inputs.proposals,
             owners=inputs.owners,
+            pending_sources=inputs.pending_sources,
         )
 
 
@@ -385,6 +390,9 @@ class _Links:
 
     def proposal(self, ref: str) -> str:
         return f"{self.base}/improvements/{ref}"
+
+    def source(self, source_id: str) -> str:
+        return f"{self.base}/discovery?peek=source:{source_id}"
 
     def pr(self, pr_id: str) -> str:
         return f"{self.base}/prs/{pr_id}"
@@ -746,7 +754,9 @@ def _decision_draft(decision: Mapping[str, Any], ctx: _Ctx, in_steer: list[str])
             kind = "proposal"
         context = _clip(row.get("rationale")) if row is not None else context
         if kind == "bet" and row is not None:
-            title = f"Approve a bet: {title_text or question}"
+            # What users get from it (the bet's outcome), not the proposal's ops.
+            outcome = _clip(str((row.get("bet") or {}).get("outcome") or ""), TITLE_MAX)
+            title = f"Approve a bet: {outcome or title_text or question}"
             context = _bet_context(row, ctx)
             action = AskAction(kind="open", label="Review the bet", href=href)
             cost_text = "a bet waits for its approval"
@@ -1010,6 +1020,35 @@ def _incident_draft(issue: FactoryIssue, ctx: _Ctx) -> _Draft:
     return _Draft(ask=ask, for_you=for_you)
 
 
+def _pending_source_draft(source: Mapping[str, Any], ctx: _Ctx) -> _Draft:
+    """A listed source that waits for an owner: nothing reads it until one approves it."""
+    sid = str(source["id"])
+    label = _clip(str(source.get("label") or sid), 80) or sid
+    kind = str(source.get("kind") or "source")
+    since = int(source.get("since") or ctx.now)
+    href = ctx.links.source(sid)
+    ask: dict[str, Any] = {
+        "id": f"source:{sid}",
+        "kind": "source",
+        "subject": f"source:{sid}",
+        "title": f"Approve a source: {label}",
+        "context": f"A {kind} source waiting for an owner: Scout reads nothing from it until "
+        "it is approved, and then it runs a 14-day trial.",
+        "meta": [kind, "for owners"],
+        "since": since,
+        "age_s": max(0, int(ctx.now) - since),
+        "cost_of_waiting": cost_of_waiting(
+            "source", now=ctx.now, text="discovery reads only approved sources"
+        ),
+        "primary_action": AskAction(kind="open", label="Review the source", href=href),
+        "assignee": "owners",
+        "mine": False,
+        "covers": [f"source:{sid}"],
+        "href": href,
+    }
+    return _Draft(ask=ask, for_you=is_mine_by("owners", None, ctx.user_id, ctx.inputs.level))
+
+
 def _stuck_sentence(issue: FactoryIssue, ctx: _Ctx) -> str:
     kind, _, sid = (issue.target or "").partition(":")
     member = ctx.members.get(_norm_id(sid)) if kind == "member" else None
@@ -1117,6 +1156,7 @@ def assemble(inputs: AskInputs, *, now: float) -> Assembled:
         if draft is not None:
             drafts.append(draft)
     drafts += _merge_drafts(ctx)
+    drafts += [_pending_source_draft(source, ctx) for source in inputs.pending_sources]
     healing: list[FactoryIssue] = []
     folded: list[str] = []
     folded_keys: set[str] = set()

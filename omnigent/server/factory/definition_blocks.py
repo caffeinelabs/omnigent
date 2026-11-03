@@ -611,7 +611,10 @@ class SourceDef(_Block):
 
     :param roles: Who may query it through the gateway.
     :param interval_min: Minutes between syncs; ``0`` is query-only.
-    :param state: ``trial`` (its first 14 days), ``active`` or ``paused``.
+    :param state: ``trial`` (its first 14 days), ``active``, ``paused``, or
+        ``pending``: listed but not approved by an owner yet (the discovery
+        starter leaves a source the owner did not tick there). Nothing reads a
+        paused or pending source; approving one (pending to trial) is an owner's.
     """
 
     id: Slug
@@ -623,7 +626,7 @@ class SourceDef(_Block):
     consent: Literal["public", "terms", "opt_in", "internal"] = "public"
     budget: SourceBudgetDef = Field(default_factory=SourceBudgetDef)
     interval_min: int = Field(60, ge=0, le=10080)
-    state: Literal["trial", "active", "paused"] = "trial"
+    state: Literal["trial", "active", "paused", "pending"] = "trial"
 
     @model_validator(mode="before")
     @classmethod
@@ -667,7 +670,10 @@ class SourceDef(_Block):
 
     @model_validator(mode="after")
     def _personal_stays_off(self) -> SourceDef:
-        if PRIVACY_RANK[self.privacy.level] >= PRIVACY_RANK["personal"] and self.state != "paused":
+        if PRIVACY_RANK[self.privacy.level] >= PRIVACY_RANK["personal"] and self.state not in (
+            "paused",
+            "pending",
+        ):
             raise ValueError(
                 f"source {self.id}: a {self.privacy.level} source stays paused until "
                 "the server can detect names in it"

@@ -2944,7 +2944,13 @@ export interface SourceDef {
   budget: { calls_per_day: number };
   /** Minutes between syncs; 0 is query-only. */
   interval_min: number;
-  state: "trial" | "active" | "paused";
+  /** `pending`: listed but not approved by an owner yet; nothing reads it (nor a paused one). */
+  state: "trial" | "active" | "paused" | "pending";
+}
+
+/** How many of `sources` are on: paused ones and those waiting for an owner read nothing. */
+export function sourcesOn(sources: readonly { state?: string }[] | null | undefined): number {
+  return (sources ?? []).filter((s) => s.state !== "paused" && s.state !== "pending").length;
 }
 
 /** The rank's numbers; its formula is code. */

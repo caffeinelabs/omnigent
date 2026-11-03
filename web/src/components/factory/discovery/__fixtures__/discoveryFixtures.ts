@@ -608,9 +608,13 @@ export function sampleHunches(nowS: number): Row[] {
 }
 
 /** (sample) The discovery summary (`GET …/discovery`). */
-export function sampleSummary(nowS: number, options: { cold?: boolean; held?: boolean } = {}): Row {
+export function sampleSummary(
+  nowS: number,
+  options: { cold?: boolean; held?: boolean; pendingWeb?: boolean } = {},
+): Row {
   const cold = options.cold ?? false;
   const held = options.held ?? false;
+  const pendingWeb = options.pendingWeb ?? false;
   return {
     enabled: true,
     def_version: 12,
@@ -654,16 +658,16 @@ export function sampleSummary(nowS: number, options: { cold?: boolean; held?: bo
         id: "web",
         label: "The open web (sample)",
         kind: "web",
-        state: cold ? "trial" : "active",
+        state: pendingWeb ? "pending" : cold ? "trial" : "active",
         privacy: "public",
         keep_days: 365,
-        calls_today: 9,
-        health: "ok",
+        calls_today: pendingWeb ? 0 : 9,
+        health: pendingWeb ? "new" : "ok",
         calls_per_day: 30,
-        last_ok_at: nowS - 5400,
+        last_ok_at: pendingWeb ? null : nowS - 5400,
         last_error: null,
-        signals_total: cold ? 0 : 210,
-        signals_week: cold ? 0 : 40,
+        signals_total: cold || pendingWeb ? 0 : 210,
+        signals_week: cold || pendingWeb ? 0 : 40,
       },
       {
         id: "team",
@@ -980,11 +984,13 @@ export function starterPreview(version: number): Row {
     def_version: version,
     version_next: version + 1,
     diff: [],
+    // As the server words them (`POST …/definition/preview` in the eval-mode smoke test).
     lines: [
-      "discovery.enabled: false → true",
-      "discovery.sources: + repo (The factory's repositories)",
-      "discovery.sources: + web (The open web)",
-      "discovery.sources: + team (The factory's people)",
+      "discovery.enabled: False → True",
+      "discovery.seat.model: None → sonnet",
+      '+ discovery.sources.repo · "The factory\'s repos"',
+      '+ discovery.sources.web · "The open web"',
+      '+ discovery.sources.team · "The factory\'s people"',
     ],
     class: "B",
     approvers: ["owners"],
@@ -995,9 +1001,10 @@ export function starterPreview(version: number): Row {
     blocked: [],
     effects: [
       {
-        kind: "discovery",
-        text: "Scout starts with the three sources in their 14-day trial and spends at most $10 a day.",
+        kind: "data",
+        text: "Product, strategy, discovery, brief, role-default and template changes are data the factory reads when it needs them; nobody is mailed.",
       },
+      { kind: "discovery", text: "Discovery turns on for this factory." },
     ],
     rerank: [],
     trialable: {
@@ -1020,6 +1027,8 @@ export interface DiscoveryRouteOptions {
   moreReadouts?: boolean;
   /** The server holds the support tracker after repeated failures. */
   heldSource?: boolean;
+  /** The web source waits for an owner's approval (the starter left it unticked). */
+  pendingWeb?: boolean;
 }
 
 /** The new cockpit's routes for the Discovery page over `snapshot`. */
@@ -1045,7 +1054,11 @@ export function discoveryRoutes(
     proposals,
     ...(on
       ? {
-          discovery: sampleSummary(nowS, { cold: state === "cold", held: options.heldSource }),
+          discovery: sampleSummary(nowS, {
+            cold: state === "cold",
+            held: options.heldSource,
+            pendingWeb: options.pendingWeb,
+          }),
           opportunities: state === "cold" ? { data: [], total: 0 } : sampleOpportunities(nowS),
         }
       : {}),

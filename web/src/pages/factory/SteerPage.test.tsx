@@ -16,7 +16,9 @@ import {
   previewOperator,
   previewRestore,
   previewRubric,
+  steerAllProposals,
   steerDefinition,
+  steerProposals,
   steerRoutes,
   steerVersions,
 } from "@/components/factory/steer/__fixtures__/steerFixtures";
@@ -25,6 +27,7 @@ import type {
   DefinitionPreviewResponse,
   DefinitionResponse,
   DefinitionVersionsResponse,
+  ProposalView,
   ViewerRole,
 } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
@@ -145,6 +148,8 @@ function serve(
         json({ proposal: { ref: "C-35", def_version_to: 13 }, decision: {} }),
       [`POST ${SNAPSHOT}/sources/forum/pause`]: () =>
         json({ changed: true, state: "paused", def_version: 13, undo: { pin: 12, until: 0 } }),
+      [`POST ${SNAPSHOT}/sources/web/approve`]: () =>
+        json({ changed: true, state: "trial", def_version: 13, undo: { pin: 12, until: 0 } }),
     },
   });
 }
@@ -415,6 +420,53 @@ describe("Steer", () => {
     expect(toast).toHaveTextContent("Paused Public community forum (sample)");
     fireEvent.click(within(toast).getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(sent("POST", "/definition/pin")).toEqual([{ version: 12 }]));
+  });
+
+  it("lists a source a person proposed as waiting for an owner, like an agent's", async () => {
+    const human: ProposalView = {
+      ...steerProposals()[2]!,
+      id: "c38c38c38c38c38c38c38c38c38c38c3",
+      ref: "C-38",
+      number: 38,
+      title: "Add a source: the release notes (sample)",
+      ops: [
+        {
+          op: "add",
+          path: "discovery.sources",
+          value: { id: "notes", label: "Release notes (sample)", kind: "web", state: "trial" },
+        },
+      ],
+      author_kind: "human",
+      author: "mia@example.com",
+      author_title: null,
+      author_role: null,
+    };
+    serve({ proposals: [...steerAllProposals(), human] });
+    renderAt("/steer/sources");
+
+    const card = await screen.findByTestId("steer-source-waiting-C-38");
+    expect(card).toHaveTextContent("Release notes (sample)");
+    expect(card).toHaveTextContent("waits for an owner");
+    expect(screen.getByTestId("steer-source-waiting-C-36")).toBeInTheDocument();
+  });
+
+  it("shows a listed source that waits for an owner, and the owner approves it", async () => {
+    serve({ pendingWeb: true });
+    renderAt("/steer/sources");
+
+    expect(await screen.findByTestId("steer-source-pending-web")).toHaveTextContent(
+      "Nothing reads it until an owner approves it",
+    );
+    const outline = screen.getByTestId("steer-outline");
+    await waitFor(() =>
+      expect(within(outline).getByTestId("steer-nav-sources")).toHaveTextContent("3 on"),
+    );
+    expect(screen.queryByTestId("steer-source-pause-web")).toBeNull();
+    fireEvent.click(screen.getByTestId("steer-source-approve-web"));
+    await waitFor(() => expect(sent("POST", "/sources/web/approve")).toHaveLength(1));
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent(
+      "Approved Web and market (sample). Scout reads it in a 14-day trial.",
+    );
   });
 
   it("adds a source in four steps and stages it", async () => {

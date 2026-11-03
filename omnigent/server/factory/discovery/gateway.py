@@ -475,7 +475,7 @@ async def _run(
         ) from None
     # A pause while it read: nothing is stored.
     fresh = await asyncio.to_thread(_fresh, deps, factory_id, source.id)
-    if fresh is None or fresh.state == "paused":
+    if fresh is None or fresh.state in sources.STOPPED:
         error = CockpitError(409, "source_paused", f"source {source.id} was paused while it read")
         await _log(
             app_state,
@@ -720,6 +720,8 @@ async def agent_sources(app_state: Any, caller: AgentCaller) -> dict[str, Any]:
                 why = view["invalid"]
             elif source.state == "paused":
                 why = "paused"
+            elif source.state == "pending":
+                why = "waits for an owner's approval"
             elif view["held"]:
                 why = "on hold after repeated failures"
             elif view["calls_today"] >= source.calls_per_day:
@@ -812,7 +814,7 @@ def due(source: Source, state: FactorySourceState | None, now: int) -> bool:
     found = kind_of(source.kind)
     if found is None or not found.syncs or not source.interval_min:
         return False
-    if source.state == "paused" or sources.held(state) is not None:
+    if source.state in sources.STOPPED or sources.held(state) is not None:
         return False
     last = ((state.data or {}) if state is not None else {}).get(sources.LAST_SYNC_KEY)
     return not isinstance(last, int) or now - last >= source.interval_min * 60
@@ -858,6 +860,14 @@ async def test(
                 409,
                 "source_paused",
                 f"source {source.id} is paused; resume it to test it",
+                source=source.id,
+            )
+        if source.state == "pending":
+            # Nothing reads a source before an owner approves it, a test included.
+            raise CockpitError(
+                409,
+                "source_pending",
+                f"source {source.id} waits for an owner's approval; approve it to test it",
                 source=source.id,
             )
         kind.params(source)
@@ -965,7 +975,8 @@ async def resume(
     out: dict[str, Any] = {"changed": True, "def_version": _version(deps, root.id)}
     if source.state == "paused":
         back = ((state.data or {}) if state is not None else {}).get(sources.PAUSED_FROM_KEY)
-        back = back if back in ("trial", "active") else "active"
+        # A source paused before an owner approved it goes back to waiting for one.
+        back = back if back in ("trial", "active", "pending") else "active"
         result = await tuning.human_edit(
             app_state,
             root.id,
@@ -1013,6 +1024,43 @@ async def resume(
         out["released"] = True
         out.setdefault("state", source.state)
     return out
+
+
+async def approve(
+    app_state: Any, root: Conversation, user_id: str | None, source_id: str, payload: Any
+) -> dict[str, Any]:
+    """
+    ``POST …/sources/{id}/approve``: an owner approves a pending source (class B), which
+    starts its 14-day trial; a new definition version, with Undo by restoring the one before.
+    """
+    from omnigent.server.factory import tuning
+    from omnigent.server.factory.start import parse_body
+
+    body = parse_body(NoteIn, payload if payload is not None else {})
+    deps = factory_deps(app_state)
+    await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    source = await asyncio.to_thread(sources.resolve, deps, root.id, source_id)
+    if source.state != "pending":
+        return {"changed": False, "state": source.state, "def_version": _version(deps, root.id)}
+    before = _version(deps, root.id)
+    result = await tuning.human_edit(
+        app_state,
+        root.id,
+        user_id,
+        {
+            "changes": [
+                {"op": "replace", "path": f"discovery.sources.{source.id}.state", "value": "trial"}
+            ],
+            "note": body.note or f"Approve source {source.id}",
+        },
+    )
+    return {
+        "changed": True,
+        "state": "trial",
+        "def_version": result.get("def_version"),
+        "proposal": result.get("proposal"),
+        "undo": {"pin": before, "until": now_s() + UNDO_WINDOW_S},
+    }
 
 
 def _version(deps: FactoryDeps, factory_id: str) -> int | None:
@@ -1081,12 +1129,18 @@ async def _on_event(app_state: Any, event: Any) -> None:
         now = after.get("state") if isinstance(after, Mapping) else None
         if not isinstance(before, Mapping):
             kind, verb = "source.added", "added"
+            if now == "pending":
+                verb = "added (waiting for an owner's approval)"
         elif not isinstance(after, Mapping):
             kind, verb = "source.removed", "removed"
         elif now == "paused" and was != "paused":
             kind, verb = "source.paused", "paused"
         elif was == "paused" and now != "paused":
             kind, verb = "source.resumed", "resumed"
+        elif was == "pending" and now != "pending":
+            kind, verb = "source.approved", "approved"
+        elif now == "pending" and was != "pending":
+            kind, verb = "source.paused", "put back to waiting for approval"
         else:
             continue
         if kind in ("source.paused", "source.removed"):
@@ -1143,6 +1197,7 @@ __all__ = [
     "access_log",
     "agent_sources",
     "answer",
+    "approve",
     "cancel_running",
     "due",
     "install",

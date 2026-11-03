@@ -43,6 +43,7 @@ import {
   starterChanges,
   starterReads,
   starterSummary,
+  starterWaiting,
   statusWords,
   triageAction,
 } from "./discoveryModel";
@@ -302,6 +303,7 @@ describe("bands, status and filters", () => {
     expect(sourceStateWord({ state: "active", health: "failing" })).toBe("on hold after failures");
     expect(sourceStateWord({ state: "paused", health: "ok" })).toBe("paused");
     expect(sourceStateWord({ state: "active", health: "ok" })).toBe("on");
+    expect(sourceStateWord({ state: "pending", health: "new" })).toBe("waits for an owner");
     const quiet = quietSegments(parseSummary(sampleSummary(NOW))!.coverage);
     expect(quiet.map((c) => [c.segment, c.signals30d])).toEqual([
       ["left", 0],
@@ -408,6 +410,20 @@ describe("flow", () => {
     expect(fromProject.has("source:repo")).toBe(true);
     expect(fromProject.has("pending:C-24")).toBe(true);
     expect(fromProject.has("O-15")).toBe(false);
+  });
+
+  it("draws a source that waits for an owner's approval like a pending one", () => {
+    const summary = parseSummary(sampleSummary(0, { pendingWeb: true }))!;
+    const m = flowModel({
+      sources: summary.sources,
+      rows: rows(),
+      proposals: [],
+      snapshot: discoverySnapshot(),
+      readouts: [],
+    });
+    const web = m.nodes.find((n) => n.id === "source:web")!;
+    expect(web).toMatchObject({ look: "amber", detail: "web · waits for an owner" });
+    expect(m.nodes.find((n) => n.id === "source:repo")!.look).toBe("plain");
   });
 
   it("links a readout back to its opportunity when that opportunity is drawn", () => {
@@ -582,24 +598,56 @@ describe("side panels and pending sources", () => {
 
 describe("the discovery starter", () => {
   it("turns discovery on with three sources that need no secret", () => {
-    const changes = starterChanges(definitionResponse().effective);
+    const changes = starterChanges(definitionResponse().effective, new Set(["repo", "web"]));
     expect(changes[0]).toEqual({ op: "replace", path: "discovery.enabled", value: true });
-    expect(changes.slice(1).map((c) => (c.value as { kind: string }).kind)).toEqual([
-      "repo",
-      "web",
-      "team",
-    ]);
+    const sources = changes.filter((c) => c.path === "discovery.sources");
+    expect(sources.map((c) => (c.value as { kind: string }).kind)).toEqual(["repo", "web", "team"]);
+    expect(sources.every((c) => (c.value as { state: string }).state !== "pending")).toBe(true);
     expect(changes.every((c) => !JSON.stringify(c).match(/key|token|secret/i))).toBe(true);
+  });
+
+  it("leaves an outside source the owner did not tick waiting for an owner", () => {
+    const off = definitionResponse().effective;
+    const states = starterChanges(off)
+      .filter((c) => c.path === "discovery.sources")
+      .map((c) => (c.value as { state: string }).state);
+    expect(states).toEqual(["pending", "pending", "active"]);
+    expect(starterWaiting(off, new Set(["web"])).map((s) => s.label)).toEqual([
+      "The factory's repos",
+    ]);
+  });
+
+  it("keeps a budget and cadence an owner set, and says what applying it costs", () => {
+    const off = structuredClone(definitionResponse().effective);
+    off.discovery = {
+      ...off.discovery!,
+      enabled: false,
+      budgets: { ...off.discovery!.budgets, usd_per_day: 3 },
+      cadence: { ...off.discovery!.cadence, sweep_h: 12 },
+    };
+    const paths = starterChanges(off).map((c) => c.path);
+    expect(paths).not.toContain("discovery.budgets.usd_per_day");
+    expect(paths).not.toContain("discovery.cadence.sweep_h");
+    expect(starterSummary(off)).toMatchObject({ usdPerDay: 3, sweepH: 12 });
+
+    const unset = structuredClone(off);
+    delete (unset.discovery!.budgets as { usd_per_day?: number }).usd_per_day;
+    expect(starterChanges(unset)).toContainEqual({
+      op: "replace",
+      path: "discovery.budgets.usd_per_day",
+      value: 10,
+    });
+    expect(starterSummary(unset).usdPerDay).toBe(10);
   });
 
   it("adds only the starter sources a factory does not have yet", () => {
     const on = discoveryDefinition().effective;
-    expect(starterChanges(on)).toEqual([]);
+    expect(starterChanges(on).filter((c) => c.path === "discovery.sources")).toEqual([]);
     const summary = starterSummary(definitionResponse().effective);
-    expect(summary.reads.map((r) => r.label)).toEqual([
-      "The factory's repositories",
-      "The open web",
-      "The factory's people",
+    expect(summary.reads.map((r) => [r.label, r.added])).toEqual([
+      ["The factory's repos", true],
+      ["The open web", true],
+      ["The factory's people", true],
     ]);
   });
 });

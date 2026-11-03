@@ -12,6 +12,7 @@ import {
   addHunch,
   linkSignal,
   patchOpportunity,
+  approveSource,
   pauseSource,
   planOpportunity,
   researchOpportunity,
@@ -49,6 +50,8 @@ export interface DiscoveryLevers {
   pauseSource: (id: string, label: string) => Promise<void>;
   /** Resume a paused source, or (`hold`) lift the server's hold after failures. */
   resumeSource: (id: string, label: string, options?: { hold?: boolean }) => Promise<void>;
+  /** Approve a source that waits for an owner (its 14-day trial starts), with Undo. */
+  approveSource: (id: string, label: string) => Promise<void>;
 }
 
 export function useDiscoveryLevers(factoryId: string): DiscoveryLevers {
@@ -208,6 +211,33 @@ export function useDiscoveryLevers(factoryId: string): DiscoveryLevers {
           toast.show({
             message: `Could not ${hold ? "lift the hold on" : "resume"} ${label}: ${message(error)}`,
           });
+        }
+      },
+      approveSource: async (id, label) => {
+        try {
+          const result = await approveSource(factoryId, id);
+          refresh();
+          const pin = result.undo?.pin;
+          toast.show({
+            message: result.changed
+              ? `Approved ${label}. Scout reads it in a 14-day trial.`
+              : `${label} was already approved.`,
+            undo:
+              result.changed && pin != null
+                ? () => {
+                    pinFactoryDefinition(factoryId, pin).then(
+                      () => {
+                        refresh();
+                        toast.show({ message: `${label} waits for an owner again.` });
+                      },
+                      (error: unknown) =>
+                        toast.show({ message: `Could not undo: ${message(error)}` }),
+                    );
+                  }
+                : undefined,
+          });
+        } catch (error) {
+          toast.show({ message: `Could not approve ${label}: ${message(error)}` });
         }
       },
     }),

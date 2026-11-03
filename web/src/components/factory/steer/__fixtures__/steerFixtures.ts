@@ -104,6 +104,8 @@ export interface SteerDefinitionOptions {
   undoable?: boolean;
   /** The environment profile at its defaults: a factory the deployment seeded none for. */
   noEnvironment?: boolean;
+  /** The web source waits for an owner's approval (the starter left it unticked). */
+  pendingWeb?: boolean;
 }
 
 /** The sample environment profile (what a deployment's seed gives a factory). */
@@ -187,6 +189,9 @@ export function steerDefinition(options: SteerDefinitionOptions = {}): Definitio
   disc.enabled = discovery;
   disc.seat = { model: "sonnet" };
   disc.sources = discovery && !options.noSources ? clone(SAMPLE_SOURCES) : [];
+  if (options.pendingWeb) {
+    disc.sources = disc.sources.map((s) => (s.id === "web" ? { ...s, state: "pending" } : s));
+  }
   disc.rubric.decay_half_life_days = 45;
   effective.briefs = options.bare
     ? (Object.fromEntries(
@@ -795,12 +800,21 @@ export function steerGates(): GatesResponse {
   };
 }
 
-/** Needs you with what waits for an owner (a bet and a source). */
-export function steerAsks(factoryId: string): AsksResponse {
-  const ask = (id: string, kind: "bet" | "source", title: string, context: string): Ask => ({
+/**
+ * Needs you with what waits for an owner (a bet and a source); with
+ * `pendingWeb`, also the server's row for the listed web source that waits.
+ */
+export function steerAsks(factoryId: string, options: { pendingWeb?: boolean } = {}): AsksResponse {
+  const ask = (
+    id: string,
+    kind: "bet" | "source",
+    title: string,
+    context: string,
+    subject = id,
+  ): Ask => ({
     id,
     kind,
-    subject: id,
+    subject,
     ref: id,
     title,
     context,
@@ -839,21 +853,36 @@ export function steerAsks(factoryId: string): AsksResponse {
         "Approve a new source: support questions (sample)",
         "Proposed by Scout (sample).",
       ),
+      ...(options.pendingWeb
+        ? [
+            ask(
+              "source:web",
+              "source",
+              "Approve a source: Web and market (sample)",
+              "A web source waiting for an owner: Scout reads nothing from it until it is approved, and then it runs a 14-day trial.",
+              "source:web",
+            ),
+          ]
+        : []),
     ],
     handled: [],
-    counts: { total: 2, mine: 2, others: 0, in_steer: 0, folded: 0 },
+    counts: options.pendingWeb
+      ? { total: 3, mine: 3, others: 0, in_steer: 0, folded: 0 }
+      : { total: 2, mine: 2, others: 0, in_steer: 0, folded: 0 },
     generated_at: NOW,
   };
 }
 
-/** The discovery summary's per-source counts. */
-export function steerDiscoverySummary() {
+/** The discovery summary's per-source counts (a web source that waits has read nothing). */
+export function steerDiscoverySummary(options: { pendingWeb?: boolean } = {}) {
   return {
     enabled: true,
     sources: [
       { id: "forum", calls_today: 41, calls_per_day: 200, signals_week: 40, health: "ok" },
       { id: "repo", calls_today: 58, calls_per_day: 100, signals_week: 24, health: "ok" },
-      { id: "web", calls_today: 17, calls_per_day: 30, signals_week: 10, health: "ok" },
+      options.pendingWeb
+        ? { id: "web", calls_today: 0, calls_per_day: 30, signals_week: 0, health: "new" }
+        : { id: "web", calls_today: 17, calls_per_day: 30, signals_week: 10, health: "ok" },
       { id: "team", calls_today: 0, calls_per_day: 100, signals_week: 3, health: "new" },
     ],
   };
@@ -932,8 +961,8 @@ export function steerRoutes(factoryId: string, options: SteerRouteOptions = {}):
     [`${base}/gates`]: { body: steerGates() },
     [`${base}/bundles`]: { body: bundlesResponse(false) },
     [`${base}/catalog`]: { body: teamCatalog() },
-    [`${base}/asks`]: { body: steerAsks(factoryId) },
+    [`${base}/asks`]: { body: steerAsks(factoryId, options) },
     [`${base}/discovery`]:
-      options.discovery === false ? { error: 404 } : { body: steerDiscoverySummary() },
+      options.discovery === false ? { error: 404 } : { body: steerDiscoverySummary(options) },
   };
 }

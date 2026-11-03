@@ -339,7 +339,7 @@ def test_every_person_write_route_requires_human_origin() -> None:
         and route.methods & {"POST", "PUT", "PATCH", "DELETE"}
         and "/agent/" not in route.path
     ]
-    assert {r.path.rsplit("/", 1)[-1] for r in people} == {"test", "pause", "resume"}
+    assert {r.path.rsplit("/", 1)[-1] for r in people} == {"test", "pause", "resume", "approve"}
     for route in people:
         calls = [dep.call for dep in route.dependant.dependencies]
         assert require_human_origin in calls, route.path

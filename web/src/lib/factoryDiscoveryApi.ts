@@ -147,6 +147,11 @@ export async function resumeSource(factoryId: string, id: string): Promise<Sourc
   return readJson(await send(`${base(factoryId)}/sources/${encodeURIComponent(id)}/resume`, {}));
 }
 
+/** `POST …/sources/{id}/approve`: an owner approves a source that waits (its trial starts). */
+export async function approveSource(factoryId: string, id: string): Promise<SourcePauseResult> {
+  return readJson(await send(`${base(factoryId)}/sources/${encodeURIComponent(id)}/approve`, {}));
+}
+
 /** One call to the source to check it answers (nothing is stored). */
 export async function testSource(factoryId: string, id: string): Promise<unknown> {
   return readJson(await send(`${base(factoryId)}/sources/${encodeURIComponent(id)}/test`, {}));

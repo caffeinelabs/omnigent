@@ -81,6 +81,8 @@ SYNTHESIS_SETTLE_S: Final = 2 * 3600
 READY_MIN_GAP_S: Final = 6 * 3600
 READY_ITEMS_MAX: Final = 5
 TESTS_MAX: Final = 2
+HUNCHES_NAMED: Final = 8
+"""A synthesis beat names at most this many of the week's hunches by id."""
 DECLINE_QUIET_S: Final = 14 * 86400
 """An opportunity Atlas declined is not offered again for this long."""
 RETRO_EVERY_S: Final = 30 * 86400
@@ -216,14 +218,29 @@ def sweep_text(new: int, since: int | None, spent: float, cap: float) -> str:
     )
 
 
-def synthesis_text(signals: int, unsorted: int, spent: float, cap: float) -> str:
-    """:returns: ``[Factory discovery · synthesis · …]`` and what to do."""
+def synthesis_text(
+    signals: int, unsorted: int, spent: float, cap: float, hunches: Sequence[str] = ()
+) -> str:
+    """
+    :returns: ``[Factory discovery · synthesis · …]`` and what to do.
+
+    :param hunches: The ids of people's hunches of the window (ids only, never their text).
+    """
+    shown = list(hunches)[:HUNCHES_NAMED]
+    more = f" and {len(hunches) - len(shown)} more" if len(hunches) > len(shown) else ""
+    named = (
+        f" People's hunches this week ({', '.join(shown)}{more}): give each one with value a "
+        "cheapest test in its opportunity's bet note."
+        if hunches
+        else ""
+    )
     return (
         f"[Factory discovery · synthesis · window 7d · {signals} new signals · "
-        f"{unsorted} unsorted · budget ${max(0.0, cap - spent):.2f} of ${cap:g} left today] "
+        f"{unsorted} unsorted · {len(hunches)} hunches · "
+        f"budget ${max(0.0, cap - spent):.2f} of ${cap:g} left today] "
         'Run load_skill("discovery-synthesis") and follow it: merge, split and create '
         "opportunities in one batch, draft bet notes for the validated ones, then post the "
-        "digest in #discovery."
+        f"digest in #discovery.{named}"
     )
 
 
@@ -293,7 +310,7 @@ async def _scout_beats(
     now: int,
     spent: float,
 ) -> list[str]:
-    from omnigent.server.factory.discovery.ledger import SUSPECT_AT
+    from omnigent.server.factory.discovery.ledger import INJECTION_SUSPECT, SUSPECT_AT
     from omnigent.stores.factory_store.discovery import SignalFilter, is_unsorted
 
     deps = factory_deps(app_state)
@@ -329,7 +346,7 @@ async def _scout_beats(
         if total:
             since = now - WEEK_S
 
-            def counts() -> tuple[int, int]:
+            def counts() -> tuple[int, int, list[str]]:
                 store = deps.factory_store
                 recent = store.list_signals(fid, SignalFilter(since=since), limit=2000)
                 linked = {
@@ -339,11 +356,19 @@ async def _scout_beats(
                 waiting = [
                     r for r in recent if r.number not in linked and is_unsorted(r, SUSPECT_AT)
                 ]
-                return len(recent), len(waiting)
+                hunches = [
+                    r.ref
+                    for r in sorted(recent, key=lambda r: r.number)
+                    if r.kind == "hunch" and r.excerpt and INJECTION_SUSPECT not in r.flags
+                ]
+                return len(recent), len(waiting), hunches
 
-            recent, unsorted = await asyncio.to_thread(counts)
+            recent, unsorted, hunches = await asyncio.to_thread(counts)
             control.send_text(
-                app_state, scout.id, synthesis_text(recent, unsorted, spent, cap), kind="request"
+                app_state,
+                scout.id,
+                synthesis_text(recent, unsorted, spent, cap, hunches),
+                kind="request",
             )
             await events.emit(
                 app_state,
@@ -352,7 +377,7 @@ async def _scout_beats(
                 to_id=scout.id,
                 subject=SUBJECT,
                 summary=f"the server asked Scout for its weekly synthesis ({recent} signals)",
-                data={"signals": recent, "unsorted": unsorted},
+                data={"signals": recent, "unsorted": unsorted, "hunches": len(hunches)},
                 ts=now * 1000,
             )
             sent.append("synthesis")
@@ -696,6 +721,27 @@ async def _retro(
 # ── The pass ───────────────────────────────────────────────────
 
 
+def next_synthesis_at(deps: FactoryDeps, fid: str, doc: Mapping[str, Any]) -> int | None:
+    """
+    When Scout's next weekly synthesis is due (epoch seconds; synchronous), or
+    ``None`` with no live seat or the synthesis turned off. Due is not sent: a
+    factory with no signal yet skips it, and a paused or over-budget seat waits.
+    """
+    from omnigent.server.factory.discovery import seat
+
+    _sweep_h, synthesis_h = _cadence(doc)
+    if synthesis_h <= 0:
+        return None
+    scout = next((c for c in seat.scouts(deps, fid) if seat.spawn.holds_pod(c)), None)
+    if scout is None:
+        return None
+    seated = _seated_at(deps, fid, scout)
+    last = _last_s(deps, fid, KIND_SYNTHESIS)
+    if last is None or last < seated:
+        return seated + min(FIRST_SYNTHESIS_S, synthesis_h * 3600)
+    return last + synthesis_h * 3600
+
+
 async def beat_factory(app_state: Any, root: Conversation, *, now: int | None = None) -> list[str]:
     """
     Run one factory's discovery beats.
@@ -793,6 +839,7 @@ __all__ = [
     "TICK_S",
     "beat_factory",
     "budget_cap",
+    "next_synthesis_at",
     "ready_items",
     "ready_text",
     "retro_text",

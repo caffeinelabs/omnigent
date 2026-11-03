@@ -3,8 +3,10 @@
  * and how long text is kept; the three read-only layers; its usage and the
  * access log (every read, pause and resume, by whom). A source an agent
  * proposed waits for an owner: the panel shows what approving would let Scout
- * read and the proposal to approve or reject. Pausing applies at once with
- * Undo; resuming a paused source is for owners.
+ * read and the proposal to approve or reject; a listed source that waits for
+ * an owner (the starter leaves an unticked one so) says nothing reads it yet
+ * and offers an owner Approve. Pausing applies at once with Undo; resuming a
+ * paused source is for owners.
  */
 
 import { LockIcon } from "lucide-react";
@@ -136,12 +138,22 @@ function Configured({
       <section className="flex flex-col gap-1.5">
         <h3 className={EYEBROW}>In plain words</h3>
         <p className="rounded-lg border border-dashed border-border px-3 py-2 text-sm">
-          Scout can read {readsOf(source.kind, weight)}, {calls}. Emails, phone numbers and tokens
-          are removed before anyone reads it.
+          {source.state === "pending" ? "Once an owner approves it, " : ""}Scout can read{" "}
+          {readsOf(source.kind, weight)}, {calls}. Emails, phone numbers and tokens are removed
+          before anyone reads it.
           {source.keepDays != null ? ` Text is kept ${source.keepDays} days.` : ""}
           {source.state === "trial" ? " It runs a 14-day trial first, then asks “keep it?”." : ""}
         </p>
       </section>
+      {source.state === "pending" && (
+        <p
+          data-testid="source-pending"
+          className={cn("rounded-lg border px-3 py-2 text-sm", MEANING.needsYou.border)}
+        >
+          <b>Waits for an owner.</b> Nothing reads it until an owner approves it; then it runs a
+          14-day trial.
+        </p>
+      )}
       {held && (
         <p
           data-testid="source-held"
@@ -156,7 +168,7 @@ function Configured({
       <section className="flex flex-col gap-1.5">
         <h3 className={cn(EYEBROW, "flex items-center gap-2")}>
           Usage
-          {canAct && source.state !== "paused" && (
+          {canAct && source.state !== "paused" && source.state !== "pending" && (
             <Button
               type="button"
               size="sm"
@@ -283,6 +295,7 @@ export function SourcePeek({
   const source = sources.find((s) => s.id === sourceId) ?? null;
   const waiting = source ? null : (pending.find((p) => p.id === sourceId) ?? null);
   const paused = source?.state === "paused";
+  const unapproved = source?.state === "pending";
   // The server holds a source after repeated failures; any editor lifts the hold.
   const held = source != null && !paused && source.health === "failing";
   return (
@@ -296,7 +309,9 @@ export function SourcePeek({
           <span
             className={cn(
               "rounded-md px-1.5 text-xs font-medium max-[760px]:hidden",
-              waiting ? cn(MEANING.needsYou.surface, MEANING.needsYou.text) : "bg-muted",
+              waiting || unapproved
+                ? cn(MEANING.needsYou.surface, MEANING.needsYou.text)
+                : "bg-muted",
             )}
           >
             {waiting ? "waits for you" : source ? sourceStateWord(source) : ""}
@@ -305,7 +320,19 @@ export function SourcePeek({
       }
       footer={
         source && canAct ? (
-          held ? (
+          unapproved ? (
+            isOwner ? (
+              <Button
+                size="sm"
+                data-testid="source-approve"
+                onClick={() => void levers.approveSource(source.id, source.label)}
+              >
+                Approve
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">An owner approves a new source.</p>
+            )
+          ) : held ? (
             <Button
               size="sm"
               data-testid="source-lift-hold"

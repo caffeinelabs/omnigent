@@ -10,7 +10,10 @@ It is skipped when nothing happened and nothing is waiting. Someone who
 switched to the new cockpit (offered with ``OMNIGENT_FACTORY_COCKPIT_V2``)
 also gets its top bar's verdict sentence above the headline, and Needs you
 instead of Waiting on you: the rows of the one list Home shows
-(:mod:`.asks`), in its order, with what the factory handled itself.
+(:mod:`.asks`), in its order, with what the factory handled itself; while
+discovery runs for the factory, a discovery section follows with the lines of
+Home's "Learned this week" (ids and titles, never a user's words); only a line
+from the last 24 h keeps the digest from being skipped.
 """
 
 from __future__ import annotations
@@ -390,6 +393,35 @@ def _retro_line(
     return f"“{esc(newest.summary, 200)}” · {link(path, 'Findings', base)}"
 
 
+def discovery_lines(
+    deps: FactoryDeps, ctx: FactoryCtx, now: float, base: str | None
+) -> tuple[list[str], bool]:
+    """
+    The digest's discovery section: Home's "Learned this week" lines
+    (:func:`..discovery.views.learned`), each linked to what it is about. Empty
+    while discovery does not run for the factory (synchronous).
+
+    :returns: The lines, and whether one of them happened in the last 24 h
+        (only that makes the digest worth sending; older lines ride along).
+    """
+    from omnigent.server.factory import definition
+    from omnigent.server.factory.discovery import opportunities, views
+
+    if not definition.discovery_enabled(deps, ctx.factory_id):
+        return [], False
+    facts = opportunities.load_facts(deps, ctx.factory_id)
+    doc, _version = opportunities.effective_doc(deps, ctx.factory_id)
+    items = opportunities.evaluate_all(facts, doc)
+    out = []
+    fresh = False
+    for at, line in views.learned_dated(deps, ctx.factory_id, items, now=int(now)):
+        fresh = fresh or at >= now - DAY_S
+        ref = str(line.get("ref") or "")
+        path = rules.factory_path(ctx, f"/discovery?peek={ref}" if ref else "/discovery")
+        out.append(f"• {esc(str(line['text']), 200)} · {link(path, ref or 'Discovery', base)}")
+    return out, fresh
+
+
 @dataclass
 class Digest:
     """One person's digest (``lines`` are escaped mrkdwn)."""
@@ -434,7 +466,11 @@ def build_digest(
     nxt = next_line(summary, person, now, base)
     said = lead_line(summary, base)
     retro = _retro_line(deps, ctx, vis, now, base)
-    if not waiting.count and counted is None and retro is None and idle is None:
+    learned, learned_today = (
+        discovery_lines(deps, ctx, now, base) if v2 and vis.everything else ([], False)
+    )
+    quiet = not waiting.count and counted is None and retro is None and idle is None
+    if quiet and not learned_today:
         return None
     local = datetime.fromtimestamp(now, tz=prefs_mod.zone(person.prefs))
     head = (
@@ -472,11 +508,12 @@ def build_digest(
         notes.append(f"*{esc(summary['lead']['who'], 40)} said*  {said}")
     if retro:
         notes.append(f"*Sentinel*  {retro}")
+    learned_group = ["*Learned this week*", *learned] if learned else []
     settings = link(
         rules.factory_path(ctx, "/settings/notifications"), "Notification settings", base
     )
     text = esc(f"{ctx.name} daily digest: {waiting.count} waiting on you", 150)
-    blocks = message(top, settings, groups=(waits, doing, day, notes))
+    blocks = message(top, settings, groups=(waits, doing, day, learned_group, notes))
     return Digest(text=text, blocks=blocks, waiting=waiting.count)
 
 

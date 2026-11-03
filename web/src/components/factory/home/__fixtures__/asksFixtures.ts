@@ -335,7 +335,9 @@ function decisionDraft(decision: DecisionView, ctx: Ctx, inSteer: string[]): Dra
     }
     if (row) context = clip(row.rationale);
     if (kind === "bet" && row) {
-      title = `Approve a bet: ${titleText || question}`;
+      // What users get from it (the bet's outcome), as the server words it.
+      const outcome = clip(row.bet?.outcome, TITLE_MAX);
+      title = `Approve a bet: ${outcome || titleText || question}`;
       context = betContext(row, ctx);
       action = open("Review the bet");
       costText = "a bet waits for its approval";

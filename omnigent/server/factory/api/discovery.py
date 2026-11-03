@@ -6,7 +6,8 @@ owner). Everything answers ``404 discovery_off`` unless the server env
 ``OMNIGENT_FACTORY_DISCOVERY`` and the factory's ``discovery.enabled`` are on.
 
 - ``GET /discovery``: chain counts, coverage, Scout, budget, sources, goals,
-  readouts and the prediction ledger;
+  readouts and the prediction ledger, what was learned this week (the Slack
+  digest's discovery lines) and when Scout's next synthesis is due;
 - ``GET /opportunities`` (``?band=&status=&goal=&segment=&source=&q=&limit=``),
   ``GET /opportunities/{O-n}``;
 - ``PATCH /opportunities/{O-n}`` ``{op: vote|pin|park|unpark|kill|revive|merge|
@@ -78,11 +79,18 @@ async def get_discovery(request: Request, factory_id: str) -> dict[str, Any] | J
         deps, _user, root = await _root(request, factory_id)
 
         def read() -> dict[str, Any]:
+            from omnigent.server.factory.background.discovery_beats import next_synthesis_at
+
             facts = opportunities.load_facts(deps, root.id)
             doc, version = opportunities.effective_doc(deps, root.id)
             items = opportunities.evaluate_all(facts, doc)
             out = views.summary(deps, root.id, facts, items, doc=doc, def_version=version)
-            return {**out, **readouts.summary_fields(deps, root.id, now=facts.now)}
+            return {
+                **out,
+                **readouts.summary_fields(deps, root.id, now=facts.now),
+                "learned": views.learned(deps, root.id, items, now=facts.now),
+                "next_synthesis_at": next_synthesis_at(deps, root.id, doc),
+            }
 
         return await asyncio.to_thread(read)
 
