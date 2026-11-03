@@ -1,28 +1,35 @@
 // Building blocks the project page's tabs share: a titled card section and a
 // dashed empty state.
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export function SectionCard({
+  id,
   title,
   meta,
   action,
   testId,
   className,
+  style,
   children,
 }: {
+  /** An anchor an old `#section` link scrolls to. */
+  id?: string;
   title: string;
   meta?: ReactNode;
   action?: ReactNode;
   testId?: string;
   className?: string;
+  style?: CSSProperties;
   children: ReactNode;
 }) {
   return (
     <section
+      id={id}
       data-testid={testId}
       aria-label={title}
+      style={style}
       className={cn(
         "flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 max-md:p-3",
         className,

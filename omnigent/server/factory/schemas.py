@@ -982,6 +982,8 @@ class ProjectHealthView(_View):
     :param reasons: The facts that make it worse than on track.
     :param agrees: The lead's update says what the facts say (``None``: no update).
     :param stale: The lead's update is older than three hours.
+    :param budget_usd: The budget the spend fact is measured against: the team
+        spec's, else the charter's project budget (``None``: neither sets one).
     """
 
     health: ProjectHealth
@@ -991,6 +993,7 @@ class ProjectHealthView(_View):
     reasons: list[str] = Field(default_factory=list)
     agrees: bool | None = None
     stale: bool = False
+    budget_usd: float | None = None
 
 
 class ProvisioningView(_View):

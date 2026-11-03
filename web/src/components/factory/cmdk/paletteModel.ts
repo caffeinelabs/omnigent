@@ -531,6 +531,7 @@ export function hitItems(
 
 const DEBUG_VIEW_LABEL: Partial<Record<DebugView, string>> = {
   fleet: "Fleet table",
+  projects: "Projects table",
   timeline: "Timeline",
   activity: "Activity",
   graph: "Graph",

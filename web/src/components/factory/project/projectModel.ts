@@ -474,10 +474,14 @@ export function spendByMember(
     .sort((a, b) => b.usd - a.usd || a.name.localeCompare(b.name));
 }
 
-/** The project's budget, from its team spec (null when it sets none). */
+/**
+ * The project's budget: its team spec's, else the one the server measured its
+ * health against (the charter's project budget); null when neither sets one.
+ */
 export function projectBudget(project: ProjectView): number | null {
-  const spec = project.team_spec?.budget_usd;
-  if (typeof spec === "number" && spec > 0) return spec;
+  for (const value of [project.team_spec?.budget_usd, project.health?.budget_usd]) {
+    if (typeof value === "number" && value > 0) return value;
+  }
   return null;
 }
 

@@ -16,7 +16,10 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from omnigent.entities.factory import FactoryProject
+from omnigent.factory import COCKPIT_V2_ENV
 from omnigent.server.factory import lead_update, nudge, snapshot, status
+from omnigent.server.factory.charter import UPDATE_LINE, render_pl_charter
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.schemas import FactorySnapshot
 from omnigent.stores.factory_store import FactoryStore
@@ -145,6 +148,9 @@ def test_the_charter_budget_counts_when_the_team_spec_has_none() -> None:
     )
 
     assert health is not None and health["facts"] == ["budget at 90 %"]
+    assert health["budget_usd"] == 50.0
+    _, spec = lead_update.views(_project(cost_usd=45.0), None, [], [], budget_usd=50.0, now=1)
+    assert spec is not None and spec["budget_usd"] != 50.0
 
 
 # ── The route ──────────────────────────────────────────────────
@@ -182,8 +188,9 @@ def _post(api: FactoryApi, world: FactoryWorld, key: str, target: str, update: A
 
 
 async def test_the_lead_posts_its_update_on_itself(
-    api: FactoryApi, world: FactoryWorld, store: FactoryStore
+    api: FactoryApi, world: FactoryWorld, store: FactoryStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv(COCKPIT_V2_ENV, "1")
     body = {"health": "on_track", "done": "T-3 merged", "next": "T-4 in review"}
 
     resp = await _post(api, world, "pl", "pl", body)
@@ -197,6 +204,38 @@ async def test_the_lead_posts_its_update_on_itself(
     [event] = [e for e in store.list_events(world.id("lead_a")) if e.kind == "project.update"]
     assert event.project_slug == PROJECT and event.data["health"] == "on_track"
     assert event.summary.endswith(f"posted an update on {PROJECT}: on track")
+
+
+async def test_without_the_new_cockpit_an_update_is_kept_but_not_logged(
+    api: FactoryApi, world: FactoryWorld, store: FactoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(COCKPIT_V2_ENV, raising=False)
+
+    resp = await _post(api, world, "pl", "pl", {"health": "at_risk", "blocker": "CI is red"})
+
+    assert resp.status_code == 200, resp.text
+    row = store.get_project(world.id("lead_a"), PROJECT)
+    assert row is not None and row.lead_update is not None
+    assert row.lead_update["health"] == "at_risk"
+    assert [e for e in store.list_events(world.id("lead_a")) if e.kind == "project.update"] == []
+
+
+def test_the_charter_asks_for_updates_only_with_the_new_cockpit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = FactoryProject(
+        id="p1",
+        factory_id="f1",
+        slug=PROJECT,
+        title="API version endpoint (sample)",
+        repo=REPO,
+        charter={"goal": "GET /version returns the sha"},
+    )
+
+    monkeypatch.delenv(COCKPIT_V2_ENV, raising=False)
+    assert "sys_factory_set(update=" not in render_pl_charter(row)
+    monkeypatch.setenv(COCKPIT_V2_ENV, "1")
+    assert UPDATE_LINE in render_pl_charter(row).splitlines()
 
 
 async def test_only_the_projects_lead_posts_its_update(

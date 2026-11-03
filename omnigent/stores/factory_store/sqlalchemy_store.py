@@ -1863,6 +1863,7 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, FactoryStore):
         kind: str | Sequence[str] | None = None,
         limit: int = 100,
         newest_first: bool = True,
+        author_kind: str | None = None,
     ) -> builtins.list[FactoryProposal]:
         model = SqlFactoryProposal
         stmt = select(model).where(
@@ -1877,6 +1878,8 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, FactoryStore):
         kinds = as_list(kind)
         if kinds is not None:
             stmt = stmt.where(model.kind.in_([encode_factory_proposal_kind(k) for k in kinds]))
+        if author_kind is not None:
+            stmt = stmt.where(model.author_kind == encode_factory_actor_kind(author_kind))
         order = model.number.desc() if newest_first else model.number
         with self._session("list_factory_proposals") as session:
             rows = session.execute(stmt.order_by(order).limit(limit)).scalars().all()

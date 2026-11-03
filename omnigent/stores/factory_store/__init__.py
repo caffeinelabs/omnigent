@@ -1173,8 +1173,10 @@ class FactoryStore(DiscoveryStore, ABC):
         kind: str | Sequence[str] | None = None,
         limit: int = 100,
         newest_first: bool = True,
+        author_kind: str | None = None,
     ) -> builtins.list[FactoryProposal]:
         """
+        :param author_kind: Only proposals by an ``agent`` (or a ``human``).
         :returns: Proposals ordered by number. Consumers: R3-07/R3-12
             ``GET …/proposals``, the snapshot's ``proposals_pending`` and ``on_trial``.
         """
@@ -2477,6 +2479,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
         kind: str | Sequence[str] | None = None,
         limit: int = 100,
         newest_first: bool = True,
+        author_kind: str | None = None,
     ) -> builtins.list[FactoryProposal]:
         fid = norm_id(factory_id)
         statuses = as_list(status)
@@ -2488,6 +2491,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
                 if r.factory_id == fid
                 and (statuses is None or r.status in statuses)
                 and (kinds is None or r.kind in kinds)
+                and (author_kind is None or r.author_kind == author_kind)
             ]
         rows.sort(key=lambda r: r.number, reverse=newest_first)
         return rows[:limit]

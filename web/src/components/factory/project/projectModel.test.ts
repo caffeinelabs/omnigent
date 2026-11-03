@@ -26,6 +26,7 @@ import {
   healthChip,
   measurementPlan,
   opportunityFacts,
+  projectBudget,
   projectDecisions,
   projectWhy,
   projectWhyChain,
@@ -294,5 +295,23 @@ describe("gates, measurement and tabs", () => {
     const rows = spendByMember(snapshot, project);
     expect(rows[0]!.usd).toBeGreaterThanOrEqual(rows.at(-1)!.usd);
     expect(rows.map((r) => r.name)).toContain("nova");
+  });
+
+  it("takes the team spec's budget, else the one the health was measured against", () => {
+    const snapshot = projectsV2Snapshot();
+    const of = (slug: string) => snapshot.projects.find((p) => p.slug === slug)!;
+    const requested = of(REQUESTED_SLUG);
+    const health = requested.health!;
+    expect(projectBudget({ ...requested, team_spec: null })).toBe(60);
+    expect(
+      projectBudget({
+        ...requested,
+        team_spec: { ...of(EVIDENCE_SLUG).team_spec!, budget_usd: 80 },
+      }),
+    ).toBe(80);
+    expect(
+      projectBudget({ ...requested, team_spec: null, health: { ...health, budget_usd: null } }),
+    ).toBeNull();
+    expect(projectBudget({ ...requested, team_spec: null, health: null })).toBeNull();
   });
 });

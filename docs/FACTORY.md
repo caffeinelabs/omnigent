@@ -350,22 +350,35 @@ applied proposals call with the acting person, agent or the server.
   the charter (people's and agents'), each field before and after; `POST
   …/projects/{slug}/charter/revert {proposal, note?}` puts the fields one
   version changed back as they were, as a new version (MANAGE when it raises
-  a budget; 409 `nothing_to_revert` / `not_a_charter_version`). A no-op edit
-  records nothing; charter edits do not count in the proposals metric. Dark
+  a budget; 409 `nothing_to_revert` / `not_a_charter_version`). An undo puts
+  back the whole charter from before a change, so only the newest change of a
+  charter can be undone: each applied projects proposal keeps `after[slug]`
+  with a hash of the charter and priority it left, and an undo after anything
+  changed them since is 409 `undo_stale` (revert it instead); the history
+  closes Undo on every version with a newer applied change on top. A no-op
+  edit records nothing; charter edits do not count in the proposals metric,
+  and the bounded scans that read agents' proposals (planner hub files,
+  dedupe keys, an opportunity's proposals) skip people's. Dark
   by default: only while the server offers the new cockpit
   (`OMNIGENT_FACTORY_COCKPIT_V2=1`); otherwise edits apply as before and both
   routes answer 404 `charter_versions_off`.
 - **Who asked for a project** (`charter.requested_by {kind, name, proposal?}`,
-  server-written): the person who added it in the cockpit, or the author of
-  the proposal that created it (an agent's idea shows as one).
+  server-written): the person who added it in the cockpit, the author of the
+  proposal that created it, or the person whose message an agent's proposal
+  answers (an agent's own idea shows as one); split children keep whoever
+  asked for their parent.
 - **The lead's update** (`factory_projects.lead_update`). A project lead posts
   `sys_factory_set(update={health: on_track|at_risk|off_track, done, next,
   blocker})` on itself (`PATCH /v1/factory/sessions/{id}` `update`; only the
-  project's current lead, 403 `not_your_project`; 400 `invalid_update`), logged
-  as `project.update`. The snapshot's `projects[].update` is the latest one and
-  `projects[].health` the health the server computes from facts (stopped,
-  failing checks, spend against the team budget, stuck members, a blocking
-  question): the facts override the lead when they say worse, never when they
+  project's current lead, 403 `not_your_project`; 400 `invalid_update`). The
+  row always keeps it; only while the new cockpit is offered is it logged as
+  `project.update`, and only then does the PL's charter ask for it (an
+  `Updates:` line), so the classic cockpit and its PLs behave as before. The
+  snapshot's `projects[].update` is the latest one and `projects[].health` the
+  health the server computes from facts (stopped, failing checks, spend
+  against the budget, stuck members, a blocking question), with the budget it
+  measured against (`budget_usd`: the team spec's, else the charter's project
+  budget): the facts override the lead when they say worse, never when they
   say better, and an update older than 3 h is stale.
 - **Dependencies are checked by every core**: an unknown `depends_on` is 400
   `unknown_dependency`, a cycle 409 `cycle` with its path, from the cockpit

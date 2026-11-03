@@ -36,6 +36,7 @@ from omnigent.factory import (
     STATES,
     SUMMARY_MAX_LEN,
     clamp_label_value,
+    cockpit_v2_enabled,
     valid_heartbeat_s,
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
@@ -605,7 +606,10 @@ async def _record_lead_update(
     project: str,
     update: dict[str, Any],
 ) -> dict[str, Any]:
-    """Store a PL's structured update on its project row, log it and refresh open cockpits."""
+    """
+    Store a PL's structured update on its project row; while the new cockpit is
+    offered, also log it and refresh open cockpits (the classic one shows none).
+    """
     assert sender.factory_id is not None
     value = lead_update.stored(update, by=sender.session_id, at=int(time.time()))
     await asyncio.to_thread(
@@ -615,6 +619,8 @@ async def _record_lead_update(
         lead_update=value,
         pl_session_id=sender.session_id,
     )
+    if not cockpit_v2_enabled():
+        return value
     words = update["health"].replace("_", " ")
     await events.emit(
         request.app.state,

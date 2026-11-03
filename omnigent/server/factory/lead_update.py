@@ -217,6 +217,7 @@ def views(
         "reasons": reasons,
         "agrees": None if lead is None else lead == computed,
         "stale": stale,
+        "budget_usd": _budget(scoped),
     }
     return update, health
 

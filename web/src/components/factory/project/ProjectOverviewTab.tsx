@@ -27,6 +27,7 @@ import { prPageHref, projectTabHref } from "../factoryRoutes";
 import { WrapUpRating } from "../feedback/FeedbackWidgets";
 import { ReportProblemButton } from "../feedback/ReportProblem";
 import { money } from "../home/homeModel";
+import { SECTION_SCROLL_MARGIN } from "../projects/ProjectSections";
 import { IMergedItButton } from "../review/ReviewActions";
 import { useViewerCan } from "../shell/viewerCan";
 import { DATA_HUE, FOCUS_RING, MEANING } from "../ui/statusTokens";
@@ -438,8 +439,10 @@ export function ProjectOverviewTab({
       <div className="flex min-w-0 flex-col gap-4">
         {open.length > 0 && (
           <SectionCard
+            id="decisions"
             title="Waiting on you"
             testId="project-waiting"
+            style={{ scrollMarginTop: SECTION_SCROLL_MARGIN }}
             className={MEANING.needsYou.border}
             meta="the same asks as on Home; answer them in either place"
           >

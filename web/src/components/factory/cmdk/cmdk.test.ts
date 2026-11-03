@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Ask } from "@/lib/factoryAsksApi";
 import type { SearchHit } from "@/lib/factoryPaletteApi";
 import { teamMember, teamRows } from "../agents/teamsModel";
+import { DEBUG_VIEWS } from "../factoryRoutes";
 import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { TEAM_SLUG, teamCatalog, teamSnapshot } from "../team/__fixtures__/teamFixtures";
 import {
@@ -338,6 +339,14 @@ describe("arrangePalette", () => {
     const places = placeItems(TFID).filter((i) => i.group === "places");
     const sections = arrangePalette("", [...places, ...askItems([ask])], [verb("Toggle theme")]);
     expect(sections.map((s) => s.group)).toEqual(["needs", "actions", "places"]);
+  });
+
+  it("lists every Debug view but one agent's page, the Projects table included", () => {
+    const debug = placeItems(TFID).filter((i) => i.group === "debug");
+    expect(debug.map((i) => i.key)).toEqual(
+      DEBUG_VIEWS.filter((v) => v !== "agent").map((v) => `page:debug:${v}`),
+    );
+    expect(debug.find((i) => i.key === "page:debug:projects")!.title).toBe("Projects table");
   });
 });
 

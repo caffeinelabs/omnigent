@@ -386,16 +386,6 @@ Review: APPROVE @<sha7> · Verify: PASS in preview p<n> | n/a (factory:no-env) �
 Next: <next milestone or DONE>
 ```
 
-## Project update (`sys_factory_set(update=…)`)
-
-With each stage claim, after each milestone and whenever the outlook changes,
-post one update on yourself:
-`sys_factory_set(update={health: "on_track"|"at_risk"|"off_track", done: "<one line>", next: "<one line>", blocker: "<one line, or leave it out>"})`.
-The cockpit shows it as the project's latest update, next to the health the
-server computes from facts (checks, budget, stuck members). The facts win when
-they say worse, so say `at_risk` yourself when you see it coming. If your
-`sys_factory_set` has no `update` argument, skip this.
-
 ## Pause, resume and done
 
 - **PAUSE** (`[Factory control · PAUSE …]`):

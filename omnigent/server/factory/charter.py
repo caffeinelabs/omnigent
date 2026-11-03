@@ -25,6 +25,7 @@ from omnigent.factory import (
     PROJECT_SLUG_RE,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
+    cockpit_v2_enabled,
 )
 
 _logger = logging.getLogger(__name__)
@@ -397,6 +398,7 @@ def render_pl_charter(
         f"IC budget: up to {ics} ICs at once" + (" (the team's builders at once)" if team else ""),
         *(team.lines if team is not None else ()),
         *_optional_lines(charter),
+        *_update_lines(),
         # Before the profile's lists: a brief cut at its length limit keeps it.
         f"Merge policy: {_merge_policy(repo, delivery or {})} Report READY FOR HUMAN MERGE "
         "<url> to your lead once every gate is green; never run `gh pr merge` or the merge "
@@ -533,6 +535,21 @@ def _optional_lines(charter: Mapping[str, Any]) -> list[str]:
         ]
         lines.append(f"Budgets: {' · '.join(parts)}")
     return lines
+
+
+UPDATE_LINE: Final = (
+    "Updates: with each stage claim, after each milestone and when the outlook changes, "
+    'post one on yourself: sys_factory_set(update={health: "on_track"|"at_risk"|"off_track", '
+    "done, next, blocker}), one line each. The cockpit shows it next to the health the "
+    "facts give (checks, budget, stuck members); the facts win when they say worse. "
+    "If your sys_factory_set has no update argument, skip this."
+)
+"""The charter line that asks a PL for its update, while the new cockpit shows it."""
+
+
+def _update_lines() -> list[str]:
+    """The update line, only while the server offers the new cockpit (nobody sees it else)."""
+    return [UPDATE_LINE] if cockpit_v2_enabled() else []
 
 
 def project_depends_on(project: FactoryProject) -> tuple[list[str], str]:
@@ -683,6 +700,7 @@ __all__ = [
     "SPAWN_LEAD",
     "SPAWN_OWNERS",
     "SPAWN_SERVER",
+    "UPDATE_LINE",
     "WHY_KEYS",
     "TeamBlock",
     "normalize_charter",

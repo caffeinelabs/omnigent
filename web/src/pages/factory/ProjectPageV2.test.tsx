@@ -213,6 +213,24 @@ describe("the project page (new cockpit)", () => {
     expect(await screen.findByTestId("project-charter-history")).toHaveTextContent("C-34");
   });
 
+  it("lands an old #activity link on the activity card of History", async () => {
+    const { snapshot } = serve();
+    renderAt(snapshot, `/projects/${EVIDENCE_SLUG}#activity`);
+    const card = await screen.findByTestId("project-activity");
+    expect(location).toBe(
+      `/factory/${snapshot.factory.id}/projects/${EVIDENCE_SLUG}/history#activity`,
+    );
+    expect(document.getElementById("activity")).toBe(card);
+  });
+
+  it("lands an old #decisions link on the Overview's Waiting on you card", async () => {
+    const { snapshot } = serve({ snapshot: { question: true } });
+    renderAt(snapshot, `/projects/${REQUESTED_SLUG}#decisions`);
+    const card = await screen.findByTestId("project-waiting");
+    expect(location).toBe(`/factory/${snapshot.factory.id}/projects/${REQUESTED_SLUG}#decisions`);
+    expect(document.getElementById("decisions")).toBe(card);
+  });
+
   it("keeps the team editor route, and sends a bad tab to the overview", async () => {
     const { snapshot } = serve();
     renderAt(snapshot, `/projects/${EVIDENCE_SLUG}/nowhere`);

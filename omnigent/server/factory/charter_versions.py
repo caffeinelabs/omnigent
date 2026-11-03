@@ -179,7 +179,7 @@ async def edit(
     stored = await asyncio.to_thread(
         lambda: store.update_proposal(
             version.id,
-            after={slug: {"charter": row.charter, "priority": row.priority}},
+            after={slug: proposals.after_state(row)},
             result={
                 RESULT_FLAG: True,
                 "updated": [slug],
@@ -355,6 +355,10 @@ def history(deps: FactoryDeps, factory_id: str, slug: str, *, now: int) -> list[
     """
     Every applied (or undone) change of a project's charter, newest first.
 
+    Only the newest applied change can be undone: an undo puts back the whole
+    charter from before it, so an older one with a newer change on top is
+    reverted (field by field) instead.
+
     :returns: Rows ``{ref, status, op, title, by, by_kind, at, undo_until,
         revert_of, rationale, changes: [{field, before, after}], revertible}``.
     """
@@ -362,14 +366,19 @@ def history(deps: FactoryDeps, factory_id: str, slug: str, *, now: int) -> list[
         factory_id, status=list(HISTORY_STATUSES), kind=proposals.KIND_PROJECTS, limit=_SCAN
     )
     out: list[dict[str, Any]] = []
+    covered = False
     for row in rows:
         op = _touch(row, slug)
         if op is None:
             continue
         result = row.result or {}
         open_undo = (
-            row.status == "applied" and row.undo_until is not None and now <= row.undo_until
+            not covered
+            and row.status == "applied"
+            and row.undo_until is not None
+            and now <= row.undo_until
         )
+        covered = covered or row.status == "applied"
         changes = _field_changes(row, slug) if op == "update" else []
         out.append(
             {

@@ -881,6 +881,11 @@ export interface ProjectHealthView {
   agrees: boolean | null;
   /** The lead's update is older than three hours. */
   stale: boolean;
+  /**
+   * The budget the spend fact is measured against: the team spec's, else the
+   * charter's project budget (null: neither sets one).
+   */
+  budget_usd?: number | null;
 }
 
 /**

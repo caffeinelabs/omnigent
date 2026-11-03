@@ -243,6 +243,7 @@ export function projectsV2Snapshot(options: ProjectV2Options = {}): FactorySnaps
       reasons: ["1 member stuck"],
       agrees: false,
       stale: Boolean(options.staleUpdate),
+      budget_usd: 60,
     },
   };
   const requested: ProjectView = {
@@ -272,6 +273,8 @@ export function projectsV2Snapshot(options: ProjectV2Options = {}): FactorySnaps
       reasons: [],
       agrees: true,
       stale: false,
+      // The charter's project budget: this project's team spec sets none.
+      budget_usd: 60,
     },
   };
   const stopped: ProjectView = {
@@ -321,6 +324,7 @@ export function projectsV2Snapshot(options: ProjectV2Options = {}): FactorySnaps
       reasons: [],
       agrees: null,
       stale: false,
+      budget_usd: 38,
     },
   };
   const shipped: ProjectView = {

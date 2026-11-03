@@ -299,6 +299,30 @@ def fingerprint(row: FactoryProject) -> str:
     return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:24]
 
 
+def charter_hash(charter: Mapping[str, Any] | None, priority: int | None) -> str:
+    """
+    :returns: A hash of the charter and priority a change left behind, for an
+        undo to see whether anything changed them since (who spawns the PL and
+        the preview tooling ref are the server's, not a change's).
+    """
+    data = normalize_charter(charter)
+    data.pop("spawn_owner", None)
+    preview = data.get("preview")
+    if isinstance(preview, Mapping):
+        data["preview"] = {k: v for k, v in preview.items() if k != "tooling_ref"}
+    body = {"charter": data, "priority": priority}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:24]
+
+
+def after_state(row: FactoryProject) -> dict[str, Any]:
+    """:returns: A proposal's ``after[slug]``: the charter and priority it left, and their hash."""
+    return {
+        "charter": row.charter,
+        "priority": row.priority,
+        "hash": charter_hash(row.charter, row.priority),
+    }
+
+
 def _protected_repos(deps: FactoryDeps, factory_id: str) -> frozenset[str]:
     """:returns: The profile's protected repos and the always-denied ones (lowercase)."""
     from omnigent.policies.builtins.factory import always_deny_repos
@@ -1406,7 +1430,10 @@ def _is_uuid(value: str) -> bool:
 
 
 def _by_dedupe(deps: FactoryDeps, factory_id: str, key: str) -> FactoryProposal | None:
-    for row in deps.factory_store.list_proposals(factory_id, kind=KIND_PROJECTS, limit=500):
+    # Only agents send dedupe keys; a person's charter edits must not crowd them out.
+    for row in deps.factory_store.list_proposals(
+        factory_id, kind=KIND_PROJECTS, limit=500, author_kind="agent"
+    ):
         if row.dedupe_key == key:
             return row
     return None
@@ -1689,6 +1716,16 @@ def _before(deps: FactoryDeps, root: Conversation, plan: Plan) -> dict[str, Any]
     return out
 
 
+def _after(deps: FactoryDeps, root: Conversation, before: Mapping[str, Any]) -> dict[str, Any]:
+    """:returns: ``{slug: after_state}`` of each project the proposal updated, once applied."""
+    out: dict[str, Any] = {}
+    for slug in before:
+        row = deps.factory_store.get_project(root.id, slug)
+        if row is not None:
+            out[slug] = after_state(row)
+    return out
+
+
 def _record_start(result: dict[str, Any], slug: str, started: projects.Started) -> None:
     if started.path == "held":
         result["held"][slug] = list(started.waiting_on)
@@ -1767,12 +1804,15 @@ async def apply_now(
     slots = {p.slug for p in rows if projects.holds_cap_slot(p)}
     try:
         inherited = await asyncio.to_thread(_split_whys, deps, root, row, plan)
+        askers = await asyncio.to_thread(_split_askers, deps, root, plan)
         for i, change in enumerate(plan.changes):
             closing = sum(_closes(c, slots) for c in plan.changes[i + 1 :])
             await _apply_change(
                 app_state, root, change, actor, user_id, ref, result, created, closing
             )
-        created = await asyncio.to_thread(_freeze_why, deps, row, created, actor, now, inherited)
+        created = await asyncio.to_thread(
+            _freeze_why, deps, row, created, actor, now, inherited, askers
+        )
         if why_slugs := [p.slug for p in created if (p.charter or {}).get("why")]:
             result["why"] = why_slugs
         for project in created:
@@ -1802,7 +1842,10 @@ async def apply_now(
             data={**actor.event_data(), "proposal_id": row.id, "error": code, "partial": result},
         )
         raise
-    await asyncio.to_thread(lambda: store.update_proposal(row.id, result=result))
+    after = await asyncio.to_thread(_after, deps, root, before)
+    await asyncio.to_thread(
+        lambda: store.update_proposal(row.id, result=result, after=after or None)
+    )
     by = projects.actor_name(actor)
     await events.emit(
         app_state,
@@ -1847,6 +1890,24 @@ def _split_whys(
     return out
 
 
+def _split_askers(deps: FactoryDeps, root: Conversation, plan: Plan) -> dict[str, dict[str, str]]:
+    """
+    Who asked for each split child: whoever asked for its parent, read before
+    the split closes the parent (the split's author only splits the work).
+
+    :returns: ``{child slug: requested_by}``.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for change in plan.changes:
+        if change.op != "split" or not change.slug:
+            continue
+        parent = deps.factory_store.get_project(root.id, change.slug)
+        asker = normalize_charter(parent.charter).get("requested_by") if parent else None
+        if asker:
+            out.update({child.slug: asker for child in change.creates})
+    return out
+
+
 def _freeze_why(
     deps: FactoryDeps,
     row: FactoryProposal,
@@ -1854,20 +1915,25 @@ def _freeze_why(
     actor: Actor,
     now: int,
     inherited: Mapping[str, dict[str, Any]] | None = None,
+    askers: Mapping[str, dict[str, str]] | None = None,
 ) -> list[FactoryProject]:
     """
     Freeze the proposal's bet into ``charter.why`` of each project it created,
-    before their PLs start (the bet's outcome fills an unset ``charter.outcome``).
-    A split child of a project with a why keeps that why when the split has no bet.
+    before their PLs start (the bet's outcome fills an unset ``charter.outcome``),
+    and record who asked for it in ``charter.requested_by``.
+    A split child of a project with a why keeps that why when the split has no bet,
+    and always keeps who asked for its parent.
 
     :param inherited: ``{child slug: why}`` from :func:`_split_whys`.
+    :param askers: ``{child slug: requested_by}`` from :func:`_split_askers`.
     :returns: The created rows as stored now.
     """
     frozen = bets.frozen_why(row, by=projects.actor_name(actor), at=now)
-    asker = _requester(deps, row)
+    author = _requester(deps, row)
     out: list[FactoryProject] = []
     for project in created:
         why = (inherited or {}).get(project.slug) or frozen
+        asker = (askers or {}).get(project.slug) or author
         charter = normalize_charter(project.charter)
         if why is None and charter.get("requested_by") == asker:
             out.append(project)
@@ -1883,10 +1949,14 @@ def _freeze_why(
 
 
 def _requester(deps: FactoryDeps, row: FactoryProposal) -> dict[str, str]:
-    """Who asked for the projects a proposal creates: its author, not whoever applied it."""
-    if row.author_kind == "agent":
+    """
+    Who asked for the projects a proposal creates: its author, or the person
+    whose message an agent's proposal answers; never whoever applied it.
+    """
+    if row.author_kind == "agent" and not row.on_behalf_of:
         return {"kind": "agent", "name": _title_of(deps, row.author), "proposal": row.ref}
-    return {"kind": "human", "name": control.human_name(row.author), "proposal": row.ref}
+    person = row.on_behalf_of if row.author_kind == "agent" else row.author
+    return {"kind": "human", "name": control.human_name(person), "proposal": row.ref}
 
 
 def _closes(change: Change, slots: set[str]) -> int:
@@ -2280,6 +2350,17 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
                 f"{label} can no longer be undone: project {slug!r} is {state}",
                 project=slug,
             )
+        if _changed_since(row, slug, current):
+            newer = await asyncio.to_thread(_newer_updates, deps, root.id, row, slug)
+            since = f" ({', '.join(newer)})" if newer else ""
+            raise CockpitError(
+                409,
+                "undo_stale",
+                f"{label} can no longer be undone: the charter of {slug!r} changed since"
+                f"{since}; revert it instead",
+                project=slug,
+                newer=newer,
+            )
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     try:
         row = (
@@ -2332,6 +2413,33 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
     )
     _tell_proposer(app_state, row, closed_text(label, "undone", by), None)
     return await asyncio.to_thread(proposal_view, deps, row)
+
+
+def _changed_since(row: FactoryProposal, slug: str, current: FactoryProject) -> bool:
+    """
+    Whether *slug*'s charter or priority changed after *row* applied, so its
+    ``before`` would wipe the newer change (a row that kept no ``after`` cannot say).
+    """
+    after = (row.after or {}).get(slug)
+    if not isinstance(after, Mapping):
+        return False
+    expected = after.get("hash") or charter_hash(after.get("charter"), after.get("priority"))
+    return expected != charter_hash(current.charter, current.priority)
+
+
+def _newer_updates(
+    deps: FactoryDeps, factory_id: str, row: FactoryProposal, slug: str
+) -> list[str]:
+    """:returns: Refs of the applied proposals after *row* that update *slug*, oldest first."""
+    found = [
+        other.ref
+        for other in deps.factory_store.list_proposals(
+            factory_id, status="applied", kind=KIND_PROJECTS, limit=200
+        )
+        if other.number > row.number
+        and any(op.get("op") == "update" and op.get("slug") == slug for op in other.ops or [])
+    ]
+    return found[::-1][:3]
 
 
 async def withdraw(app_state: Any, caller: AgentCaller, ref: str) -> dict:
@@ -2524,10 +2632,12 @@ __all__ = [
     "ProposalAnswer",
     "ProposalIn",
     "Request",
+    "after_state",
     "answer",
     "applied_text",
     "apply_graceful",
     "apply_now",
+    "charter_hash",
     "check_based_on",
     "closed_text",
     "cosign",

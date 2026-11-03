@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { ActivityList } from "../activity/ActivityList";
 import { formatElapsed } from "../factoryFormat";
 import { projectTabHref } from "../factoryRoutes";
+import { SECTION_SCROLL_MARGIN } from "../projects/ProjectSections";
 import { TeamHistory } from "../team/TeamHistory";
 import type { StagedTeamChange } from "../team/teamModel";
 import { stageTeamChanges, teamEditorHref } from "../team/teamStaging";
@@ -112,7 +113,12 @@ export function ProjectHistoryTab({
           </Link>
         </SectionCard>
       </div>
-      <SectionCard title="Recent activity" testId="project-activity">
+      <SectionCard
+        id="activity"
+        title="Recent activity"
+        testId="project-activity"
+        style={{ scrollMarginTop: SECTION_SCROLL_MARGIN }}
+      >
         <ActivityList
           factoryId={fid}
           projects={snapshot.projects}

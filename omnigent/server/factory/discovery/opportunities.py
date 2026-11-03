@@ -182,7 +182,10 @@ def load_facts(
         by_opportunity.setdefault(link.opportunity, []).append(link)
     refs = {r.ref for r in rows}
     proposals: dict[str, list[Any]] = {}
-    for proposal in store.list_proposals(factory_id, kind="projects", limit=1000):
+    # Only agents' proposals answer an opportunity; people's charter edits are skipped.
+    for proposal in store.list_proposals(
+        factory_id, kind="projects", limit=1000, author_kind="agent"
+    ):
         if proposal.opportunity in refs:
             proposals.setdefault(str(proposal.opportunity), []).append(proposal)
     projects: dict[str, list[Any]] = {}

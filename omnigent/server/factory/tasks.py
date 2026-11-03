@@ -370,11 +370,14 @@ def hub_files(deps: FactoryDeps, factory_id: str) -> dict[str, list[str]]:
     Project slug → hub files a planner analysis flagged (best effort, never raises).
 
     Reads the ``hub_files`` of each projects proposal's analysis (overall, or
-    under ``projects.<slug>``) for the projects its ops touch.
+    under ``projects.<slug>``) for the projects its ops touch. Only agents
+    file analyses, so a person's charter edits never crowd them out.
     """
     out: dict[str, list[str]] = defaultdict(list)
     try:
-        proposals = deps.factory_store.list_proposals(factory_id, kind="projects", limit=50)
+        proposals = deps.factory_store.list_proposals(
+            factory_id, kind="projects", limit=50, author_kind="agent"
+        )
     except Exception:  # noqa: BLE001 - no analysis, no hub warnings
         return {}
     for proposal in proposals:
