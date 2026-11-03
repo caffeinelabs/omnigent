@@ -400,6 +400,10 @@ def test_a_ready_pr_of_the_task_waits_on_a_person_to_merge_it() -> None:
 TARGET = frozenset({("sample-org/sample-app", "main")})
 
 
+def _branch(slug: str) -> str:
+    return f"factory/{slug}/route"
+
+
 def test_a_merge_the_server_makes_itself_needs_no_person() -> None:
     """An owner-set auto-merge target: the server merges, nobody is asked."""
     rows = [
@@ -407,25 +411,28 @@ def test_a_merge_the_server_makes_itself_needs_no_person() -> None:
         project("db", stage="ready"),
         project("ui", charter={"goal": "g", "depends_on": ["db: reads its table"]}),
     ]
-    mine = pr(40, "api", ready=True, ready_at=NOW - HOUR, base_ref="main")
-    theirs = pr(41, "db", ready=True, ready_at=NOW - HOUR, base_ref="main")
+    mine = pr(40, "api", ready=True, ready_at=NOW - HOUR, base_ref="main", head_ref=_branch("api"))
+    theirs = pr(41, "db", ready=True, ready_at=NOW - HOUR, base_ref="main", head_ref=_branch("db"))
     t1 = task(1, "api", "route", state="review", pr_id=mine.id)
-    found = facts(projects=rows, prs=[mine, theirs], tasks=[t1], auto_merge=TARGET)
+    found = facts(projects=rows, prs=[mine, theirs], tasks=[t1], targets=TARGET)
     (merge,) = waits.task_waits(t1, found)
     assert (merge.kind, merge.who, merge.person) == ("merge", "the server", False)
     assert merge.label == "waiting on the server to merge PR #40"
     (dep,) = waits.project_waits(rows[2], found)
     assert (dep.kind, dep.ref, dep.who, dep.person) == ("merge", "db", "the server", False)
     assert dep.label == "waiting on the server to merge db · reads its table"
-    # Another base is still a person's merge.
-    other = facts(projects=rows, prs=[mine, theirs], tasks=[t1], auto_merge=frozenset())
+    # No target (or no merger on this server), or a PR off a non-factory branch: a person.
+    other = facts(projects=rows, prs=[mine, theirs], tasks=[t1], targets=frozenset())
     assert waits.project_waits(rows[2], other)[0].person
+    by_hand = pr(41, "db", ready=True, ready_at=NOW - HOUR, base_ref="main", head_ref="fix-it")
+    manual = facts(projects=rows, prs=[mine, by_hand], tasks=[t1], targets=TARGET)
+    assert waits.project_waits(rows[2], manual)[0].who == "an operator"
 
 
 def test_a_hold_on_a_ready_pr_into_a_target_is_not_on_purpose() -> None:
-    ready = pr(40, "db", ready=True, ready_at=NOW - HOUR, base_ref="main")
+    ready = pr(40, "db", ready=True, ready_at=NOW - HOUR, base_ref="main", head_ref=_branch("db"))
     held = task(1, "api", "route", state="running", hold=_hold_on("PR #40"))
-    found = facts(projects=[project("api"), project("db")], prs=[ready], auto_merge=TARGET)
+    found = facts(projects=[project("api"), project("db")], prs=[ready], targets=TARGET)
     wait = waits.explicit_hold(held, found)
     assert wait is not None and not wait.on_purpose
     assert wait.label == "T-1 held: waiting on the server to merge PR #40"

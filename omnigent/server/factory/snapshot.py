@@ -1256,11 +1256,13 @@ def _waiting_views(
     project_pl: Mapping[str, str | None],
     now: float,
     open_tasks: Sequence[FactoryTask],
+    targets: auto_merge.Targets = frozenset(),
 ) -> None:
     """
     Each live project's ``waiting_on``: why it is not moving (in place; never raises).
 
     :param open_tasks: The factory's open tasks, as the snapshot read them.
+    :param targets: The auto-merge targets the server merges into now.
     """
     try:
         bad = deps.factory_store.list_loops(factory_id, states=sorted(waits.BAD_LOOP_STATES))
@@ -1273,6 +1275,7 @@ def _waiting_views(
             loops=bad,
             leads=project_pl,
             now=now,
+            targets=targets,
         )
     except Exception:  # noqa: BLE001 - the cards render without it
         _logger.warning("factory snapshot: no waits for %s", factory_id, exc_info=True)
@@ -1524,6 +1527,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         project_pl,
         now,
         open_tasks,
+        targets,
     )
     for pr, view in zip(loaded.prs, pr_views, strict=True):
         view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")

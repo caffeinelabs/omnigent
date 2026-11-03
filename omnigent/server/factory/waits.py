@@ -156,8 +156,9 @@ class Facts:
     :param tasks: Its open tasks (closed ones may be given too; they never hold).
     :param loops: Its bad loops (stalled, exhausted, thrashing).
     :param leads: Project slug -> its lead's session id (the lead-asked rule).
-    :param auto_merge: The owner-set auto-merge targets, ``(lowercase owner/repo,
-        base)``: a ready PR into one waits on the server, not a person.
+    :param targets: The owner-set auto-merge targets the server merges into now
+        (:func:`auto_targets`): a ready factory PR into one waits on the server,
+        not a person.
     """
 
     projects: Mapping[str, FactoryProject] = field(default_factory=dict)
@@ -168,7 +169,7 @@ class Facts:
     loops: Sequence[FactoryLoop] = ()
     leads: Mapping[str, str | None] = field(default_factory=dict)
     now: float = 0.0
-    auto_merge: frozenset[tuple[str, str]] = frozenset()
+    targets: frozenset[tuple[str, str]] = frozenset()
     _decisions_by_number: dict[int, FactoryDecision] = field(init=False, repr=False)
     _decisions_by_id: dict[str, FactoryDecision] = field(init=False, repr=False)
     _proposals_by_number: dict[int, FactoryProposal] = field(init=False, repr=False)
@@ -223,12 +224,15 @@ class Facts:
         now: float,
         *,
         tasks: Sequence[FactoryTask] | None = None,
+        targets: frozenset[tuple[str, str]] = frozenset(),
     ) -> Facts:
         """
         Read what the waits need (synchronous; a handful of row reads).
 
         :param tasks: The factory's tasks when the caller already read them (only
             the open ones are kept); else the open tasks are read.
+        :param targets: The auto-merge targets (:func:`auto_targets`; none: a
+            person merges every PR).
         """
         store = deps.factory_store
         projects = {p.slug: p for p in store.list_projects(factory_id)}
@@ -248,6 +252,7 @@ class Facts:
             loops=store.list_loops(factory_id, states=sorted(BAD_LOOP_STATES)),
             leads=project_leads(deps, factory_id, projects.values()),
             now=now,
+            targets=targets,
         )
 
     def decision(self, number: int) -> FactoryDecision | None:
@@ -292,10 +297,12 @@ class Facts:
         return max(found, key=lambda p: p.created_at) if found else None
 
     def merges_itself(self, pr: FactoryPr) -> bool:
-        """:returns: Whether the server merges *pr* when ready (an owner-set target)."""
-        if not pr.repo or not pr.base_ref:
+        """:returns: Whether the server, not a person, merges *pr* once it is ready."""
+        if not self.targets:
             return False
-        return (pr.repo.strip().lower(), pr.base_ref.strip()) in self.auto_merge
+        from omnigent.server.factory import auto_merge
+
+        return auto_merge.merges_itself(pr, self.targets, self.projects.get(pr.project_slug or ""))
 
     def asker(self, decision: FactoryDecision) -> str | None:
         """:returns: The normalized session id that asked *decision*, else ``None``."""
@@ -337,6 +344,21 @@ def _norm_or_none(value: str | None) -> str | None:
         return None
 
 
+def auto_targets(app_state: Any, deps: FactoryDeps, factory_id: str) -> frozenset[tuple[str, str]]:
+    """
+    The owner-set auto-merge targets the server merges into now: none while
+    this server runs no merger (a person merges, as before). Never raises.
+    """
+    from omnigent.server.factory import auto_merge
+
+    try:
+        if app_state is None or not auto_merge.merger_on(app_state):
+            return frozenset()
+        return auto_merge.factory_targets(deps, factory_id)
+    except Exception:  # noqa: BLE001 - a person merges: the waits say so
+        return frozenset()
+
+
 def project_leads(
     deps: FactoryDeps, factory_id: str, projects: Iterable[FactoryProject]
 ) -> dict[str, str | None]:
@@ -355,7 +377,8 @@ def project_leads(
         for member in factory_members(factory_id, deps.conversation_store):
             slug = member.labels.get(LABEL_PROJECT)
             if (
-                slug in missing
+                slug is not None
+                and slug in missing
                 and member.labels.get(LABEL_ROLE) == ROLE_PROJECT_LEAD
                 and not is_gone(member)
             ):
@@ -1187,6 +1210,7 @@ __all__ = [
     "Facts",
     "HoldRef",
     "Wait",
+    "auto_targets",
     "capacity_wait",
     "clip",
     "decision_label",

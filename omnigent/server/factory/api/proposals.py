@@ -20,6 +20,7 @@ Refusals render as ``{"error": {code, message, field?}, ...}``.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal, TypeVar
@@ -130,8 +131,13 @@ async def get_agent_projects(
         rows = await asyncio.to_thread(store.list_projects, caller.factory_id)
         prs = await asyncio.to_thread(store.list_prs, caller.factory_id)
         by_slug = {p.slug: p for p in rows}
+        targets = await asyncio.to_thread(
+            waits.auto_targets, request.app.state, caller.deps, caller.factory_id
+        )
         facts = await asyncio.to_thread(
-            waits.Facts.load, caller.deps, caller.factory_id, time.time()
+            functools.partial(
+                waits.Facts.load, caller.deps, caller.factory_id, time.time(), targets=targets
+            )
         )
         if role == ROLE_PROJECT_LEAD:
             rows = [p for p in rows if p.slug == caller.membership.project]

@@ -396,6 +396,52 @@ def test_decisions_the_server_closed_are_not_counted_as_answered() -> None:
     assert signals.decisions == 1
 
 
+async def test_a_dependent_of_a_pr_the_server_merges_waits_on_the_server(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An owner-set auto-merge target: the dependent waits on the server, nobody is asked."""
+    from omnigent.server.factory import auto_merge
+
+    target = frozenset({(REPO.lower(), "develop")})
+    monkeypatch.setattr(auto_merge, "merger_on", lambda _state: True)
+    monkeypatch.setattr(auto_merge, "targets_of", lambda _delivery: target)
+    cockpit.store.upsert_project(
+        cockpit.fid, "ux-badge-copy", title="badge", repo=REPO, charter={"goal": "g"}
+    )
+    pr, _ = cockpit.store.upsert_pr(
+        cockpit.fid,
+        REPO,
+        601,
+        project_slug="ux-badge-copy",
+        title="PR 601",
+        head_sha="b" * 40,
+        head_ref="factory/ux-badge-copy/badge",
+        base_ref="develop",
+    )
+    cockpit.store.update_pr(pr.id, ready=True, ready_at=int(time.time()) - 600)
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        "panel-ux",
+        title="Panel",
+        repo=REPO,
+        charter={"goal": "panel", "depends_on": ["ux-badge-copy: reuses its badge"]},
+    )
+    raw = await snapshot.build_snapshot(cockpit.app.state, cockpit.world.get("lead_a"))
+    view = next(p for p in raw.body["projects"] if p["slug"] == "panel-ux")
+    [wait] = view["waiting_on"]
+    assert wait["label"] == "waiting on the server to merge ux-badge-copy · reuses its badge"
+    assert (wait["kind"], wait["who"], wait["person"]) == ("merge", "the server", False)
+    body = asks.asks_from_raw(cockpit.deps, cockpit.fid, raw, None, None, time.time())
+    assert not [a for a in body["asks"] if a["kind"] == "merge"]
+    listed = await cockpit.client.get(
+        "/v1/factory/agent/projects",
+        params={"from_session_id": cockpit.world.id("lead_a")},
+        headers={"X-Test-User": "alice"},
+    )
+    row = next(p for p in listed.json()["projects"] if p["slug"] == "panel-ux")
+    assert [(w["who"], w["person"]) for w in row["waits"]] == [("the server", False)]
+
+
 # ── Incidents of closed projects (FX-11) ───────────────────────
 
 

@@ -1803,13 +1803,18 @@ async def edit_task(
     now = int(time.time())
     if body.cancel and body.hold is not None:
         raise CockpitError(400, "invalid_body", "a cancelled task cannot be held", field="hold")
+    targets = (
+        await asyncio.to_thread(waits.auto_targets, app_state, deps, factory_id)
+        if "hold" in body.model_fields_set
+        else frozenset()
+    )
 
     def run() -> tuple[FactoryTask, FactoryTask, Write | None, _HoldWrite | None]:
         task = resolve_task_ref(deps, factory_id, ref)
         held: _HoldWrite | None = None
         if "hold" in body.model_fields_set and (body.hold is not None or task.hold):
             # The hold is checked before anything is written: a refused one changes nothing.
-            facts = waits.Facts.load(deps, factory_id, now)
+            facts = waits.Facts.load(deps, factory_id, now, targets=targets)
             record = (
                 hold_of_input(task, body.hold, actor, now, facts)
                 if body.hold is not None
@@ -2037,9 +2042,10 @@ async def hold_task(
     """
     deps = factory_deps(app_state)
     now = int(time.time())
+    targets = await asyncio.to_thread(waits.auto_targets, app_state, deps, factory_id)
 
     def run() -> tuple[FactoryTask, dict[str, Any] | None, bool, waits.Facts]:
-        facts = waits.Facts.load(deps, factory_id, now)
+        facts = waits.Facts.load(deps, factory_id, now, targets=targets)
         current = deps.factory_store.get_task(task.id) or task
         if hold is None:
             if not current.hold:
@@ -2101,7 +2107,9 @@ async def sweep_holds(
     deps = factory_deps(app_state)
 
     def run() -> list[tuple[FactoryTask, dict[str, Any], str, bool]]:
-        found = facts or waits.Facts.load(deps, factory_id, now)
+        found = facts or waits.Facts.load(
+            deps, factory_id, now, targets=waits.auto_targets(app_state, deps, factory_id)
+        )
         out: list[tuple[FactoryTask, dict[str, Any], str, bool]] = []
         for seen in candidates:
             current = deps.factory_store.get_task(seen.id)

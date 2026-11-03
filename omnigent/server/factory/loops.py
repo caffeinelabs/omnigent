@@ -486,6 +486,8 @@ class Ctx:
     """Tasks read with a hold this pass (the hold sweep re-checks them)."""
     facts: waits.Facts | None = None
     """What the pass read of the tasks' waits, when it read them."""
+    targets: frozenset[tuple[str, str]] = frozenset()
+    """The auto-merge targets the server merges into now (merge waits name the server)."""
 
     @property
     def store(self) -> Any:
@@ -2261,8 +2263,9 @@ async def tick(
         try:
             mine = [m for m in members if norm_id(m.labels.get(LABEL_ID) or "") == factory_id]
             await asyncio.to_thread(_mirror_mode, deps, factory_id, mine)
+            targets = await asyncio.to_thread(waits.auto_targets, app_state, deps, factory_id)
             async with lock(factory_id):
-                ctx = Ctx(deps, factory_id, at)
+                ctx = Ctx(deps, factory_id, at, targets=targets)
                 await asyncio.to_thread(tick_sync, ctx)
             await apply(app_state, ctx)
             await tasks.sweep_holds(app_state, factory_id, ctx.held, now=at, facts=ctx.facts)
@@ -2402,7 +2405,7 @@ def tick_sync(ctx: Ctx) -> None:
     by_task = {norm_id(t.id): t for t in rows}
     close_ended(ctx, projects, by_task)
     ctx.held = [t for t in rows if t.hold]
-    reader = task_pulse.Reader(ctx.deps, ctx.factory_id, ctx.now, tasks=rows)
+    reader = task_pulse.Reader(ctx.deps, ctx.factory_id, ctx.now, tasks=rows, targets=ctx.targets)
     for loop in ctx.store.list_loops(
         ctx.factory_id, kinds=["implement"], states=["running", "stalled"]
     ):

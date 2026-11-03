@@ -719,6 +719,8 @@ class Reader:
     now: float
     tasks: Sequence[FactoryTask] = ()
     """The factory's tasks: a lead's question naming another one does not hold a task."""
+    targets: frozenset[tuple[str, str]] = frozenset()
+    """The auto-merge targets the server merges into now (:func:`.waits.auto_targets`)."""
     _facts: waits.Facts | None = None
     _quiet_s: float | None = None
     _leads: dict[str, Conversation | None] = field(default_factory=dict)
@@ -744,7 +746,11 @@ class Reader:
         """:returns: What the tasks' waits read, loaded once per tick."""
         if self._facts is None:
             self._facts = waits.Facts.load(
-                self.deps, self.factory_id, self.now, tasks=self.tasks or None
+                self.deps,
+                self.factory_id,
+                self.now,
+                tasks=self.tasks or None,
+                targets=self.targets,
             )
         return self._facts
 
