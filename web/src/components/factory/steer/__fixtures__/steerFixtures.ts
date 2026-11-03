@@ -529,7 +529,8 @@ export function previewRubric(): DefinitionPreviewResponse {
     trialable: {
       ok: false,
       code: "trial_overlap",
-      reason: "C-33 is already trialing discovery (day 4 of 14).",
+      reason:
+        "C-33 is already trialing discovery (day 4 of 14). Two trials on one block confound each other's guards: apply it directly, or wait for C-33 to end.",
       trial: "C-33",
       block: "discovery",
     },

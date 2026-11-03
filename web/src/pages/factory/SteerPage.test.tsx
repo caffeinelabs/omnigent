@@ -201,7 +201,8 @@ describe("Steer", () => {
     const rule = await screen.findByTestId("steer-trial-rule");
     await waitFor(() => expect(rule).toHaveAttribute("data-code", "trial_overlap"));
     expect(rule).toHaveTextContent("No second trial on discovery.");
-    expect(rule).toHaveTextContent("Apply directly, or wait for C-33 to end.");
+    expect(rule).toHaveTextContent("apply it directly, or wait for C-33 to end.");
+    expect(rule.textContent!.match(/wait for C-33 to end/g)).toHaveLength(1);
     expect(screen.queryByTestId("steer-apply-trial")).toBeNull();
     expect(screen.getByTestId("steer-running-trials")).toHaveTextContent("C-33");
   });

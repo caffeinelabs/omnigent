@@ -69,7 +69,9 @@ export function columnTrialRule(
       code: "trial_overlap",
       ok: false,
       head: `No second trial on ${verdict.block ?? "this block"}.`,
-      text: `${verdict.reason ?? ""} Apply directly, or wait for ${verdict.trial ?? "it"} to end.`.trim(),
+      text:
+        verdict.reason ??
+        `${verdict.trial ?? "A trial"} holds this block. Apply directly, or wait for it to end.`,
       trial: verdict.trial,
     };
   }
@@ -157,10 +159,12 @@ function StagedCard({ preview }: { preview: Preview }) {
   const intact = proposalIntact(staging);
   const busy = edit.isPending || restore.isPending || answer.isPending || propose.isPending;
   const blocked = preview.settled ? (preview.data?.blocked ?? []) : [];
+  // Until the preview answers nobody knows the class; only a failed preview falls back to the role.
+  const waiting = !preview.data && !preview.error;
   const canApply = preview.data
     ? preview.settled && preview.data.you_can_apply && blocked.length === 0
-    : steer.owner;
-  const canPropose = !steer.owner && (preview.data?.you_can_propose ?? steer.canEdit);
+    : steer.owner && !waiting;
+  const canPropose = !steer.owner && !waiting && (preview.data?.you_can_propose ?? steer.canEdit);
   const effects = (preview.settled ? (preview.data?.effects ?? []) : []).filter(
     (e) => e.kind !== "restore",
   );

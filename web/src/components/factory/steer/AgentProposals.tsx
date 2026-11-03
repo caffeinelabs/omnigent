@@ -114,7 +114,7 @@ export function AgentProposals({
                     >
                       {staged ? "Staged" : "Stage it"}
                     </Button>
-                    {steer.owner && (
+                    {steer.owner && p.status === "pending" && (
                       <Button
                         size="xs"
                         variant="ghost"

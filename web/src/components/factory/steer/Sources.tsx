@@ -143,7 +143,15 @@ function SourceCard({
             message: paused
               ? `Resumed ${source.label}.`
               : `Paused ${source.label}. Its reads stopped.`,
-            undo: res.undo?.pin != null ? () => pin.mutate(res.undo!.pin) : undefined,
+            undo:
+              res.undo?.pin != null
+                ? () =>
+                    pin.mutate(res.undo!.pin, {
+                      onSuccess: () => toast.show({ message: `${source.label} runs again.` }),
+                      onError: (error) =>
+                        toast.show({ message: `Could not undo: ${error.message}` }),
+                    })
+                : undefined,
           }),
         onError: (error) => toast.show({ message: `Not done: ${error.message}` }),
       },

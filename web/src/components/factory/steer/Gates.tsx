@@ -6,6 +6,7 @@
  */
 
 import { LockIcon } from "lucide-react";
+import { FactoryLoadError } from "../FactoryLoadError";
 import { SectionCard } from "../project/projectParts";
 import { useSteer } from "./SteerContext";
 import { TierZero } from "./steerFields";
@@ -17,6 +18,17 @@ export function Gates() {
   const catalog = useSteerCatalog(steer.factoryId, gates.data === null);
   if (gates.isLoading)
     return <div aria-busy="true" className="h-48 animate-pulse rounded-xl bg-muted/70" />;
+  if (gates.error) {
+    return (
+      <FactoryLoadError
+        error={gates.error}
+        updatedAt={0}
+        onRetry={() => void gates.refetch()}
+        what="the gates"
+        testId="steer-gates-error"
+      />
+    );
+  }
   const data = gates.data;
   return (
     <div data-testid="steer-gates" className="flex min-w-0 flex-col gap-4">
