@@ -44,16 +44,17 @@ export type FactoryPageKey =
   | "teams"
   | "steer"
   | "debug"
+  | "node"
   | "other";
 
 export interface FactoryLocation {
   page: FactoryPageKey;
   /**
    * The project slug, PR id, settings section, Room thread, Discovery view,
-   * Teams tab, Steer section or Debug view the page is about.
+   * Teams tab, Steer section, Debug view or node ref the page is about.
    */
   id: string | null;
-  /** Under a Debug view: the incident ref or the agent's session id. */
+  /** Under a Debug view: the incident ref or the agent's session id; under a node: the level shown. */
   sub?: string | null;
 }
 
@@ -78,6 +79,10 @@ export function factoryLocation(rest: string | undefined): FactoryLocation {
       return third
         ? { page: "debug", id: second ?? null, sub: third }
         : { page: "debug", id: second ?? null };
+    case "n":
+      return third
+        ? { page: "node", id: second ?? null, sub: third }
+        : { page: "node", id: second ?? null };
     case "":
       return { page: "overview", id: null };
     case "projects":
@@ -151,6 +156,8 @@ export function presenceLocation(location: FactoryLocation): string | null {
       if (location.id === "agent" && location.sub) return `agent:${location.sub}`;
       if (location.id === "incidents" && location.sub) return `incident:${location.sub}`;
       return location.id ? `debug:${location.id}` : "debug";
+    case "node":
+      return location.id ? `node:${location.id}` : "overview";
     default:
       return null;
   }
@@ -203,6 +210,8 @@ export function presenceWhere(location: string | null | undefined): string {
       return "Steer";
     case "debug":
       return "Debug";
+    case "node":
+      return id ? `${id} page` : "a node page";
     default:
       return kind ?? "here";
   }

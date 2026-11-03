@@ -64,6 +64,7 @@ export function CockpitShell({
   updatedAt,
   rest,
   onClassic,
+  variant = "v2",
   children,
 }: {
   snapshot: FactorySnapshot;
@@ -72,6 +73,8 @@ export function CockpitShell({
   rest: string;
   /** Switch this person back to the classic cockpit. */
   onClassic: () => void;
+  /** v3 puts the node pages in this shell (Home is the product's node page). */
+  variant?: "v2" | "v3";
   children: ReactNode;
 }) {
   const fid = snapshot.factory.id;
@@ -180,7 +183,7 @@ export function CockpitShell({
       <div
         {...{ [PAGE_PALETTE_ATTRIBUTE]: "" }}
         data-testid="factory-shell"
-        data-cockpit="v2"
+        data-cockpit={variant}
         data-page={location.page}
         className="flex min-w-0 flex-col gap-3"
       >
@@ -218,7 +221,7 @@ export function CockpitShell({
               onAddProject={() => setAdding({ title: null })}
               onRoom={(thread) => setParam(ROOM_PARAM, thread)}
             />
-            <KeyboardHelp open={keys} onOpenChange={setKeys} />
+            <KeyboardHelp open={keys} onOpenChange={setKeys} nodes={variant === "v3"} />
           </FactoryToastProvider>
         </main>
       </div>

@@ -357,6 +357,7 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
               updatedAt={updatedAt}
               rest={rest}
               onClassic={() => cockpit.choose("v1")}
+              variant={cockpit.v3 ? "v3" : "v2"}
             >
               {children}
             </CockpitShell>
