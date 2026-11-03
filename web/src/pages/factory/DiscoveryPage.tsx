@@ -25,6 +25,7 @@ import {
   bandSections,
   chainCells,
   filterRows,
+  findReadout,
   flowModel,
   hunchWeight,
   latestReadouts,
@@ -820,9 +821,7 @@ function DiscoveryBody() {
       <ReadoutPeek
         factoryId={fid}
         readoutId={target?.kind === "readout" ? target.id : null}
-        readout={
-          target?.kind === "readout" ? (readoutList.find((r) => r.id === target.id) ?? null) : null
-        }
+        readout={target?.kind === "readout" ? findReadout(readoutList, target.id) : null}
         canAct={canAct}
         onOpenOpportunity={openPeek}
         onClose={closePeek}

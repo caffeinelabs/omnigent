@@ -730,29 +730,106 @@ export function sampleSummary(nowS: number, options: { cold?: boolean; held?: bo
   };
 }
 
-/** (sample) Readouts as the plan's A7 serves them: one won on day 7. */
-export function sampleReadouts(): { data: Row[] } {
+/** (sample) Readouts as A7 serves them (`GET …/readouts`): one won on day 7, kept. */
+export function sampleReadouts(options: { more?: boolean } = {}): { data: Row[] } {
   return {
     data: [
       {
         id: "R-1",
+        key: "C-20-d7",
+        status: "decided",
         proposal: "C-20",
         opportunity: "O-9",
         title: "Retry a failed step in one click (sample)",
         day: 7,
         method: "signal_trend",
-        metric: "failed-step complaints per week",
+        metric: "signal_trend:O-9",
         verdict: "won",
-        recommendation: "roll out",
+        recommendation: "keep",
+        why: "moved at least the smallest predicted change (-20 %)",
         expected: { direction: "down", low: -40, high: -20, unit: "%" },
-        actual: -31,
+        effect: -31,
+        predicted_vs_actual: "inside",
         n: 120,
-        guardrails: [{ name: "support tickets per 1,000 accounts (sample)", held: true }],
+        guardrails: [{ name: "support tickets per 1,000 accounts (sample)", state: "held" }],
         decision: { decision: "keep", by: "ana", reason: null, against_recommendation: false },
+        options: null,
         next_day: 28,
       },
+      ...(options.more ? moreReadouts() : []),
     ],
   };
+}
+
+/** (sample) Readouts that wait on a person: one to decide, one to answer, one for its data. */
+export function moreReadouts(): Row[] {
+  const plan = { direction: "down", low: -60, high: -20, unit: "%" };
+  return [
+    {
+      id: "R-2",
+      key: "C-21-d28",
+      status: "written",
+      proposal: "C-21",
+      opportunity: "O-7",
+      title: "Share a private draft link (sample)",
+      day: 28,
+      method: "signal_trend",
+      metric: "signal_trend:O-7",
+      verdict: "flat",
+      recommendation: "iterate",
+      why: "moved less than the smallest predicted change (-20 %) (guardrails not measured)",
+      expected: plan,
+      effect: -8,
+      predicted_vs_actual: "above",
+      n: 24,
+      guardrails: [{ name: "support load (sample)", state: "unmeasured" }],
+      decision: null,
+      options: [
+        { decision: "iterate", label: "Iterate", recommended: true, against_recommendation: false },
+        { decision: "drop", label: "Drop it", recommended: false, against_recommendation: false },
+        { decision: "keep", label: "Keep it", recommended: false, against_recommendation: true },
+        {
+          decision: "extend",
+          label: "Extend once",
+          recommended: false,
+          against_recommendation: true,
+        },
+      ],
+    },
+    {
+      id: "R-3",
+      key: "C-22-d7",
+      status: "awaiting_answer",
+      proposal: "C-22",
+      opportunity: "O-8",
+      title: "Name a reviewer before publishing (sample)",
+      day: 7,
+      method: "human_verdict",
+      metric: "reviewers named (sample)",
+      verdict: null,
+      expected: { direction: "up", low: 1, high: 3, unit: "teams" },
+      guardrails: [],
+      decision: null,
+      options: null,
+    },
+    {
+      id: "R-4",
+      key: "C-23-d7",
+      status: "scheduled",
+      proposal: "C-23",
+      opportunity: "O-10",
+      title: "Undo a publish within a minute (sample)",
+      day: 7,
+      method: "signal_trend",
+      metric: "signal_trend:O-10",
+      verdict: null,
+      expected: plan,
+      guardrails: [{ name: "support load (sample)", state: "unmeasured" }],
+      waiting: { why: "3 signals from the window are not sorted into an opportunity yet" },
+      decision: null,
+      options: null,
+    },
+  ];
 }
 
 /** (sample) The source log of one source. */
@@ -939,6 +1016,8 @@ export interface DiscoveryRouteOptions {
   definition?: DefinitionResponse;
   /** No readouts route on this server (404). */
   noReadouts?: boolean;
+  /** Readouts that wait on a person too (to decide, to answer, for their data). */
+  moreReadouts?: boolean;
   /** The server holds the support tracker after repeated failures. */
   heldSource?: boolean;
 }
@@ -1016,7 +1095,7 @@ export function discoveryRoutes(
   routes[`${own}/signals`] = signals;
   routes[`${own}/readouts`] = options.noReadouts
     ? { error: 404, message: "Not found" }
-    : { body: state === "cold" ? { data: [] } : sampleReadouts() };
+    : { body: state === "cold" ? { data: [] } : sampleReadouts({ more: options.moreReadouts }) };
   for (const id of ["repo", "trk", "web", "team"]) {
     routes[`${own}/sources/${id}/log`] = { body: sampleSourceLog(nowS, id) };
     routes[`${own}/sources/${id}/test`] = { body: { ok: true, items: 3 } };

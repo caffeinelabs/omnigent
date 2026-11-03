@@ -1287,8 +1287,8 @@ def discovery_thread() -> str:
 
 
 def link(factory_id: str, row: FactoryReadout) -> str:
-    """:returns: The cockpit path of the readout."""
-    return f"/factory/{factory_id}/discovery/impact?readout={row.key}"
+    """:returns: The cockpit path of the readout (Discovery's Impact, its side panel open)."""
+    return f"/factory/{factory_id}/discovery/impact?peek=readout:{row.key}"
 
 
 def _outcome(row: FactoryReadout) -> str:
@@ -1675,7 +1675,7 @@ async def mark_released(
     return {
         "proposal": bet.ref,
         "released_at": at,
-        "readouts": [readout_view(r, now=now) for r in rows],
+        "readouts": [readout_view(r, now=now, siblings=rows) for r in rows],
     }
 
 
@@ -1766,7 +1766,7 @@ async def decide(
         row = await _rejudge(app_state, root.id, row, body, by, reported, now)
     if body.decision is not None:
         row = await _apply_decision(app_state, root.id, row, body, by, level, now, via=via)
-    return readout_view(row, now=now)
+    return await asyncio.to_thread(view_of, deps, root.id, row, now=now)
 
 
 async def _rejudge(
@@ -2091,7 +2091,7 @@ async def reopen(
         # Its "did it help?" closed with the decision: ask it again.
         if other.status == "awaiting_answer":
             await _ask(app_state, root.id, other, answer=True)
-    return readout_view(stored, now=now)
+    return await asyncio.to_thread(view_of, deps, root.id, stored, now=now)
 
 
 def _unsettle_opportunity(
@@ -2209,9 +2209,24 @@ def install() -> Callable[[], None]:
 # ── Views ──────────────────────────────────────────────────────
 
 
-def readout_view(row: FactoryReadout, *, now: int) -> dict[str, Any]:
-    """One readout as the cockpit shows it (everything is server-written)."""
+def readout_view(
+    row: FactoryReadout, *, now: int, siblings: Iterable[FactoryReadout] = ()
+) -> dict[str, Any]:
+    """
+    One readout as the cockpit shows it (everything is server-written).
+
+    :param siblings: Readouts that may include the same bet's other days
+        (``next_day`` is the next one still to come).
+    """
     result = row.result or {}
+    next_day = min(
+        (
+            r.day
+            for r in siblings
+            if r.proposal == row.proposal and r.day > row.day and r.status in OPEN_STATUSES
+        ),
+        default=None,
+    )
     plan = row.plan or {}
     measurement = plan.get("measurement") or {}
     decision = None
@@ -2296,7 +2311,16 @@ def readout_view(row: FactoryReadout, *, now: int) -> dict[str, Any]:
         "def_version": (row.stamp or {}).get("def_version"),
         "origin": (row.stamp or {}).get("origin"),
         "extension": bool(plan.get("extension")),
+        "next_day": next_day,
     }
+
+
+def view_of(
+    deps: FactoryDeps, factory_id: str, row: FactoryReadout, *, now: int
+) -> dict[str, Any]:
+    """:func:`readout_view` with the bet's other days read (synchronous)."""
+    siblings = deps.factory_store.list_readouts(factory_id, proposal=row.proposal)
+    return readout_view(row, now=now, siblings=siblings)
 
 
 def pending_bets(deps: FactoryDeps, factory_id: str) -> list[dict[str, Any]]:
@@ -2425,7 +2449,7 @@ def summary_fields(deps: FactoryDeps, factory_id: str, *, now: int) -> dict[str,
             "waiting": len(waiting),
             "won": sum(1 for r in latest_readouts(written) if r.verdict == "won"),
             "next_due_at": min((r.due_at for r in scheduled), default=None),
-            "latest": [readout_view(r, now=now) for r in latest],
+            "latest": [readout_view(r, now=now, siblings=rows) for r in latest],
             "release": release_mode(deps, factory_id),
         },
         "ledger": prediction_ledger(deps, factory_id, rows=rows),
@@ -2484,6 +2508,7 @@ __all__ = [
     "stamp",
     "summary_fields",
     "tick",
+    "view_of",
     "write_back",
     "write_due",
 ]

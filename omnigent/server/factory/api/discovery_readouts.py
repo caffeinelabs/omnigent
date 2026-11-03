@@ -97,7 +97,7 @@ async def list_readouts(
             ]
             rows.sort(key=lambda r: (r.written_at or 0, r.due_at, r.proposal, r.day), reverse=True)
             return {
-                "data": [readouts.readout_view(r, now=now) for r in rows[:limit]],
+                "data": [readouts.readout_view(r, now=now, siblings=every) for r in rows[:limit]],
                 "total": len(rows),
                 "pending": readouts.pending_bets(deps, root.id),
                 "ledger": readouts.prediction_ledger(deps, root.id, rows=every),
@@ -120,7 +120,7 @@ async def get_readout(
     async def run() -> dict[str, Any]:
         deps, _user, root = await _root(request, factory_id)
         row = await asyncio.to_thread(readouts.find, deps, root.id, ref)
-        return readouts.readout_view(row, now=now_s())
+        return await asyncio.to_thread(readouts.view_of, deps, root.id, row, now=now_s())
 
     return await _guard(run)
 

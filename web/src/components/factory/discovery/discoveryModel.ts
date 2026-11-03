@@ -165,9 +165,21 @@ function parseSource(raw: unknown): SourceView | null {
   };
 }
 
+/** How many of a share's n were 1: A7 gives `{value, n}` per group, not counts. */
+function wonOf(row: Obj | null): number {
+  const won = num(row?.won);
+  if (won != null) return won;
+  const value = num(row?.value);
+  const n = num(row?.n);
+  return value != null && n != null ? Math.round(value * n) : 0;
+}
+
 export function parseLedger(raw: unknown): LedgerView | null {
   const l = obj(raw);
   if (!l) return null;
+  // A7: `inside {n, of, share}`, `win_rate_by_level {level: {value, n}}`,
+  // `by_origin {discovered: {value, n}}`, `requested {shipped, measured}`.
+  const origin = obj(obj(l.by_origin)?.discovered);
   const discovered = obj(l.discovered ?? obj(l.hit_rate)?.discovered);
   const requested = obj(l.requested ?? obj(l.hit_rate)?.requested);
   const byLevelRaw = l.by_level ?? l.win_rate_by_level;
@@ -176,21 +188,23 @@ export function parseLedger(raw: unknown): LedgerView | null {
         .map((row) => {
           const r = obj(row);
           const name = str(r?.level);
-          return name ? { level: name, n: num(r?.n) ?? 0, won: num(r?.won) ?? 0 } : null;
+          return name ? { level: name, n: num(r?.n) ?? 0, won: wonOf(r) } : null;
         })
         .filter((r): r is LedgerView["byLevel"][number] => r != null)
     : Object.entries(obj(byLevelRaw) ?? {}).map(([name, value]) => {
         const r = obj(value);
-        return { level: name, n: num(r?.n) ?? 0, won: num(r?.won) ?? 0 };
+        return { level: name, n: num(r?.n) ?? 0, won: wonOf(r) };
       });
   return {
     readouts: num(l.readouts, l.n) ?? 0,
-    inside: num(l.inside, l.inside_range) ?? 0,
+    inside: num(l.inside, obj(l.inside)?.n, l.inside_range) ?? 0,
     byLevel,
     minPerLevel: num(l.min_per_level) ?? 5,
     discovered: discovered
       ? { won: num(discovered.won) ?? 0, total: num(discovered.total, discovered.n) ?? 0 }
-      : null,
+      : origin
+        ? { won: wonOf(origin), total: num(origin.n) ?? 0 }
+        : null,
     requested: requested
       ? { shipped: num(requested.shipped) ?? 0, measured: num(requested.measured) ?? 0 }
       : null,
@@ -1008,8 +1022,26 @@ export function hunchOutcome(hunch: SignalView, rows: readonly OpportunityRow[])
 
 // ── Readouts (plan A7) ─────────────────────────────────────────
 
+/** A decision the server offers on a written readout (A7), the recommended one first. */
+export interface ReadoutOption {
+  decision: ReadoutDecision;
+  label: string;
+  recommended: boolean;
+  /** Going against the recommendation: an owner, a named reviewer and a reason. */
+  against: boolean;
+}
+
+export type ReadoutDecision = "keep" | "drop" | "iterate" | "extend";
+
+/** A person's "did it help?" on a readout measured by a person's verdict. */
+export type ReadoutAnswer = "helped" | "no_change" | "hurt";
+
 export interface ReadoutView {
   id: string;
+  /** Its key, e.g. `C-31-d28` (links may name a readout by it). */
+  key: string | null;
+  /** `scheduled`, `awaiting_answer`, `written`, `decided`, `cancelled` (A7). */
+  status: string | null;
   proposal: string | null;
   opportunity: string | null;
   title: string;
@@ -1024,12 +1056,20 @@ export interface ReadoutView {
   actual: number | null;
   inside: boolean | null;
   n: number | null;
-  guardrails: { name: string; held: boolean }[];
+  /** `measured` is false while no source reads it (then `held` says nothing). */
+  guardrails: { name: string; held: boolean; measured: boolean }[];
   decision: { decision: string; by: string | null; reason: string | null; against: boolean } | null;
   nextDay: number | null;
+  /** The server's why-line for its verdict. */
+  why: string | null;
+  /** Why a due readout still waits for its data (its window not read or sorted yet). */
+  waiting: string | null;
+  options: ReadoutOption[];
+  answer: { answer: string; reason: string | null; by: string | null } | null;
 }
 
 const VERDICTS = new Set(["won", "flat", "lost", "inconclusive"]);
+const DECISIONS = new Set(["keep", "drop", "iterate", "extend"]);
 
 export function parseReadout(raw: unknown): ReadoutView | null {
   const r = obj(raw);
@@ -1053,8 +1093,11 @@ export function parseReadout(raw: unknown): ReadoutView | null {
             : actual != null && low != null && high != null
               ? actual >= Math.min(low, high) && actual <= Math.max(low, high)
               : null;
+  const answer = obj(r.answer);
   return {
     id,
+    key: str(r.key),
+    status: str(r.status),
     proposal: str(r.proposal, r.bet),
     opportunity: str(r.opportunity),
     title: str(r.title, r.outcome) ?? id,
@@ -1073,7 +1116,11 @@ export function parseReadout(raw: unknown): ReadoutView | null {
       .map((g) => {
         const row = obj(g);
         const name = str(row?.name, row?.guardrail);
-        return name ? { name, held: row?.held !== false && row?.state !== "broken" } : null;
+        const state = str(row?.state);
+        if (!name) return null;
+        return state
+          ? { name, held: state === "held", measured: state !== "unmeasured" }
+          : { name, held: row?.held !== false, measured: true };
       })
       .filter((g): g is ReadoutView["guardrails"][number] => g != null),
     decision: decision
@@ -1087,7 +1134,38 @@ export function parseReadout(raw: unknown): ReadoutView | null {
         ? { decision: str(r.decision)!, by: null, reason: null, against: false }
         : null,
     nextDay: num(r.next_day),
+    why: str(r.why),
+    waiting: str(obj(r.waiting)?.why, r.waiting),
+    options: list(r.options)
+      .map((o): ReadoutOption | null => {
+        const row = obj(o);
+        const choice = str(row?.decision);
+        if (!row || !choice || !DECISIONS.has(choice)) return null;
+        return {
+          decision: choice as ReadoutDecision,
+          label: str(row.label) ?? choice,
+          recommended: bool(row.recommended),
+          against: bool(row.against_recommendation),
+        };
+      })
+      .filter((o): o is ReadoutOption => o != null),
+    answer: answer
+      ? {
+          answer: str(answer.answer) ?? "",
+          reason: str(answer.reason),
+          by: str(answer.by),
+        }
+      : null,
   };
+}
+
+/** A readout named in the address: by its id or its key (`C-31-d28`). */
+export function findReadout(
+  readouts: readonly ReadoutView[],
+  ref: string | null,
+): ReadoutView | null {
+  if (!ref) return null;
+  return readouts.find((r) => r.id === ref || r.key === ref) ?? null;
 }
 
 export function parseReadouts(raw: unknown): ReadoutView[] | null {

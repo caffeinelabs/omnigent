@@ -476,6 +476,10 @@ async def test_the_last_readout_waits_in_needs_you_and_one_click_keeps_it(
     decision = cockpit.store.get_decision(day28.decision_id)
     assert decision is not None and decision.source == "readout"
     assert decision.options[0] == {"id": "keep", "label": "Keep it", "recommended": True}
+    # "Decide otherwise…" opens the readout's side panel on Discovery's Impact.
+    assert decision.options[-1]["href"] == (
+        f"/factory/{cockpit.fid}/discovery/impact?peek=readout:C-1-d28"
+    )
     asks = await cockpit.client.get(base(cockpit, "/asks"), headers={"X-Test-User": "carol"})
     [row] = [a for a in asks.json()["asks"] if a["kind"] == "readout"]
     assert row["primary_action"] == {
@@ -771,6 +775,7 @@ async def test_viewers_read_agents_never_decide(cockpit: Cockpit) -> None:
     assert [r["key"] for r in body["data"]] == ["C-1-d7", "C-1-d28"]
     assert body["release"] == "merged" and body["ledger"]["readouts"] == 1
     assert one.status_code == 200 and one.json()["verdict"] == "won"
+    assert one.json()["next_day"] == 28 and body["data"][0]["next_day"] == 28
     assert [o["decision"] for o in one.json()["options"] if not o["against_recommendation"]] == [
         "keep"
     ]
