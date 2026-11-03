@@ -19,6 +19,7 @@ from omnigent.server.factory.discovery.ledger import (
     CONVICTION_KINDS,
     INJECTION_SUSPECT,
     SALT_ROW,
+    SUSPECT_AT,
     sources_of,
 )
 from omnigent.server.factory.discovery.opportunities import (
@@ -31,7 +32,6 @@ from omnigent.server.factory.discovery.opportunities import (
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.membership import factory_members, is_session_id
 from omnigent.stores.factory_store import now_s
-from omnigent.stores.factory_store.discovery import SignalFilter
 
 if TYPE_CHECKING:
     from omnigent.entities.factory_discovery import FactorySignal, FactorySignalLink
@@ -43,7 +43,6 @@ QUOTES_MAX: Final = 3
 AGAINST_MAX: Final = 2
 HUNCH_QUOTES_MAX: Final = 2
 HISTORY_MAX: Final = 20
-UNSORTED_SCAN: Final = 2000
 _DAY_S: Final = 86400
 _WEEK_S: Final = 7 * _DAY_S
 _EXCLUDED: Final = {
@@ -141,12 +140,18 @@ def signal_view(
 
 
 def _votes(votes: Mapping[str, int], user_id: str | None) -> dict[str, Any]:
+    # Keyed as the levers key them: the person's id, or their name in single-user mode.
+    mine = user_id or human_name(user_id)
     return {
         "up": sum(1 for v in votes.values() if v > 0),
         "down": sum(1 for v in votes.values() if v < 0),
-        "mine": votes.get(user_id or "local", 0) if votes else 0,
+        "mine": votes.get(mine, 0) if votes else 0,
         "note": "votes never change the score",
     }
+
+
+def _read_out_and_dropped(e: Evaluated) -> bool:
+    return (e.row.result or {}).get("decision") == "drop"
 
 
 def _bet(e: Evaluated) -> Any:
@@ -179,7 +184,7 @@ def next_step(e: Evaluated) -> dict[str, Any] | None:
         return {"action": "research", "label": "Research this"}
     if status == "parked":
         return {"action": "unpark", "label": "Unpark"}
-    if status == "dropped":
+    if status == "dropped" and e.row.kill is not None and not _read_out_and_dropped(e):
         return {"action": "revive", "label": "Revive"}
     return None
 
@@ -374,7 +379,9 @@ def _spent_today(deps: FactoryDeps, factory_id: str, now: int) -> float:
     return round(sum(c.cost_usd for c in cells if c.role == SCOUT_ROLE), 2)
 
 
-def _sources(deps: FactoryDeps, factory_id: str, now: int) -> list[dict[str, Any]]:
+def _sources(
+    deps: FactoryDeps, factory_id: str, per_source: Mapping[str, int]
+) -> list[dict[str, Any]]:
     states = {
         s.source: s
         for s in deps.factory_store.list_source_states(factory_id)
@@ -385,11 +392,6 @@ def _sources(deps: FactoryDeps, factory_id: str, now: int) -> list[dict[str, Any
         for s in definition.value(deps, factory_id, "discovery.sources", []) or []
         if isinstance(s, Mapping)
     }
-    week = now - _WEEK_S
-    recent = deps.factory_store.list_signals(factory_id, SignalFilter(since=week), limit=5000)
-    per_source: dict[str, int] = {}
-    for signal in recent:
-        per_source[signal.source] = per_source.get(signal.source, 0) + 1
     out: list[dict[str, Any]] = []
     for ref in sources_of(deps, factory_id):
         raw = configured.get(ref.id, {})
@@ -422,24 +424,20 @@ def summary(
     doc: Mapping[str, Any],
     def_version: int | None,
 ) -> dict[str, Any]:
-    """``GET …/discovery``: the chain counts, coverage, Scout, budget, sources and goals."""
+    """
+    ``GET …/discovery``: the chain counts, coverage, Scout, budget, sources and goals.
+
+    Signal counts are counted by the store (no signal row is read), so the
+    header costs the same with ten signals or a hundred thousand.
+    """
     now = facts.now
-    store = deps.factory_store
     discovery = doc.get("discovery") or {}
     strategy = doc.get("strategy") or {}
     product = doc.get("product") or {}
     statuses = [e.status for e in items]
-    recent = store.list_signals(factory_id, SignalFilter(since=now - 30 * _DAY_S), limit=5000)
-    linked = {link.signal for link in store.list_links(factory_id)}
-    scan = store.list_signals(factory_id, limit=UNSORTED_SCAN)
-    unsorted = [
-        s
-        for s in scan
-        if s.number not in linked
-        and s.kind not in CONVICTION_KINDS
-        and _excluded(s) is None
-        and not s.gone
-    ]
+    counts = deps.factory_store.signal_counts(
+        factory_id, since=now - _WEEK_S, segments_since=now - 30 * _DAY_S, suspect_at=SUSPECT_AT
+    )
     focus = [str(s) for s in strategy.get("focus_segments") or []]
     coverage = []
     for segment in product.get("segments") or []:
@@ -451,7 +449,7 @@ def summary(
                 "segment": sid,
                 "label": segment.get("label") or sid,
                 "focus": sid in focus,
-                "signals_30d": sum(1 for s in recent if sid in s.segments),
+                "signals_30d": counts.segments.get(sid, 0),
             }
         )
     coverage.sort(key=lambda c: (not c["focus"], c["signals_30d"]))
@@ -482,14 +480,16 @@ def summary(
             "per_ask": budgets.get("per_ask"),
             "spent_today": _spent_today(deps, factory_id, now),
         },
-        "sources": _sources(deps, factory_id, now),
+        "sources": _sources(deps, factory_id, counts.by_source),
         "chain": {
-            "signals_week": store.count_signals(factory_id, since=now - _WEEK_S),
+            "signals_week": counts.recent,
             "opportunities": sum(1 for s in statuses if s not in CLOSED),
             "bets": sum(1 for s in statuses if s == "proposed"),
             "building": sum(1 for s in statuses if s == "building"),
             "shipped": sum(1 for s in statuses if s == "shipped"),
-            "measured": sum(1 for s in statuses if s in ("measured", "kept")),
+            "measured": sum(
+                1 for e in items if e.status in ("measured", "kept") or _read_out_and_dropped(e)
+            ),
         },
         "bands": {
             "now": sum(1 for e in items if e.band == "now"),
@@ -502,10 +502,10 @@ def summary(
         "unassigned": sum(1 for e in items if e.row.goal is None and e.status not in CLOSED),
         "coverage": coverage,
         "signals": {
-            "total": store.count_signals(factory_id),
-            "unsorted": len(unsorted),
-            "flagged": sum(1 for s in scan if INJECTION_SUSPECT in s.flags),
-            "hunches": sum(1 for s in scan if s.kind in CONVICTION_KINDS and not s.gone),
+            "total": counts.total,
+            "unsorted": counts.unsorted,
+            "flagged": counts.flagged,
+            "hunches": counts.hunches,
         },
         "levels": list(evidence.LEVELS),
         "generated_at": now_s(),

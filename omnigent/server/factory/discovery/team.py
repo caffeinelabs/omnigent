@@ -2,8 +2,8 @@
 
 A person's Room message is kept as a ``hunch`` (weight 0.1, never user
 evidence) when it is one (:func:`omnigent.server.factory.chat_routing.team_signal`):
-``hunch: …`` anywhere, "I think … because …", or a request such as "we need
-…" in ``#factory``. Scout later attaches it to an opportunity, and the
+``hunch: …`` anywhere, and in ``#factory`` "I think … because …" or a
+request such as "we need …". Scout later attaches it to an opportunity, and the
 ledger compares the hit rate of requested work with discovered work.
 
 Nothing is kept while discovery is off for the factory, or while its

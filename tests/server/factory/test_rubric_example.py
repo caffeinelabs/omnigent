@@ -36,7 +36,7 @@ def sig(
         source=source,
         source_kind=kind,
         kind=signal_kind,
-        excerpt=f"sample {number}",
+        excerpt=f"words {number} (sample)",
         observed_at=NOW - 2 * DAY,
         ingested_at=NOW,
         account=f"acct_{number}",
@@ -147,3 +147,51 @@ def test_value_and_confidence_place_it_on_the_map() -> None:
     assert rubric.quadrant_of(0.1, 0.1, None) == "wait"
     assert rubric.band_of(0.199, None) == "now"  # shown as 0.20, so it reads as Now
     assert rubric.band_of(0.09, None) == "later"
+
+
+def test_one_loud_account_is_one_voice_in_the_intensity() -> None:
+    # 7 accounts say nice-to-have; one account files 30 blockers (sample).
+    row, _items = example()
+    quiet = [
+        sig("repo-issues" if i % 2 else "web", "repo" if i % 2 else "web", intensity="nice")
+        for i in range(7)
+    ]
+    loud = [
+        FactorySignal(**{**sig("web", "web", intensity="blocker").to_dict(), "account": "acct_x"})
+        for _ in range(30)
+    ]
+    items = [Linked(s) for s in [*quiet, *loud]]
+    meter = measure(items, None, now=NOW)
+
+    score = rubric.score(row, meter, items, strategy=STRATEGY, rubric=None, now=NOW)
+
+    assert meter.accounts == 8
+    assert score.part("intensity") == 0.1
+    assert round(score.rank, 2) == 0.02 and score.band == "later"
+    intensity = next(p for p in score.parts if p.name == "intensity")
+    assert intensity.reason == (
+        "the median label of 8 accounts (7 say nice-to-have; at most 1 per account)"
+    )
+    assert score.inputs["labels"].count("blocker") == 1
+    # With a higher cap the loud account weighs more, as the rubric says.
+    capped = rubric.capped_labels(loud, 3)
+    assert capped == {"acct_x": ["blocker", "blocker", "blocker"]}
+
+
+def test_only_an_analytics_aggregate_measures_the_reach() -> None:
+    row, items = example()
+
+    def behaviour(source: str, kind: str, reach: int) -> Linked:
+        base = sig(source, kind).to_dict()
+        return Linked(
+            FactorySignal(**{**base, "kind": "behavior", "say_do": "do", "meta": {"reach": reach}})
+        )
+
+    def reach(extra: Linked) -> str:
+        found = [*items, extra]
+        meter = measure(found, None, now=NOW)
+        score = rubric.score(row, meter, found, strategy=STRATEGY, rubric=None, now=NOW)
+        return next(p for p in score.parts if p.name == "reach").input
+
+    assert "measured" not in reach(behaviour("web", "web", 10**6))
+    assert reach(behaviour("analytics", "analytics", 400)) == "400/mo measured"

@@ -24,7 +24,8 @@ proven    a won test or readout                                       1.0
   ``counter_share_down`` of the supporting weight.
 - **Some inputs never count**: ``simulation`` signals, signals flagged as a
   possible injection, and people's votes and pins.
-- **A lost readout** drops the level to weak; a won one makes it proven.
+- **A lost readout** drops the level to weak; a won one makes it proven
+  (only the server's own readouts carry a verdict).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from omnigent.server.factory.discovery.ledger import (
     CONVICTION_KINDS,
     DO_KINDS,
     INJECTION_SUSPECT,
+    VERDICT_SOURCE_KINDS,
 )
 
 if TYPE_CHECKING:
@@ -139,7 +141,8 @@ def decay(age_days: float, half_life_days: float) -> float:
     return math.pow(0.5, max(0.0, age_days) / half_life_days)
 
 
-def _key(signal: FactorySignal) -> str:
+def account_key(signal: FactorySignal) -> str:
+    """:returns: Whose voice *signal* is: its account, or itself when it has none."""
     return signal.account or f"signal:{signal.number}"
 
 
@@ -149,7 +152,7 @@ def _weights(
     """``{account: decayed weight}``: an account's freshest *cap* signals, each decayed."""
     by_account: dict[str, list[FactorySignal]] = {}
     for signal in signals:
-        by_account.setdefault(_key(signal), []).append(signal)
+        by_account.setdefault(account_key(signal), []).append(signal)
     out: dict[str, float] = {}
     for account, rows in by_account.items():
         rows.sort(key=lambda s: s.seen_at, reverse=True)
@@ -209,7 +212,7 @@ def measure(linked: Sequence[Linked], rubric: Mapping[str, Any] | None, *, now: 
             excluded += 1
             continue
         seen.append(signal.seen_at)
-        if signal.kind == "test_result":
+        if signal.kind == "test_result" and signal.source_kind in VERDICT_SOURCE_KINDS:
             verdict = str((signal.meta or {}).get("verdict") or "")
             if verdict in ("won", "lost") and not item.counter:
                 verdicts.append((signal.seen_at, verdict))
@@ -227,7 +230,7 @@ def measure(linked: Sequence[Linked], rubric: Mapping[str, Any] | None, *, now: 
     say_kinds = sorted({s.source_kind for s in say})
     by_source: dict[str, set[str]] = {}
     for signal in support:
-        by_source.setdefault(signal.source, set()).add(_key(signal))
+        by_source.setdefault(signal.source, set()).add(account_key(signal))
     weight = sum(all_weights.values())
     counter_weight = sum(counter_weights.values())
 
@@ -289,6 +292,7 @@ __all__ = [
     "LEVELS",
     "Linked",
     "Meter",
+    "account_key",
     "at_least",
     "decay",
     "level_index",

@@ -98,7 +98,7 @@ def test_labels_never_touch_the_evidence(cockpit: Cockpit) -> None:
         cockpit.fid,
         signal.number,
         by="scout (sample)",
-        paraphrase="Failed builds cost time",
+        paraphrase="Failed builds cost time (sample)",
         kind="pain",
         intensity="blocker",
         force="push",
@@ -174,6 +174,55 @@ def test_a_paused_or_personal_source_stores_nothing(cockpit: Cockpit) -> None:
     assert stopped.value.code == "source_paused"
     assert refused.value.code == "source_not_allowed"
     assert cockpit.store.count_signals(cockpit.fid) == 0
+
+
+def test_a_source_asking_for_a_redaction_the_server_cannot_do_stores_nothing(
+    cockpit: Cockpit,
+) -> None:
+    names = ledger.SourceRef(id="web", kind="web", redact=("email", "name"))
+
+    with pytest.raises(CockpitError) as refused:
+        ledger.ingest(cockpit.deps, cockpit.fid, names, [ledger.Item(text="x (sample)")])
+
+    assert refused.value.code == "redaction_unavailable" and "name" in refused.value.message
+    assert cockpit.store.count_signals(cockpit.fid) == 0
+
+
+def test_only_the_server_writes_readouts_and_only_analytics_writes_behaviour(
+    cockpit: Cockpit,
+) -> None:
+    web = ledger.source_ref(cockpit.deps, cockpit.fid, "web")
+    assert web is not None
+    analytics = ledger.SourceRef(id="product-analytics", kind="analytics", privacy="internal")
+    won = {"verdict": "won"}
+
+    forged = ledger.ingest(
+        cockpit.deps,
+        cockpit.fid,
+        web,
+        [
+            ledger.Item(text="test won (sample)", kind="test_result", meta=won),
+            ledger.Item(text="10000 a month (sample)", kind="behavior", meta={"reach": 10**6}),
+        ],
+    ).signals
+    real = (
+        ledger.ingest(
+            cockpit.deps,
+            cockpit.fid,
+            ledger.SERVER_REF,
+            [ledger.Item(text="readout: won (sample)", kind="test_result", meta=won)],
+        ).signals
+        + ledger.ingest(
+            cockpit.deps,
+            cockpit.fid,
+            analytics,
+            [ledger.Item(text="exports a month (sample)", kind="behavior", meta={"reach": 400})],
+        ).signals
+    )
+
+    assert [s.kind for s in forged] == [None, None]
+    assert [s.say_do for s in forged] == ["say", "say"]
+    assert [s.kind for s in real] == ["test_result", "behavior"]
 
 
 def test_retention_drops_the_text_and_keeps_the_row(cockpit: Cockpit) -> None:

@@ -28,9 +28,9 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from omnigent.server.factory import bets, definition
 from omnigent.server.factory.control import CockpitError
@@ -56,6 +56,7 @@ SIGNAL_RE: Final = re.compile(r"^S-([1-9][0-9]{0,8})$")
 TITLE_MAX: Final = 120
 STATEMENT_MAX: Final = 200
 PROBLEM_MAX: Final = 200
+NOTE_FIELD_MAX: Final = 500
 ALTERNATIVE_MAX: Final = 160
 ALTERNATIVES_MAX: Final = 6
 SIGNALS_MAX: Final = 100
@@ -460,6 +461,20 @@ class SignalRef(BaseModel):
     confidence: int | None = Field(None, ge=0, le=100)
 
 
+_NoteText = Annotated[str, StringConstraints(min_length=1, max_length=NOTE_FIELD_MAX)]
+
+
+class BetNote(BaseModel):
+    """Scout's draft of a bet: solution ideas, the riskiest assumption, the cheapest test."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    solutions: list[_NoteText] = Field(default_factory=list, max_length=ALTERNATIVES_MAX)
+    riskiest_assumption: _NoteText | None = None
+    cheapest_test: _NoteText | None = None
+    metric: str | None = Field(None, min_length=1, max_length=200)
+
+
 class NewOpportunity(BaseModel):
     """What creating an opportunity takes (an agent's write, or a person's split)."""
 
@@ -473,7 +488,7 @@ class NewOpportunity(BaseModel):
     area: str | None = Field(None, max_length=32)
     alternatives: list[str] = Field(default_factory=list, max_length=ALTERNATIVES_MAX * 2)
     signals: list[SignalRef] = Field(default_factory=list, max_length=SIGNALS_MAX)
-    bet_note: dict[str, Any] | None = None
+    bet_note: BetNote | None = None
 
 
 def _profile_ids(doc: Mapping[str, Any], key: str) -> set[str]:
@@ -529,6 +544,18 @@ def check_signals(
     return out
 
 
+def _strings(value: Any, where: str) -> Iterable[tuple[str, str]]:
+    """Every string in *value*, at any depth, with its path."""
+    if isinstance(value, str):
+        yield where, value
+    elif isinstance(value, Mapping):
+        for key, inner in value.items():
+            yield from _strings(inner, f"{where}.{key}")
+    elif isinstance(value, list | tuple):
+        for i, inner in enumerate(value):
+            yield from _strings(inner, f"{where}[{i}]")
+
+
 def _agent_texts(body: NewOpportunity) -> list[tuple[str, str | None]]:
     texts: list[tuple[str, str | None]] = [
         ("title", body.title),
@@ -536,13 +563,8 @@ def _agent_texts(body: NewOpportunity) -> list[tuple[str, str | None]]:
         ("problem", body.problem),
     ]
     texts += [(f"alternatives[{i}]", a) for i, a in enumerate(body.alternatives)]
-    for key, value in (body.bet_note or {}).items():
-        if isinstance(value, str):
-            texts.append((f"bet_note.{key}", value))
-        elif isinstance(value, list):
-            texts += [
-                (f"bet_note.{key}[{i}]", v) for i, v in enumerate(value) if isinstance(v, str)
-            ]
+    if body.bet_note is not None:
+        texts += list(_strings(body.bet_note.model_dump(exclude_none=True), "bet_note"))
     return texts
 
 
@@ -600,7 +622,7 @@ def create(
         segments=list(dict.fromkeys(body.segments)),
         area=body.area,
         alternatives=alternatives,
-        bet_note=body.bet_note,
+        bet_note=body.bet_note.model_dump(exclude_none=True) if body.bet_note else None,
         origin=dict(origin) if origin else None,
         split_from=split_from,
     )
@@ -663,6 +685,7 @@ __all__ = [
     "REF_RE",
     "SIGNAL_RE",
     "STATUSES",
+    "BetNote",
     "Evaluated",
     "Facts",
     "NewOpportunity",

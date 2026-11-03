@@ -14,9 +14,10 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
 
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select, update
 
 from omnigent.db.db_models import (
+    SqlFactoryFeedback,
     SqlFactoryOpportunity,
     SqlFactoryScoreSnapshot,
     SqlFactorySignal,
@@ -49,6 +50,7 @@ from omnigent.entities.factory_discovery import (
 )
 from omnigent.stores.factory_store.discovery import (
     EMPTY_JSON,
+    HUNCH_KINDS,
     LABEL_FIELDS,
     OPPORTUNITY_FIELDS,
     OPPORTUNITY_JSON,
@@ -56,6 +58,8 @@ from omnigent.stores.factory_store.discovery import (
     SIGNAL_JSON,
     SNAPSHOT_FIELDS,
     SOURCE_STATE_FIELDS,
+    UNSORTED_SKIP,
+    SignalCounts,
     SignalFilter,
     check_enums,
     check_fields,
@@ -332,6 +336,65 @@ class SqlDiscoveryStore:
             stmt = stmt.where(model.ingested_at >= since)
         with self._session("count_factory_signals") as session:
             return int(session.execute(stmt).scalar() or 0)
+
+    def signal_counts(
+        self, factory_id: str, *, since: int, segments_since: int, suspect_at: int
+    ) -> SignalCounts:
+        model = SqlFactorySignal
+        link = SqlFactorySignalLink
+        ws = current_workspace_id()
+        fid = norm_id(factory_id)
+        mine = (model.workspace_id == ws, model.factory_id == fid)
+        live = and_(model.expired_at.is_(None), model.withdrawn_at.is_(None))
+        attached = (
+            select(link.signal)
+            .where(
+                link.workspace_id == ws,
+                link.factory_id == fid,
+                link.signal == model.number,
+                link.detached_at.is_(None),
+            )
+            .exists()
+        )
+        skip = [encode_factory_signal_kind(k) for k in UNSORTED_SKIP]
+        unsorted = and_(
+            or_(model.kind.is_(None), model.kind.not_in(skip)),
+            model.injection < suspect_at,
+            live,
+            ~attached,
+        )
+        hunches = and_(model.kind.in_([encode_factory_signal_kind(k) for k in HUNCH_KINDS]), live)
+
+        def tally(cond: ColumnElement[bool]) -> ColumnElement[int]:
+            return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+
+        totals = select(
+            func.count(), tally(unsorted), tally(model.injection >= suspect_at), tally(hunches)
+        ).where(*mine)
+        per_source = (
+            select(model.source, func.count())
+            .where(*mine, model.ingested_at >= since)
+            .group_by(model.source)
+        )
+        tagged = select(model.segments).where(
+            *mine, model.ingested_at >= segments_since, model.segments.is_not(None)
+        )
+        with self._session("count_factory_signal_facts") as session:
+            total, unsorted_n, flagged_n, hunches_n = session.execute(totals).one()
+            by_source = {str(src): int(n) for src, n in session.execute(per_source)}
+            segments: dict[str, int] = {}
+            for raw in session.execute(tagged).scalars():
+                for segment in dict.fromkeys(_load(raw, "segments") or []):
+                    segments[segment] = segments.get(segment, 0) + 1
+        return SignalCounts(
+            total=int(total or 0),
+            recent=sum(by_source.values()),
+            by_source=by_source,
+            segments=segments,
+            unsorted=int(unsorted_n or 0),
+            flagged=int(flagged_n or 0),
+            hunches=int(hunches_n or 0),
+        )
 
     def label_signal(
         self, factory_id: str, number: int, *, labelled_by: str, **labels: Any
@@ -621,6 +684,7 @@ class SqlDiscoveryStore:
         *,
         opportunity: int | None = None,
         since: int | None = None,
+        reason: str | None = None,
         limit: int = 200,
     ) -> builtins.list[FactoryScoreSnapshot]:
         model = SqlFactoryScoreSnapshot
@@ -632,9 +696,28 @@ class SqlDiscoveryStore:
             stmt = stmt.where(model.opportunity == opportunity)
         if since is not None:
             stmt = stmt.where(model.at >= since)
+        if reason is not None:
+            stmt = stmt.where(model.reason == reason)
         stmt = stmt.order_by(model.at.desc(), model.id.desc()).limit(limit)
         with self._session("list_factory_score_snapshots") as session:
             return [_snapshot(r) for r in session.execute(stmt).scalars()]
+
+    # ── Feedback a person took back ─────────────────────────────
+
+    def retract_feedback(self, factory_id: str, ids: Sequence[str]) -> int:
+        if not ids:
+            return 0
+        model = SqlFactoryFeedback
+        stmt = delete(model).where(
+            model.workspace_id == current_workspace_id(),
+            model.factory_id == norm_id(factory_id),
+            model.id.in_([norm_id(i) for i in ids]),
+        )
+
+        def write(session: Session) -> int:
+            return int(getattr(session.execute(stmt), "rowcount", 0) or 0)
+
+        return self._write("retract_factory_feedback", write)
 
     # ── Source state ────────────────────────────────────────────
 

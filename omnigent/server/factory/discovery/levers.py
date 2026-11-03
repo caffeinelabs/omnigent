@@ -248,11 +248,12 @@ def _detach(
     return True
 
 
-def _undo_record(work: _Work) -> dict[str, Any]:
+def _undo_record(work: _Work, feedback: Sequence[str] = ()) -> dict[str, Any]:
     return {
         "rows": {str(k): v for k, v in work.rows.items()},
         "links": work.links,
         "created": work.created,
+        "feedback": list(feedback),
     }
 
 
@@ -663,7 +664,14 @@ def _undo(
         store.update_opportunity(fid, int(number), **{k: v[0] for k, v in entry.items()})
     for number in undo.get("created") or []:
         store.update_opportunity(fid, int(number), merged_into=row.number)
-    work.data = {"undid": body.action, "kind": event.kind, "event_id": event.id}
+    # The calibration and closure feedback the act left go too: Scout learns nothing from it.
+    retracted = store.retract_feedback(fid, [str(i) for i in undo.get("feedback") or []])
+    work.data = {
+        "undid": body.action,
+        "kind": event.kind,
+        "event_id": event.id,
+        "feedback_retracted": retracted,
+    }
     work.snapshot.append(row.number)
     return work
 
@@ -692,20 +700,9 @@ async def _finish(
     from omnigent.server.factory import feedback
 
     deps = factory_deps(app_state)
-    action = uuid.uuid4().hex if work.undoable else None
-    data = {**actor.event_data(), "opportunity": row.ref, **work.data}
-    if action is not None:
-        data.update(action=action, undo=_undo_record(work))
-    await events.emit(
-        app_state,
-        root.id,
-        work.kind,
-        subject=f"{_SUBJECT}{row.ref}",
-        summary=work.summary,
-        data=data,
-    )
+    kept: list[str] = []
     for target_kind, target_id, tag, text in work.calibrations:
-        await feedback.add(
+        found = await feedback.add(
             app_state,
             root.id,
             author=actor.id,
@@ -716,9 +713,10 @@ async def _finish(
             tags=[tag],
             body=text,
         )
+        kept.append(found.id)
     if work.closure is not None:
         target_id, reason, note = work.closure
-        await feedback.add(
+        found = await feedback.add(
             app_state,
             root.id,
             author=actor.id,
@@ -729,6 +727,19 @@ async def _finish(
             tags=[reason],
             body=note,
         )
+        kept.append(found.id)
+    action = uuid.uuid4().hex if work.undoable else None
+    data = {**actor.event_data(), "opportunity": row.ref, **work.data}
+    if action is not None:
+        data.update(action=action, undo=_undo_record(work, kept))
+    await events.emit(
+        app_state,
+        root.id,
+        work.kind,
+        subject=f"{_SUBJECT}{row.ref}",
+        summary=work.summary,
+        data=data,
+    )
     if work.snapshot:
         await asyncio.to_thread(_snapshot, deps, root.id, work.snapshot, work.kind)
     if action is None:
@@ -1095,7 +1106,7 @@ async def add_hunch(
         root.id,
         "hunch.added",
         subject=f"{_SUBJECT}{target.ref}" if target is not None else f"signal:{row.ref}",
-        summary=f"{_name(actor)} added a hunch: {control.clip(body.text, 160)}",
+        summary=f"{_name(actor)} added a hunch: {control.clip(row.excerpt or '', 160)}",
         data={
             **actor.event_data(),
             "signal": row.ref,

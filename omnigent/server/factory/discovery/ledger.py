@@ -40,7 +40,7 @@ from omnigent.server.factory.definition_blocks import (
     REDACT_FLOOR,
     SOURCE_PRIVACY,
 )
-from omnigent.server.factory.discovery.redact import redact
+from omnigent.server.factory.discovery.redact import redact, unsupported
 from omnigent.stores.factory_store import now_s
 
 if TYPE_CHECKING:
@@ -71,6 +71,10 @@ SIGNAL_KINDS: Final = (
 LABEL_KINDS: Final = frozenset({"request", "pain", "praise", "bug", "churn_reason", "market"})
 """Kinds a labeller may give a user-text signal (the others are the server's)."""
 DO_KINDS: Final = frozenset({"behavior", "test_result"})
+VERDICT_SOURCE_KINDS: Final = frozenset({"factory"})
+"""Source kinds whose ``test_result`` signals (and ``meta.verdict``) are kept: the server's."""
+BEHAVIOR_SOURCE_KINDS: Final = frozenset({"analytics", "observability", "factory"})
+"""Source kinds whose ``behavior`` signals (and their ``meta.reach``) are kept."""
 CONVICTION_KINDS: Final = frozenset({"hunch", "idea"})
 INTENSITIES: Final = ("blocker", "workaround", "annoyance", "nice")
 FORCES: Final = ("push", "pull", "anxiety", "habit")
@@ -326,13 +330,27 @@ def _refuse_source(source: SourceRef) -> None:
             f"source {source.id} is {source.privacy}: it stays off until the server can "
             "detect names in it",
         )
+    missing = unsupported(source.redact)
+    if missing:
+        raise CockpitError(
+            422,
+            "redaction_unavailable",
+            f"source {source.id} asks to redact {', '.join(missing)}, which this server cannot "
+            "detect yet: it stores nothing until it can (remove the kind to store with the "
+            "floor only)",
+        )
     if source.state == "paused":
         raise CockpitError(409, "source_paused", f"source {source.id} is paused")
 
 
 def _kind(source: SourceRef, item: Item) -> str | None:
+    """A source tells only the kinds it can: a readout is the server's, behaviour is analytics'."""
     if source.kind == "team" or item.team_author:
         return "hunch"
+    if item.kind == "test_result" and source.kind not in VERDICT_SOURCE_KINDS:
+        return None
+    if item.kind == "behavior" and source.kind not in BEHAVIOR_SOURCE_KINDS:
+        return None
     if item.kind in SIGNAL_KINDS and item.kind not in CONVICTION_KINDS:
         return item.kind
     return None
@@ -403,7 +421,8 @@ def ingest(
 
     :param query_event: The ``source.query`` event that fetched them.
     :raises CockpitError: 422 ``source_not_allowed`` (a personal or sensitive
-        source), 409 ``source_paused``, 400 ``invalid_body`` (too many items).
+        source) or ``redaction_unavailable`` (it asks for a kind the server
+        cannot redact yet), 409 ``source_paused``, 400 ``invalid_body`` (too many items).
     """
     _refuse_source(source)
     if len(items) > BATCH_MAX:
@@ -586,6 +605,7 @@ def expire_due(deps: FactoryDeps, *, now: int | None = None, limit: int = 500) -
 
 __all__ = [
     "BATCH_MAX",
+    "BEHAVIOR_SOURCE_KINDS",
     "CONVICTION_KINDS",
     "DO_KINDS",
     "FORCES",
@@ -599,6 +619,7 @@ __all__ = [
     "SUSPECT_AT",
     "TEAM_AUTHOR",
     "TEAM_SOURCE",
+    "VERDICT_SOURCE_KINDS",
     "Ingested",
     "Item",
     "SourceRef",

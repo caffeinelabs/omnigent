@@ -4,9 +4,11 @@
 
     rank       = reach_s × intensity × fit × confidence
     reach_s    = min(1, sqrt(reach / reach_ref))
-                 reach = accounts a month: a behaviour aggregate's reach when one
-                         exists, otherwise distinct accounts × the middle of reach_ratio
-    intensity  = the median label of the supporting signals:
+                 reach = accounts a month: a behaviour aggregate's reach (from an
+                         analytics or observability source) when one exists,
+                         otherwise distinct accounts × the middle of reach_ratio
+    intensity  = the median label of the supporting signals, each account's
+                 freshest per_account_cap labels only (one loud account is one voice):
                  blocker 1.0 · workaround 0.6 · annoyance 0.3 · nice-to-have 0.1
     fit        = goal weight ÷ heaviest goal weight × (1 in a focus segment, else
                  off_focus_factor); 0 under a non-goal
@@ -27,8 +29,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
+from omnigent.server.factory.discovery import evidence
 from omnigent.server.factory.discovery.evidence import Linked, Meter
-from omnigent.server.factory.discovery.ledger import CONVICTION_KINDS, INJECTION_SUSPECT
+from omnigent.server.factory.discovery.ledger import (
+    BEHAVIOR_SOURCE_KINDS,
+    CONVICTION_KINDS,
+    INJECTION_SUSPECT,
+)
 
 if TYPE_CHECKING:
     from omnigent.entities.factory_discovery import FactoryOpportunity
@@ -158,7 +165,9 @@ def _reach(meter: Meter, support: Sequence[Any], r: Mapping[str, Any]) -> Part:
     measured = [
         (s.seen_at, float(s.meta["reach"]))
         for s in support
-        if s.kind == "behavior" and isinstance((s.meta or {}).get("reach"), int | float)
+        if s.kind == "behavior"
+        and s.source_kind in BEHAVIOR_SOURCE_KINDS
+        and isinstance((s.meta or {}).get("reach"), int | float)
     ]
     if measured:
         reach = max(measured)[1]
@@ -174,9 +183,28 @@ def _reach(meter: Meter, support: Sequence[Any], r: Mapping[str, Any]) -> Part:
     return Part("reach", value, what, why)
 
 
-def _intensity(support: Sequence[Any], r: Mapping[str, Any]) -> Part:
+def capped_labels(support: Sequence[Any], cap: int) -> dict[str, list[str]]:
+    """
+    ``{account: labels}``: each account's freshest *cap* intensity labels.
+
+    An account-less signal (a public page, an aggregate) counts as its own
+    account, as in the evidence meter.
+    """
+    by_account: dict[str, list[Any]] = {}
+    for signal in support:
+        if signal.intensity in INTENSITY_ORDER:
+            by_account.setdefault(evidence.account_key(signal), []).append(signal)
+    out: dict[str, list[str]] = {}
+    for account, rows in by_account.items():
+        rows.sort(key=lambda s: (s.seen_at, s.number), reverse=True)
+        out[account] = [s.intensity for s in rows[: max(cap, 1)]]
+    return out
+
+
+def _intensity(support: Sequence[Any], r: Mapping[str, Any], cap: int) -> Part:
     weights = r["intensity"]
-    labels = [s.intensity for s in support if s.intensity in INTENSITY_ORDER]
+    per_account = capped_labels(support, cap)
+    labels = [lbl for found in per_account.values() for lbl in found]
     if not labels:
         return Part(
             "intensity",
@@ -186,12 +214,14 @@ def _intensity(support: Sequence[Any], r: Mapping[str, Any]) -> Part:
         )
     middle = statistics.median_low(sorted(INTENSITY_ORDER.index(lbl) for lbl in labels))
     label = INTENSITY_ORDER[middle]
-    share = sum(1 for lbl in labels if lbl == label)
+    share = sum(1 for found in per_account.values() if label in found)
+    accounts = len(per_account)
     return Part(
         "intensity",
         float(weights[label]),
         f"most say {_INTENSITY_WORDS[label]}",
-        f"the median of {len(labels)} labelled signals ({share} {_INTENSITY_WORDS[label]})",
+        f"the median label of {accounts} account{'s' if accounts != 1 else ''} "
+        f"({share} say {_INTENSITY_WORDS[label]}; at most {max(cap, 1)} per account)",
     )
 
 
@@ -249,9 +279,10 @@ def score(
     :param rubric: The effective ``discovery.rubric``.
     """
     r = rubric_values(rubric)
+    cap = int(evidence.rubric_values(rubric)["per_account_cap"])
     support = _support(linked, now, int(r["window_days"]))
     reach = _reach(meter, support, r)
-    intensity = _intensity(support, r)
+    intensity = _intensity(support, r, cap)
     fit = _fit(opportunity, strategy or {}, r)
     confidence = Part(
         "confidence", meter.confidence, f"{meter.level} evidence", meter.reason or meter.level
@@ -268,7 +299,9 @@ def score(
             "accounts": meter.accounts,
             "source_kinds": list(meter.source_kinds),
             "level": meter.level,
-            "labels": sorted(s.intensity for s in support if s.intensity),
+            "labels": sorted(
+                lbl for found in capped_labels(support, cap).values() for lbl in found
+            ),
             "goal": opportunity.goal,
             "segments": list(opportunity.segments),
             "non_goal": opportunity.non_goal,
@@ -366,6 +399,7 @@ __all__ = [
     "Part",
     "Score",
     "band_of",
+    "capped_labels",
     "quadrant_of",
     "rerank",
     "rubric_values",

@@ -26,6 +26,14 @@ from omnigent.server.factory.discovery.redact import redact
         ("open https://app.example.org/share?token=abc123def456 now", "url_secret", "[url]"),
         ("https://user:hunter2@example.org/x is the link", "url_secret", "[url]"),
         ("card 4242 4242 4242 4242 was charged", "card", "[card]"),
+        ("db at postgres://admin:S3cr3t!pw@db.internal/app (sample)", "url_secret", "[url]"),
+        ("cache redis://:supersecretpass@cache:6379 (sample)", "url_secret", "[url]"),
+        ("token glpat-abcdefghijklmnopqrstu1 leaked (sample)", "token", "[token]"),
+        ("token npm_abcdefghijklmnopqrstuvwxyz0123456789 leaked (sample)", "token", "[token]"),
+        ("token hf_abcdefghijklmnopqrstuvwxyz0123456 leaked (sample)", "token", "[token]"),
+        ("key rk_live_abcdefghijklmnop12 leaked (sample)", "token", "[token]"),
+        ("call me on 4155550134 tomorrow (sample)", "phone", "[phone]"),
+        ("my mobile: +447911123456 (sample)", "phone", "[phone]"),
     ],
 )
 def test_each_floor_kind_becomes_a_typed_placeholder(
@@ -47,6 +55,8 @@ def test_each_floor_kind_becomes_a_typed_placeholder(
         "It took 12:30:45 to finish (sample)",
         "Order 1234567890123 is not a card (sample)",
         "https://docs.example.org/guide?page=2 explains it (sample)",
+        "Read s3://sample-bucket/reports/latest for the numbers (sample)",
+        "Ticket 4155550134 was closed (sample)",
     ],
 )
 def test_ordinary_words_numbers_and_links_stay(text: str) -> None:
@@ -78,3 +88,21 @@ def test_a_plain_url_keeps_its_path_but_an_ip_in_it_goes() -> None:
     out = redact("see http://10.1.2.3/status for details (sample)")
 
     assert out.text == "see http://[ip]/status for details (sample)"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "open https://x.example.org/a?token=abcd1234efgh5678 now (sample)",
+            "open [url] now (sample)",
+        ),
+        ("db postgres://admin:S3cr3t!pw@db.internal/app (sample)", "db [url] (sample)"),
+        ("cache redis://:supersecretpass@cache:6379 (sample)", "cache [url] (sample)"),
+    ],
+)
+def test_a_secret_bearing_url_goes_whole(text: str, expected: str) -> None:
+    out = redact(text)
+
+    assert out.text == expected
+    assert out.counts == {"url_secret": 1}

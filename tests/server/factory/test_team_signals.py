@@ -1,9 +1,10 @@
 """The ``team`` source: what the factory's own people say in the Room becomes hunch signals.
 
-``hunch: …`` anywhere, "I think … because …", and requests such as "we need
-…" in ``#factory`` are kept as hunches (weight 0.1, never user evidence);
-other messages are not. Nothing is kept while discovery is off or the team
-source is paused. Every text is sample data.
+``hunch: …`` anywhere, and in ``#factory`` "I think … because …" and
+requests such as "we need …", are kept as hunches (weight 0.1, never user
+evidence); debugging chatter, instructions to Atlas and other messages are
+not. Nothing is kept while discovery is off or the team source is paused.
+Every text is sample data.
 """
 
 from __future__ import annotations
@@ -47,13 +48,24 @@ async def say(
             "hunch: teams review drafts together (sample)",
             ("hunch", "teams review drafts together (sample)"),
         ),
-        ("project:x", "I think people leave because builds fail (sample)", ("hunch", None)),
+        (
+            "project:x",
+            "hunch: people leave when builds fail (sample)",
+            ("hunch", "people leave when builds fail (sample)"),
+        ),
+        ("factory", "I think people leave because builds fail (sample)", ("hunch", None)),
+        ("project:x", "I think CI fails because the lockfile drifted (sample)", None),
+        ("pr:abc", "I think this breaks because the cache is stale (sample)", None),
         ("factory", "We need a way to share drafts (sample)", ("request", None)),
         (
             "factory",
-            "@atlas can we add an export? (sample)",
-            ("request", "can we add an export? (sample)"),
+            "@atlas we should add an export (sample)",
+            ("request", "we should add an export (sample)"),
         ),
+        ("factory", "@atlas can we add an export? (sample)", None),
+        ("factory", "can you add a retry to the deploy step? (sample)", None),
+        ("factory", "could we get the logs from yesterday? (sample)", None),
+        ("factory", "please make the PL rebase first (sample)", None),
         ("project:x", "we need this today (sample)", None),
         ("factory", "How is the build going? (sample)", None),
     ],

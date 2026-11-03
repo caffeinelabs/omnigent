@@ -7,7 +7,8 @@ and keys ``[token]``, IP addresses ``[ip]``, URLs that carry a secret
 digits). The six kinds are the floor every source applies
 (:data:`~omnigent.server.factory.definition_blocks.REDACT_FLOOR`); names and
 addresses need a detector this server does not have yet, so sources that
-would carry them (``personal``, ``sensitive``) stay refused.
+would carry them (``personal``, ``sensitive``), or that ask for them
+(:func:`unsupported`), stay refused.
 
 The stage is code, never configuration: a source can only add kinds.
 """
@@ -31,13 +32,16 @@ PLACEHOLDERS: Final[dict[str, str]] = {
     "card": "[card]",
 }
 
-_URL_RE: Final = re.compile(r"\b(?:https?|ftp|wss?)://[^\s<>\"'`)\]]+", re.IGNORECASE)
+_URL_RE: Final = re.compile(r"\b[a-z][a-z0-9+.-]{1,20}://[^\s<>\"'`)\]]+", re.IGNORECASE)
+_USERINFO_RE: Final = re.compile(r"://[^/@\s?#:]*:[^/@\s?#]+@")
+"""A URL with a password in it, the user name possibly empty (``redis://:pass@host``)."""
 _EMAIL_RE: Final = re.compile(
     r"(?<![\w.+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}\b"
 )
 _TOKEN_RE: Final = re.compile(
     r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}"
-    r"|sk-[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}"
+    r"|sk-[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}"
+    r"|glpat-[A-Za-z0-9_-]{20,}|\bnpm_[A-Za-z0-9]{36}\b|\bhf_[A-Za-z0-9]{30,}\b"
     r"|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"
     r"|\bBearer\s+[A-Za-z0-9._~+/=-]{16,})"
@@ -55,6 +59,11 @@ _PHONE_RE: Final = re.compile(
     r"(?<![\w+])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d{2,4}(?:[\s.-]\d{2,5}){1,4}(?![\w])"
     r"|(?<![\w+])\+\d{8,15}(?!\w)"
 )
+_BARE_PHONE_RE: Final = re.compile(
+    r"(?i)(\b(?:phone|tel|telephone|mobile|cell|call|text|sms|whatsapp|fax)\b[^\d\n]{0,20}?)"
+    r"(\+?\d{10,15})(?!\d)"
+)
+"""An unbroken run of 10-15 digits right after a phone word (``call me 4155550134``)."""
 _DATE_RE: Final = re.compile(r"^\d{4}[-./]\d{1,2}[-./]\d{1,2}$|^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$")
 _MIN_PHONE_DIGITS: Final = 9
 _MAX_PHONE_DIGITS: Final = 15
@@ -114,12 +123,11 @@ def _phone(match: re.Match[str]) -> bool:
 
 
 def _url(match: re.Match[str]) -> bool:
-    return secret_text(match.group(0))
+    return bool(_USERINFO_RE.search(match.group(0))) or secret_text(match.group(0))
 
 
 _Stage = tuple[str, re.Pattern[str], Callable[[re.Match[str]], bool] | None]
 _STAGES: Final[tuple[_Stage, ...]] = (
-    ("url_secret", _URL_RE, _url),
     ("email", _EMAIL_RE, None),
     ("token", _TOKEN_RE, None),
     ("card", _CARD_RE, _card),
@@ -141,34 +149,58 @@ def _assigned(text: str, counts: dict[str, int]) -> str:
     return _ASSIGNED_SECRET_RE.sub(repl, text)
 
 
+def _bare_phones(text: str, counts: dict[str, int]) -> str:
+    """``call me 4155550134`` → ``call me [phone]`` (the phone word stays)."""
+
+    def repl(match: re.Match[str]) -> str:
+        counts["phone"] = counts.get("phone", 0) + 1
+        return f"{match.group(1)}{PLACEHOLDERS['phone']}"
+
+    return _BARE_PHONE_RE.sub(repl, text)
+
+
+def _stage(
+    text: str,
+    kind: str,
+    pattern: re.Pattern[str],
+    accept: Callable[[re.Match[str]], bool] | None,
+    counts: dict[str, int],
+) -> str:
+    def repl(match: re.Match[str]) -> str:
+        if accept is not None and not accept(match):
+            return match.group(0)
+        counts[kind] = counts.get(kind, 0) + 1
+        return PLACEHOLDERS[kind]
+
+    return pattern.sub(repl, text)
+
+
+def unsupported(kinds: Iterable[str]) -> list[str]:
+    """:returns: The kinds in *kinds* this stage cannot redact yet (``name``, ``address``)."""
+    return sorted({k for k in kinds if k not in PLACEHOLDERS})
+
+
 def redact(text: str, kinds: Iterable[str] = REDACT_FLOOR) -> Redacted:
     """
     Replace personal and secret data in *text* with typed placeholders.
+
+    Secret-bearing URLs go first, whole, so a ``?token=…`` inside one never
+    leaves half a URL behind.
 
     :param kinds: The kinds to redact; the Tier-0 floor is always applied.
     :returns: The redacted text and the placeholders written per kind.
     """
     wanted = set(kinds) | set(REDACT_FLOOR)
     counts: dict[str, int] = {}
-    out = text
+    out = _stage(text, "url_secret", _URL_RE, _url, counts)
     if "token" in wanted:
         out = _assigned(out, counts)
     for kind, pattern, accept in _STAGES:
-        if kind not in wanted:
-            continue
-
-        def repl(
-            match: re.Match[str],
-            kind: str = kind,
-            accept: Callable[[re.Match[str]], bool] | None = accept,
-        ) -> str:
-            if accept is not None and not accept(match):
-                return match.group(0)
-            counts[kind] = counts.get(kind, 0) + 1
-            return PLACEHOLDERS[kind]
-
-        out = pattern.sub(repl, out)
+        if kind in wanted:
+            out = _stage(out, kind, pattern, accept, counts)
+    if "phone" in wanted:
+        out = _bare_phones(out, counts)
     return Redacted(out, counts)
 
 
-__all__ = ["PLACEHOLDERS", "Redacted", "redact"]
+__all__ = ["PLACEHOLDERS", "Redacted", "redact", "unsupported"]

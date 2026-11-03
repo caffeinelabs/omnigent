@@ -236,12 +236,68 @@ def test_snapshots_and_source_state_round_trip(store: FactoryStore) -> None:
     assert snaps[1].inputs == {"accounts": 5} and snaps[1].def_version == 3
     assert [s.opportunity for s in store.list_score_snapshots(FID, opportunity=1)] == [1]
     assert store.list_score_snapshots(FID, since=15)[0].opportunity == 2
+    assert [s.opportunity for s in store.list_score_snapshots(FID, reason="daily")] == [1]
 
     state = store.put_source_state(FID, "web", calls_today=3, usage_day="2026-11-03")
     state = store.put_source_state(FID, "web", failures=1, data={"etag": "x"})
     assert (state.calls_today, state.failures, state.data) == (3, 1, {"etag": "x"})
     assert store.get_source_state(FID, "repo") is None
     assert [s.source for s in store.list_source_states(FID)] == ["web"]
+
+
+def test_signal_counts_are_counted_without_reading_rows(store: FactoryStore) -> None:
+    signal(store, ingested_at=10, segments=["teams"])  # S-1: old, unsorted
+    signal(store, ingested_at=100, segments=["new_user", "teams"])  # S-2: attached
+    signal(store, ingested_at=100, source="repo", source_kind="repo", segments=["new_user"])
+    signal(store, ingested_at=100, injection=75, flags=["injection_suspect"])  # S-4: flagged
+    signal(store, ingested_at=100, kind="hunch", source="team", source_kind="team")  # S-5
+    signal(store, ingested_at=100, kind="idea", source="team", source_kind="team")  # S-6
+    signal(store, ingested_at=100, kind="simulation")  # S-7
+    signal(store, ingested_at=100)  # S-8: expires below
+    signal(store, ingested_at=100, kind="request")  # S-9: detached below
+    signal(store, OTHER, ingested_at=100)
+    store.put_link(FID, 2, 1, attached_by="scout", attached_kind="agent")
+    store.put_link(FID, 9, 1, attached_by="scout", attached_kind="agent")
+    store.detach_link(FID, 9, 1, by="alice")
+    store.clear_signal_text(FID, 6, reason="withdrawn", by="alice")
+    store.clear_signal_text(FID, 8, reason="expired")
+
+    counts = store.signal_counts(FID, since=50, segments_since=5, suspect_at=50)
+
+    assert counts.total == 9
+    assert counts.recent == 8
+    assert counts.by_source == {"web": 5, "repo": 1, "team": 2}
+    assert counts.segments == {"teams": 2, "new_user": 2}
+    assert counts.unsorted == 3  # S-1, S-3 and S-9 (detached)
+    assert counts.flagged == 1
+    assert counts.hunches == 1  # S-6 was withdrawn
+    assert store.signal_counts(OTHER, since=0, segments_since=0, suspect_at=50).total == 1
+
+
+def test_an_undo_retracts_feedback(store: FactoryStore) -> None:
+    kept = store.add_feedback(
+        FID,
+        target_kind="opportunity",
+        target_id="O-1",
+        author_kind="human",
+        author="alice",
+        kind="calibration",
+        tags=["move"],
+    )
+    other = store.add_feedback(
+        OTHER,
+        target_kind="opportunity",
+        target_id="O-1",
+        author_kind="human",
+        author="alice",
+        kind="calibration",
+        tags=["move"],
+    )
+
+    assert store.retract_feedback(FID, [kept.id, other.id]) == 1
+    assert store.list_feedback(FID) == []
+    assert [f.id for f in store.list_feedback(OTHER)] == [other.id]
+    assert store.retract_feedback(FID, []) == 0
 
 
 def test_rows_stay_in_their_workspace(store: FactoryStore) -> None:

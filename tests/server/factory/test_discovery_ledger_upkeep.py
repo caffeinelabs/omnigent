@@ -48,6 +48,31 @@ def test_a_pass_expires_text_and_snapshots_each_factory_once_a_day(cockpit: Cock
     assert snap.inputs["status"] in ("idea", "validated")
 
 
+def test_many_decision_snapshots_never_hide_the_days_daily_one(cockpit: Cockpit) -> None:
+    make_opportunity(cockpit, ingest(cockpit, "web", ["words (sample)"]))
+    start = 1_800_000_000 - 1_800_000_000 % 86400
+    assert discovery_ledger.run_once(cockpit.deps, now=start + 60)["snapshots"] == 1
+    cockpit.store.add_score_snapshots(
+        cockpit.fid,
+        [
+            {
+                "opportunity": 1,
+                "at": start + 120 + i,
+                "reason": "parked",
+                "rank": 0.1,
+                "band": "next",
+                "level": "weak",
+            }
+            for i in range(600)
+        ],
+    )
+
+    later = discovery_ledger.run_once(cockpit.deps, now=start + 3600)
+
+    assert later["snapshots"] == 0
+    assert len(cockpit.store.list_score_snapshots(cockpit.fid, reason="daily")) == 1
+
+
 def test_a_factory_without_discovery_gets_no_snapshot(cockpit: Cockpit) -> None:
     make_opportunity(cockpit, ingest(cockpit, "web", ["words (sample)"]))
     definition.set_values(

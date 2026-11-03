@@ -984,11 +984,14 @@ the factory's `discovery.enabled`; no product knowledge lives in it.
   writes, and the server's kinds (`hunch`, `idea`, `behavior`, `test_result`,
   `simulation`) never change. Text past the source's `keep_days` is dropped by
   the hourly upkeep (`background/discovery_ledger.py`); the row and its counts
-  stay. A paused source, or a `personal`/`sensitive` one, stores nothing.
-- **The team source**: people's hunches (`POST …/hunches`, or `hunch: …` and
-  "I think … because …" in the Room) and Room requests in `#factory` ("we
-  need …") are `hunch` signals of the `team` source (weight 0.1); so are repo
-  items whose author is on the team.
+  stay. A paused source, a `personal`/`sensitive` one, or one that asks for a
+  redaction the server cannot do yet (`name`, `address`) stores nothing. Only
+  the server's own source writes `test_result` (a readout's verdict), and only
+  analytics and observability sources write `behavior` (an aggregate's reach).
+- **The team source**: people's hunches (`POST …/hunches`, `hunch: …` in any
+  Room thread, "I think … because …" in `#factory`) and `#factory` requests
+  ("we need …", "we should have|add|build …") are `hunch` signals of the
+  `team` source (weight 0.1); so are repo items whose author is on the team.
 - **The evidence meter** (`evidence.py`): hunch, weak, moderate (≥ 5 accounts'
   worth from ≥ 2 source kinds within 90 days), strong (plus "do" evidence),
   proven (a won test). An account counts once per opportunity; evidence
@@ -997,13 +1000,18 @@ the factory's `discovery.enabled`; no product knowledge lives in it.
   a `discovery.rubric` field.
 - **The rank** (`rubric.py`): `reach_s × intensity × fit × confidence`, bands
   Now ≥ 0.20, Next ≥ 0.10, Later; each part with its input and reason. The
-  formula is code, the numbers are rubric fields.
+  intensity is the median label with the meter's per-account cap, so one
+  loud account is one voice. The formula is code, the numbers are rubric
+  fields.
 - **Opportunities** (`O-n`, `opportunities.py`): status is derived (idea,
   validated, proposed, building, shipped, measured, kept, dropped, parked,
   merged) from the evidence, the `C-n` that name them and their projects'
   `charter.why`. An agent's opportunity must be a need in job form that names
   no solution, with two different solutions, cited ids that resolve, and
-  quotes that match a stored excerpt (`quotes.py`, also the bets' quote check).
+  quotes (in any quote marks, in any field it writes, `bet_note` included)
+  that match a stored excerpt as whole words (`quotes.py`, also the bets'
+  quote check): an ellipsis joins at most three parts of three words or
+  more, and may not drop a negation.
 - **People's levers** (`levers.py`, `api/discovery.py`, prefix
   `/v1/factory/factories/{fid}`; reads READ, writes EDIT and human origin):
   `GET /discovery`, `GET /opportunities`, `GET /opportunities/{O-n}`,
@@ -1018,7 +1026,7 @@ the factory's `discovery.enabled`; no product knowledge lives in it.
   10 minutes, `{op: "undo", action}` puts it back (409 `undo_stale` once it
   changed again). Merges, splits, renames, moves and detaches are kept as
   `calibration` feedback on the `opportunity` or `signal`; a kill's reason as
-  `closure`.
+  `closure`; an undo takes that feedback back too.
 
 ### Learning
 

@@ -245,6 +245,43 @@ class SignalFilter:
         return self.numbers is None or row.number in self.numbers
 
 
+UNSORTED_SKIP: Final = ("hunch", "idea", "simulation")
+"""Signal kinds never waiting to be sorted into an opportunity."""
+HUNCH_KINDS: Final = ("hunch", "idea")
+
+
+@dataclass(frozen=True)
+class SignalCounts:
+    """
+    What :meth:`DiscoveryStore.signal_counts` counts (no row is decoded but segments).
+
+    :param recent: Signals stored at or after ``since``; ``by_source`` splits them.
+    :param segments: Signals per segment id stored at or after ``segments_since``.
+    :param unsorted: Live user signals (not a hunch, idea, simulation or suspect,
+        text not gone) with no attached link.
+    :param flagged: Signals whose injection score reached ``suspect_at``.
+    :param hunches: Hunches and ideas whose text is not gone.
+    """
+
+    total: int = 0
+    recent: int = 0
+    by_source: dict[str, int] = field(default_factory=dict)
+    segments: dict[str, int] = field(default_factory=dict)
+    unsorted: int = 0
+    flagged: int = 0
+    hunches: int = 0
+
+
+def is_unsorted(row: FactorySignal, suspect_at: int) -> bool:
+    """:returns: Whether *row* is a live user signal waiting to be sorted (links aside)."""
+    return (
+        row.kind not in UNSORTED_SKIP
+        and row.injection < suspect_at
+        and row.expired_at is None
+        and row.withdrawn_at is None
+    )
+
+
 class DiscoveryStore(ABC):
     """The discovery ledger's store methods (synchronous; workspace-scoped)."""
 
@@ -276,6 +313,12 @@ class DiscoveryStore(ABC):
     @abstractmethod
     def count_signals(self, factory_id: str, *, since: int | None = None) -> int:
         """:returns: How many signals the factory stored at or after *since*."""
+
+    @abstractmethod
+    def signal_counts(
+        self, factory_id: str, *, since: int, segments_since: int, suspect_at: int
+    ) -> SignalCounts:
+        """:returns: The ledger's counts for the Discovery header, counted by the database."""
 
     @abstractmethod
     def label_signal(
@@ -391,9 +434,16 @@ class DiscoveryStore(ABC):
         *,
         opportunity: int | None = None,
         since: int | None = None,
+        reason: str | None = None,
         limit: int = 200,
     ) -> builtins.list[FactoryScoreSnapshot]:
-        """:returns: Snapshots, newest first."""
+        """:returns: Snapshots (of *reason*, when given), newest first."""
+
+    # ── Feedback a person took back ─────────────────────────────
+
+    @abstractmethod
+    def retract_feedback(self, factory_id: str, ids: Sequence[str]) -> int:
+        """Delete feedback rows *ids* (an Undo takes its calibration back). :returns: How many."""
 
     # ── Source state ────────────────────────────────────────────
 
@@ -501,6 +551,37 @@ class InMemoryDiscoveryStore:
                 for k, r in self._tables().signals.items()
                 if k[0] == ws and k[1] == fid and (since is None or r.ingested_at >= since)
             )
+
+    def signal_counts(
+        self, factory_id: str, *, since: int, segments_since: int, suspect_at: int
+    ) -> SignalCounts:
+        fid = norm_id(factory_id)
+        ws = current_workspace_id()
+        tables = self._tables()
+        with self._lock:
+            rows = [r for k, r in tables.signals.items() if k[0] == ws and k[1] == fid]
+            linked = {
+                k[2]
+                for k, link in tables.links.items()
+                if k[0] == ws and k[1] == fid and link.detached_at is None
+            }
+        by_source: dict[str, int] = {}
+        segments: dict[str, int] = {}
+        for row in rows:
+            if row.ingested_at >= since:
+                by_source[row.source] = by_source.get(row.source, 0) + 1
+            if row.ingested_at >= segments_since:
+                for segment in dict.fromkeys(row.segments):
+                    segments[segment] = segments.get(segment, 0) + 1
+        return SignalCounts(
+            total=len(rows),
+            recent=sum(by_source.values()),
+            by_source=by_source,
+            segments=segments,
+            unsorted=sum(1 for r in rows if r.number not in linked and is_unsorted(r, suspect_at)),
+            flagged=sum(1 for r in rows if r.injection >= suspect_at),
+            hunches=sum(1 for r in rows if r.kind in HUNCH_KINDS and not r.gone),
+        )
 
     def label_signal(
         self, factory_id: str, number: int, *, labelled_by: str, **labels: Any
@@ -740,6 +821,7 @@ class InMemoryDiscoveryStore:
         *,
         opportunity: int | None = None,
         since: int | None = None,
+        reason: str | None = None,
         limit: int = 200,
     ) -> builtins.list[FactoryScoreSnapshot]:
         fid = norm_id(factory_id)
@@ -752,9 +834,25 @@ class InMemoryDiscoveryStore:
                 and r.factory_id == fid
                 and (opportunity is None or r.opportunity == opportunity)
                 and (since is None or r.at >= since)
+                and (reason is None or r.reason == reason)
             ]
         rows.sort(key=lambda r: (r.at, r.id), reverse=True)
         return rows[:limit]
+
+    def retract_feedback(self, factory_id: str, ids: Sequence[str]) -> int:
+        fid = norm_id(factory_id)
+        ws = current_workspace_id()
+        wanted = set(ids)
+        feedback: dict[tuple[int, str], Any] = getattr(self, "_feedback", {})
+        with self._lock:
+            gone = [
+                key
+                for key, row in feedback.items()
+                if key[0] == ws and key[1] in wanted and row.factory_id == fid
+            ]
+            for key in gone:
+                del feedback[key]
+        return len(gone)
 
     # ── Source state ────────────────────────────────────────────
 
@@ -790,6 +888,7 @@ class InMemoryDiscoveryStore:
 
 __all__ = [
     "EMPTY_JSON",
+    "HUNCH_KINDS",
     "LABEL_FIELDS",
     "OPPORTUNITY_FIELDS",
     "OPPORTUNITY_JSON",
@@ -797,11 +896,14 @@ __all__ = [
     "SIGNAL_JSON",
     "SNAPSHOT_FIELDS",
     "SOURCE_STATE_FIELDS",
+    "UNSORTED_SKIP",
     "DiscoveryStore",
     "InMemoryDiscoveryStore",
+    "SignalCounts",
     "SignalFilter",
     "check_enums",
     "check_fields",
     "clip",
+    "is_unsorted",
     "pointer_key",
 ]

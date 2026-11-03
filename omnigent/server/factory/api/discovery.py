@@ -33,16 +33,22 @@ from omnigent.server.factory import control
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.discovery import levers, opportunities, require_on, views
-from omnigent.server.factory.discovery.ledger import CONVICTION_KINDS, INJECTION_SUSPECT
+from omnigent.server.factory.discovery.ledger import (
+    CONVICTION_KINDS,
+    INJECTION_SUSPECT,
+    SUSPECT_AT,
+)
 from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.routes._auth_helpers import get_user_id
-from omnigent.stores.factory_store.discovery import SignalFilter
+from omnigent.stores.factory_store.discovery import SignalFilter, is_unsorted
 
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
 _T = TypeVar("_T")
 _BASE = "/factories/{factory_id}"
 LIST_MAX = 500
+_BAND_ORDER = {"now": 0, "next": 1, "later": 2, "parked": 3, "closed": 4}
+"""How the table orders bands (a closed opportunity has none)."""
 
 
 async def _guard(call: Callable[[], Awaitable[_T]]) -> _T | JSONResponse:
@@ -93,7 +99,10 @@ async def list_opportunities(
     q: str | None = Query(None, max_length=200),
     limit: int = Query(200, ge=1, le=LIST_MAX),
 ) -> dict[str, Any] | JSONResponse:
-    """Opportunities by rank (pinned first within a band), with evidence, score and status."""
+    """
+    Opportunities by band (Now, Next, Later, parked, then closed), pinned first
+    within a band, then by rank; with evidence, score and status.
+    """
 
     async def run() -> dict[str, Any]:
         deps, user_id, root = await _root(request, factory_id)
@@ -124,7 +133,12 @@ async def list_opportunities(
 
             kept = [e for e in items if keep(e)]
             kept.sort(
-                key=lambda e: (e.row.pinned_by is None, -round(e.score.rank, 4), e.row.number)
+                key=lambda e: (
+                    _BAND_ORDER.get(e.band or "closed", len(_BAND_ORDER)),
+                    e.row.pinned_by is None,
+                    -round(e.score.rank, 4),
+                    e.row.number,
+                )
             )
             rubric = (doc.get("discovery") or {}).get("rubric") or {}
             return {
@@ -250,12 +264,7 @@ async def list_signals(
                 by_signal.setdefault(link.signal, []).append(link)
             if view == "unsorted":
                 rows = [
-                    r
-                    for r in rows
-                    if r.number not in by_signal
-                    and r.kind not in CONVICTION_KINDS
-                    and INJECTION_SUSPECT not in r.flags
-                    and not r.gone
+                    r for r in rows if r.number not in by_signal and is_unsorted(r, SUSPECT_AT)
                 ]
             elif view == "flagged":
                 rows = [r for r in rows if INJECTION_SUSPECT in r.flags]

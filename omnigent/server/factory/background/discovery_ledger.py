@@ -63,8 +63,7 @@ def run_once(deps: FactoryDeps, *, now: int | None = None) -> dict[str, int]:
     for fid in _roots(deps):
         if not definition.discovery_enabled(deps, fid):
             continue
-        today = deps.factory_store.list_score_snapshots(fid, since=start, limit=500)
-        if any(s.reason == DAILY for s in today):
+        if deps.factory_store.list_score_snapshots(fid, since=start, reason=DAILY, limit=1):
             continue
         snapshots += opportunities.snapshot_all(deps, fid, reason=DAILY, at=at)
     return {"expired": expired, "snapshots": snapshots}

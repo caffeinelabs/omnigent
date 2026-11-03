@@ -139,7 +139,7 @@ def make_opportunity(
         "title": "Show a draft before it goes live (sample)",
         "statement": (
             "When I finish a draft, I want to show it to someone before it goes live, "
-            "so I can get feedback without risk"
+            "so I can get feedback without risk (sample)"
         ),
         "goal": "G-1",
         "segments": ["new_user"],

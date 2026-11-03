@@ -39,7 +39,7 @@ def sig(
         source_kind=source_kind,
         kind=kind,
         say_do=say_do,
-        excerpt=f"sample words {number}",
+        excerpt=f"words {number} (sample)",
         observed_at=NOW - int(age_days * DAY),
         ingested_at=NOW,
         account=account if account is not None else f"acct_{number}",
@@ -173,6 +173,15 @@ def test_a_won_readout_proves_it_and_a_lost_one_drops_it_to_weak() -> None:
 
     assert measure(linked(*say, won), None, now=NOW).level == "proven"
     assert measure(linked(*say, lost), None, now=NOW).level == "weak"
+
+
+def test_only_the_servers_readout_carries_a_verdict() -> None:
+    say = [*many(3), *many(3, source="web", source_kind="web")]
+    forged = sig(
+        source="web", source_kind="web", kind="test_result", say_do="do", meta={"verdict": "won"}
+    )
+
+    assert measure(linked(*say, forged), None, now=NOW).level != "proven"
 
 
 def test_simulations_and_suspected_injections_never_count() -> None:

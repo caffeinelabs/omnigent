@@ -72,6 +72,10 @@ SIGNAL_REF_RE: Final = re.compile(r"\bS-[1-9][0-9]{0,8}\b")
 _FLAG_KEY_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,63}$")
 _QUOTE_RE: Final = re.compile(
     r"“([^”]{1,2000})”|\"([^\"]{1,2000})\"|«([^»]{1,2000})»|„([^“”]{1,2000})[“”]"
+    # Single quotes open and close at word edges; an apostrophe inside a word
+    # (don't, don’t) belongs to the quoted span.
+    r"|‘((?:[^’\n]|(?<=\w)’(?=\w)){1,2000})’(?!\w)"
+    r"|(?<!\w)'((?:[^'\n]|(?<=\w)'(?=\w)){1,2000})'(?!\w)"
 )
 _REQUIRED: Final = ("hypothesis", "outcome", "metric", "expected", "flag", "measurement", "kill")
 
