@@ -9,6 +9,7 @@ import {
   isOpen,
   outcomeLine,
   proposalLever,
+  proposalOrigin,
   proposalState,
   proposerLine,
   undoLeftS,
@@ -234,5 +235,56 @@ describe("Edit & apply", () => {
       field: "branch",
     });
     expect(mapChangeField(proposal, "rationale")).toBeNull();
+  });
+});
+
+describe("proposalOrigin", () => {
+  const base = proposalInState("pending", NOW);
+
+  it("says where a projects proposal's work comes from, in one line", () => {
+    expect(proposalOrigin({ ...base, opportunity: "O-12", bet: null })).toEqual({
+      kind: "evidence",
+      text: "from O-12 · not measured",
+      opportunity: "O-12",
+    });
+    expect(
+      proposalOrigin({
+        ...base,
+        opportunity: null,
+        author_kind: "human",
+        author: "mia@example.com",
+      }),
+    ).toMatchObject({
+      kind: "requested",
+      text: "No user evidence · requested by mia · not measured",
+    });
+    expect(
+      proposalOrigin({
+        ...base,
+        opportunity: null,
+        author_kind: "agent",
+        author_title: "Atlas",
+        on_behalf_of: "lena@example.com",
+      }),
+    ).toMatchObject({
+      kind: "requested",
+      text: "No user evidence · requested by lena · not measured",
+    });
+    expect(
+      proposalOrigin({
+        ...base,
+        opportunity: null,
+        author_kind: "agent",
+        author_title: "Atlas",
+        on_behalf_of: null,
+      }),
+    ).toMatchObject({
+      kind: "idea",
+      text: "No user evidence · Atlas's own idea, counted as a hunch · not measured",
+    });
+  });
+
+  it("has nothing to say for a change to how the factory works", () => {
+    expect(proposalOrigin({ ...base, kind: "tuning" })).toBeNull();
   });
 });

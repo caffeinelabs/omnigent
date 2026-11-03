@@ -237,6 +237,31 @@ describe("the project page (new cockpit)", () => {
     await screen.findByTestId(`project-page-${EVIDENCE_SLUG}`);
     expect(location).toBe(`/factory/${snapshot.factory.id}/projects/${EVIDENCE_SLUG}`);
   });
+
+  it("says in one line that the work comes from user evidence", async () => {
+    const { snapshot } = serve();
+    renderAt(snapshot, `/projects/${EVIDENCE_SLUG}`);
+    expect(await screen.findByTestId("project-why-sentence")).toHaveTextContent(
+      /^From user evidence \(O-\d+\)\. (Measured after release|Not measured yet)\.$/,
+    );
+  });
+});
+
+describe("the PR page (new cockpit)", () => {
+  it("says why its project's work exists: evidence, or a person's request", async () => {
+    const { snapshot } = serve();
+    const evidence = snapshot.projects.find((p) => p.slug === EVIDENCE_SLUG)!;
+    const requested = snapshot.projects.find((p) => p.slug === REQUESTED_SLUG)!;
+    const first = renderAt(snapshot, `/prs/${evidence.pr_ids[0]}`);
+    const why = await screen.findByTestId("pr-why");
+    expect(why).toHaveAttribute("data-kind", "evidence");
+    expect(why).toHaveTextContent(/^from O-\d+/);
+    first.unmount();
+    renderAt(snapshot, `/prs/${requested.pr_ids[0]}`);
+    const asked = await screen.findByTestId("pr-why");
+    expect(asked).toHaveAttribute("data-kind", "requested");
+    expect(asked).toHaveTextContent("No user evidence · requested by mia · not measured");
+  });
 });
 
 describe("the Charter tab", () => {

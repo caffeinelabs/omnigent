@@ -51,11 +51,14 @@ import {
   isOpen,
   outcomeLine,
   proposalLever,
+  proposalOrigin,
   proposalState,
   proposerLine,
 } from "./proposalModel";
 import { RejectProposalForm } from "./RejectProposalForm";
 import { useCountdown } from "./useCountdown";
+import { WhyLineText } from "../project/WhyLineText";
+import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { BetBlock } from "./BetBlock";
 import { waitsForCosign } from "./betModel";
 
@@ -181,6 +184,8 @@ export function ProposalCard({
   const queryClient = useQueryClient();
   const nowS = useFactoryServerNowS(clockOffsetS);
   const { gate } = useViewerCan();
+  // The new cockpit says where the work comes from on every card.
+  const v2 = useOptionalFactoryShell()?.cockpit === "v2";
   // The server's answer shows at once; the next read of the list replaces it.
   const [local, setLocal] = useState<ProposalView | null>(null);
   const proposal = local && local.updated_at >= given.updated_at ? local : given;
@@ -210,6 +215,7 @@ export function ProposalCard({
   const analysis = analysisLine(proposal.analysis);
   const hubs = hubFiles(proposal.analysis);
   const editable = createdProjects(proposal).length > 0;
+  const origin = v2 ? proposalOrigin(proposal, snapshot) : null;
   const outcome = conflict
     ? `Already ${conflict.status}${conflict.by ? ` by ${conflict.by.split("@")[0]}` : ""}`
     : outcomeLine(proposal, state);
@@ -294,6 +300,21 @@ export function ProposalCard({
         </span>
       </header>
       <p className="text-ui font-medium break-words">{proposal.title}</p>
+      {/* With an opportunity, the bet block's first line says where it comes from. */}
+      {origin && !proposal.opportunity && (
+        <WhyLineText
+          factoryId={factoryId}
+          testId={`proposal-origin-${proposal.ref}`}
+          why={{
+            kind: origin.kind,
+            text: origin.text,
+            opportunity: origin.opportunity,
+            by: null,
+            measured: proposal.bet != null,
+            noEvidence: true,
+          }}
+        />
+      )}
       {(proposal.bet || proposal.opportunity) && (
         <BetBlock proposal={proposal} snapshot={snapshot} />
       )}

@@ -298,6 +298,51 @@ export function proposerLine(
   return line;
 }
 
+/** Where the work a projects proposal asks for comes from, in one line. */
+export interface ProposalOrigin {
+  kind: "evidence" | "requested" | "idea";
+  text: string;
+  /** The opportunity it comes from (`O-12`). */
+  opportunity: string | null;
+}
+
+/**
+ * Why a projects proposal exists, as its projects will say it: from user
+ * evidence (an opportunity), requested by a person (its author, or the person
+ * whose message an agent's proposal answers), or an agent's own idea, counted
+ * as a hunch. The server records the same asker on the projects it creates.
+ * Null for proposals that change the factory rather than ask for work.
+ */
+export function proposalOrigin(
+  proposal: ProposalView,
+  snapshot: FactorySnapshot | null = null,
+): ProposalOrigin | null {
+  if (proposal.kind !== "projects") return null;
+  const measured = proposal.bet ? "measured after release" : "not measured";
+  if (proposal.opportunity) {
+    return {
+      kind: "evidence",
+      text: `from ${proposal.opportunity} · ${measured}`,
+      opportunity: proposal.opportunity,
+    };
+  }
+  if (proposal.author_kind === "agent" && !proposal.on_behalf_of) {
+    const who = proposal.author_title ?? memberTitle(proposal.author, snapshot);
+    return {
+      kind: "idea",
+      text: `No user evidence · ${who === "another agent" ? "an agent" : who}'s own idea, counted as a hunch · ${measured}`,
+      opportunity: null,
+    };
+  }
+  const person = (proposal.author_kind === "agent" ? proposal.on_behalf_of : proposal.author) ?? "";
+  const name = person.split("@")[0] || "a person";
+  return {
+    kind: "requested",
+    text: `No user evidence · requested by ${name} · ${measured}`,
+    opportunity: null,
+  };
+}
+
 /** The planner's analysis in one line: hub files, predicted size, low cohesion. */
 export function analysisLine(analysis: unknown): string | null {
   if (!analysis || typeof analysis !== "object") return null;

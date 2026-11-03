@@ -31,6 +31,8 @@ import {
 import { deliveryOf } from "@/components/factory/review/deliveryModel";
 import { ReviewActions } from "@/components/factory/review/ReviewActions";
 import { demoRecorder } from "@/components/factory/review/reviewModel";
+import { projectWhy } from "@/components/factory/project/projectModel";
+import { WhyLineText } from "@/components/factory/project/WhyLineText";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { findPr } from "@/components/factory/shell/shellRoutes";
 import { Button } from "@/components/ui/button";
@@ -120,6 +122,8 @@ function Panel({
 function PrBody({ snapshot, pr, nowS }: { snapshot: FactorySnapshot; pr: PrView; nowS: number }) {
   const [params] = useSearchParams();
   const phone = useIsMobileViewport();
+  // The new cockpit says why the PR's work exists, as its project does.
+  const v2 = useFactoryShell().cockpit === "v2";
   const fid = snapshot.factory.id;
   const project = snapshot.projects.find((p) => p.slug === pr.project_slug) ?? null;
   const members = snapshot.members;
@@ -187,6 +191,7 @@ function PrBody({ snapshot, pr, nowS }: { snapshot: FactorySnapshot; pr: PrView;
           </div>
         </div>
         <PrMeta pr={pr} expectedBase={expectedBase} />
+        {v2 && project && <WhyLineText factoryId={fid} why={projectWhy(project)} testId="pr-why" />}
         <StatusLine pr={pr} nowS={nowS} />
         {unavailable && <PreviewUnavailableNotice pr={pr} />}
       </header>
