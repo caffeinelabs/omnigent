@@ -444,7 +444,7 @@ _JSON_COLUMNS: dict[str, frozenset[str]] = {
             "case_against",
         }
     ),
-    "task": frozenset({"card", "deps", "scope", "session_ids", "budget"}),
+    "task": frozenset({"card", "deps", "scope", "session_ids", "budget", "hold"}),
     "loop": frozenset({"spec", "spent"}),
     "issue": frozenset({"evidence"}),
     "span": frozenset({"attrs"}),
@@ -598,6 +598,7 @@ def _task(row: SqlFactoryTask) -> FactoryTask:
         closed_at=row.closed_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        hold=load_json(row.hold),
         workspace_id=row.workspace_id,
     )
 

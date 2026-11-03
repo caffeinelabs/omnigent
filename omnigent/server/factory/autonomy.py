@@ -50,9 +50,10 @@ Approval = Literal["auto", "operator", "owner"]
 _RANK: Final[dict[str, int]] = {"auto": 0, "operator": 1, "owner": 2}
 
 MINOR_UPDATE_FIELDS: Final = frozenset(
-    {"priority", "demo_focus", "demo", "preview", "preview_slots", "budget_ics"}
+    {"priority", "demo_focus", "demo", "preview", "preview_slots", "budget_ics", "depends_why"}
 )
-"""Charter fields an agent may change on its own (with Undo)."""
+"""Charter fields an agent may change on its own (with Undo); a dependency's reason
+explains it and changes nothing the server does."""
 
 
 @dataclass(frozen=True)

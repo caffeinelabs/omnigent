@@ -1755,13 +1755,16 @@ async def test_a_task_budget_edit_lifts_an_exhausted_loop(cockpit: Cockpit) -> N
     assert (await start(cockpit, "route"))["attempt"] == 4
 
 
-async def test_a_loop_that_ends_by_itself_expires_its_decision(cockpit: Cockpit) -> None:
+async def test_a_loop_that_ends_by_itself_closes_its_decision_with_why(cockpit: Cockpit) -> None:
     await plan(cockpit, "route")
     await start(cockpit, "route")
     row = await exhaust(cockpit, "route")
     await tasks.close_task(cockpit.app.state, cockpit.fid, SLUG, "route", "done", _pl(cockpit))
     assert implement(cockpit, "route").state == "converged"
-    assert cockpit.store.get_decision(row.decision_id).status == "expired"
+    closed = cockpit.store.get_decision(row.decision_id)
+    assert (closed.status, closed.answered_by) == ("answered", "server")
+    assert closed.answer_text == "Closed by the server: T-1 is done"
+    assert closed.nobody_to_tell
     assert not pl_texts(cockpit)[-1].startswith("[Factory loop · RESUMED")
 
 

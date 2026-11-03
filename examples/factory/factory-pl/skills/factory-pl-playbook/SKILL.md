@@ -64,6 +64,16 @@ The server owns the tasks (`T-<n>`), their dependencies and states
   is done. Close the rest (ad-hoc too) with `op="done"`, `fail` or `cancel`.
 - A person's `[Factory control · TASK ADD|TASK EDIT …]` already changed the graph.
 
+## Holding a task on purpose
+
+Your lead said wait for `C-16`, it needs a person's answer `D-45`, another PR
+must merge first: say on what, or after an hour the server asks a person
+whether the task stalled. `sys_factory_task(op="hold", key="<key>", on="C-16",
+note="<why>")` where your tool lists `hold` (it lifts by itself once that
+closes; `op="release"` lifts it now). Else name both in your update:
+`sys_factory_set(update={health: "at_risk", blocker: "T-16 waits on C-16 (D-45)"})`.
+Give the IC its next step as soon as the hold ends.
+
 ## plan.md (`~/factory/<slug>/plan.md`)
 
 ```
@@ -338,6 +348,7 @@ To label a PR the human chose to review without a preview:
 | `[Factory notice · dev env needed · bring it up]` | env_keeper `UP base=<base>` now, next to the IC's dispatch; record it in plan.md. |
 | `[Factory control · …]` | The CONTROL section of your prompt. Reply once. |
 | `[Factory proposal · C-<n> …]` | The outcome of your `sys_factory_project` or `sys_factory_propose` proposal. Record it in plan.md; after a rejection, adapt the plan to the note. |
+| `[Factory loop · NUDGE · T-<n> …]` | A person saw the task's IC idle and waiting on you: send it its next step now, or hold the task on what it waits on (Work graph). |
 
 ## Splitting the project
 

@@ -1036,7 +1036,19 @@ class SysFactoryProjectTool(Tool):
         )
 
 
-TASK_OPS: Final = ("upsert", "ready", "start", "done", "fail", "cancel", "get", "list", "report")
+TASK_OPS: Final = (
+    "upsert",
+    "ready",
+    "start",
+    "done",
+    "fail",
+    "cancel",
+    "get",
+    "list",
+    "report",
+    "hold",
+    "release",
+)
 TASK_UPSERT_MAX: Final = 30
 
 
@@ -1069,6 +1081,10 @@ class SysFactoryTaskTool(Tool):
             "cost_budget: <cost_budget>, model: <model, when not null>}). "
             "op='done', 'fail' or 'cancel' (key, note) closes a task; a merged PR closes "
             "its task by itself. op='get' (key) and op='list' read (leads: any project). "
+            "A task you hold back on purpose: op='hold' (key, on='D-<n>'|'C-<n>'|'PR #<n>'|"
+            "'T-<n>'|'<project>'|a few words, until?, note?) says on what, so the server "
+            "shows it as held instead of stalled; it lifts by itself when that closes, or "
+            "op='release' (key). Leads hold any task by its T-<n>. "
             "ICs: op='report' (key, result PASS|FAIL|BLOCKED, note) for the task you were "
             "dispatched for."
         )
@@ -1140,6 +1156,21 @@ class SysFactoryTaskTool(Tool):
                         "description": "report: your RESULT.",
                     },
                     "note": {"type": "string", "maxLength": 1000},
+                    "on": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": (
+                            "hold: what the task waits on, e.g. 'C-16', 'D-45', 'PR #9881', "
+                            "'T-3', a project slug, or a few words."
+                        ),
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": (
+                            "hold: when it lapses by itself, e.g. '2h', '1d' or an ISO-8601 time "
+                            "(at most 7 days); a hold on a ref lifts when the ref closes."
+                        ),
+                    },
                 },
                 "required": ["op"],
                 "additionalProperties": False,

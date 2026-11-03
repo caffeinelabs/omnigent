@@ -42,6 +42,9 @@ node <script> --root ~/factory/plans/wt/$ID \
      Tightly coupled code stays in one project.
    - `hubs` and `shared_outside_scopes` (files several scopes import): if the
      goal changes them, make a groundwork project the others `depends_on`.
+     A dependency is only for a real code or API one (the dependent imports,
+     calls or builds on what the other adds or changes); give each a one-line
+     reason in `depends_why` (`{"<slug>": "<what it needs from it>"}`).
    - `overlaps`: tighten the globs until there are none.
 4. Size each project: files likely touched, PRs (about 3 or fewer), and
    `S`/`M`/`L`. Set `budget_ics` (1-3) and `priority` (0 highest).
@@ -53,7 +56,7 @@ Write `~/factory/plans/<id>.json` (one file, valid JSON):
 ```json
 {"changes": [{"op": "create", "project": {"slug": "…", "title": "…", "goal": "…",
   "dod": ["…"], "scope_paths": ["…"], "demo_focus": "…", "depends_on": [],
-  "budget_ics": 2, "priority": 1}}],
+  "depends_why": {}, "budget_ics": 2, "priority": 1}}],
  "analysis": {"head": "<sha>", "scope_graph": <the report>, "hub_files": ["…"],
   "overlaps": [], "sizes": {"<slug>": "S · 1 PR · 4 files"}, "notes": ["…"]}}
 ```

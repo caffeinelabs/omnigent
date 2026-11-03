@@ -38,6 +38,21 @@ node ~/factory/bin/scope-graph.mjs --selftest
 - No two active projects on the same `repo#base` with overlapping `scope_paths`.
 - Shared groundwork (hub files several scopes import) is its own project; the
   others `depends_on` it (`depends_mode: merged` unless stacking is asked for).
+- Add a dependency only for a real code or API dependency: the dependent
+  imports, calls or builds on code, a schema or an API the other project adds
+  or changes, so it cannot be built or reviewed before that lands. Never for
+  order, priority, a shared theme, an area two projects touch side by side, or
+  "nice to have first". Every dependency holds the dependent queued until a
+  person merges the other project's PR (with `merged`), so one too many costs
+  hours of nothing.
+- Explain each one in a line that names what it needs:
+  `depends_on: ["db-version"], depends_why: {"db-version": "api-version reads its version table"}`
+  (or the item `"db-version: api-version reads its version table"`). The
+  server refuses a dependency without a reason, an unknown project, and one
+  that is done or cancelled (nothing to wait for, or never coming).
+- Unrelated work waiting for a human merge is never a dependency: if the new
+  project only touches the same area later, plan it on its own and let review
+  catch conflicts.
 - Tightly coupled code stays in ONE project: low cohesion or many cross-scope
   edges in the analysis mean merge, not split. Parallel PLs pay only when
   coupling is low; every extra PL costs about 15x the chat tokens.
@@ -51,15 +66,19 @@ The planner writes `~/factory/plans/<id>.json` and ends with
 ```json
 {"changes": [{"op": "create", "project": {"slug": "db-version", "title": "…", "goal": "…",
   "dod": ["…"], "scope_paths": ["services/api/src/db/**"], "demo_focus": "…",
-  "depends_on": [], "budget_ics": 2, "priority": 1}}],
+  "depends_on": [], "depends_why": {}, "budget_ics": 2, "priority": 1}}],
  "analysis": {"head": "<base sha>", "scope_graph": {"…": "scope-graph.mjs output"},
   "hub_files": ["…"], "overlaps": [], "sizes": {"db-version": "S · 1 PR · 4 files"},
   "notes": ["…"]}}
 ```
 
-Read it, fix anything that breaks the heuristics, then file it as ONE proposal:
+Read it, fix anything that breaks the heuristics (drop each dependency that is
+not a real code or API one; give each one left its `depends_why`), then file it
+as ONE proposal:
 `sys_factory_project(changes=<its changes>, rationale=<why this split, 2-4 lines>, thread="factory", reply_to="chat_<id>", analysis_file="~/factory/plans/<id>.json")`.
 A field error names its path (`changes[1].project.slug`): fix and call again.
+`dependency_reason_required`: add the one-line `depends_why` it names.
+`dependency_closed`: the project is done or cancelled; drop the dependency.
 `PLAN FAILED`: propose what you can yourself, or ask in the thread.
 
 **Autonomy.** With `reply_to` a human's recent message, creates inside the

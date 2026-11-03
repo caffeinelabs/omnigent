@@ -8,7 +8,9 @@ Agent routes (runner tunnel; the caller is ``from_session_id``):
   project lead reads its own project; leads read any project (``ready`` is
   the PL's).
 - ``POST /v1/factory/agent/tasks/{key}/{op}``: ``start``, ``done``, ``fail``,
-  ``cancel`` (the PL) and ``report`` (the worker bound to the task).
+  ``cancel`` (the PL), ``report`` (the worker bound to the task), and ``hold``
+  (``on``, ``until?``, ``note?``) / ``release``: the PL holds its task on
+  purpose and says on what (a lead may hold any task by its ``T-n``).
 
 Human routes (user credentials):
 
@@ -17,6 +19,7 @@ Human routes (user credentials):
 - ``POST /v1/factory/factories/{fid}/tasks`` and
   ``PATCH /v1/factory/factories/{fid}/tasks/{id or T-n}``: EDIT on the root,
   human origin only; the PL is mailed ``[Factory control · TASK ADD|TASK EDIT · by …]``.
+  ``{"hold": {on, note?, until?}}`` holds the task, ``{"hold": null}`` lifts it.
 
 Refusals render as ``{"error": {"code", "message"}, ...extra}`` (e.g. ``path``
 for ``cycle``, ``waiting_on`` for ``not_ready``).
@@ -25,6 +28,7 @@ for ``cycle``, ``waiting_on`` for ``not_ready``).
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable
 from typing import Annotated, Any, TypeVar
 
@@ -34,7 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.factory import ROLE_IC, ROLE_LEAD, ROLE_PROJECT_LEAD
 from omnigent.server.auth import LEVEL_EDIT
-from omnigent.server.factory import binder, control, people, tasks
+from omnigent.server.factory import binder, control, people, tasks, waits
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.agent_scope import AgentCaller, authorize_agent
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -49,6 +53,8 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
 _T = TypeVar("_T")
 PL_OPS = frozenset({"start", "done", "fail", "cancel"})
+HOLD_OPS = frozenset({"hold", "release"})
+_T_REF = re.compile(r"^T-(\d+)$", re.IGNORECASE)
 
 
 class UpsertBody(BaseModel):
@@ -69,6 +75,8 @@ class OpBody(BaseModel):
     harness: str | None = None
     result: str | None = None
     note: str | None = Field(None, max_length=1000)
+    on: str | None = Field(None, max_length=200)
+    until: int | str | None = None
 
 
 async def _run(call: Awaitable[_T]) -> _T | JSONResponse:
@@ -173,12 +181,58 @@ async def agent_op(
                 app_state, fid, slug, key, actor, result=body.result or "", note=body.note
             )
         )
+    if op in HOLD_OPS:
+        return await _run(_hold(request, caller, key, op, body, actor))
     if op not in PL_OPS:
-        raise FactoryRouteError(400, "invalid_op", "op is start, done, fail, cancel or report")
+        raise FactoryRouteError(
+            400, "invalid_op", "op is start, done, fail, cancel, report, hold or release"
+        )
     slug = _own_project(caller)
     if op == "start":
         return await _run(tasks.start_task(app_state, fid, slug, key, actor, harness=body.harness))
     return await _run(tasks.close_task(app_state, fid, slug, key, op, actor, note=body.note))
+
+
+async def _hold(
+    request: Request, caller: AgentCaller, key: str, op: str, body: OpBody, actor: Actor
+) -> dict[str, Any]:
+    """Hold a task on purpose (``on``, ``until?``, ``note?``) or lift its hold."""
+    deps = factory_deps(request.app.state)
+    fid = caller.factory_id
+    membership = caller.membership
+    ref = _T_REF.match(key.strip())
+    if membership.role == ROLE_LEAD and membership.is_top_level:
+        if ref is None:
+            raise CockpitError(400, "invalid_body", "a lead holds a task by its T-n", field="key")
+        task = await asyncio.to_thread(tasks.resolve_task_ref, deps, fid, key)
+    else:
+        slug = _own_project(caller)
+        if ref is not None:
+            task = await asyncio.to_thread(tasks.resolve_task_ref, deps, fid, key)
+            if task.project_slug != slug:
+                raise CockpitError(
+                    403, "not_your_project", f"{task.ref} is a task of {task.project_slug}"
+                )
+        else:
+            found = await asyncio.to_thread(
+                deps.factory_store.get_task_by_key, fid, slug, key.strip()
+            )
+            if found is None:
+                raise CockpitError(404, "unknown_task", f"no task {key!r} in project {slug}")
+            task = found
+    if op == "release":
+        return await tasks.hold_task(request.app.state, fid, task, None, actor)
+    if not body.on or not body.on.strip():
+        raise CockpitError(
+            400,
+            "invalid_body",
+            "hold needs on: what the task waits on (D-<n>, C-<n>, PR #<n>, T-<n>, a project "
+            "or a few words)",
+            field="on",
+        )
+    note = " ".join((body.note or "").split())[: waits.HOLD_NOTE_MAX] or None
+    hold = tasks.HoldIn(on=body.on.strip(), note=note, until=body.until)
+    return await tasks.hold_task(request.app.state, fid, task, hold, actor)
 
 
 # ── Human routes ───────────────────────────────────────────────

@@ -209,6 +209,12 @@ async def test_a_task_waiting_on_its_pls_questions_is_not_stalled(stall: Stall) 
         "refs": [first.ref, second.ref],
         "since": first.created_at,
         "count": 2,
+        "kind": "decision",
+        "label": (
+            f"waiting on {first.ref} (Which build tier should validate-p9774 target?, "
+            "needs an operator)"
+        ),
+        "who": "an operator",
     }
     # The task's chip says what it waits on, too.
     chip = next(t for t in tasks.list_view(cockpit.deps, cockpit.fid, SLUG)["tasks"])["loop"]
@@ -231,7 +237,7 @@ async def test_a_task_waiting_on_its_pls_questions_is_not_stalled(stall: Stall) 
     row = await stall.ticks(10 * MIN)
     assert row.state == "stalled" and row.last_reason.startswith("no progress for")
     (decision,) = stall.stall_decisions()
-    assert _recommended(decision) == ["Keep waiting"]
+    assert _recommended(decision) == ["Nudge the lead"]
     assert _why(decision).startswith("The IC is alive but has been idle for")
 
 
@@ -349,9 +355,15 @@ async def test_a_wall_stall_of_a_working_ic_recommends_keep_waiting(stall: Stall
     assert wait["description"] == (
         "Up to 2 h in all; asks again sooner only if the IC stops or its run fails"
     )
+    pl, fid = cockpit.world.id("pl"), cockpit.fid
     assert (decision.context or "").splitlines() == [
         "Why: running 1 h (wall budget 1 h)",
         "Last verdict: DISPATCHED",
+        "Last doing: it is running pnpm -F web build",
+        "Waiting on: nothing the server knows of (no open decision, proposal, dependency, "
+        "merge or hold)",
+        f"Look: [IC session](/c/{stall.ic.id}) · "
+        f"[IC in the agent panel](/factory/{fid}/agents/{stall.ic.id}) · [its lead](/c/{pl})",
     ]
 
 
@@ -722,7 +734,7 @@ def test_a_running_call_reads_in_plain_words(
             task_pulse.Pulse(worker="alive", worker_status="idle", worker_at=1000 - 4320),
             None,
             None,
-            "wait",
+            "nudge",
             "The IC is alive but has been idle for 72 minutes; its lead may owe it a next step.",
         ),
         (
@@ -790,3 +802,249 @@ def test_the_task_is_named_by_its_ref_branch_or_key() -> None:
     assert prose.search("T-5 is waiting on review") and not prose.search("T-50 is done")
     assert prose.search("pushed factory/api-version/docs") and not prose.search("the docs")
     assert args.search('{"title": "docs-r1"}') and not args.search('{"command": "ls docs/"}')
+
+
+# ── Holds, honest alerts and stale decisions (the live tryout) ─
+
+
+def _proposal(stall: Stall, *, slug: str | None = None, owners: bool = True) -> tuple[Any, Any]:
+    """A pending projects proposal ``C-n`` and the decision a person approves it on."""
+    cockpit = stall.cockpit
+    row, _ = cockpit.store.create_proposal(
+        cockpit.fid,
+        kind="projects",
+        title="Narrow the scope of the API",
+        author_kind="agent",
+        author=cockpit.world.id("lead_a"),
+        ops=[{"op": "update", "slug": slug or "other-project", "patch": {"goal": "narrower"}}],
+        approval="owner" if owners else "operator",
+    )
+    decision, _ = cockpit.store.create_decision(
+        cockpit.fid,
+        dedupe_key=f"proposal:{row.id}"[:64],
+        question=f"Atlas proposes C-{row.number}: {row.title}",
+        source="proposal",
+        options=[{"id": "apply", "label": "Apply", "action": "apply_proposal"}],
+        blocking=False,
+        project_slug=slug,
+        asked_by_session_id=cockpit.world.id("lead_a"),
+        subject=f"proposal:C-{row.number}",
+        assignee="owners" if owners else "operators",
+    )
+    return row, decision
+
+
+def _pl_actor(stall: Stall) -> Any:
+    from omnigent.server.factory.actor import Actor
+
+    return Actor.agent(stall.cockpit.world.id("pl"), "project_lead", title="PL · api-version")
+
+
+async def _project_view(stall: Stall) -> dict[str, Any]:
+    from omnigent.server.factory import snapshot
+
+    raw = await snapshot.build_snapshot(stall.cockpit.app.state, stall.cockpit.world.get("lead_a"))
+    return next(p for p in raw.body["projects"] if p["slug"] == SLUG)
+
+
+async def test_a_pl_holding_its_task_for_an_open_proposal_is_not_asked_about(
+    stall: Stall,
+) -> None:
+    """The live T-16: finished locally, held until C-16 applies (D-45): no D-48, no INC-47."""
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    proposal, decision = _proposal(stall)  # about another project: only the hold links it
+    out = await tasks.hold_task(
+        cockpit.app.state,
+        cockpit.fid,
+        task(cockpit, KEY),
+        tasks.HoldIn(on=f"C-{proposal.number}", note="Atlas: wait until the scope applies"),
+        _pl_actor(stall),
+    )
+    words = (
+        f"T-1 held: waiting on {decision.ref} (Approve C-{proposal.number}, needs an owner)"
+        " · Atlas: wait until the scope applies"
+    )
+    assert out["hold"]["active"] is True and out["hold"]["label"] == words
+    assert out["task"]["hold"]["on"] == f"C-{proposal.number}"
+    [held] = cockpit.events("task.held")
+    assert held.data["by"] == cockpit.world.id("pl") and held.data["by_kind"] == "agent"
+    row = await stall.ticks(3 * HOUR)
+    assert row.state == "running"
+    assert stall.stall_decisions() == []
+    assert cockpit.events("loop.stalled") == []
+    assert loops.held_by(row) is not None
+    assert loops.held_by(row)["label"] == words
+    assert loops.held_by(row)["kind"] == "hold"
+    view = await _project_view(stall)
+    assert view["waiting_on"][0]["label"] == words
+    assert view["waiting_on"][0]["who"] == "an owner"
+    # C-16 applies: the hold lapses by itself and the clock runs again.
+    cockpit.store.update_proposal(proposal.id, status="applied")
+    cockpit.store.set_decision_status(decision.id, "expired")
+    row = await stall.ticks(70 * MIN)
+    assert row.state == "stalled"
+    (asked,) = stall.stall_decisions()
+    assert _recommended(asked) == ["Nudge the lead"]
+
+
+async def test_an_open_proposal_about_the_project_holds_its_tasks_without_a_hold(
+    stall: Stall,
+) -> None:
+    """Before a host bump the PL cannot hold yet: the server infers the hold."""
+    stall.status(stall.ic.id, "idle")
+    proposal, decision = _proposal(stall, slug=SLUG, owners=False)
+    row = await stall.ticks(2 * HOUR)
+    assert (row.state, stall.stall_decisions()) == ("running", [])
+    assert loops.held_by(row)["label"] == (
+        f"waiting on {decision.ref} (Approve C-{proposal.number}, needs an operator)"
+    )
+
+
+async def test_the_leads_update_naming_what_the_task_waits_on_holds_it(stall: Stall) -> None:
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    asked = stall.ask("Which tier should it target?", asker=cockpit.world.id("lead_a"))
+    row = cockpit.store.get_project(cockpit.fid, SLUG)
+    assert row is not None
+    cockpit.store.update_project(
+        row.id,
+        lead_update={"health": "at_risk", "blocker": f"T-1 waits on {asked.ref}", "at": 1},
+    )
+    loop = await stall.ticks(2 * HOUR)
+    assert (loop.state, stall.stall_decisions()) == ("running", [])
+    assert loops.held_by(loop)["decision_ref"] == asked.ref
+
+
+async def test_an_idle_ic_with_nothing_to_wait_on_recommends_nudging_its_lead(
+    stall: Stall,
+) -> None:
+    """D-48's honest version: what the IC last did, that nothing holds it, where to look."""
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    stall.tool_call(stall.ic.id, "pnpm -F web test", "call-1")
+    stall.item(
+        stall.ic.id,
+        "function_call_output",
+        {"call_id": "call-1", "output": "Tests: 12 passed"},
+    )
+    stall.say(stall.ic.id, "assistant", "Done: the route and its tests pass. Waiting for review.")
+    row = await stall.ticks(65 * MIN)
+    assert row.state == "stalled"
+    (asked,) = stall.stall_decisions()
+    assert _why(asked) == (
+        "The IC is alive but has been idle for 60 minutes; its lead may owe it a next step."
+    )
+    assert [o["label"] for o in asked.options][:2] == ["Nudge the lead", "Keep waiting"]
+    assert _recommended(asked) == ["Nudge the lead"]
+    context = asked.context or ""
+    assert "Last doing: its last call was running pnpm -F web test" in context
+    assert 'its last reply: "Done: the route and its tests pass. Waiting for review."' in context
+    assert "Waiting on: nothing the server knows of" in context
+    assert "Idle for: 60 minutes (the no-progress budget is 60 minutes)" in context
+    assert f"[IC session](/c/{stall.ic.id})" in context
+    assert f"/factory/{cockpit.fid}/agents/{stall.ic.id}" in context
+    assert f"[its lead](/c/{cockpit.world.id('pl')})" in context
+    # Its incident says the same, not just "stalled".
+    from omnigent.server.factory import detectors
+
+    [event] = cockpit.events("loop.stalled")
+    await detectors.on_event(cockpit.app.state, event)
+    [incident] = [
+        i for i in cockpit.store.list_issues(cockpit.fid, limit=50) if i.rule == "loop.stalled"
+    ]
+    assert (incident.body or "").splitlines() == [
+        "The IC is alive but has been idle for 60 minutes; its lead may owe it a next step.",
+        *context.splitlines()[2:],
+    ]
+    # Nudge the lead: the PL hears what is owed, and the loop keeps waiting.
+    await decisions.answer_decision(
+        cockpit.app.state, asked.id, user_id="alice", option_id="nudge"
+    )
+    assert implement(cockpit, KEY).state == "running"
+    text = cockpit.mailer.texts_to(cockpit.world.id("pl"))[-1]
+    assert text.startswith("[Factory loop · NUDGE · T-1 · by ")
+    assert f'sys_factory_task(op="hold", key="{KEY}"' in text
+
+
+async def test_a_stall_decision_closes_itself_once_the_tasks_pr_merged(stall: Stall) -> None:
+    """D-47: the PR merged and the project shipped, yet "what next?" stayed open."""
+    from tests.server.factory.test_loops import make_pr
+
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(65 * MIN)
+    (asked,) = stall.stall_decisions()
+    pr = make_pr(cockpit, KEY)
+    cockpit.store.update_pr(pr.id, state="merged", merged_at=int(stall.clock()))
+    row = await stall.tick(MIN)
+    assert (row.state, row.last_reason) == ("converged", f"PR #{pr.number} merged")
+    closed = cockpit.store.get_decision(asked.id)
+    assert closed is not None and closed.status == "answered"
+    assert closed.answered_by == "server"
+    assert closed.answer_text == f"Closed by the server: PR #{pr.number} merged"
+    [event] = [e for e in cockpit.events("decision.answered") if e.data.get("auto")]
+    assert event.data["reason"] == f"PR #{pr.number} merged"
+    # The next ticks have nothing left to ask.
+    await stall.ticks(2 * HOUR)
+    assert [d.status for d in stall.stall_decisions()] == ["answered"]
+
+
+async def test_a_stall_decision_left_open_after_its_loop_ended_closes_on_the_tick(
+    stall: Stall,
+) -> None:
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(65 * MIN)
+    (asked,) = stall.stall_decisions()
+    # The loop ended on a path that did not settle its decision.
+    cockpit.store.update_loop(row.id, state="converged", last_reason="T-1 is done")
+    await stall.tick(MIN)
+    closed = cockpit.store.get_decision(asked.id)
+    assert closed is not None and (closed.status, closed.answered_by) == ("answered", "server")
+    assert closed.answer_text == "Closed by the server: T-1 is done"
+
+
+async def test_a_task_held_on_purpose_needs_no_ic_to_stay_held(stall: Stall) -> None:
+    """Finished locally and held: its lead closed the IC; the wall budget waits too."""
+    cockpit = stall.cockpit
+    row = implement(cockpit, KEY)
+    cockpit.store.update_loop(row.id, spec={**row.spec, "wall_h": 2})
+    stall.close(stall.ic.id)
+    proposal, _decision = _proposal(stall)
+    await tasks.hold_task(
+        cockpit.app.state,
+        cockpit.fid,
+        task(cockpit, KEY),
+        tasks.HoldIn(on=f"C-{proposal.number}"),
+        _pl_actor(stall),
+    )
+    row = await stall.ticks(3 * HOUR, every=10 * MIN)
+    assert (row.state, stall.stall_decisions()) == ("running", [])
+    assert row.spent.get("held_s")
+
+
+async def test_a_budget_decision_is_not_a_stale_loop_decision(stall: Stall) -> None:
+    """A project's $ cap asks with the loop source but acts on the project: it stays."""
+    cockpit = stall.cockpit
+    budget, _ = cockpit.store.create_decision(
+        cockpit.fid,
+        dedupe_key="budget:project:api-version:day",
+        question="api-version spent $160 of $150. Pause or raise?",
+        source="loop",
+        options=[
+            {"id": "pause", "label": "Pause", "action": "pause", "target": f"project:{SLUG}"},
+            {
+                "id": "raise",
+                "label": "Raise",
+                "action": "raise_budget",
+                "target": f"budget:project:{SLUG}",
+            },
+        ],
+        blocking=True,
+        project_slug=SLUG,
+    )
+    assert loop_escalation.stale_loop_decisions(cockpit.deps, cockpit.fid) == []
+    await stall.tick(MIN)
+    current = cockpit.store.get_decision(budget.id)
+    assert current is not None and current.status == "open"

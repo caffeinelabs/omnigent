@@ -233,6 +233,63 @@ async def expire_decision(
     return row
 
 
+SERVER_BY: Final = "server"
+"""``answered_by`` of a decision the server closed itself (metrics leave it out)."""
+CLOSED_PREFIX: Final = "Closed by the server: "
+
+
+async def close_by_server(app_state: Any, decision_id: str, *, why: str) -> FactoryDecision | None:
+    """
+    Close an open decision whose question no longer applies: answered by the
+    server with *why*, recorded with nobody to tell, and logged. Never raises.
+
+    The answer shows in the decision's history ("Closed by the server: PR #9881
+    merged · server") and ``decision.answered`` carries the reason.
+
+    :param why: Why it no longer applies, e.g. ``"T-16 is done"``.
+    :returns: The closed decision, or ``None`` when it was no longer open.
+    """
+    store = _store(app_state)
+    if store is None:
+        return None
+    text = _clip(f"{CLOSED_PREFIX}{why}", _QUESTION_MAX)
+    try:
+        row = await asyncio.to_thread(
+            store.answer_decision, decision_id, option_id=None, text=text, by=SERVER_BY
+        )
+    except (DecisionNotOpen, DecisionNotFound):
+        return None
+    except Exception:  # noqa: BLE001 - an open stale decision only costs a dismiss
+        _logger.warning("factory: could not close decision %s", decision_id, exc_info=True)
+        return None
+    from omnigent.stores.factory_store import now_s
+
+    row = await asyncio.to_thread(store.update_decision, row.id, delivered_at=now_s()) or row
+    await events.emit(
+        app_state,
+        row.factory_id,
+        "decision.answered",
+        project=row.project_slug,
+        from_id=None,
+        to_id=row.asked_by_session_id,
+        subject=f"decision:{row.ref}",
+        summary=f"{row.ref} closed by the server: {why}",
+        data={
+            "decision_id": row.id,
+            "source": row.source,
+            "from": SERVER_BY,
+            "by": SERVER_BY,
+            "by_kind": "server",
+            "label": "Closed by the server",
+            "text": why,
+            "reason": why,
+            "nobody_to_tell": True,
+            "auto": True,
+        },
+    )
+    return row
+
+
 async def expire_by_key(app_state: Any, factory_id: str, dedupe_key: str) -> None:
     """Expire the open decision of *factory_id* carrying *dedupe_key*, if any."""
     store = _store(app_state)
@@ -521,12 +578,15 @@ async def open_storm_decision(
 
 
 __all__ = [
+    "CLOSED_PREFIX",
     "PROJECT_RUN_SOURCES",
+    "SERVER_BY",
     "SOURCE_BLOCKED",
     "SOURCE_RELAUNCH_FAILED",
     "SOURCE_STORM",
     "WRAPPED_UP_SOURCES",
     "blocked_key",
+    "close_by_server",
     "ended_project_decisions",
     "expire_by_key",
     "expire_decision",

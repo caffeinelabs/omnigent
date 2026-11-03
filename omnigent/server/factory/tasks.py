@@ -42,7 +42,7 @@ from omnigent.factory import (
     TASK_CLOSED_STATES,
     TASK_KEY_RE,
 )
-from omnigent.server.factory import events, schemas
+from omnigent.server.factory import events, schemas, waits
 from omnigent.server.factory.actor import Actor, task_key_ref
 from omnigent.server.factory.charter import (
     DEPENDS_MERGED,
@@ -153,11 +153,31 @@ class TaskAddIn(TaskIn):
     budget: TaskBudgetIn | None = None
 
 
+class HoldIn(BaseModel):
+    """
+    A hold on a task: what it waits on, on purpose.
+
+    :param on: ``D-45``, ``C-16``, ``PR #12``, ``T-3``, a project slug, or free text.
+    :param until: When it lapses by itself: epoch seconds, ISO-8601, or ``2h``/``30m``/``1d``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    on: str = Field(min_length=1, max_length=waits.HOLD_NOTE_MAX)
+    note: str | None = Field(None, max_length=waits.HOLD_NOTE_MAX)
+    until: int | str | None = None
+
+
 class TaskEditIn(TaskFields):
-    """``PATCH /v1/factory/factories/{fid}/tasks/{id}``: a person edits a task."""
+    """
+    ``PATCH /v1/factory/factories/{fid}/tasks/{id}``: a person edits a task.
+
+    :param hold: Hold it on purpose (``{on, note?, until?}``); ``null`` lifts a hold.
+    """
 
     budget: TaskBudgetIn | None = None
     cancel: bool = False
+    hold: HoldIn | None = None
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -645,6 +665,7 @@ def task_view(
         "critical": analysis is not None and task.key in analysis.path,
         "waiting_on": list((analysis.waiting if analysis is not None else {}).get(task.key, [])),
         "loop": loop,
+        "hold": waits.task_hold_view(task),
     }
     return schemas.TaskView.model_validate(body).model_dump(mode="json")
 
@@ -1585,6 +1606,10 @@ def _diff_lines(task: FactoryTask | None) -> list[str]:
         f"Estimate: {task.estimate_min or '-'} min",
         f"Budget: {budget.get('attempts') or '-'} attempts · ${budget.get('usd') or '-'}",
     ]
+    hold = task.hold if isinstance(task.hold, Mapping) else None
+    if hold:
+        note = f" · {hold['note']}" if hold.get("note") else ""
+        fields.append(f"Hold: {hold.get('on') or '-'}{note} · by {hold.get('by_title') or '-'}")
     return quote_spoofed_lines("\n".join(fields)).splitlines()
 
 
@@ -1759,7 +1784,7 @@ async def edit_task(
     app_state: Any, factory_id: str, ref: str, body: TaskEditIn, actor: Actor, by: str
 ) -> dict[str, Any]:
     """
-    A person edits a task (priority, deps, budget, card, or cancels it).
+    A person edits a task (priority, deps, budget, card, hold, or cancels it).
 
     Its PL gets ``[Factory control · TASK EDIT · by …]`` with the diff; an
     edit that changes nothing sends nothing.
@@ -1794,6 +1819,9 @@ async def edit_task(
         before, after, write = await asyncio.to_thread(run)
     if write is not None:
         await emit_all(app_state, factory_id, write.events)
+    if "hold" in body.model_fields_set and (body.hold is not None or after.hold):
+        await hold_task(app_state, factory_id, after, body.hold, actor)
+        after = await asyncio.to_thread(deps.factory_store.get_task, after.id) or after
     ctx = (
         write.ctx
         if write is not None
@@ -1822,6 +1850,163 @@ async def edit_task(
     return {"task": view, "changed": True, "mail_id": mail_id, "warnings": analysis.warnings}
 
 
+# ── Holds ──────────────────────────────────────────────────────
+
+_UNTIL_RE: Final = re.compile(r"^\s*(\d+)\s*(m|min|mins|h|hr|hrs|d|day|days)\s*$", re.IGNORECASE)
+_UNIT_S: Final = {"m": 60, "min": 60, "mins": 60, "h": 3600, "hr": 3600, "hrs": 3600}
+
+
+def parse_until(value: int | str | None, now: int) -> int | None:
+    """
+    When a hold lapses: epoch seconds, an ISO-8601 time, or ``2h``/``30m``/``1d`` from now.
+
+    :raises CockpitError: 400 ``invalid_until`` (unreadable, past, or more than 7 days out).
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    at: int | None = None
+    if isinstance(value, bool):
+        at = None
+    elif isinstance(value, int):
+        at = value
+    else:
+        text = value.strip()
+        match = _UNTIL_RE.match(text)
+        if match:
+            unit = match.group(2).lower()
+            at = now + int(match.group(1)) * _UNIT_S.get(unit, 86400)
+        elif text.isdigit():
+            at = int(text)
+        else:
+            from datetime import datetime
+
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                at = None
+            else:
+                at = int(parsed.timestamp())
+    if at is None or at <= now or at > now + waits.HOLD_UNTIL_MAX_S:
+        raise CockpitError(
+            400,
+            "invalid_until",
+            "until is a time within 7 days: epoch seconds, ISO-8601, or e.g. '2h', '1d'",
+            field="until",
+        )
+    return at
+
+
+def _check_hold_target(
+    deps: FactoryDeps, factory_id: str, task: FactoryTask, record: Mapping[str, Any]
+) -> None:
+    """A hold on a ref must name something open now (else there is nothing to wait on)."""
+    kind, ref = record.get("kind"), record.get("ref")
+    if kind == waits.REF_KIND_TEXT or not ref:
+        return
+    facts = waits.Facts.load(deps, factory_id, time.time())
+    number = waits.ref_number(ref)
+    gone: str | None = None
+    if kind == waits.REF_KIND_DECISION and (number is None or facts.decision(number) is None):
+        gone = f"{ref} is not an open decision"
+    elif kind == waits.REF_KIND_PROPOSAL and (number is None or facts.proposal(number) is None):
+        gone = f"{ref} is not an open proposal"
+    elif kind == waits.REF_KIND_TASK:
+        other = facts.task(number) if number is not None else None
+        if other is None or other.state not in waits.OPEN_TASK_STATES:
+            gone = f"{ref} is not an open task"
+        elif other.id == task.id:
+            gone = "a task cannot wait on itself"
+    elif kind == waits.REF_KIND_PR:
+        pr = facts.pr_number(number) if number is not None else None
+        if pr is None or pr.state != "open":
+            gone = f"{ref} is not an open PR the factory tracks"
+    elif kind == waits.REF_KIND_PROJECT:
+        project = facts.projects.get(str(ref))
+        if project is None or project.status != "active":
+            gone = f"{ref} is not an active project"
+        elif project.slug == task.project_slug:
+            gone = "a task cannot wait on its own project"
+    if gone is not None:
+        raise CockpitError(409, "nothing_to_wait_on", f"{gone}: nothing to hold on", field="on")
+
+
+async def hold_task(
+    app_state: Any,
+    factory_id: str,
+    task: FactoryTask,
+    hold: HoldIn | None,
+    actor: Actor,
+) -> dict[str, Any]:
+    """
+    Hold a task on purpose, or lift its hold (*hold* ``None``).
+
+    While it holds, the loop engine does not call the task stalled: it shows
+    "held: waiting on …" instead. A hold on a ``D-n``, ``C-n``, ``PR #n``,
+    ``T-n`` or project lapses by itself once that closes; one on free text
+    after a day, unless ``until`` says otherwise. Logs ``task.held`` or
+    ``task.released`` (who, on what, since when).
+
+    :returns: ``{task, hold}``: the task view and the hold as it reads now.
+    :raises CockpitError: 409 ``task_closed`` / ``nothing_to_wait_on``, 400 ``invalid_until``.
+    """
+    deps = factory_deps(app_state)
+    now = int(time.time())
+
+    def run() -> tuple[FactoryTask, dict[str, Any] | None, str | None]:
+        current = deps.factory_store.get_task(task.id) or task
+        if hold is None:
+            if not current.hold:
+                return current, None, None
+            row = deps.factory_store.update_task(current.id, hold=None) or current
+            return row, None, "lifted"
+        if current.state in TASK_CLOSED_STATES:
+            raise CockpitError(409, "task_closed", f"{current.ref} is {current.state}")
+        until = parse_until(hold.until, now)
+        projects = [p.slug for p in deps.factory_store.list_projects(factory_id)]
+        record = waits.hold_record(
+            hold.on,
+            note=hold.note,
+            until=until,
+            by=actor.id,
+            by_kind=actor.kind,
+            by_title=actor.title,
+            now=now,
+            projects=projects,
+        )
+        _check_hold_target(deps, factory_id, current, record)
+        row = deps.factory_store.update_task(current.id, hold=record) or current
+        facts = waits.Facts.load(deps, factory_id, now)
+        found = waits.explicit_hold(row, facts)
+        return row, record, found.label if found is not None else None
+
+    async with lock(factory_id):
+        row, record, label = await asyncio.to_thread(run)
+    if record is None and label is None:
+        return {"task": task_view(row), "hold": None}
+    kind = "task.held" if record is not None else "task.released"
+    if record is None:
+        label = None
+    words = label or (f"{row.ref} held: {record['on']}" if record else f"{row.ref} hold lifted")
+    await events.emit(
+        app_state,
+        factory_id,
+        kind,
+        severity="notice",
+        project=row.project_slug,
+        subject=task_subject(row),
+        summary=f"{words} ({actor.title})" if record else f"{words} by {actor.title}",
+        data={
+            "task_id": row.id,
+            "ref": row.ref,
+            "hold": record,
+            "label": label,
+            **actor.event_data(),
+        },
+    )
+    facts = await asyncio.to_thread(waits.Facts.load, deps, factory_id, time.time())
+    return {"task": task_view(row), "hold": waits.task_hold_view(row, facts)}
+
+
 def reset() -> None:
     """Forget cached observations and locks (tests)."""
     _observed.clear()
@@ -1835,6 +2020,7 @@ __all__ = [
     "DEFAULT_TASK_USD",
     "MAX_UPSERT",
     "Analysis",
+    "HoldIn",
     "ProjectCtx",
     "TaskAddIn",
     "TaskEditIn",
@@ -1850,6 +2036,7 @@ __all__ = [
     "emit_all",
     "engine_mode",
     "get_view",
+    "hold_task",
     "hub_files",
     "list_view",
     "load_ctx",

@@ -179,12 +179,17 @@ class NowState(_View):
 
 class LoopHoldView(_View):
     """
-    The questions a running implement loop waits on: its stall clock is paused.
+    What a running implement loop waits on: its stall clock is paused.
 
-    :param decision_ref: The oldest open one, e.g. ``D-22``.
-    :param refs: The oldest ones it waits on, oldest first (at most five).
-    :param since: When the oldest was asked (epoch seconds).
+    :param decision_ref: The first thing it waits on, e.g. ``D-22``, ``C-16``,
+        ``PR #12`` or a project slug.
+    :param refs: The first ones it waits on, in order (at most five).
+    :param since: When the first began (epoch seconds).
     :param count: How many it waits on in all.
+    :param kind: The first one's wait kind (``decision``, ``hold``, ``merge``, …).
+    :param label: It in one line, e.g. ``T-16 held: waiting on D-45 (Approve C-16,
+        needs an owner)``.
+    :param who: Who must act on it.
     """
 
     decision_id: str | None = None
@@ -192,6 +197,9 @@ class LoopHoldView(_View):
     refs: list[str] = Field(default_factory=list)
     since: int | None = None
     count: int | None = None
+    kind: str | None = None
+    label: str | None = None
+    who: str | None = None
 
 
 class LoopChipView(_View):
@@ -1125,6 +1133,34 @@ class TeamSpecView(_View):
     def_version: int | None = None
 
 
+WaitKind = Literal["stall", "decision", "proposal", "hold", "merge", "dependency", "capacity"]
+
+
+class WaitingOnView(_View):
+    """
+    One thing a project waits on (``ProjectView.waiting_on``, see ``waits.py``).
+
+    :param kind: ``stall``, ``decision``, ``proposal``, ``hold``, ``merge``,
+        ``dependency`` or ``capacity``.
+    :param ref: ``D-45``, ``C-16``, ``PR #9881``, ``T-3``, a project slug or ``pods``.
+    :param label: One line, e.g. ``waiting on api-core's merge (needs a person)``.
+    :param who: Who must act, e.g. ``an owner``, ``an operator``, ``api-core's lead``.
+    :param person: A person must act (it is also in "Needs you").
+    :param since: When the wait began (epoch seconds), when known.
+    :param task: The task that waits (``T-16``), or ``None`` for the project.
+    :param decision_id: The decision a person answers, when there is one.
+    """
+
+    kind: WaitKind
+    ref: str
+    label: str
+    who: str
+    person: bool = False
+    since: int | None = None
+    task: str | None = None
+    decision_id: str | None = None
+
+
 class ProjectView(_View):
     """One project card."""
 
@@ -1158,6 +1194,7 @@ class ProjectView(_View):
     closed_at: int | None = None
     depends_on: list[str] | None = None
     depends_mode: DependsMode | None = None
+    depends_why: dict[str, str] | None = None
     human_owner: str | None = None
     tasks_summary: TasksSummaryView | None = None
     active_task: ActiveTaskView | None = None
@@ -1168,6 +1205,8 @@ class ProjectView(_View):
     requested_by: RequestedByView | None = None
     update: LeadUpdateView | None = None
     health: ProjectHealthView | None = None
+    waiting_on: list[WaitingOnView] = Field(default_factory=list)
+    """Why it is not moving, the most decisive first (empty: nothing holds it)."""
 
 
 # ── Decisions and events ───────────────────────────────────────
@@ -1655,6 +1694,34 @@ class TaskBudgetView(_View):
     usd: float | None = None
 
 
+class TaskHoldView(_View):
+    """
+    A hold its lead (or a person) put on a task on purpose.
+
+    :param on: What it waits on, as given (``D-45``, ``C-16``, ``PR #12``, ``T-3``,
+        a project slug, or free text).
+    :param kind: ``decision``, ``proposal``, ``task``, ``pr``, ``project`` or ``text``.
+    :param ref: The ref it names (``None`` for free text).
+    :param until: When it lapses by itself (epoch seconds), if set.
+    :param by: Who put it on (a session id or a user id); ``by_kind`` ``agent``/``human``.
+    :param active: It still holds (what it names is open, ``until`` not passed).
+    :param label: What the task shows while it holds, e.g. ``T-16 held: waiting on D-45
+        (Approve C-16, needs an owner)``.
+    """
+
+    on: str | None = None
+    kind: str | None = None
+    ref: str | None = None
+    note: str | None = None
+    until: int | None = None
+    by: str | None = None
+    by_kind: str | None = None
+    by_title: str | None = None
+    since: int | None = None
+    active: bool | None = None
+    label: str | None = None
+
+
 class TaskView(_View):
     """
     One node of the work graph, ``T-<number>``.
@@ -1697,6 +1764,7 @@ class TaskView(_View):
     critical: bool = False
     waiting_on: list[str] = Field(default_factory=list)
     loop: LoopChipView | None = None
+    hold: TaskHoldView | None = None
 
 
 class LoopSpentView(_View):

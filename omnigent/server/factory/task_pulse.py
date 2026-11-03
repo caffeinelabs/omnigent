@@ -6,10 +6,12 @@ or a lead waiting on a person's answer, then read as "no progress" and a
 person was asked to switch vendors on good work. Each tick the loop engine
 reads a :class:`Pulse` for every running implement loop:
 
-- **held**: an open blocking question a person owes one of the task's
-  sessions, one its lead asked about this task (or about no task in
-  particular), or one whose subject is the task. The stall clock waits while
-  one is open and starts again when it is answered.
+- **held**: what the task waits on (:mod:`.waits`): a hold its lead put on
+  it, an open question a person owes one of its sessions, one its lead asked
+  about this task (or about no task in particular), one whose subject is the
+  task or one about its project, a proposal that changes its project, a
+  dependency that is not there yet, or a PR that waits for a person to merge
+  it. The stall clock waits while one holds and starts again when it ends.
 - **activity**: the newest item in the task's open sessions (its ICs, reviewer
   and demo agent: turns, tool calls, messages, and the lead's messages to
   them) and whether one of them runs a turn now. A closed session is not
@@ -21,7 +23,9 @@ reads a :class:`Pulse` for every running implement loop:
 
 Only when the clock runs out anyway does :meth:`Watch.lead_seen` read the
 lead's newest tool calls for the task, and :meth:`Watch.advise` words the
-stall: what to recommend and why, in one plain line.
+stall: what to recommend and why, in one plain line, and what the IC was last
+doing (:class:`WorkerLook`). An IC that is alive and idle with nothing to wait
+on waits on its lead: the stall recommends nudging the lead, not a new vendor.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.cli_diagnostics import redact_secrets
 from omnigent.policies.builtins._shell import SHELL_TOOLS
-from omnigent.server.factory import control, tasks
+from omnigent.server.factory import control, tasks, waits
 from omnigent.server.factory.activity_now import current_call, parse_calls
 from omnigent.stores.factory_store import norm_id
 
@@ -81,6 +85,8 @@ DEAD_WORKERS: Final = frozenset({WORKER_FAILED, WORKER_GONE, WORKER_NONE})
 
 RECOMMEND_WAIT: Final = "wait"
 RECOMMEND_SWITCH: Final = "switch"
+RECOMMEND_NUDGE: Final = "nudge"
+SAID_MAX: Final = 140
 
 
 def _norm(value: str | None) -> str:
@@ -104,30 +110,61 @@ def _status(conv: Conversation) -> str:
 @dataclass(frozen=True)
 class Hold:
     """
-    The open blocking questions a task waits on.
+    What a task waits on (:mod:`.waits`), the most decisive first.
 
-    :param decision_id: The oldest one's row id.
-    :param ref: The oldest one, e.g. ``D-22``.
-    :param refs: The oldest ones, oldest first (at most :data:`HOLD_REFS_MAX`).
-    :param since: When the oldest was asked (epoch seconds).
+    :param decision_id: The first one's decision row id, when a person answers it.
+    :param ref: The first one, e.g. ``D-22``, ``C-16``, ``PR #12`` or a project slug.
+    :param refs: The first ones, in order (at most :data:`HOLD_REFS_MAX`).
+    :param since: When the first began (epoch seconds; ``0`` when unknown).
     :param count: How many there are in all.
+    :param kind: The first one's wait kind (``decision``, ``hold``, ``merge``, …).
+    :param label: It in one line, e.g. ``waiting on D-45 (Approve C-16, needs an owner)``.
+    :param who: Who must act on it.
     """
 
-    decision_id: str
+    decision_id: str | None
     ref: str
     refs: tuple[str, ...]
     since: int
     count: int = 1
+    kind: str = "decision"
+    label: str | None = None
+    who: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         """:returns: The ``held_by`` of a loop's ``spent`` (and its views)."""
-        return {
+        out: dict[str, Any] = {
             "decision_id": self.decision_id,
             "decision_ref": self.ref,
             "refs": list(self.refs),
             "since": self.since,
             "count": max(self.count, len(self.refs)),
         }
+        if self.label:
+            out.update(kind=self.kind, label=self.label, who=self.who)
+        return out
+
+    @classmethod
+    def of(cls, found: Sequence[waits.Wait]) -> Hold | None:
+        """:returns: The hold of *found* waits (the first one leads), else ``None``."""
+        if not found:
+            return None
+        first = found[0]
+        return cls(
+            decision_id=first.decision_id,
+            ref=first.ref,
+            refs=tuple(w.ref for w in found[:HOLD_REFS_MAX]),
+            since=int(first.since or 0),
+            count=len(found),
+            kind=first.kind,
+            label=first.label,
+            who=first.who,
+        )
+
+    @property
+    def words(self) -> str:
+        """:returns: What it waits on, e.g. ``waiting on D-45 (…)`` (the ref when unlabelled)."""
+        return self.label or f"waiting on {self.ref}"
 
 
 def open_holds(deps: FactoryDeps, factory_id: str) -> list[FactoryDecision]:
@@ -179,6 +216,8 @@ def hold_of(
 
     :param decisions: Open blocking questions (:func:`open_holds`), oldest first.
     :param others: The project's other tasks (their keys and branches name them too).
+    :returns: The questions as a :class:`Hold`. :func:`read_pulse` given the
+        factory's facts reads every wait :mod:`.waits` knows of instead.
     """
     askers = {_norm(s) for s in task.session_ids or []}
     lead = _norm(lead_id) if lead_id else None
@@ -255,14 +294,21 @@ def read_pulse(
     decisions: Sequence[FactoryDecision] = (),
     quiet_s: float = RUNNING_QUIET_MAX_S,
     others: Sequence[FactoryTask] = (),
+    facts: waits.Facts | None = None,
 ) -> Pulse:
     """
-    Read *task*'s sessions and the questions it waits on (synchronous; a few row reads).
+    Read *task*'s sessions and what it waits on (synchronous; a few row reads).
 
     :param quiet_s: A running turn silent this long does not count as working.
     :param others: The project's other tasks (see :func:`hold_of`).
+    :param facts: The factory's facts: every wait :mod:`.waits` knows of holds the
+        task; without them only the open questions in *decisions* do.
     """
-    held = hold_of(task, decisions, lead_id=lead.id if lead is not None else None, others=others)
+    lead_id = lead.id if lead is not None else None
+    if facts is not None:
+        held = Hold.of(waits.task_waits(task, facts, lead_id=lead_id))
+    else:
+        held = hold_of(task, decisions, lead_id=lead_id, others=others)
     ids = list(dict.fromkeys(task.session_ids or []))
     rows = deps.conversation_store.get_conversations(ids) if ids else {}
     convs = [rows[i] for i in ids if i in rows]
@@ -361,7 +407,8 @@ class Advice:
     """
     What a stall's decision recommends, and why in one plain line.
 
-    :param recommend: ``wait`` (Keep waiting) or ``switch`` (Switch vendor).
+    :param recommend: ``wait`` (Keep waiting), ``switch`` (Switch vendor) or
+        ``nudge`` (Nudge the lead: the IC is idle and waits on its lead).
     """
 
     recommend: str
@@ -376,10 +423,31 @@ class WorkerLook:
     :param tool: What its running call does, e.g. ``running pnpm -F web build`` for a
         shell command or ``editing files``.
     :param error: The error its last turn ended on, if any (secrets redacted).
+    :param last: Its newest finished call in plain words, e.g. ``running pnpm test``.
+    :param last_at: When that call ended (epoch seconds).
+    :param said: The first line of its newest reply (secrets redacted, clipped).
+    :param said_at: When it said it.
     """
 
     tool: str | None = None
     error: str | None = None
+    last: str | None = None
+    last_at: int | None = None
+    said: str | None = None
+    said_at: int | None = None
+
+    def doing(self, now: float) -> str | None:
+        """:returns: What the IC was last doing, in one line, e.g. ``its last reply (…)``."""
+        if self.tool:
+            return f"it is {self.tool}"
+        parts: list[str] = []
+        if self.last:
+            when = f" ({ago_text(now - self.last_at)})" if self.last_at else ""
+            parts.append(f"its last call was {self.last}{when}")
+        if self.said:
+            when = f" ({ago_text(now - self.said_at)})" if self.said_at else ""
+            parts.append(f'its last reply: "{self.said}"{when}')
+        return "; ".join(parts) or None
 
 
 def doing_text(name: str, arg: str | None) -> str | None:
@@ -392,9 +460,41 @@ def doing_text(name: str, arg: str | None) -> str | None:
     return _TOOL_WORDS.get(name.lower())
 
 
+def _first_line(text: str) -> str | None:
+    for line in redact_secrets(text).splitlines():
+        flat = " ".join(line.split()).strip("#*`> ")
+        if flat:
+            return flat[: SAID_MAX - 1] + "…" if len(flat) > SAID_MAX else flat
+    return None
+
+
+def _reply_text(item: ConversationItem) -> str | None:
+    """The text of an assistant message item, else ``None``."""
+    data = item.data
+    if item.type != "message" or getattr(data, "role", None) != "assistant":
+        return None
+    content = getattr(data, "content", None) or []
+    parts = []
+    for block in content:
+        text = block.get("text") if isinstance(block, Mapping) else getattr(block, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts) or None
+
+
 def look_at(items: Sequence[ConversationItem], status: str) -> WorkerLook:
-    """Read a worker's newest items (oldest first): its running call and a last error."""
-    call = current_call(parse_calls(items), status)
+    """Read a worker's newest items (oldest first): its running call, last call, reply, error."""
+    calls = parse_calls(items)
+    call = current_call(calls, status)
+    done = [c for c in calls if c.ended_at is not None]
+    last = done[-1] if done else None
+    said: str | None = None
+    said_at: int | None = None
+    for item in reversed(items):
+        text = _reply_text(item)
+        if text and (line := _first_line(text)):
+            said, said_at = line, int(item.created_at)
+            break
     error = None
     for item in reversed(items):
         if item.type == "error" and getattr(item.data, "level", None) != "info":
@@ -405,24 +505,42 @@ def look_at(items: Sequence[ConversationItem], status: str) -> WorkerLook:
         if item.type in ("message", "function_call", "function_call_output"):
             break
     tool = doing_text(call.name, call.arg) if call is not None else None
-    return WorkerLook(tool=tool, error=error)
+    last_words = None
+    if last is not None:
+        arg = redact_secrets(last.arg) if last.arg else None
+        last_words = doing_text(last.name, arg) or f"{last.name}"
+        if last.failed:
+            last_words += " (it failed)"
+    return WorkerLook(
+        tool=tool,
+        error=error,
+        last=last_words,
+        last_at=last.ended_at if last is not None else None,
+        said=said,
+        said_at=said_at,
+    )
 
 
 def advise(
     pulse: Pulse, *, now: float, look: WorkerLook | None = None, kept_at: int | None = None
 ) -> Advice:
     """
-    Recommend Keep waiting or Switch vendor for a stalled implement loop, and say why.
+    Recommend Keep waiting, Nudge the lead or Switch vendor for a stalled implement loop.
 
-    Keep waiting while the IC is alive and was active, or the task waits on a
-    person; Switch vendor when the IC is gone, failed or erroring, has been
-    silent mid-turn for long, or produced nothing since the last Keep waiting.
+    Keep waiting while the IC is alive and was active, or the task waits on
+    something; Nudge the lead when the IC is alive but idle with nothing to wait
+    on (its lead owes it a next step); Switch vendor when the IC is gone, failed
+    or erroring, has been silent mid-turn for long, or produced nothing since
+    the last Keep waiting.
 
     :param kept_at: When a person last answered Keep waiting on this try.
     """
     look = look or WorkerLook()
     if pulse.held is not None:
-        return Advice(RECOMMEND_WAIT, f"It waits on {pulse.held.ref} for a person's answer.")
+        held = pulse.held
+        if held.kind == "decision" and held.ref.startswith("D-"):
+            return Advice(RECOMMEND_WAIT, f"It waits on {held.ref} for a person's answer.")
+        return Advice(RECOMMEND_WAIT, f"It is held: {held.words}.")
     last = pulse.worker_at
     if pulse.worker == WORKER_NONE:
         return Advice(RECOMMEND_SWITCH, "No IC is working on the task.")
@@ -462,9 +580,50 @@ def advise(
         return Advice(RECOMMEND_WAIT, f"{who} worked {ago_text(now - active)}; it is still on it.")
     idle = f" for {span_text(now - last)}" if last else ""
     return Advice(
-        RECOMMEND_WAIT,
+        RECOMMEND_NUDGE,
         f"The IC is alive but has been idle{idle}; its lead may owe it a next step.",
     )
+
+
+LOOK_LINKS_MAX: Final = 3
+NOTHING_WAITED: Final = (
+    "nothing the server knows of (no open decision, proposal, dependency, merge or hold)"
+)
+
+
+def stall_lines(stall: Mapping[str, Any], factory_id: str, budget_s: float | None) -> list[str]:
+    """
+    A stall in plain lines, for its decision and its incident alike: what the IC
+    was last doing, what the task waits on, how long nothing moved, where to look.
+
+    :param stall: What :meth:`Watch.stall_words` recorded (``doing``, ``waiting``,
+        ``idle_s``, ``worker_id``, ``lead_id``) and its ``kind`` (``idle``/``wall``).
+    :param budget_s: The no-progress budget of the try, when known.
+    """
+    from omnigent.server.factory.status_summary import _Links
+
+    doing = stall.get("doing")
+    waiting = stall.get("waiting")
+    lines = [
+        f"Last doing: {doing}" if doing else "Last doing: nothing the server saw",
+        f"Waiting on: {waiting or NOTHING_WAITED}",
+    ]
+    idle_s = stall.get("idle_s")
+    if stall.get("kind") == "idle" and isinstance(idle_s, int) and idle_s > 0:
+        of = f" (the no-progress budget is {span_text(budget_s)})" if budget_s else ""
+        lines.append(f"Idle for: {span_text(idle_s)}{of}")
+    links = _Links(_norm(factory_id))
+    look: list[str] = []
+    worker = stall.get("worker_id")
+    if isinstance(worker, str) and worker:
+        look.append(f"[IC session](/c/{worker})")
+        look.append(f"[IC in the agent panel]({links.agent(worker)})")
+    lead = stall.get("lead_id")
+    if isinstance(lead, str) and lead:
+        look.append(f"[its lead](/c/{lead})")
+    if look:
+        lines.append("Look: " + " · ".join(look[:LOOK_LINKS_MAX]))
+    return lines
 
 
 # ── One tick's reads ───────────────────────────────────────────
@@ -516,6 +675,30 @@ class Watch:
         """:returns: What the stall recommends, and why (reads the worker's items)."""
         return advise(self.pulse, now=self.now, look=self.look(), kept_at=kept_at)
 
+    def stall_words(self, kept_at: int | None = None) -> dict[str, Any]:
+        """
+        What a stall's decision says (reads the worker's items once).
+
+        :returns: ``{recommend, line, worker, doing, waiting, worker_id, lead_id,
+            idle_s}``: the recommendation and why, what the IC was last doing, what
+            the task waits on (``None``: nothing the server knows of), its IC and
+            lead sessions, and how long nothing moved.
+        """
+        look = self.look()
+        advice = advise(self.pulse, now=self.now, look=look, kept_at=kept_at)
+        pulse = self.pulse
+        active = max(pulse.active_at or 0, pulse.worker_at or 0)
+        return {
+            "recommend": advice.recommend,
+            "line": advice.line,
+            "worker": pulse.worker,
+            "doing": look.doing(self.now),
+            "waiting": pulse.held.words if pulse.held is not None else None,
+            "worker_id": pulse.worker_id,
+            "lead_id": self.lead.id if self.lead is not None else None,
+            "idle_s": int(self.now - active) if active else None,
+        }
+
 
 @dataclass
 class Reader:
@@ -526,7 +709,7 @@ class Reader:
     now: float
     tasks: Sequence[FactoryTask] = ()
     """The factory's tasks: a lead's question naming another one does not hold a task."""
-    _decisions: list[FactoryDecision] | None = None
+    _facts: waits.Facts | None = None
     _quiet_s: float | None = None
     _leads: dict[str, Conversation | None] = field(default_factory=dict)
 
@@ -547,10 +730,15 @@ class Reader:
             self._quiet_s = float(found or RUNNING_QUIET_MAX_S)
         return self._quiet_s
 
+    def facts(self) -> waits.Facts:
+        """:returns: What the tasks' waits read, loaded once per tick."""
+        if self._facts is None:
+            self._facts = waits.Facts.load(self.deps, self.factory_id, self.now)
+        return self._facts
+
     def watch(self, task: FactoryTask) -> Watch:
         """:returns: *task*'s pulse now (synchronous)."""
-        if self._decisions is None:
-            self._decisions = open_holds(self.deps, self.factory_id)
+        facts = self.facts()
         lead = self._lead(task.project_slug)
         others = [t for t in self.tasks if t.project_slug == task.project_slug]
         pulse = read_pulse(
@@ -558,9 +746,9 @@ class Reader:
             task,
             now=self.now,
             lead=lead,
-            decisions=self._decisions,
             quiet_s=self.quiet_s(),
             others=others,
+            facts=facts,
         )
         return Watch(self.deps, task, lead, pulse, self.now)
 
@@ -572,18 +760,23 @@ def held_view(spent: Mapping[str, Any] | None) -> dict[str, Any] | None:
         return None
     refs = [str(r) for r in found.get("refs") or [] if r] or [str(found["decision_ref"])]
     count = found.get("count")
-    return {
+    out = {
         "decision_id": found.get("decision_id"),
         "decision_ref": str(found["decision_ref"]),
         "refs": refs,
         "since": found.get("since"),
         "count": max(count, len(refs)) if isinstance(count, int) else len(refs),
     }
+    for key in ("kind", "label", "who"):
+        if isinstance(found.get(key), str):
+            out[key] = found[key]
+    return out
 
 
 __all__ = [
     "DEAD_WORKERS",
     "HOLD_SOURCES",
+    "RECOMMEND_NUDGE",
     "RECOMMEND_SWITCH",
     "RECOMMEND_WAIT",
     "RUNNING_QUIET_MAX_S",
@@ -607,5 +800,6 @@ __all__ = [
     "open_holds",
     "read_pulse",
     "span_text",
+    "stall_lines",
     "task_patterns",
 ]

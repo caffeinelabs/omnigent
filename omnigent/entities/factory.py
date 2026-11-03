@@ -614,6 +614,8 @@ class FactoryTask:
     :param budget: ``{attempts?, usd?}`` overrides.
     :param cost_usd: Spend attributed to the task.
     :param created_via: ``human`` / ``agent`` / ``server``.
+    :param hold: Its lead (or a person) holds it on purpose: ``{on, kind, ref, note,
+        until, by, by_kind, since}`` (see :mod:`omnigent.server.factory.waits`), or ``None``.
     """
 
     id: str
@@ -642,6 +644,7 @@ class FactoryTask:
     closed_at: int | None = None
     created_at: int = 0
     updated_at: int = 0
+    hold: dict[str, Any] | None = None
     workspace_id: int = 0
 
     @property

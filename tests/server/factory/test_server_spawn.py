@@ -141,7 +141,13 @@ async def test_an_applied_proposal_spawns_without_an_atlas_turn(
         cockpit,
         {"op": "create", "project": project("db-version")},
         {"op": "create", "project": project("api-route")},
-        {"op": "create", "project": project("settings", depends_on=["db-version", "api-route"])},
+        {
+            "op": "create",
+            "project": project(
+                "settings",
+                depends_on=["db-version: reads its table", "api-route: calls its route"],
+            ),
+        },
         reply_to=f"chat_{chat.id}",
     )
     await settle()

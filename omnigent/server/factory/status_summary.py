@@ -237,6 +237,8 @@ class WorkingItem(_Model):
     :param doing: Its lead agent's own one-liner, verbatim (not for display).
     :param problem: Plain words for a blocked, failed or paused project.
     :param running: Its lead or one of its agents is running a turn now.
+    :param waiting: Why it is not moving, in one line (``ProjectView.waiting_on``),
+        e.g. ``T-16 held: waiting on D-45 (Approve C-16, needs an owner)``.
     """
 
     project: str
@@ -249,6 +251,7 @@ class WorkingItem(_Model):
     doing: str | None = None
     problem: str | None = None
     running: bool = False
+    waiting: str | None = None
     href: str
 
 
@@ -261,6 +264,7 @@ class NextItem(_Model):
         blocked or paused): the same words Health uses.
     :param step_since: When the start step in *reason* began (e.g. pulling its
         image), so the card can say for how long; ``None`` when unknown.
+    :param waiting: Why it is not moving, in one line (``ProjectView.waiting_on``).
     """
 
     project: str
@@ -269,6 +273,7 @@ class NextItem(_Model):
     problem: str | None = None
     since: int
     step_since: int | None = None
+    waiting: str | None = None
     href: str
 
 
@@ -1006,6 +1011,7 @@ def working_items(
                 doing=_clip((project.get("pl") or {}).get("summary")),
                 problem=_problem(project),
                 running=_project_running(project),
+                waiting=waiting_line(project),
                 href=links.project(project["slug"]),
             )
         )
@@ -1013,6 +1019,31 @@ def working_items(
         items,
         key=lambda i: (i.problem is None, -_STAGE_RANK.get(i.stage, -1), i.since, i.project),
     )
+
+
+def waiting_line(project: Mapping[str, Any]) -> str | None:
+    """:returns: Why *project* is not moving, in one line (its first wait, ``+N more``)."""
+    from omnigent.server.factory.waits import one_line
+
+    found = [w for w in project.get("waiting_on") or [] if isinstance(w, Mapping)]
+    return _clip(one_line(found)) if found else None
+
+
+_WAIT_VERBS: Final = (("waiting on ", "waits on "), ("waiting for ", "waits for "))
+
+
+def _waits_reason(project: Mapping[str, Any]) -> str | None:
+    """A queued project's reason from what it waits on (dependencies, merges, holds)."""
+    found = [w for w in project.get("waiting_on") or [] if isinstance(w, Mapping)]
+    if not found or found[0].get("kind") == "capacity":
+        return None
+    text = str(found[0].get("label") or "")
+    for head, verb in _WAIT_VERBS:
+        if text.startswith(head):
+            text = verb + text[len(head) :]
+            break
+    more = len(found) - 1
+    return _clip(f"{text} (+{more} more)" if more else text)
 
 
 def _queued_problem(project: Mapping[str, Any], factory_paused: bool) -> str | None:
@@ -1067,6 +1098,9 @@ def _queued_reason(
         return f"{verb}: {problem}"
     if factory_paused:
         return "waits until the factory resumes"
+    said = _waits_reason(project)
+    if said:
+        return said
     waiting = _WAITING_ON_RE.match(str(project.get("overlay_reason") or ""))
     if waiting:
         return f"waits for {waiting['deps']} to finish"
@@ -1123,6 +1157,7 @@ def next_items(body: Mapping[str, Any], links: _Links) -> list[NextItem]:
                 problem=problem,
                 since=int(project.get("stage_since") or 0),
                 step_since=None if paused else _step_since(project, problem),
+                waiting=waiting_line(project),
                 href=links.project(project["slug"]),
             )
         )
@@ -1615,7 +1650,12 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         health=health,
         counts=counts,
     )
-    return summary.model_dump(mode="json")
+    out = summary.model_dump(mode="json")
+    # "waiting" shows only when something holds the project (older readers never see it).
+    for item in (*out["working"], *out["next"]):
+        if item.get("waiting") is None:
+            item.pop("waiting", None)
+    return out
 
 
 def spend_text(spend: Mapping[str, Any]) -> str:
@@ -1665,7 +1705,8 @@ def plain_lines(summary: Mapping[str, Any], *, now: float, base_url: str = "") -
         )
     for item in summary["working"]:
         status = item.get("problem") or item["status"]
-        lines.append(f"Working on {item['project']}: {status}{age(item['since'])}")
+        held = f" · {item['waiting']}" if item.get("waiting") else ""
+        lines.append(f"Working on {item['project']}: {status}{held}{age(item['since'])}")
     for item in summary["next"]:
         lines.append(f"Next: {item['project']} {item['reason']}")
     beat = summary.get("check_in")

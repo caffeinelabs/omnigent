@@ -429,7 +429,10 @@ async def test_an_oversized_analysis_is_refused(cockpit: Cockpit) -> None:
 async def test_undo_before_spawn_drops_the_project(cockpit: Cockpit) -> None:
     await propose(
         cockpit,
-        {"op": "create", "project": project("settings", depends_on=["api-version"])},
+        {
+            "op": "create",
+            "project": project("settings", depends_on=["api-version: shows its answer"]),
+        },
         reply_to=_human_chat(cockpit),
     )
     assert cockpit.store.get_project(cockpit.fid, "settings") is not None

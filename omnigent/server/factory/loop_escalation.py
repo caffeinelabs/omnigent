@@ -61,7 +61,13 @@ from omnigent.server.factory.loops import (
     wait_words,
 )
 from omnigent.server.factory.loops import lock as loop_lock
-from omnigent.server.factory.task_pulse import DEAD_WORKERS, RECOMMEND_WAIT, span_text
+from omnigent.server.factory.task_pulse import (
+    DEAD_WORKERS,
+    RECOMMEND_NUDGE,
+    RECOMMEND_WAIT,
+    span_text,
+    stall_lines,
+)
 from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
@@ -193,6 +199,7 @@ def decision_for(
     reason = loop.last_reason or state
     question = f"{what}: {_count(loop)} {state} - what next?"
     context = [f"Why: {reason}", f"Last verdict: {loop.last_verdict or '-'}"]
+    context += stall_context(loop, state)
     advice = _stall_advice(loop, state)
     if advice is not None:
         # Why, in one plain line, where every surface shows it (the card, the Room, Slack).
@@ -208,7 +215,9 @@ def decision_for(
         other = OTHER_VENDOR.get(harness, "ic_codex")
         switched = bool(_spent(loop).get("switched"))
         money = bool(_spent(loop).get("usd")) and state == "exhausted" and "$" in reason
+        nudge = advice is not None and advice[0] == RECOMMEND_NUDGE and state == "stalled"
         wait = advice is not None and advice[0] == RECOMMEND_WAIT
+        calm = wait or nudge
         options: list[dict[str, Any]] = []
         if money:
             usd = float((loop.spec or {}).get("usd") or 0.0) or 15.0
@@ -228,6 +237,22 @@ def decision_for(
                 _option("raise", "One more review round", ACTION_RAISE_BUDGET, target, rounds=1)
             )
         elif state == "stalled":
+            if nudge:
+                options.append(
+                    _option(
+                        "nudge",
+                        "Nudge the lead",
+                        ACTION_RAISE_BUDGET,
+                        target,
+                        wait=True,
+                        nudge=True,
+                        recommended=True,
+                        description=(
+                            "Tell its project lead the IC waits for its next step; "
+                            "keep waiting meanwhile"
+                        ),
+                    )
+                )
             options.append(
                 _option(
                     "wait",
@@ -248,14 +273,14 @@ def decision_for(
                 ACTION_SWITCH_VENDOR,
                 target,
                 vendor=other,
-                recommended=not switched and not wait,
+                recommended=not switched and not calm,
             ),
             _option(
                 "fresh",
                 "Fresh restart",
                 ACTION_FRESH_RESTART,
                 target,
-                recommended=switched and not wait,
+                recommended=switched and not calm,
             ),
             _option("abandon", "Abandon task", ACTION_ABANDON_TASK, target),
         ]
@@ -337,6 +362,17 @@ def decision_for(
         ],
         None,
     )
+
+
+def stall_context(loop: FactoryLoop, state: str) -> list[str]:
+    """
+    The lines an implement stall's decision adds: what the IC was last doing,
+    what the task waits on, for how long nothing moved, and where to look.
+    """
+    stall = _stall_of(loop, state)
+    if not stall:
+        return []
+    return stall_lines(stall, loop.factory_id, idle_budget_s(loop))
 
 
 def _stall_of(loop: FactoryLoop, state: str) -> dict[str, Any]:
@@ -553,9 +589,11 @@ async def settle(app_state: Any, deps: FactoryDeps, changed: list[FactoryLoop]) 
     Loops that left their bad state without an answer close their open decision. Never raises.
 
     Progress, a person's changes request or budget edit, or the task closing
-    can end the stop before anyone answers it. The decision expires (unless a
-    sibling loop still rides on it) and, when the loop runs again, the PL is
-    told its hold is lifted.
+    can end the stop before anyone answers it. When the loop runs again its
+    decision expires (unless a sibling loop still rides on it) and the PL is
+    told its hold is lifted; when its work ended (the task closed, its PR
+    merged, its project closed) the server answers the decision itself with
+    the reason, so its history says why it closed.
     """
     for loop_id in dict.fromkeys(loop.id for loop in changed):
         try:
@@ -573,6 +611,11 @@ async def _settle(app_state: Any, deps: FactoryDeps, loop_id: str) -> None:
     if decision is None or decision.status != "open":
         return
     if await asyncio.to_thread(_still_shared, deps, loop, decision.id):
+        return
+    if loop.state in ("converged", "cancelled"):
+        await server_decisions.close_by_server(
+            app_state, decision.id, why=loop.last_reason or f"the loop {loop.state}"
+        )
         return
     expired = await server_decisions.expire_decision(app_state, decision.id)
     if expired is None or loop.state != "running":
@@ -645,6 +688,64 @@ async def reconcile(app_state: Any, deps: FactoryDeps, factory_id: str) -> None:
                 )
     except Exception:  # noqa: BLE001 - the next tick retries
         _logger.warning("factory loops: reconcile failed for %s", factory_id, exc_info=True)
+
+
+def _target_loop(deps: FactoryDeps, decision: FactoryDecision) -> tuple[bool, FactoryLoop | None]:
+    """
+    :returns: ``(names a loop, the loop)``: whether the decision's options act on a
+        ``loop:<id>`` (a budget decision acts on a project), and that loop if it exists.
+    """
+    for option in decision.options or []:
+        target = str(option.get("target") or "")
+        if target.startswith("loop:"):
+            try:
+                return True, deps.factory_store.get_loop(target[5:])
+            except ValueError:
+                return True, None
+    return False, None
+
+
+def stale_loop_decisions(deps: FactoryDeps, factory_id: str) -> list[tuple[FactoryDecision, str]]:
+    """
+    Open stall and claim decisions whose loop ended or is gone (synchronous).
+
+    :returns: ``(decision, why)`` pairs, e.g. ``(D-47, "PR #9881 merged")``.
+    """
+    rows = deps.factory_store.list_decisions(factory_id=factory_id, status="open", limit=500)
+    out: list[tuple[FactoryDecision, str]] = []
+    for decision in rows:
+        if decision.source != SOURCE_LOOP:
+            continue
+        names, loop = _target_loop(deps, decision)
+        if not names:
+            continue
+        if loop is None:
+            out.append((decision, "its loop is gone"))
+        elif loop.state in ("converged", "cancelled", "superseded"):
+            out.append((decision, loop.last_reason or f"the loop {loop.state}"))
+    return out
+
+
+async def close_stale(app_state: Any, deps: FactoryDeps, factory_id: str) -> list[str]:
+    """
+    Close the stall and claim decisions nothing is left to act on. Never raises.
+
+    Their loop ended (its task closed, its PR merged, its project closed or
+    shipped) while the decision stayed open: the server answers each with why.
+
+    :returns: The refs closed.
+    """
+    try:
+        stale = await asyncio.to_thread(stale_loop_decisions, deps, factory_id)
+    except Exception:  # noqa: BLE001 - the next tick retries
+        _logger.warning("factory loops: no stale decisions for %s", factory_id, exc_info=True)
+        return []
+    closed: list[str] = []
+    for decision, why in stale:
+        row = await server_decisions.close_by_server(app_state, decision.id, why=why)
+        if row is not None:
+            closed.append(row.ref)
+    return closed
 
 
 def wait_text(facts: LoopFacts, pending: Sequence[str], sha7: str) -> str:
@@ -984,6 +1085,18 @@ def answer_text(answer: LoopAnswer, by: str) -> str:
                 f"Keep waiting for the gates of PR #{number}; do not claim READY again: the "
                 "server sends READY FOR HUMAN MERGE when they pass."
             )
+        elif what == "wall_h" and answer.option.get("nudge"):
+            stall = _spent(loop).get("stall")
+            idle = stall.get("idle_s") if isinstance(stall, dict) else None
+            for_how_long = f" for {span_text(idle)}" if isinstance(idle, int) and idle else ""
+            head = f"[Factory loop · NUDGE · {task_word} · by {by} · {ref}]"
+            body = (
+                f"The IC on {task_word} ({key}) has been idle{for_how_long} and waits on you: "
+                "send it its next step now. If it waits on purpose, say on what so the "
+                f'server does not ask again: sys_factory_task(op="hold", key="{key}", '
+                'on="D-<n>|C-<n>|PR #<n>|T-<n>|<project>") where your tool offers it, else '
+                'sys_factory_set(update={…, blocker: "<task> waits on D-<n>"}).'
+            )
         elif what == "wall_h":
             body = f"Keep {key} running; give its worker the next step if it waits on you."
         else:
@@ -1247,6 +1360,7 @@ __all__ = [
     "LoopAnswer",
     "LoopFacts",
     "answer_text",
+    "close_stale",
     "decision_for",
     "done_checks",
     "escalate",
@@ -1258,6 +1372,8 @@ __all__ = [
     "reconcile",
     "resumed_text",
     "settle",
+    "stale_loop_decisions",
+    "stall_context",
     "violation",
     "wait_notice",
     "wait_text",

@@ -162,6 +162,23 @@ def _slugs(value: Any) -> list[str]:
     return out
 
 
+DEPENDS_WHY_MAX: Final = 200
+
+
+def _depends_why(
+    value: Any, parsed: Mapping[str, str], depends_on: Sequence[str]
+) -> dict[str, str]:
+    """Each dependency's one-line reason (``charter.depends_why``), only for slugs it names."""
+    given = dict(value) if isinstance(value, Mapping) else {}
+    out: dict[str, str] = {}
+    for slug in depends_on:
+        why = given.get(slug) or parsed.get(slug)
+        text = " ".join(str(why or "").split())[:DEPENDS_WHY_MAX]
+        if text:
+            out[slug] = text
+    return out
+
+
 def _budgets(value: Any) -> dict[str, float]:
     if not isinstance(value, Mapping):
         return {}
@@ -209,7 +226,7 @@ def normalize_charter(
     :param tooling_ref: Preview tooling ref to record when previews are on.
     :returns: ``{kind, goal, dod, scope_paths, constraints, env_needed,
         preview{enabled, slots, tooling_ref?}, preview_slots, demo_focus, demo,
-        budget_ics, version_path?, health_path?, depends_on?, depends_mode?,
+        budget_ics, version_path?, health_path?, depends_on?, depends_mode?, depends_why?,
         human_owner?, budgets?, spawn_owner?, outcome?, why?, requested_by?}``; ``kind`` is
         ``work`` unless it is
         one of :data:`~omnigent.factory.PROJECT_KINDS`. The optional keys are
@@ -248,11 +265,20 @@ def normalize_charter(
         path = _text(src.get(key))
         if path:
             out[key] = path
-    depends_on = _slugs(src.get("depends_on"))
+    raw_deps = src.get("depends_on")
+    reasons: dict[str, str] = {}
+    if isinstance(raw_deps, list):
+        from omnigent.server.factory.start import split_dependency_reasons
+
+        raw_deps, reasons = split_dependency_reasons(raw_deps)
+    depends_on = _slugs(raw_deps)
     if depends_on:
         out["depends_on"] = depends_on
         mode = src.get("depends_mode")
         out["depends_mode"] = mode if mode in DEPENDS_MODES else DEPENDS_MERGED
+        why = _depends_why(src.get("depends_why"), reasons, depends_on)
+        if why:
+            out["depends_why"] = why
     owner = _text(src.get("human_owner"))
     if owner:
         out["human_owner"] = owner
@@ -536,9 +562,10 @@ def _optional_lines(charter: Mapping[str, Any]) -> list[str]:
             if charter.get("depends_mode") == DEPENDS_READY
             else "merged into the base"
         )
+        why = charter.get("depends_why") or {}
+        names = [f"{d} [{why[d]}]" if why.get(d) else d for d in charter["depends_on"]]
         lines.append(
-            f"Depends on: {', '.join(charter['depends_on'])} (the server starts you once "
-            f"each is {until})"
+            f"Depends on: {', '.join(names)} (the server starts you once each is {until})"
         )
     if charter.get("human_owner"):
         lines.append(f"Human owner: {charter['human_owner']}")

@@ -1032,7 +1032,10 @@ def test_task_schema_and_description() -> None:
         "get",
         "list",
         "report",
+        "hold",
+        "release",
     ]
+    assert {"on", "until"} <= set(params["properties"])
     assert params["properties"]["tasks"]["maxItems"] == 30
     item = params["properties"]["tasks"]["items"]
     assert item["required"] == ["key"]
@@ -1041,7 +1044,15 @@ def test_task_schema_and_description() -> None:
     )
     assert params["properties"]["result"]["enum"] == ["PASS", "FAIL", "BLOCKED"]
     text = SysFactoryTaskTool.description()
-    for token in ("title_to_use", "card_text", "cost_budget", "op='report'", "not_ready"):
+    for token in (
+        "title_to_use",
+        "card_text",
+        "cost_budget",
+        "op='report'",
+        "not_ready",
+        "op='hold'",
+        "op='release'",
+    ):
         assert token in text, token
 
 
@@ -1095,6 +1106,31 @@ async def test_task_transitions_post_to_the_key() -> None:
     }
 
 
+async def test_task_hold_posts_what_it_waits_on() -> None:
+    reply = {"hold": {"on": "C-16", "active": True}}
+    server = (
+        FakeServer()
+        .on("POST", "/v1/factory/agent/tasks/route/hold", body=reply)
+        .on("POST", "/v1/factory/agent/tasks/T-16/hold", body=reply)
+        .on("POST", "/v1/factory/agent/tasks/route/release", body={"hold": None})
+    )
+    out = await _call(
+        server,
+        "sys_factory_task",
+        {"op": "hold", "key": "route", "on": " C-16 ", "until": "2h", "note": "lead said wait"},
+    )
+    assert out == reply
+    await _call(
+        server, "sys_factory_task", {"op": "hold", "key": "T-16", "on": "D-45"}, role="lead"
+    )
+    await _call(server, "sys_factory_task", {"op": "release", "key": "route"})
+    assert [r.body for r in server.requests] == [
+        {"from_session_id": PL, "on": "C-16", "until": "2h", "note": "lead said wait"},
+        {"from_session_id": PL, "on": "D-45"},
+        {"from_session_id": PL},
+    ]
+
+
 @pytest.mark.parametrize(
     ("args", "needle"),
     [
@@ -1103,6 +1139,8 @@ async def test_task_transitions_post_to_the_key() -> None:
         ({"op": "start"}, "needs the task 'key'"),
         ({"op": "done", "key": "../../sessions"}, "needs the task 'key'"),
         ({"op": "get", "key": "Route"}, "needs the task 'key'"),
+        ({"op": "hold", "key": "route"}, "needs 'on'"),
+        ({"op": "hold", "key": "../x", "on": "C-1"}, "branch suffix or T-<n>"),
     ],
 )
 async def test_task_validates_locally(args: dict[str, Any], needle: str) -> None:

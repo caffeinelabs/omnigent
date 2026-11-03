@@ -1651,3 +1651,52 @@ async def test_a_non_reader_gets_404(world: FactoryWorld, authed_api: FactoryApi
     resp = await _get(authed_api, _path(world.id("lead_a")), "bob")
 
     assert resp.status_code == 404
+
+
+def test_what_a_project_waits_on_reads_the_same_on_next_and_working() -> None:
+    """The live queued project: Next and Working on say what holds it, as the card does."""
+    merges = [
+        {
+            "kind": "merge",
+            "ref": slug,
+            "label": f"waiting on {slug}'s merge (needs a person)",
+            "who": "an operator",
+            "person": True,
+            "since": NOW - 7 * HOUR,
+        }
+        for slug in ("ux-badge-copy", "ux-status-page", "ux-slash-focus")
+    ]
+    held = {
+        "kind": "hold",
+        "ref": "D-45",
+        "label": "T-16 held: waiting on D-45 (Approve C-16, needs an owner)",
+        "who": "an owner",
+        "person": True,
+        "task": "T-16",
+    }
+    body = _snapshot(
+        projects=[
+            _project("panel-ux", "queued", NOW - 7 * HOUR, waiting_on=merges),
+            _project(
+                "assistant-core",
+                "building",
+                NOW - 3 * HOUR,
+                waiting_on=[held],
+                pl=_member("pl-core", "PL · assistant-core", running=True),
+            ),
+        ]
+    )
+
+    summary = _build(body)
+
+    [queued] = summary["next"]
+    assert queued["reason"] == "waits on ux-badge-copy's merge (needs a person) (+2 more)"
+    assert queued["waiting"] == "waiting on ux-badge-copy's merge (needs a person) +2 more"
+    [working] = summary["working"]
+    assert working["waiting"] == "T-16 held: waiting on D-45 (Approve C-16, needs an owner)"
+    lines = plain_lines(summary, now=NOW)
+    assert any(
+        line.startswith("Working on assistant-core: ")
+        and "· T-16 held: waiting on D-45 (Approve C-16, needs an owner)" in line
+        for line in lines
+    ), lines

@@ -53,6 +53,7 @@ _SAME_AS_CHARTER: Final = (
     "human_owner",
     "depends_on",
     "depends_mode",
+    "depends_why",
 )
 
 
