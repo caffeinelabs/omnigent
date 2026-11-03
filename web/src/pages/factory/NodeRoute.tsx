@@ -29,7 +29,7 @@ function Pending() {
 export function closestPage(snapshot: FactorySnapshot, ref: string): string {
   const fid = snapshot.factory.id;
   if (snapshot.projects.some((p) => p.slug === ref)) return projectPageHref(fid, ref);
-  const pr = /^PR-(\d+)$/.exec(ref);
+  const pr = ref.match(/^PR-(\d+)$/);
   const hit = pr ? snapshot.prs.find((p) => String(p.number) === pr[1]) : undefined;
   if (hit) return prPageHref(fid, hit.id);
   return factoryPageHref(fid);
