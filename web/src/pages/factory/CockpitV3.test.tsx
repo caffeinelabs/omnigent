@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIVE_RUN_FACTORY_ID, preflightOk } from "@/components/factory/__fixtures__/liveRun";
+import { round3Tasks } from "@/components/factory/agents/__fixtures__/opsFixtures";
 import { resetFactoryControls } from "@/components/factory/controls/useFactoryControls";
 import { definitionResponse } from "@/components/factory/insights/__fixtures__/learnFixtures";
 import { notifyMe } from "@/components/factory/notify/__fixtures__/notifyFixtures";
@@ -70,6 +71,7 @@ function serve({ choice = "v2" as CockpitChoice | null, offered = true } = {}) {
       },
       [`GET ${SNAPSHOT}/notify/me`]: () => json(notifyMe()),
       [`GET ${SNAPSHOT}/definition`]: () => json(definitionResponse()),
+      [`GET ${SNAPSHOT}/tasks`]: () => json({ tasks: round3Tasks(), projects: [] }),
     },
   });
 }
@@ -174,6 +176,41 @@ describe("cockpit v3 · the switch and routes", () => {
     renderAt("/n/db-version");
 
     await waitFor(() => expect(location).toBe(`${BASE}/projects/db-version`));
+  });
+
+  it("sends a task's v3 link opened on v2 to its project's page", async () => {
+    serve({ choice: "v2" });
+    renderAt("/n/T-3");
+
+    await waitFor(() => expect(location).toBe(`${BASE}/projects/api-version`));
+  });
+
+  it("offers the way back to v2 in the person's menu while v3 is on", async () => {
+    serve({ choice: "v2" });
+    renderAt("?cockpit=v3");
+    await screen.findByTestId("v3-node-page");
+
+    fireEvent.pointerDown(screen.getByTestId("cockpit-you"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByTestId("cockpit-you-v2"));
+
+    await waitFor(() => expect(screen.queryByTestId("v3-node-page")).toBeNull());
+    expect(screen.getByTestId("factory-shell")).toHaveAttribute("data-cockpit", "v2");
+    expect(localStorage.getItem(COCKPIT_STORAGE_KEY)).toBe("v2");
+  });
+
+  it("says an answer on sample data answered nothing", async () => {
+    serve();
+    renderAt("?cockpit=v3");
+    const status = await screen.findByTestId("v3-status");
+
+    fireEvent.click(within(status).getAllByRole("button", { name: "Apply" })[0]!);
+
+    expect(await screen.findByText(/Sample data: nothing was answered/)).toBeInTheDocument();
+    expect(server.calls.filter((c) => c.path.includes("/decisions/"))).toEqual([]);
   });
 
   it("ignores ?cockpit=v3 while the server does not offer the new cockpit", async () => {

@@ -20,10 +20,12 @@ import {
 import { NodeContent } from "./NodeContent";
 import { NodeHeader } from "./NodeHeader";
 import { Kbd, NodeLink } from "./nodeParts";
-import { useLevel, useNode, usePrefetchNode } from "./nodeQueries";
+import { useLevel, useMoreChildren, useNode, usePrefetchNode } from "./nodeQueries";
 import { nodeHref } from "./nodeRoutes";
 import { DEFAULT_OVERLAYS, type Overlays } from "./NodeTile";
 import type { ChildPage, LevelView as View, NodePage as Page, NodeSummary } from "./nodeTypes";
+import { drawsTiles, levelName } from "./nodeWire";
+import { hasWhy } from "./statusModel";
 import { useNodeKeys, useRovingStops } from "./useNodeKeys";
 
 type Lens = "map" | "list";
@@ -41,7 +43,7 @@ function usefulOverlays(items: NodeSummary[]): (keyof Overlays)[] {
   const has: Record<keyof Overlays, boolean> = {
     needs: items.some((k) => k.needs.open > 0),
     changed: items.some((k) => k.changed?.length),
-    env: items.some((k) => k.try_it),
+    env: items.some((k) => k.try_ready),
     cost: items.some((k) => k.cost),
     people: items.some((k) => k.working?.length || k.idle),
   };
@@ -74,7 +76,7 @@ function Seg({
           onClick={() => onChange(v)}
           className={cn(
             "rounded-md px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground",
-            v === value && "bg-card text-foreground shadow-sm ring-1 ring-border",
+            v === value && "bg-card-solid text-foreground shadow-sm ring-1 ring-border",
           )}
         >
           {name}
@@ -134,7 +136,7 @@ function SectionHead({
                 className={cn(
                   "shrink-0 rounded-full border px-2.5 py-px text-xs whitespace-nowrap",
                   overlays[k]
-                    ? "border-border-strong bg-card text-foreground before:mr-1 before:text-[9px] before:text-status-blue before:content-['●']"
+                    ? "border-border-strong bg-card-solid text-foreground before:mr-1 before:text-[9px] before:text-status-blue before:content-['●']"
                     : "border-border text-foreground-tertiary",
                 )}
               >
@@ -149,9 +151,11 @@ function SectionHead({
 }
 
 function childSub(c: ChildPage): string {
+  // `total` counts every child, also those past the first 60 not read yet.
+  const active = Math.max(c.items.length, c.total - c.later.length - c.ghosts.length);
   const later = c.later.length ? ` · ${c.later.length} later` : "";
   const fold = c.via_fold ? ` · ${c.via_fold} shown in place of an implicit parent` : "";
-  return `${c.items.length}${later}${fold}`;
+  return `${active}${later}${fold}`;
 }
 
 function viewSub(v: View): string {
@@ -164,12 +168,16 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
   const { factoryId } = useNodeActions();
   const grouped = Boolean(level && level !== page.children.level);
   const view = useLevel(page.node.ref, grouped ? level : null, factoryId);
+  const more = useMoreChildren(page.node.ref, page.children, factoryId);
   const [lens, setLens] = useState<Lens>("map");
   const [overlays, setOverlays] = useState<Overlays>(DEFAULT_OVERLAYS);
+  const c: ChildPage = more.items.length
+    ? { ...page.children, items: [...page.children.items, ...more.items] }
+    : page.children;
   const items = grouped
     ? (view.data?.groups.flatMap((g) => g.items) ?? [])
-    : [...page.children.items, ...page.children.ghosts];
-  const tiles = grouped ? Boolean(view.data?.tiles) : page.children.tiles;
+    : [...c.items, ...c.ghosts];
+  const tiles = grouped ? Boolean(view.data && drawsTiles(view.data)) : drawsTiles(c);
   const lenses: Lens[] = items.length ? (tiles ? ["map", "list"] : ["list"]) : [];
   const shownLens: Lens = lenses.includes(lens) ? lens : "list";
   const offered = usefulOverlays(items);
@@ -178,10 +186,11 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
     if (view.isPending)
       return <div aria-busy="true" className="h-40 animate-pulse rounded-xl bg-muted" />;
     if (!view.data) return null;
+    const name = levelName(view.data.level, view.data.level_name);
     return (
-      <section className="mt-[18px]" aria-label={view.data.level_name} data-testid="v3-below">
+      <section className="mt-[18px]" aria-label={name} data-testid="v3-below">
         <SectionHead
-          title={view.data.level_name}
+          title={name}
           sub={viewSub(view.data)}
           lenses={lenses}
           lens={shownLens}
@@ -193,8 +202,8 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
         />
         {explicit && (
           <p className="-mt-0.5 mb-2.5 text-xs text-foreground-tertiary">
-            One level at a time: {view.data.level_name.toLowerCase()} under {page.node.title}, each
-            under its parent&rsquo;s name.{" "}
+            One level at a time: {name.toLowerCase()} under {page.node.title}, each under its
+            parent&rsquo;s name.{" "}
             <NodeLink nodeRef={page.node.ref} className="text-status-blue-fg hover:underline">
               Back to children
             </NodeLink>
@@ -204,12 +213,12 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
       </section>
     );
   }
-  const c = page.children;
   if (!c.items.length && !c.later.length && !c.ghosts.length) return null;
+  const name = levelName(c.level, c.level_name);
   return (
-    <section className="mt-[18px]" aria-label={c.level_name} data-testid="v3-below">
+    <section className="mt-[18px]" aria-label={name} data-testid="v3-below">
       <SectionHead
-        title={c.level_name}
+        title={name}
         sub={childSub(c)}
         lenses={lenses}
         lens={shownLens}
@@ -219,30 +228,39 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
         onOverlay={toggle}
         since={page.rollup.since?.at}
       />
-      <ChildrenView page={c} lens={shownLens} overlays={overlays} />
+      <ChildrenView page={c} lens={shownLens} overlays={overlays} more={more} />
     </section>
   );
 }
 
-function KeysLine() {
+/** The keys this page answers: moving and stepping in only with nodes to move to, `w` only with a why. */
+function KeysLine({ stops, out, why }: { stops: boolean; out: boolean; why: boolean }) {
   return (
     <div
       className="mt-6 flex flex-wrap gap-3 text-[11.5px] text-foreground-tertiary max-md:hidden"
       data-testid="v3-keys"
     >
-      <span>
-        <Kbd>j</Kbd>
-        <Kbd>k</Kbd> move
-      </span>
-      <span>
-        <Kbd>↵</Kbd> or <Kbd>l</Kbd> step in
-      </span>
-      <span>
-        <Kbd>h</Kbd> step out
-      </span>
-      <span>
-        <Kbd>w</Kbd> why
-      </span>
+      {stops && (
+        <>
+          <span>
+            <Kbd>j</Kbd>
+            <Kbd>k</Kbd> move
+          </span>
+          <span>
+            <Kbd>↵</Kbd> or <Kbd>l</Kbd> step in
+          </span>
+        </>
+      )}
+      {out && (
+        <span>
+          <Kbd>h</Kbd> step out
+        </span>
+      )}
+      {why && (
+        <span>
+          <Kbd>w</Kbd> why
+        </span>
+      )}
       <span>
         <Kbd>?</Kbd> all keys
       </span>
@@ -321,10 +339,11 @@ function LoadedNodePage({
   const [whyOpen, setWhyOpen] = useState(false);
   const parent = [...page.breadcrumb].reverse().find((c) => !c.folded);
   const toggleWhy = useCallback(() => setWhyOpen((open) => !open), []);
-  useRovingStops(body);
+  const why = hasWhy(page.status);
+  const stops = useRovingStops(body);
   useNodeKeys(body, {
     onStepOut: parent ? () => navigate(nodeHref(factoryId, parent.ref)) : undefined,
-    onWhy: toggleWhy,
+    onWhy: why ? toggleWhy : undefined,
   });
   const value = useMemo<NodeActions>(
     () => ({ ...actions, factoryId, prefetch }),
@@ -356,7 +375,7 @@ function LoadedNodePage({
               <NodeHeader page={page} whyOpen={whyOpen} onWhyChange={setWhyOpen} />
               {!level && <NodeContent node={page.node} />}
               <Below page={page} level={shown} explicit={Boolean(level)} />
-              <KeysLine />
+              <KeysLine stops={stops} out={Boolean(parent)} why={why} />
             </div>
             {aside}
           </div>

@@ -1,12 +1,15 @@
 // One level under a node, grouped under each item's parent. Parents are
 // section titles only (never nodes, never joined by lines); groups whose work
-// is all done fold into one line, and rows page at 60.
+// is all done fold into one line, and rows page at 60 (a group's next 60 come
+// from the server when it has more).
 
 import { useState } from "react";
-import { DoneLine, PagedRows } from "./Children";
+import { DoneLine, MoreFooter, PagedRows } from "./Children";
 import { NodeLink, StateDot } from "./nodeParts";
+import { useMoreInGroup } from "./nodeQueries";
 import { NodeTile, type Overlays } from "./NodeTile";
 import type { LevelGroup, LevelView as View } from "./nodeTypes";
+import { drawsTiles, levelName } from "./nodeWire";
 
 function GroupHead({ group }: { group: LevelGroup }) {
   const p = group.parent;
@@ -25,7 +28,7 @@ function GroupHead({ group }: { group: LevelGroup }) {
         </span>
       )}
       <span className="mr-2 text-xs text-foreground-tertiary">
-        {p.level_name}
+        {levelName(p.level, p.level_name)}
         {p.ancestors.length ? ` · in ${p.ancestors.join(" › ")}` : ""}
       </span>
       {p.evidence && <span className="text-[12.5px] text-muted-foreground">· {p.evidence}</span>}
@@ -34,14 +37,18 @@ function GroupHead({ group }: { group: LevelGroup }) {
 }
 
 function Group({
-  group,
+  view,
+  group: first,
   rows,
   overlays,
 }: {
+  view: View;
   group: LevelGroup;
   rows: boolean;
   overlays: Overlays;
 }) {
+  const more = useMoreInGroup(view.scope, view.level, first);
+  const group = more.items.length ? { ...first, items: [...first.items, ...more.items] } : first;
   const live = group.items.filter((k) => k.state !== "done");
   const done = group.items.filter((k) => k.state === "done");
   return (
@@ -66,6 +73,7 @@ function Group({
           <DoneLine done={done} overlays={overlays} />
         </div>
       )}
+      <MoreFooter more={more} shown={group.items.length} />
       {group.later?.length ? (
         <div className="mt-2 flex items-center gap-2 rounded-[10px] border border-dashed border-border-strong px-3 py-2 text-[13px] text-muted-foreground">
           <StateDot state="later" />
@@ -86,13 +94,13 @@ export function LevelView({
   overlays: Overlays;
 }) {
   const [showDone, setShowDone] = useState(false);
-  const rows = lens === "list" || !view.tiles;
+  const rows = lens === "list" || !drawsTiles(view);
   const fold = Boolean(view.done_groups) && !showDone;
   const groups = fold ? view.groups.filter((g) => !g.folded_done) : view.groups;
   return (
     <div data-testid="v3-level-view">
       {groups.map((g) => (
-        <Group key={g.parent.ref} group={g} rows={rows} overlays={overlays} />
+        <Group key={g.parent.ref} view={view} group={g} rows={rows} overlays={overlays} />
       ))}
       {fold && view.done_groups && (
         <button
@@ -105,7 +113,7 @@ export function LevelView({
             ✓
           </span>
           <b className="font-semibold text-foreground">
-            {view.done_groups.count} {view.done_groups.noun}
+            {view.done_groups.count} {view.done_groups.noun ?? "all done"}
           </b>
           <span>
             {view.done_groups.titles.slice(0, 5).join(" · ")}

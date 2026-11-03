@@ -2,10 +2,12 @@
  * Cockpit v3's node pages: `/n/<ref>` (one node with its children) and
  * `/n/<ref>/<level>` (one level under it, grouped under parents); Home is the
  * product's node page. Someone on the classic or v2 cockpit who opens a v3
- * link lands on the closest page of their cockpit.
+ * link lands on the closest page of their cockpit. On sample data an answer
+ * changes only the sample, and says so.
  */
 
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Navigate } from "react-router-dom";
 import { factoryPageHref, prPageHref, projectPageHref } from "@/components/factory/factoryRoutes";
 import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
@@ -16,7 +18,8 @@ import { NodePage } from "@/components/factory/v3/NodePage";
 import { useAnswerDecision } from "@/components/factory/v3/nodeQueries";
 import { PRODUCT_REF } from "@/components/factory/v3/nodeRoutes";
 import { useNodeSource } from "@/components/factory/v3/nodeSource";
-import type { FactorySnapshot } from "@/lib/factoryApi";
+import type { FactorySnapshot, TaskView } from "@/lib/factoryApi";
+import { fetchFactoryTasks } from "@/lib/factoryRoomApi";
 import { useParams, useSearchParams } from "@/lib/routing";
 
 function Pending() {
@@ -25,14 +28,39 @@ function Pending() {
   );
 }
 
-/** The classic or v2 page closest to a node ref: its project, its PR, else Home. */
-export function closestPage(snapshot: FactorySnapshot, ref: string): string {
+/** A task ref (`T-16`): its project is on the tasks list, not the snapshot. */
+const TASK_REF = /^T-\d+$/;
+
+/** The classic or v2 page closest to a node ref: its project (a task's too), its PR, else Home. */
+export function closestPage(
+  snapshot: FactorySnapshot,
+  ref: string,
+  tasks: readonly TaskView[] = [],
+): string {
   const fid = snapshot.factory.id;
   if (snapshot.projects.some((p) => p.slug === ref)) return projectPageHref(fid, ref);
   const pr = ref.match(/^PR-(\d+)$/);
   const hit = pr ? snapshot.prs.find((p) => String(p.number) === pr[1]) : undefined;
   if (hit) return prPageHref(fid, hit.id);
+  const task = TASK_REF.test(ref) ? tasks.find((t) => t.ref === ref) : undefined;
+  if (task && snapshot.projects.some((p) => p.slug === task.project_slug)) {
+    return projectPageHref(fid, task.project_slug, { section: "tasks" });
+  }
   return factoryPageHref(fid);
+}
+
+/** A v3 link opened on v1 or v2: wait for the tasks list when the ref is a task's. */
+function ClosestPage({ nodeRef }: { nodeRef: string }) {
+  const { factoryId, snapshot } = useFactoryShell();
+  const task = TASK_REF.test(nodeRef);
+  const tasks = useQuery({
+    queryKey: ["factory-node-closest", factoryId, "tasks"],
+    queryFn: async ({ signal }) => (await fetchFactoryTasks(factoryId, null, signal)).tasks,
+    enabled: task,
+    retry: false,
+  });
+  if (task && tasks.isPending) return <Pending />;
+  return <Navigate replace to={closestPage(snapshot, nodeRef, tasks.data ?? [])} />;
 }
 
 function SampleNotice({ label, onBack }: { label: string; onBack: () => void }) {
@@ -68,7 +96,12 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
         answer(
           { decision, action },
           {
-            onSuccess: () => toast.show({ message: `${decision.id}: ${action.label}` }),
+            onSuccess: () =>
+              toast.show({
+                message: sample
+                  ? `Sample data: nothing was answered. The sample shows what ${decision.id}: ${action.label} would do.`
+                  : `${decision.id}: ${action.label}`,
+              }),
             onError: (error) =>
               toast.show({ message: `${decision.id} was not answered: ${String(error)}` }),
           },
@@ -114,11 +147,10 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
 /** `/n/:ref[/:level]`, and Home (`home`) on cockpit v3. */
 export function NodeRoute({ home = false }: { home?: boolean }) {
   const params = useParams<{ ref?: string; level?: string }>();
-  const { snapshot } = useFactoryShell();
   const cockpit = useCockpitV2();
   const ref = home ? PRODUCT_REF : (params.ref ?? PRODUCT_REF);
   const level = home ? null : (params.level ?? null);
   if (cockpit.loading) return <Pending />;
-  if (!cockpit.v3) return <Navigate replace to={closestPage(snapshot, ref)} />;
+  if (!cockpit.v3) return <ClosestPage nodeRef={ref} />;
   return <V3Node key={`${ref}/${level ?? ""}`} nodeRef={ref} level={level} />;
 }

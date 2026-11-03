@@ -3,15 +3,19 @@
 // to say is left out; nothing renders empty.
 
 import { type ReactNode, useState } from "react";
+import { cn } from "@/lib/utils";
 import { ChipList } from "./LinkChip";
 import { useNodeActions } from "./NodeContext";
 import { Avatar, Glyph, Kbd, NodeLink, Ring, money } from "./nodeParts";
-import type { NodePage, Rollup, VerbAvail } from "./nodeTypes";
+import type { NodePage, Rollup, RollupCount, VerbAvail } from "./nodeTypes";
+import { levelName } from "./nodeWire";
 import { RichText } from "./RichText";
 import { StatusBox } from "./StatusLine";
 import { WhyCard } from "./WhyCard";
 
 const DOT = <span className="text-foreground-tertiary">·</span>;
+/** A separator that stays at the end of its line ("4 working · 2 idle"). */
+const SEP = "\u00a0· ";
 
 function TeamStrip({ team }: { team: NonNullable<Rollup["team"]> }) {
   const n = team.working.length;
@@ -23,63 +27,51 @@ function TeamStrip({ team }: { team: NonNullable<Rollup["team"]> }) {
       ))}
       <span>
         {n ? `${n} working` : ""}
-        {n && team.idle ? " · " : ""}
+        {n && team.idle ? SEP : ""}
         {team.idle ? `${team.idle} idle` : ""}
       </span>
     </span>
   );
 }
 
+/** "3 features", "9 projects (+4 later)", "4 projects later": a root's count, named from the definition. */
+function CountWords({ c }: { c: RollupCount }) {
+  const later = c.later ?? 0;
+  const n = c.count || later;
+  const noun = (n === 1 ? c.name : c.plural).toLowerCase();
+  return (
+    <>
+      <b className="font-semibold text-foreground">{n}</b> {noun}
+      {c.count === 0 ? " later" : null}
+      {c.count > 0 && later > 0 ? (
+        <span className="text-foreground-tertiary"> (+{later} later)</span>
+      ) : null}
+    </>
+  );
+}
+
 /** Line 4: progress, cost, team, base env, what changed since the last look. */
 export function RollupLine({ page }: { page: NodePage }) {
   const { node, rollup } = page;
-  const parts: { id: string; node: ReactNode }[] = [];
-  const add = (id: string, part: ReactNode) => {
-    parts.push({ id, node: part });
+  const isRoot = page.breadcrumb.length === 0;
+  const parts: { id: string; node: ReactNode; shrink?: boolean }[] = [];
+  const add = (id: string, part: ReactNode, shrink = false) => {
+    parts.push({ id, node: part, shrink });
   };
   const p = rollup.progress;
-  if (rollup.counts) {
-    const c = rollup.counts;
-    const words: { id: string; node: ReactNode }[] = [];
-    if (c.features) {
-      words.push({
-        id: "features",
-        node: (
-          <>
-            <b className="font-semibold text-foreground">{c.features}</b> feature
-            {c.features > 1 ? "s" : ""}
-          </>
-        ),
-      });
-    }
-    if (c.studies) {
-      words.push({ id: "studies", node: `${c.studies} stud${c.studies > 1 ? "ies" : "y"}` });
-    }
-    if (c.projects) {
-      words.push({
-        id: "projects",
-        node: (
-          <>
-            <b className="font-semibold text-foreground">{c.projects}</b> project
-            {c.projects > 1 ? "s" : ""}
-            {c.later ? <span className="text-foreground-tertiary"> (+{c.later} later)</span> : null}
-          </>
-        ),
-      });
-    }
-    if (words.length) {
-      add(
-        "counts",
-        <>
-          {words.map((w) => (
-            <span key={w.id}>
-              {w.id !== words[0]!.id && " · "}
-              {w.node}
-            </span>
-          ))}
-        </>,
-      );
-    }
+  const counts = (rollup.counts ?? []).filter((c) => c.count > 0 || c.later);
+  if (counts.length) {
+    add(
+      "counts",
+      <>
+        {counts.map((c, i) => (
+          <span key={c.key}>
+            <CountWords c={c} />
+            {i < counts.length - 1 && SEP}
+          </span>
+        ))}
+      </>,
+    );
   }
   if (p?.what === "acceptance") {
     add(
@@ -132,7 +124,7 @@ export function RollupLine({ page }: { page: NodePage }) {
       "moving",
       rollup.moving_anywhere
         ? "work moving"
-        : `nothing in the ${node.level_name.toLowerCase()} is moving`,
+        : `nothing in the ${levelName(node.level, node.level_name).toLowerCase()} is moving`,
     );
   }
   if (rollup.in_base_env) {
@@ -151,6 +143,7 @@ export function RollupLine({ page }: { page: NodePage }) {
         {rollup.since.items.join(", ")}
         {rollup.since.more ? ` +${rollup.since.more}` : ""}
       </>,
+      true,
     );
   }
   if (rollup.alarms_closed?.count) {
@@ -168,11 +161,12 @@ export function RollupLine({ page }: { page: NodePage }) {
       data-testid="v3-rollup"
       className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground"
     >
-      {p && node.level !== "root" && <Ring progress={p} size={28} />}
-      {parts.map((part) => (
-        <span key={part.id} className="inline-flex max-w-full items-center gap-2">
-          {part.id !== parts[0]!.id && DOT}
-          <span className="min-w-0">{part.node}</span>
+      {p && !isRoot && <Ring progress={p} size={28} />}
+      {parts.map((part, i) => (
+        // The separator ends its part, so a wrapped line never starts with "·".
+        <span key={part.id} className="inline-flex max-w-full min-w-0 items-center gap-2">
+          <span className={cn("min-w-0", part.shrink && "max-md:truncate")}>{part.node}</span>
+          {i < parts.length - 1 && DOT}
         </span>
       ))}
     </div>
@@ -196,7 +190,7 @@ function VerbBar({ verbs }: { verbs: VerbAvail[] }) {
           disabled={!v.enabled}
           title={v.enabled ? undefined : v.reason}
           onClick={() => onVerb?.(v)}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-card px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground hover:border-border-strong hover:text-foreground disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-card-solid px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground hover:border-border-strong hover:text-foreground disabled:opacity-50"
         >
           {v.label}
           {v.key && (
@@ -224,8 +218,9 @@ export function NodeHeader({
   const [ownWhy, setOwnWhy] = useState(false);
   const whyOpen = whyOpenProp ?? ownWhy;
   const setWhy = onWhyChange ?? setOwnWhy;
-  const glyph = node.level !== "root" && (!node.progress || node.implicit) && node.glyph;
-  const kind = node.kind_name && node.kind_name !== node.level_name ? ` · ${node.kind_name}` : "";
+  const level = levelName(node.level, node.level_name);
+  const glyph = page.breadcrumb.length > 0 && (!node.progress || node.implicit) && node.glyph;
+  const kind = node.kind_name && node.kind_name !== level ? ` · ${node.kind_name}` : "";
   const start = page.verbs.find((v) => v.verb === "start") ?? null;
   return (
     <section data-testid="v3-header" className="mb-3 flex flex-col gap-[7px]">
@@ -237,7 +232,7 @@ export function NodeHeader({
         <span className="flex flex-wrap items-center gap-2 text-[12.5px] text-foreground-tertiary">
           {node.tag && <span className="font-mono text-xs">{node.tag}</span>}
           <span>
-            {node.level_name}
+            {level}
             {kind}
             {node.implicit ? " · implicit" : ""}
           </span>

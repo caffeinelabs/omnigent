@@ -71,7 +71,7 @@ function GrandDots({ gc }: { gc: NonNullable<NodeSummary["grandchildren"]> }) {
         <StateBar byState={gc.by_state} className="h-1.5 w-[7.5rem]" />
       )}
       <span className="text-[11.5px] text-foreground-tertiary">
-        {gc.count > 0 ? `${gc.count} ${gc.noun}` : ""}
+        {gc.count > 0 ? [gc.count, gc.noun].filter(Boolean).join(" ") : ""}
         {gc.count > 0 && gc.later > 0 ? " · " : ""}
         {gc.later > 0 ? `${gc.later} later` : ""}
       </span>
@@ -102,7 +102,7 @@ function Badges({ node, overlays }: { node: NodeSummary; overlays: Overlays }) {
           {low} ask{low > 1 ? "s" : ""} · block nothing
         </span>
       )}
-      {overlays.env && node.try_it && (
+      {overlays.env && node.try_ready && (
         <span
           className={cn(
             BADGE,
@@ -159,7 +159,8 @@ export function NodeTile({
     </NodeLink>
   );
   const base = cn(
-    "relative flex min-w-0 flex-col rounded-xl bg-card ring-1 ring-border transition-shadow focus-within:ring-2 focus-within:ring-status-blue hover:ring-border-strong",
+    // bg-card-solid: dark mode's glass rule would replace this ring (state edge, focus) on bg-card.
+    "relative flex min-w-0 flex-col rounded-xl bg-card-solid ring-1 ring-border transition-shadow focus-within:ring-2 focus-within:ring-status-blue hover:ring-border-strong",
     compact ? "gap-1 rounded-[10px] px-3 py-2" : "gap-[7px] px-3.5 py-3",
   );
   if (node.state === "ghost") {
@@ -195,7 +196,7 @@ export function NodeTile({
             ✓
           </span>
           <div className="min-w-0 flex-1">{link}</div>
-          {overlays.env && node.try_it && (
+          {overlays.env && node.try_ready && (
             <Badges node={{ ...node, changed: [] }} overlays={{ ...overlays, needs: false }} />
           )}
         </div>

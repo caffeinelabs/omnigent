@@ -1,20 +1,27 @@
 // A node's children in one lens: tiles under First / Then / Later columns
 // (order among siblings is a column, never an arrow), rows past 12, rows
 // grouped by state past 60 (60 to a page), done work folded into one line,
-// held work in one dashed box with its reasons.
+// held work in one dashed box with its reasons. Proposals and held work show
+// at every size.
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { StateDot } from "./nodeParts";
+import type { MorePages } from "./nodeQueries";
 import { NodeRow, NodeTile, type Overlays, byState } from "./NodeTile";
 import type { ChildPage, NodeSummary } from "./nodeTypes";
+import { drawsTiles } from "./nodeWire";
 
 export const PAGE_ROWS = 60;
 export const TILES_MAX = 12;
 
 const COLH =
   "flex items-baseline gap-2 px-0.5 text-[11px] tracking-[0.07em] uppercase text-foreground-tertiary";
-const ROWS = "overflow-hidden rounded-xl bg-card ring-1 ring-border";
+// `bg-card-solid`, not `bg-card`: dark mode's glass rule restyles every
+// top-level `bg-card` and would drop these rings and state edges.
+const ROWS = "overflow-hidden rounded-xl bg-card-solid ring-1 ring-border";
+const NEXT_BTN =
+  "rounded-[7px] border border-border-strong bg-card-solid px-2 text-xs font-semibold text-foreground disabled:opacity-60";
 
 /** "✓ 4 done  title · title · in base env  show": done siblings in one line; a click shows them. */
 export function DoneLine({
@@ -194,11 +201,7 @@ export function PagedRows({
       {items.length > shown.length && (
         <li className="flex items-center justify-center gap-2.5 border-t border-border p-2 text-[12.5px] text-foreground-tertiary">
           {shown.length} of {items.length}
-          <button
-            type="button"
-            onClick={() => setPages((p) => p + 1)}
-            className="rounded-[7px] border border-border-strong bg-card px-2 text-xs font-semibold text-foreground"
-          >
+          <button type="button" onClick={() => setPages((p) => p + 1)} className={NEXT_BTN}>
             Next {PAGE_ROWS}
           </button>
         </li>
@@ -207,12 +210,39 @@ export function PagedRows({
   );
 }
 
+/** The server's next 60 (`children.next`, a group's `next`): "60 of 340 · Next 60". */
+export function MoreFooter({
+  more,
+  shown,
+  total,
+}: {
+  more: MorePages;
+  shown: number;
+  total?: number;
+}) {
+  if (!more.more) return null;
+  return (
+    <div
+      data-testid="v3-more"
+      className="flex items-center justify-center gap-2.5 p-2 text-[12.5px] text-foreground-tertiary"
+    >
+      {total && total > shown ? `${shown} of ${total}` : `${shown} shown`}
+      <button type="button" onClick={more.more} disabled={more.loading} className={NEXT_BTN}>
+        Next {PAGE_ROWS}
+      </button>
+    </div>
+  );
+}
+
+/** Every state but done, which folds into one line. */
 const STATE_GROUPS: [NodeSummary["state"][], string][] = [
   [["needs"], "Needs you"],
   [["broken"], "Broken"],
   [["moving"], "Moving"],
   [["waiting", "paused"], "Waiting"],
   [["notstarted", "offered"], "Not started"],
+  [["ghost"], "Proposed"],
+  [["later"], "Later"],
 ];
 
 /** More than 60 children: rows grouped by state, done folded, 60 to a page. */
@@ -249,7 +279,7 @@ export function StateGroups({
 export function ColumnRows({ page, overlays }: { page: ChildPage; overlays: Overlays }) {
   const active = [...page.items, ...page.ghosts];
   const columns = page.columns && page.columns.length > 1 ? page.columns : null;
-  const owner = !page.tiles;
+  const owner = !drawsTiles(page);
   return (
     <div className="flex flex-col gap-2.5">
       {columns ? (
@@ -297,29 +327,39 @@ export function ColumnRows({ page, overlays }: { page: ChildPage; overlays: Over
   );
 }
 
-/** The children of a node in the chosen lens. */
+/** The children of a node in the chosen lens, with the server's next 60 when there are more. */
 export function ChildrenView({
   page,
   lens,
   overlays,
+  more,
 }: {
   page: ChildPage;
   lens: "map" | "list";
   overlays: Overlays;
+  more?: MorePages;
 }) {
   const active = page.items.length;
   if (!active && !page.later.length && !page.ghosts.length) return null;
+  const footer = more ? (
+    <MoreFooter
+      more={more}
+      shown={active}
+      total={page.total - page.later.length - page.ghosts.length}
+    />
+  ) : null;
+  const tiles = drawsTiles(page);
   if (active > PAGE_ROWS || page.grouped_by_state) {
     return (
-      <StateGroups
-        items={[...page.items, ...page.ghosts]}
-        overlays={overlays}
-        owner={!page.tiles}
-      />
+      <div className="flex flex-col gap-3">
+        <StateGroups items={[...page.items, ...page.ghosts]} overlays={overlays} owner={!tiles} />
+        <LaterBox later={page.later} note={page.later_note} />
+        {footer}
+      </div>
     );
   }
-  const autoRows = lens === "map" && page.tiles && active > TILES_MAX;
-  if (lens === "list" || !page.tiles || autoRows) {
+  const autoRows = lens === "map" && tiles && active > TILES_MAX;
+  if (lens === "list" || !tiles || autoRows) {
     return (
       <div className="flex flex-col gap-2">
         {autoRows && (
@@ -328,6 +368,7 @@ export function ChildrenView({
           </p>
         )}
         <ColumnRows page={page} overlays={overlays} />
+        {footer}
       </div>
     );
   }

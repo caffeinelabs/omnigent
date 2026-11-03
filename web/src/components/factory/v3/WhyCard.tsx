@@ -68,7 +68,7 @@ export function WhyCard({
             <button
               type="button"
               onClick={() => onVerb?.(start)}
-              className="rounded-[7px] border border-border-strong bg-card px-2 text-xs leading-[1.5] font-semibold hover:border-status-blue hover:text-status-blue-fg"
+              className="rounded-[7px] border border-border-strong bg-card-solid px-2 text-xs leading-[1.5] font-semibold hover:border-status-blue hover:text-status-blue-fg"
             >
               Start it now instead
             </button>

@@ -85,7 +85,7 @@ export function StatusBox({
       data-kind={line.kind}
       className={cn(
         "flex flex-wrap items-center gap-2 rounded-[9px] py-[7px] pr-2 pl-3 leading-[1.55]",
-        needs ? cn(AMBER.surface, AMBER.ring) : "bg-card ring-1 ring-border",
+        needs ? cn(AMBER.surface, AMBER.ring) : "bg-card-solid ring-1 ring-border",
       )}
     >
       <span className="min-w-0 flex-1 max-md:basis-full">

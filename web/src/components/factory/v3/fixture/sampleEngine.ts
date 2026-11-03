@@ -1045,7 +1045,7 @@ export class SampleEngine {
     const kindName = this.data.kinds[n.kind];
     return {
       ref: n.id,
-      level: n.lvl,
+      level: this.levelKey(n),
       level_name: this.lvName(n),
       kind: n.kind,
       ...(kindName ? { kind_name: kindName } : {}),
@@ -1066,7 +1066,7 @@ export class SampleEngine {
       ...(n.rate && s === "moving" ? { burn: n.rate } : {}),
       ...(n.budget ? { budget: n.budget } : {}),
       ...(this.inBase(n) ? { in_base_env: true } : {}),
-      ...(this.hasTry(n) ? { try_it: true } : {}),
+      ...(this.hasTry(n) ? { try_ready: true } : {}),
       ...(n.automerge || (n.lvl === "project" && this.ancestors(n.id).some((a) => a.automerge))
         ? { auto_merge: true }
         : {}),
@@ -1078,10 +1078,15 @@ export class SampleEngine {
     };
   }
 
+  /** The level key a page names: a root's is its tree's root key ("product", "fx"). */
+  private levelKey(n: RawNode): string {
+    return n.lvl === "root" ? this.data.trees[n.tree].root : n.lvl;
+  }
+
   private crumb(a: RawNode): Crumb {
     return {
       ref: a.id,
-      level: a.lvl,
+      level: this.levelKey(a),
       level_name: this.lvName(a),
       title: a.title,
       state: apiState(this.stateOf(a.id)),
@@ -1089,6 +1094,35 @@ export class SampleEngine {
       ...(a.implicit ? { implicit: true } : {}),
       ...(this.isFolded(a) ? { folded: true } : {}),
     };
+  }
+
+  /** A root's counts by level (and the study kind), named from the levels and kinds. */
+  private rootCounts(n: RawNode, features: RawNode[], projects: number, later: number) {
+    const lv = (key: string) => this.levels(n.tree).find((l) => l.key === key);
+    const named = (key: string, count: number, name?: string, plural?: string) =>
+      name && plural && count ? [{ key, name, plural, count }] : [];
+    const f = lv("feature");
+    const p = lv("project");
+    return [
+      ...named("feature", features.filter((x) => x.kind === "feature").length, f?.name, f?.plural),
+      ...named(
+        "study",
+        features.filter((x) => x.kind === "study").length,
+        this.data.kinds.study,
+        this.data.kindPlurals.study,
+      ),
+      ...(p && (projects || later)
+        ? [
+            {
+              key: "project",
+              name: p.name,
+              plural: p.plural,
+              count: projects,
+              ...(later ? { later } : {}),
+            },
+          ]
+        : []),
+    ];
   }
 
   private rollup(n: RawNode): Rollup {
@@ -1103,12 +1137,7 @@ export class SampleEngine {
       );
       const projects = this.atLevel(n.id, "project").filter((x) => !x.ghost);
       const later = projects.filter((x) => x.state === "later").length;
-      out.counts = {
-        features: fl.filter((x) => x.kind === "feature").length,
-        studies: fl.filter((x) => x.kind === "study").length,
-        projects: projects.length - later,
-        ...(later ? { later } : {}),
-      };
+      out.counts = this.rootCounts(n, fl, projects.length - later, later);
       out.burn = this.data.factory.burn;
       out.alarms_closed = { count: this.data.alarmsClosed, ref: "fx:health" };
     } else if (n.lvl === "root") {

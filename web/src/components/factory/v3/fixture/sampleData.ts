@@ -123,6 +123,8 @@ export interface RawFactory {
   trees: Record<RawTree, { label: string; root: string; home: string; levels: RawLevel[] }>;
   order: { cols: string[]; later: string };
   kinds: Record<string, string>;
+  /** Plural names of kinds a root counts on their own ("Studies"). */
+  kindPlurals: Record<string, string>;
   glyphs: Record<string, string>;
   responders: Record<string, string | null>;
   verbs: Record<string, string[]>;
@@ -191,6 +193,7 @@ export function sampleFactory(): RawFactory {
       agent: "Agent",
       def: "Definition",
     },
+    kindPlurals: { study: "Studies" },
     glyphs: {
       product: "◆",
       goal: "G",

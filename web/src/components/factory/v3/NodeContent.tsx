@@ -5,7 +5,7 @@
 import { cn } from "@/lib/utils";
 import type { NodeFull } from "./nodeTypes";
 
-const BLOCK = "rounded-[10px] bg-card px-3.5 py-2.5 ring-1 ring-border";
+const BLOCK = "rounded-[10px] bg-card-solid px-3.5 py-2.5 ring-1 ring-border";
 
 function Acceptance({ acceptance }: { acceptance: NonNullable<NodeFull["acceptance"]> }) {
   const steps = acceptance.steps;

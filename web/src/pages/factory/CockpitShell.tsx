@@ -64,6 +64,7 @@ export function CockpitShell({
   updatedAt,
   rest,
   onClassic,
+  onV2,
   variant = "v2",
   children,
 }: {
@@ -73,6 +74,8 @@ export function CockpitShell({
   rest: string;
   /** Switch this person back to the classic cockpit. */
   onClassic: () => void;
+  /** Cockpit v3: switch back to v2. */
+  onV2?: () => void;
   /** v3 puts the node pages in this shell (Home is the product's node page). */
   variant?: "v2" | "v3";
   children: ReactNode;
@@ -201,6 +204,7 @@ export function CockpitShell({
           onShare={() => setSharing(true)}
           onAddProject={() => setAdding({ title: null })}
           onClassic={onClassic}
+          onV2={onV2}
         />
         {viewer?.role === "viewer" && <ViewerBanner factoryId={fid} />}
         <main

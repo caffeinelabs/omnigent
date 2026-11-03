@@ -16,13 +16,13 @@ function toneClass(tone: Chip["tone"]): string {
     case "amb":
       return "border-status-yellow/55 bg-status-yellow/12 text-status-yellow-fg";
     case "warn":
-      return "border-dashed border-status-yellow/70 bg-card text-status-yellow-fg";
+      return "border-dashed border-status-yellow/70 bg-card-solid text-status-yellow-fg";
     case "acc":
       return "border-status-blue/45 bg-status-blue/12 text-status-blue-fg";
     case "try":
       return "border-status-green/70 bg-status-green/12 text-status-green-fg";
     default:
-      return "border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground";
+      return "border-border bg-card-solid text-muted-foreground hover:border-border-strong hover:text-foreground";
   }
 }
 
@@ -82,7 +82,7 @@ function GroupList({ groups }: { groups: ChipGroup[] }) {
   return (
     <div
       data-testid="v3-chip-list"
-      className="mt-0.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12.5px]"
+      className="mt-0.5 rounded-lg border border-border bg-card-solid px-2.5 py-1.5 text-[12.5px]"
     >
       {groups.map((g) => (
         <div key={g.crumb ?? g.chips.map(chipKey).join("|")}>
@@ -134,6 +134,9 @@ export function ChipList({
             open={open === "more"}
             onToggle={() => toggle("more")}
           />
+        ) : more > 0 ? (
+          // A server without `chips_more`: the count alone, nothing to open.
+          <LinkChip chip={{ title: `+${more}` }} />
         ) : null}
       </div>
       {groups.length > 0 && <GroupList groups={groups} />}

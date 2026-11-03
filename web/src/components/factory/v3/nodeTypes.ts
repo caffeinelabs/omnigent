@@ -4,9 +4,11 @@
 // or roll-ups; it renders these shapes. Level names, kinds, verbs and wording
 // are data, so nothing here names a product or a level.
 //
-// Fields marked "(client)" are small additions to api.md that let the page
-// render without a second read (display names next to refs, the level's name
-// on each node); the server's node projection (S4) fills them.
+// Fields marked "(client)" (marked the same in api.md) let the page render
+// without a second read (display names next to refs, the level's name on each
+// node); the server's node projection (S4) fills them. Every one is optional:
+// the page falls back to the level key, the ref or nothing, and `nodeWire.ts`
+// also reads `also_holds` and `why` sent as plain strings.
 
 /** A node's state; amber (`needs`) only when a person must act. */
 export type NodeState =
@@ -144,10 +146,10 @@ export interface Crumb {
   ref: string;
   level: string;
   /** The level's name from the definition ("Feature"); the tree's label at a root. (client) */
-  level_name: string;
+  level_name?: string;
   title: string;
   state: NodeState;
-  /** A small code next to the title ("I-1", "T-16"). (client) */
+  /** A small code next to the title ("T-16"), on crumbs of row levels only. (client) */
   tag?: string;
   implicit?: boolean;
   /** An implicit parent with one child, shown as that child (italic in the strip). */
@@ -156,9 +158,10 @@ export interface Crumb {
 
 export interface NodeSummary {
   ref: string;
+  /** The level key from `/levels`; a root's level is its tree's root key ("product", "fx"). */
   level: string;
-  /** (client) */
-  level_name: string;
+  /** The level's name ("Feature"). (client) */
+  level_name?: string;
   kind: string;
   /** "Feature", "Study", "Pull request". (client) */
   kind_name?: string;
@@ -182,8 +185,8 @@ export interface NodeSummary {
   burn?: number;
   budget?: number;
   in_base_env?: boolean;
-  /** Something here can be tried in the base env. (client) */
-  try_it?: boolean;
+  /** Something here can be tried in the base env (the "Try it" badge). (client) */
+  try_ready?: boolean;
   /** Auto-merge covers this node (its own setting or an ancestor's). (client) */
   auto_merge?: boolean;
   changed?: string[];
@@ -192,7 +195,7 @@ export interface NodeSummary {
     by_state: Partial<Record<NodeState, number>>;
     later: number;
     /** "projects", "task". (client) */
-    noun: string;
+    noun?: string;
   };
   owner?: Actor;
   working?: Actor[];
@@ -208,10 +211,19 @@ export interface AcceptanceStep {
   ref?: string;
 }
 
+/** A thing to try in the base env (api.md `NodeFull.try_it`; the Try it sheet reads it). */
+export interface TryStep {
+  text: string;
+  how?: string;
+  acceptance_step?: number;
+  api?: boolean;
+}
+
 export interface NodeFull extends NodeSummary {
   /** Product words; may hold `<b>` and `<a data-ref>` (see `RichText`). */
   why_html: string;
   budget?: number;
+  try_it?: TryStep[];
   acceptance?: { steps: AcceptanceStep[]; note?: string; run_at?: string };
   evidence?: {
     summary: string;
@@ -224,9 +236,23 @@ export interface NodeFull extends NodeSummary {
   };
 }
 
+/** A root's count of one level or kind, named from the definition ("3 features"). */
+export interface RollupCount {
+  /** A level key ("feature") or a kind at a level ("study"). */
+  key: string;
+  /** The singular name ("Feature"), for a count of one. */
+  name: string;
+  /** The plural name ("Features"). */
+  plural: string;
+  count: number;
+  /** Held items of this level, not in `count`. */
+  later?: number;
+}
+
 export interface Rollup {
   progress?: Progress;
-  counts?: { features?: number; studies?: number; projects?: number; later?: number };
+  /** At a root: what the tree holds, level by level (no zero entries). */
+  counts?: RollupCount[];
   cost: number;
   budget?: number;
   burn?: number;
@@ -262,7 +288,7 @@ export interface Results {
 export interface ChildPage {
   level: string;
   /** The plural name of the children's level ("Projects"). (client) */
-  level_name: string;
+  level_name?: string;
   /** First / Then / …, from dependencies among siblings; null when unordered. */
   columns: { title: string; col: number }[] | null;
   /** The title of the held column ("Later (held)"). (client) */
@@ -272,11 +298,12 @@ export interface ChildPage {
   items: NodeSummary[];
   later: NodeSummary[];
   ghosts: NodeSummary[];
+  /** Cursor of the next 60 (`GET …/n/{ref}?children_page=`). */
   next?: string;
   total: number;
   grouped_by_state?: boolean;
-  /** This level is drawn as tiles (levels above Task) or only as rows. (client) */
-  tiles: boolean;
+  /** This level is drawn as tiles (levels above Task) or only as rows; tiles when absent. (client) */
+  tiles?: boolean;
   /** Children shown in place of an implicit parent. (client) */
   via_fold?: number;
 }
@@ -305,6 +332,7 @@ export interface LevelGroup {
   items: NodeSummary[];
   folded_done?: boolean;
   later?: string[];
+  /** Cursor of this group's next 60 (`GET …/level/{level}?cursor=`). */
   next?: string;
 }
 
@@ -312,15 +340,15 @@ export interface LevelGroup {
 export interface LevelView {
   scope: string;
   level: string;
-  /** (client) */
-  level_name: string;
+  /** The level's plural name ("Tasks"). (client) */
+  level_name?: string;
   /** The parents' plural name ("projects"). (client) */
   parent_level_name?: string;
   total: number;
   groups: LevelGroup[];
-  done_groups?: { count: number; titles: string[]; in_base_env: boolean; noun: string };
-  /** (client) */
-  tiles: boolean;
+  done_groups?: { count: number; titles: string[]; in_base_env: boolean; noun?: string };
+  /** Tiles or rows only, as on `ChildPage`; tiles when absent. (client) */
+  tiles?: boolean;
   /** (client) */
   via_fold?: number;
 }

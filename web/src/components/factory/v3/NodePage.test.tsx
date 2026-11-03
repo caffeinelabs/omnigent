@@ -154,6 +154,7 @@ describe("cockpit v3 · the level strip", () => {
             by_state: { needs: 3, done: 4 },
           },
           { level: "task", name: "Tasks", count: 0, later: 5, needs: 0, by_state: {} },
+          { level: "change", name: "Changes", count: 0, later: 0, needs: 0, by_state: {} },
         ],
       };
     };
@@ -163,8 +164,25 @@ describe("cockpit v3 · the level strip", () => {
     expect(screen.getByTestId("v3-level-project")).toHaveTextContent("7+2 later3 you");
     // A level holding only later work says so; it never shows a 0.
     expect(screen.getByTestId("v3-level-task")).toHaveTextContent("5 later");
+    // A level with nothing in it is left out, even when the data lists it.
     expect(within(strip).queryByText("Changes")).toBeNull();
+    expect(screen.queryByTestId("v3-level-change")).toBeNull();
     expect(within(strip).getByText("Workstreams")).toBeInTheDocument();
+  });
+
+  it("names the node itself with its code in the strip (T-16 · …), not a priority", async () => {
+    const view = renderNode("T-16");
+    await shown("T-16");
+    const strip = screen.getByTestId("v3-level-strip");
+    expect(
+      within(strip).getByRole("link", { name: /^Task.*T-16 · Debit each/ }),
+    ).toBeInTheDocument();
+    view.unmount();
+    renderNode("assistant-core");
+    await shown("assistant-core");
+    expect(
+      within(screen.getByTestId("v3-level-strip")).queryByText(/P0 · assistant-core/),
+    ).toBeNull();
   });
 
   it("folds implicit ancestors into their only child, in italics without a state dot", async () => {
@@ -195,7 +213,87 @@ describe("cockpit v3 · the level strip", () => {
   });
 });
 
+describe("cockpit v3 · header details", () => {
+  it("names a root's counts from the levels, also when they are renamed", async () => {
+    const view = renderNode("product");
+    await shown("product");
+    expect(screen.getByTestId("v3-rollup")).toHaveTextContent(
+      /3 features · 1 study · 9 projects \(\+4 later\)/,
+    );
+    view.unmount();
+    renderNode("product", { renamed: true });
+    await shown("product");
+    const rollup = screen.getByTestId("v3-rollup");
+    expect(rollup).toHaveTextContent(/3 outcomes · 1 study · 9 workstreams/);
+    expect(rollup).not.toHaveTextContent(/feature|project/);
+  });
+
+  it("offers `w` and lists it only where the header has a why", async () => {
+    renderNode("fx:team");
+    await shown("fx:team");
+    expect(screen.queryByTestId("v3-why-toggle")).toBeNull();
+    act(() => {
+      document.body.focus();
+    });
+    fireEvent.keyDown(window, { key: "w" });
+    expect(screen.queryByTestId("v3-why")).toBeNull();
+    expect(screen.getByTestId("v3-keys")).not.toHaveTextContent("why");
+  });
+
+  it("lists step-in keys only on a page with nodes to step into", async () => {
+    const view = renderNode("run:luz-t16");
+    await shown("run:luz-t16");
+    const keys = screen.getByTestId("v3-keys");
+    expect(keys).not.toHaveTextContent("step in");
+    expect(keys).toHaveTextContent("step out");
+    view.unmount();
+    renderNode("I-1");
+    await shown("I-1");
+    await waitFor(() => expect(screen.getByTestId("v3-keys")).toHaveTextContent("step in"));
+  });
+
+  it("keeps the amber edge on a tile that needs you in dark mode (no glass card)", async () => {
+    renderNode("I-1");
+    await shown("I-1");
+    const core = screen.getAllByTestId("v3-tile").find((t) => t.dataset.ref === "assistant-core")!;
+    expect(core.dataset.state).toBe("needs");
+    // The dark glass rule restyles bare `bg-card`; v3 surfaces use `bg-card-solid`.
+    expect(core.className).toContain("bg-card-solid");
+    expect(core.className).toContain("ring-status-yellow/55");
+    expect(document.querySelectorAll('[class~="bg-card"]')).toHaveLength(0);
+  });
+});
+
 describe("cockpit v3 · children", () => {
+  it("reads children past the first 60 from the server's cursor", async () => {
+    const source = sampleNodeSource();
+    const node = source.node;
+    const cursors: (string | undefined)[] = [];
+    source.node = async (fid, ref, signal, cursor) => {
+      const page = (await node(fid, ref, signal)) as Page;
+      if (ref !== "assistant-core") return page;
+      cursors.push(cursor);
+      const first = page.children.items[0]!;
+      const two = { ...first, ref: "T-900", tag: "T-900", title: "a task on page two" };
+      return {
+        ...page,
+        children: {
+          ...page.children,
+          items: cursor ? [two] : page.children.items,
+          total: page.children.items.length + 1,
+          ...(cursor ? {} : { next: "page-2" }),
+        },
+      };
+    };
+    renderNode("assistant-core", { source });
+    await shown("assistant-core");
+    const footer = await screen.findByTestId("v3-more");
+    fireEvent.click(within(footer).getByRole("button", { name: "Next 60" }));
+    expect(await screen.findByRole("link", { name: /a task on page two/ })).toBeInTheDocument();
+    expect(cursors).toContain("page-2");
+    expect(screen.queryByTestId("v3-more")).toBeNull();
+  });
+
   it("orders siblings in First / Then / Later columns, folds done, keeps held work in one box", async () => {
     renderNode("I-1");
     await shown("I-1");

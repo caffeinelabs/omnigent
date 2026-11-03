@@ -4,7 +4,7 @@
 // opens "why". Keys never fire while someone types or works a menu or dialog,
 // and Enter never answers a decision (the answer buttons swallow it).
 
-import { type RefObject, useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { CHORD_MS, keyOwnedByTarget } from "../cmdk/useFactoryPaletteHotkey";
 
 const STOP = "[data-node-link]";
@@ -13,14 +13,19 @@ function stops(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(STOP)];
 }
 
-/** Keeps one roving stop tabbable (the last focused, else the first) as the list changes. */
-export function useRovingStops(container: RefObject<HTMLElement | null>): void {
+/**
+ * Keeps one roving stop tabbable (the last focused, else the first) as the
+ * list changes; true while the container holds any.
+ */
+export function useRovingStops(container: RefObject<HTMLElement | null>): boolean {
   const active = useRef<string | null>(null);
+  const [any, setAny] = useState(false);
   useEffect(() => {
     const root = container.current;
     if (!root) return;
     const apply = () => {
       const all = stops(root);
+      setAny(all.length > 0);
       const current = all.find((el) => el.dataset.nodeLink === active.current) ?? all[0];
       for (const el of all) {
         const want = el === current ? "0" : "-1";
@@ -42,6 +47,7 @@ export function useRovingStops(container: RefObject<HTMLElement | null>): void {
       root.removeEventListener("focusin", onFocus);
     };
   }, [container]);
+  return any;
 }
 
 export interface NodeKeys {

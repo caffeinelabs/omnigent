@@ -1,12 +1,13 @@
 // Node pages and level views through TanStack Query, keyed by factory and
 // ref (a ref is an address, so a moved node keeps its cache). Pages are read
 // ahead on hover or focus; an answer refreshes every node of the factory.
+// Children and level groups past their first 60 are read when asked.
 
 import { useCallback } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { type NodeSource, useNodeSource } from "./nodeSource";
-import type { DecisionAction, DecisionRef } from "./nodeTypes";
+import type { ChildPage, DecisionAction, DecisionRef, LevelGroup, NodeSummary } from "./nodeTypes";
 
 /** Node pages are fresh for 5 s, as long as the server memoizes its facts. */
 export const NODE_STALE_MS = 5_000;
@@ -46,6 +47,79 @@ export function useLevel(ref: string, level: string | null, factoryId?: string) 
     enabled: Boolean(source && fid && ref && level),
     staleTime: NODE_STALE_MS,
   });
+}
+
+/** The next pages of a list, read one at a time when the person asks. */
+export interface MorePages {
+  /** Items read so far past the first page. */
+  items: NodeSummary[];
+  /** Read the next 60; absent when there is nothing more. */
+  more?: () => void;
+  loading: boolean;
+}
+
+/** A node's children past the first 60 (`children.next`), appended as they are read. */
+export function useMoreChildren(ref: string, first: ChildPage, factoryId?: string): MorePages {
+  const fid = useFid(factoryId);
+  const source = useNodeSource();
+  const query = useInfiniteQuery({
+    queryKey: [
+      ...nodeQueryKeys.node(fid, source?.kind ?? "pending", ref),
+      "more",
+      first.next ?? "",
+    ],
+    queryFn: ({ pageParam, signal }) => source!.node(fid, ref, signal, pageParam),
+    initialPageParam: first.next ?? "",
+    getNextPageParam: (last) => last?.children.next || undefined,
+    enabled: false,
+    staleTime: NODE_STALE_MS,
+  });
+  const pages = query.data?.pages ?? [];
+  const next = pages.length ? pages.at(-1)?.children.next : first.next;
+  const { fetchNextPage } = query;
+  const more = useCallback(() => void fetchNextPage(), [fetchNextPage]);
+  return {
+    items: pages.flatMap((p) => p?.children.items ?? []),
+    more: source && next ? more : undefined,
+    loading: query.isFetching,
+  };
+}
+
+/** One group of a level view past its first 60 (`group.next`), appended as they are read. */
+export function useMoreInGroup(
+  scope: string,
+  level: string,
+  group: LevelGroup,
+  factoryId?: string,
+): MorePages {
+  const fid = useFid(factoryId);
+  const source = useNodeSource();
+  const parent = group.parent.ref;
+  const query = useInfiniteQuery({
+    queryKey: [
+      ...nodeQueryKeys.level(fid, source?.kind ?? "pending", scope, level),
+      "more",
+      parent,
+      group.next ?? "",
+    ],
+    queryFn: ({ pageParam, signal }) => source!.level(fid, scope, level, signal, pageParam),
+    initialPageParam: group.next ?? "",
+    getNextPageParam: (last) =>
+      last?.groups.find((g) => g.parent.ref === parent)?.next || undefined,
+    enabled: false,
+    staleTime: NODE_STALE_MS,
+  });
+  const pages = (query.data?.pages ?? []).map((p) =>
+    p?.groups.find((g) => g.parent.ref === parent),
+  );
+  const next = pages.length ? pages.at(-1)?.next : group.next;
+  const { fetchNextPage } = query;
+  const more = useCallback(() => void fetchNextPage(), [fetchNextPage]);
+  return {
+    items: pages.flatMap((g) => g?.items ?? []),
+    more: source && next ? more : undefined,
+    loading: query.isFetching,
+  };
 }
 
 /** Read a node's page ahead (a link under the pointer or the keyboard). */

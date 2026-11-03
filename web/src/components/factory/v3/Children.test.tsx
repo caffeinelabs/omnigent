@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChildrenView } from "./Children";
 import { NodeContextProvider } from "./NodeContext";
 import { DEFAULT_OVERLAYS } from "./NodeTile";
+import type { MorePages } from "./nodeQueries";
 import type { ChildPage, NodeSummary } from "./nodeTypes";
 
 // Zoom by count: tiles up to 12 children, rows (with a note) from 13 to 60,
@@ -22,7 +23,7 @@ function child(i: number, state: NodeSummary["state"]): NodeSummary {
   };
 }
 
-function page(items: NodeSummary[]): ChildPage {
+function page(items: NodeSummary[], extra: Partial<ChildPage> = {}): ChildPage {
   return {
     level: "project",
     level_name: "Projects",
@@ -32,14 +33,25 @@ function page(items: NodeSummary[]): ChildPage {
     ghosts: [],
     total: items.length,
     tiles: true,
+    ...extra,
   };
 }
 
-function show(items: NodeSummary[], lens: "map" | "list" = "map") {
+function show(
+  items: NodeSummary[],
+  lens: "map" | "list" = "map",
+  extra: Partial<ChildPage> = {},
+  more?: MorePages,
+) {
   return render(
     <MemoryRouter>
       <NodeContextProvider value={{ factoryId: "f" }}>
-        <ChildrenView page={page(items)} lens={lens} overlays={DEFAULT_OVERLAYS} />
+        <ChildrenView
+          page={page(items, extra)}
+          lens={lens}
+          overlays={DEFAULT_OVERLAYS}
+          more={more}
+        />
       </NodeContextProvider>
     </MemoryRouter>,
   );
@@ -76,5 +88,34 @@ describe("cockpit v3 · children by count", () => {
     expect(screen.getByTestId("v3-done-line")).toHaveTextContent("30 done");
     fireEvent.click(screen.getByRole("button", { name: "Next 60" }));
     expect(screen.getAllByTestId("v3-row")).toHaveLength(75);
+  });
+
+  it("past 60 still shows proposals and held work", () => {
+    const ghost = { ...child(900, "ghost"), title: "a proposed project" };
+    const held = { ...child(901, "later"), title: "a held project", held_for: "after the pilot" };
+    show(
+      Array.from({ length: 61 }, (_, i) => child(i, "moving")),
+      "map",
+      { ghosts: [ghost], later: [held], later_note: "Held on purpose.", total: 63 },
+    );
+    const groups = screen.getByTestId("v3-state-groups");
+    expect(within(groups).getByText("Proposed")).toBeInTheDocument();
+    expect(within(groups).getByRole("link", { name: "a proposed project" })).toBeInTheDocument();
+    expect(screen.getByTestId("v3-later")).toHaveTextContent("a held projectafter the pilot");
+    expect(screen.getByTestId("v3-later")).toHaveTextContent("Held on purpose.");
+  });
+
+  it("reads the server's next 60 when the page has more than it holds", () => {
+    const more = vi.fn();
+    show(
+      Array.from({ length: 60 }, (_, i) => child(i, "moving")),
+      "list",
+      { total: 340, grouped_by_state: true, next: "c-60" },
+      { items: [], more, loading: false },
+    );
+    const footer = screen.getByTestId("v3-more");
+    expect(footer).toHaveTextContent("60 of 340");
+    fireEvent.click(within(footer).getByRole("button", { name: "Next 60" }));
+    expect(more).toHaveBeenCalledTimes(1);
   });
 });

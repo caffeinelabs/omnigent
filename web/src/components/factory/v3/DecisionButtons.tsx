@@ -62,7 +62,7 @@ export function DecisionButtons({
               size,
               i === 0
                 ? "border-foreground bg-foreground text-background hover:opacity-90"
-                : "border-border-strong bg-card text-foreground hover:border-status-blue",
+                : "border-border-strong bg-card-solid text-foreground hover:border-status-blue",
             )}
           >
             {action.label}
@@ -92,7 +92,7 @@ export function DecisionButtons({
           className={cn(
             BTN,
             size,
-            "border-border-strong bg-card text-foreground hover:border-status-blue hover:text-status-blue-fg",
+            "border-border-strong bg-card-solid text-foreground hover:border-status-blue hover:text-status-blue-fg",
           )}
         >
           Open {decision.subject ?? decision.id}
