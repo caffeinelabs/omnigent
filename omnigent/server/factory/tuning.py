@@ -1481,20 +1481,35 @@ async def _keep(
 
 
 def _editor_path(path: str) -> bool:
-    """Whether an editor may apply a change of *path* when it only narrows (team or source)."""
-    return definition.team_spec.is_project_path(path) or definition.blocks.under(
-        path, "discovery.sources"
+    """
+    Whether an editor may apply a change of *path* when it only narrows (a
+    team or a source) or only lowers (a budget).
+    """
+    return (
+        definition.team_spec.is_project_path(path)
+        or definition.blocks.under(path, "discovery.sources")
+        or definition.is_budget_path(path)
     )
 
 
 def editor_may_apply(diff: Sequence[Mapping[str, Any]]) -> bool:
     """
-    Whether editors apply *diff* (class A): it only narrows project teams, or
-    only narrows sources (a pause, a lower budget, fewer roles, stricter privacy).
+    Whether editors apply *diff* (class A): it only narrows project teams,
+    only narrows sources (a pause, a lower budget, fewer roles, stricter
+    privacy), or only lowers the factory's or discovery's budgets (spec §8.4).
     """
-    return definition.team_spec.editor_may_apply(diff) or definition.blocks.sources_narrow_only(
-        diff
+    return (
+        definition.team_spec.editor_may_apply(diff)
+        or definition.blocks.sources_narrow_only(diff)
+        or definition.budgets_lower_only(diff)
     )
+
+
+EDITOR_TRIAL_REFUSAL: Final = (
+    "an editor's change applies at once, with Undo for "
+    f"{definition.UNDO_WINDOW_S // 60} minutes; owners run trials"
+)
+"""Why an editor's change never runs as a trial (``PUT …/definition`` and its preview)."""
 
 
 def projects_name(actor: Actor) -> str:
@@ -1676,7 +1691,8 @@ async def human_edit(
     body = parse_body(DefinitionEditIn, payload if payload is not None else {})
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
-    # Editors apply a change that only narrows a team or a source (class A); owners everything.
+    # Editors apply a change that only narrows a team or a source, or only lowers a
+    # budget (class A); owners everything.
     team_only = all(
         _editor_path(definition.normalize_path(str(c.get("path") or ""))) for c in body.changes
     )
@@ -1704,12 +1720,20 @@ async def human_edit(
                 "owners_only",
                 "adding a member, a vendor or model change, more builders, a higher budget "
                 "and briefs are owner changes (class B); an editor applies removals, fewer "
-                "builders, a lower budget and handles, and pauses or narrows a source",
+                "builders, a lower budget and handles, pauses or narrows a source, and "
+                "lowers the factory's or discovery's budgets",
             )
     if body.trial:
         from omnigent.server.factory import evaluate
 
         await asyncio.to_thread(evaluate.check_trial, deps, root.id, diff_paths(diff))
+        # An editor's change (class A) applies at once, with Undo: owners run trials.
+        if (
+            team_only
+            and (await asyncio.to_thread(people.viewer_level, deps, root.id, user_id))
+            < LEVEL_MANAGE
+        ):
+            raise CockpitError(403, "owners_only", EDITOR_TRIAL_REFUSAL)
     kind = "rules" if all(c.path == "rules" for c in changes) else "tuning"
     trial_h = definition.trial_hours(diff_paths(diff), body.trial_h, factory_id=root.id)
     row, _ = await asyncio.to_thread(
@@ -1768,8 +1792,9 @@ async def pin_version(
     """
     ``POST …/definition/pin``: an owner puts a stored version back in force.
 
-    An editor may pin only the Undo of their own team change that editors
-    apply (class A), within :data:`.definition.UNDO_WINDOW_S`.
+    An editor may pin only the Undo of their own change that editors apply
+    (class A: a team or a source narrowed, a budget lowered), within
+    :data:`.definition.UNDO_WINDOW_S`.
     """
     from omnigent.server.factory import people
     from omnigent.server.factory.projects import human_actor
@@ -1806,8 +1831,8 @@ async def pin_version(
             raise CockpitError(
                 403,
                 "owners_only",
-                "owners pin versions; an editor may only Undo their own team or source "
-                f"change within {definition.UNDO_WINDOW_S // 60} minutes",
+                "owners pin versions; an editor may only Undo their own team, source or "
+                f"budget change within {definition.UNDO_WINDOW_S // 60} minutes",
             )
         await asyncio.to_thread(definition.pin, deps, root.id, version)
         await deliver(
@@ -2158,6 +2183,7 @@ async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None)
 
 
 __all__ = [
+    "EDITOR_TRIAL_REFUSAL",
     "KINDS",
     "UNDONE_KIND",
     "DefinitionEditIn",

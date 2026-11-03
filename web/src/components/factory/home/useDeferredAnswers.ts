@@ -6,17 +6,21 @@
 // pointer or focus is on the toast, so Undo is never too late; if it is
 // anyway, the toast says so. Leaving the page, hiding the tab (a phone
 // switching apps) or unmounting sends what is held at once, so no answer is
-// lost. A failed send brings the row back and says why.
+// lost. A failed send brings the row back and says why. The shell hears which
+// rows are hidden, so the top bar's count leaves them out as Home does.
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import { type Ask, type AskOption, sendAskAnswer } from "@/lib/factoryAsksApi";
 import { type DecisionConflictBody, isDecisionConflict } from "@/lib/factoryApi";
+import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { type ToastMessage, useFactoryToast } from "../ui/Toast";
 
 /** How long an answer waits for Undo before it goes out. */
 export const ANSWER_UNDO_MS = 8_000;
+
+const NONE: ReadonlySet<string> = new Set();
 
 interface Held {
   ask: Ask;
@@ -224,6 +228,13 @@ export function useDeferredAnswers(factoryId: string): DeferredAnswers {
       hold.flush();
     };
   }, [hold]);
+
+  // The top bar counts what Home lists: tell the shell what is hidden, and nothing once gone.
+  const holdAnswers = useOptionalFactoryShell()?.holdAnswers;
+  useEffect(() => {
+    holdAnswers?.(hidden);
+  }, [holdAnswers, hidden]);
+  useEffect(() => () => holdAnswers?.(NONE), [holdAnswers]);
 
   const answer = useCallback((ask: Ask, option: AskOption) => hold.answer(ask, option), [hold]);
 

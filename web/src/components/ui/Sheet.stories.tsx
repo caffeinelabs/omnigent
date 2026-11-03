@@ -28,7 +28,7 @@ function Example({
       <SheetContent side={side} size={size}>
         <SheetHeader>
           <SheetTitle>api-version · P1</SheetTitle>
-          <SheetDescription>Ready · caffeinelabs/app · main</SheetDescription>
+          <SheetDescription>Ready · sample-org/sample-app · main</SheetDescription>
         </SheetHeader>
         <SheetBody className="flex flex-col gap-3 text-sm">
           {Array.from({ length: 12 }, (_, i) => (

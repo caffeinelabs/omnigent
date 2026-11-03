@@ -32,6 +32,7 @@ from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import control, events, people
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.definition_blocks import DiscoveryBudgetsDef
 from omnigent.server.factory.discovery import ledger, opportunities, views
 from omnigent.server.factory.discovery.ledger import INJECTION_SUSPECT
 from omnigent.server.factory.discovery.opportunities import (
@@ -839,6 +840,16 @@ def _scout_session(deps: FactoryDeps, fid: str) -> str | None:
     return conv.id if conv is not None else None
 
 
+def _usd_cap(raw: object, default: float) -> float:
+    """:returns: A ``discovery.budgets.*`` dollar cap; ``0`` stays ``0``, unset is *default*."""
+    if raw is None or isinstance(raw, bool):
+        return default
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def _research_text(ref: str, who: str, question: str, budget: float, due: int | None) -> str:
     when = f", due {due}" if due else ""
     return (
@@ -867,11 +878,14 @@ async def research(
     level = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id)
     doc, _version = await asyncio.to_thread(effective_doc, deps, root.id)
     budgets = (doc.get("discovery") or {}).get("budgets") or {}
-    cap = float(budgets.get("per_ask") or 2.0)
+    # $0 is a cap too (an editor may lower it to that): only an unset one takes the default.
+    cap = _usd_cap(budgets.get("per_ask"), DiscoveryBudgetsDef().per_ask)
     budget = body.budget_usd if body.budget_usd is not None else cap
     if budget > cap:
         _owner(level, f"an ask over ${cap:g}")
-        budget = min(budget, float(budgets.get("usd_per_day") or budget))
+        budget = min(
+            budget, _usd_cap(budgets.get("usd_per_day"), DiscoveryBudgetsDef().usd_per_day)
+        )
     now = now_s()
     due = body.due if body.due is not None else (now + body.days * 86400 if body.days else None)
     async with _lock(root.id):

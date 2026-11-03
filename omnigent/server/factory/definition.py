@@ -466,7 +466,8 @@ CLASS_MAP: Final[dict[str, Callable[[Any, Any], Klass]]] = {
     "rules": _always("B"),
     "engine.*": _always("B"),
     "autonomy.*": _always("B"),
-    "budgets.*": _always("B"),
+    # Lowering a budget only reduces spend: editors apply it at once (spec §8.4).
+    "budgets.*": _lower_is_a,
     "models.*": _always("B"),
     "product.*": _always("B"),
     "strategy.*": _always("B"),
@@ -481,17 +482,19 @@ CLASS_MAP: Final[dict[str, Callable[[Any, Any], Klass]]] = {
 """``path pattern -> (before, after) -> class``; the first matching pattern wins."""
 CLASS_TABLE: Final = (
     ("cadence.*", "A when slower, else B (0 = off is B)"),
-    ("loops.*.attempts|rounds|per_head|usd", "A when lower, else B"),
+    ("loops.*.attempts|rounds|per_head", "A when lower, else B"),
+    ("loops.*.usd", "A when lower (editors apply it at once), else B"),
     ("loops.* (other keys)", "B"),
     ("mail.*", "A when lower, else B"),
     ("supervisor.*, alerts.*, decisions.*", "A"),
     ("previews.*, caps.*", "B"),
     ("rules", "B (owners), as a trial"),
-    ("engine.*, autonomy.*, budgets.*", "B (owners)"),
+    ("engine.*, autonomy.*", "B (owners)"),
+    ("budgets.*", "A when lower (editors apply it at once), else B (owners)"),
     ("product.*, strategy.*", "B (owners); never on trial, applies as a version"),
     ("discovery.enabled", "A when turning it off, else B (owners)"),
     ("discovery.sources.<id>", "A when it only narrows (pause, less budget, fewer roles), else B"),
-    ("discovery.budgets.*", "A when lower, else B (owners)"),
+    ("discovery.budgets.*", "A when lower (editors apply it at once), else B (owners)"),
     ("discovery.cadence.*", "A when slower or off, else B (owners)"),
     ("discovery.seat|rubric|thresholds|autonomy", "B (owners)"),
     ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
@@ -564,6 +567,35 @@ def classify(path: str, before: Any, after: Any) -> Klass:
         if _pattern_match(pattern, path):
             return rule(before, after)
     return "B"
+
+
+BUDGET_PREFIXES: Final = ("budgets.", "discovery.budgets.")
+"""Dollar budgets a person lowers at once: lowering one only reduces spend (spec §8.4)."""
+_LOOP_USD_RE: Final = re.compile(r"^loops\.[a-z_]+\.usd$")
+
+
+def is_budget_path(path: str) -> bool:
+    """
+    Whether *path* is a dollar budget: the factory's and discovery's
+    (:data:`BUDGET_PREFIXES`) or a loop's (``loops.<loop>.usd``, e.g. the
+    per-task default).
+    """
+    return path.startswith(BUDGET_PREFIXES) or _LOOP_USD_RE.match(path) is not None
+
+
+def budgets_lower_only(entries: Iterable[Mapping[str, Any]]) -> bool:
+    """
+    Whether diff *entries* (``{path, before, after}``) only lower budgets:
+    each is a :func:`is_budget_path` that :func:`classify` calls A (a lower
+    value). Editors apply those at once, with Undo; raising one, or setting a
+    cap that was unset, stays the owners' (class B).
+    """
+    found = list(entries)
+    return bool(found) and all(
+        is_budget_path(str(e.get("path") or ""))
+        and classify(str(e.get("path") or ""), e.get("before"), e.get("after")) == "A"
+        for e in found
+    )
 
 
 def owner_only(path: str) -> bool:
@@ -1951,6 +1983,7 @@ def schema_paths() -> list[str]:
 __all__ = [
     "ALLOWED_PATHS",
     "BOUNDS",
+    "BUDGET_PREFIXES",
     "CLASS_MAP",
     "DISCOVERY_OFF",
     "DISCOVERY_TRIAL_H",
@@ -1974,6 +2007,7 @@ __all__ = [
     "apply_changes",
     "autonomy_mode",
     "bounds",
+    "budgets_lower_only",
     "canonical_path",
     "classify",
     "default_doc",
@@ -1992,6 +2026,7 @@ __all__ = [
     "install",
     "int_value",
     "invalidate",
+    "is_budget_path",
     "is_item_path",
     "is_new_item",
     "mail_limits",

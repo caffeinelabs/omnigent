@@ -11,6 +11,7 @@ import {
   STEER_VERSION,
   type SteerRouteOptions,
   goalSuggestion,
+  previewBudgetLower,
   previewFocus,
   previewOperator,
   previewRestore,
@@ -42,9 +43,9 @@ import { resetSteerStaging, writeSteerStaging } from "./steerStaging";
 // second trial refused), sources with one waiting for an owner, the add-source
 // sheet's four steps, Scout's brief diff from an agent's proposal, versions
 // with an undone one and a staged restore, Undo of the version in force, a
-// change staged on a version no longer in force, an operator's change that
-// waits for an owner, a viewer, discovery off, empty sections, light, and a
-// 390 px phone. A story's staging is staged on v12 unless it says otherwise.
+// change staged on a version no longer in force, an operator's raise that
+// waits for an owner and their lower budget that applies at once, a viewer,
+// discovery off, empty sections, light, and a 390 px phone. A story's staging is staged on v12 unless it says otherwise.
 
 interface SteerStoryOptions extends SteerRouteOptions {
   role?: ViewerRole;
@@ -340,52 +341,60 @@ export const GatesMobile = phone(steer("/steer/gates"));
 
 // ── Guardrails ─────────────────────────────────────────────────
 
+/** The factory's daily budget staged at `usd` (it is $400 a day in force). */
+const dayBudgetStaged = (usd: number) => () =>
+  stageEdit(
+    EMPTY_STEER,
+    replaceEdit(
+      "budgets",
+      "budgets.factory_usd_per_day",
+      "Factory per day",
+      (doc().budgets as { factory_usd_per_day: number }).factory_usd_per_day,
+      usd,
+    ),
+  );
+
 export const Budgets = steer("/steer/budgets");
 
+/** An owner lowers the daily budget: class A, it applies at once. */
 export const BudgetsStaged = steer("/steer/budgets", {
-  staging: () =>
-    stageEdit(
-      EMPTY_STEER,
-      replaceEdit(
-        "budgets",
-        "budgets.factory_usd_per_day",
-        "Factory per day",
-        (doc().budgets as { factory_usd_per_day: number }).factory_usd_per_day,
-        300,
-      ),
-    ),
+  staging: dayBudgetStaged(300),
+  preview: previewBudgetLower(),
 });
 
 export const BudgetsStagedLight = steer("/steer/budgets", {
   ...light,
-  staging: () =>
-    stageEdit(
-      EMPTY_STEER,
-      replaceEdit(
-        "budgets",
-        "budgets.factory_usd_per_day",
-        "Factory per day",
-        (doc().budgets as { factory_usd_per_day: number }).factory_usd_per_day,
-        300,
-      ),
-    ),
+  staging: dayBudgetStaged(300),
+  preview: previewBudgetLower(),
 });
 
 /** An operator's raise waits for an owner: Propose to owners. */
 export const BudgetsOperator = steer("/steer/budgets", {
   role: "operator",
-  staging: () =>
-    stageEdit(
-      EMPTY_STEER,
-      replaceEdit(
-        "budgets",
-        "budgets.factory_usd_per_day",
-        "Factory per day",
-        (doc().budgets as { factory_usd_per_day: number }).factory_usd_per_day,
-        300,
-      ),
-    ),
+  staging: dayBudgetStaged(500),
 });
+
+/** An operator lowers the daily budget: it only reduces spend, so their Apply applies it. */
+export const BudgetsOperatorLowers = steer("/steer/budgets", {
+  role: "operator",
+  staging: dayBudgetStaged(300),
+  preview: previewBudgetLower("editor"),
+});
+
+export const BudgetsOperatorLowersLight = steer("/steer/budgets", {
+  ...light,
+  role: "operator",
+  staging: dayBudgetStaged(300),
+  preview: previewBudgetLower("editor"),
+});
+
+export const BudgetsOperatorLowersMobile = phone(
+  steer("/steer/budgets", {
+    role: "operator",
+    staging: dayBudgetStaged(300),
+    preview: previewBudgetLower("editor"),
+  }),
+);
 
 export const AlertsAndRules = steer("/steer/alerts");
 

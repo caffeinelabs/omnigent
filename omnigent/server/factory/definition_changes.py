@@ -222,7 +222,12 @@ def _trial_info(
     *,
     restore: int | None,
     trial_h: int | None,
+    editor: bool = False,
 ) -> dict[str, Any]:
+    """
+    :param editor: The viewer is an editor applying their own class-A change,
+        which applies at once (owners run trials).
+    """
     if restore is not None:
         return {
             "ok": False,
@@ -237,6 +242,14 @@ def _trial_info(
             dict.fromkeys(definition.not_trialable(paths, factory_id=factory_id).values())
         )
         return {"ok": False, "code": evaluate.NOT_TRIALABLE, "reason": reason, "why": why}
+    if editor:
+        refusal = tuning.EDITOR_TRIAL_REFUSAL
+        return {
+            "ok": False,
+            "code": evaluate.NOT_TRIALABLE,
+            "reason": f"{refusal[0].upper()}{refusal[1:]}.",
+            "why": "owners run trials",
+        }
     found = evaluate.overlapping_trial(deps, factory_id, paths)
     if found is not None:
         error = evaluate.overlap_error(found[0], found[1], now_s())
@@ -265,10 +278,10 @@ def _who(
     owner_only: bool,
     *,
     editors: bool = False,
-    narrows: str = "a team",
+    narrows: str = "narrows a team",
 ) -> str:
     if editors:
-        head = f"Owners and editors (class A: it only narrows {narrows})."
+        head = f"Owners and editors (class A: it only {narrows})."
     else:
         head = f"Owners (class {klass})." if klass else "Owners."
     if level >= LEVEL_MANAGE:
@@ -284,6 +297,15 @@ def _who(
         you = " You can look, not change."
     agents = " Agents can only propose it." if owner_only else ""
     return f"{head}{you}{agents}"
+
+
+def _narrows(diff: Sequence[Mapping[str, Any]]) -> str:
+    """What an editor's change does, in words: ``narrows a source``, ``lowers a budget``…"""
+    if definition.blocks.sources_narrow_only(diff):
+        return "narrows a source"
+    if definition.budgets_lower_only(diff):
+        return "lowers a budget"
+    return "narrows a team"
 
 
 def _refusals(exc: CockpitError) -> list[dict[str, Any]]:
@@ -418,7 +440,7 @@ def _preview(
             level,
             owner_only,
             editors=editor_applies,
-            narrows="a source" if definition.blocks.sources_narrow_only(diff) else "a team",
+            narrows=_narrows(diff),
         ),
         "owner_only": owner_only,
         "you_can_apply": can_apply and bool(diff) and not blocked,
@@ -426,7 +448,14 @@ def _preview(
         "blocked": blocked,
         "effects": effects,
         "rerank": _rerank(deps, root.id, resolved.stored, after, paths),
-        "trialable": _trial_info(deps, root.id, paths, restore=body.restore, trial_h=body.trial_h),
+        "trialable": _trial_info(
+            deps,
+            root.id,
+            paths,
+            restore=body.restore,
+            trial_h=body.trial_h,
+            editor=editor_applies and LEVEL_EDIT <= level < LEVEL_MANAGE,
+        ),
         "restore": (
             {"version": body.restore, "ends": [proposal_ref(r.number) for r in ending]}
             if body.restore is not None

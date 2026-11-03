@@ -120,9 +120,9 @@ export const FactoryManaged: Story = {
       mode: "on",
       labels: { "omnigent.factory.id": FACTORY_ID },
       permissions: [
-        { user_id: "luka@caffeine.ai", conversation_id: sessionId, level: 4 },
-        { user_id: "mia@caffeine.ai", conversation_id: sessionId, level: 2 },
-        { user_id: "ops@caffeine.ai", conversation_id: sessionId, level: 1 },
+        { user_id: "lena@example.com", conversation_id: sessionId, level: 4 },
+        { user_id: "mia@example.com", conversation_id: sessionId, level: 2 },
+        { user_id: "ops@example.com", conversation_id: sessionId, level: 1 },
       ],
     }),
   ],

@@ -97,8 +97,12 @@
       "class": "A when slower, else B (0 = off is B)"
     },
     {
-      "paths": "loops.*.attempts|rounds|per_head|usd",
+      "paths": "loops.*.attempts|rounds|per_head",
       "class": "A when lower, else B"
+    },
+    {
+      "paths": "loops.*.usd",
+      "class": "A when lower (editors apply it at once), else B"
     },
     {
       "paths": "loops.* (other keys)",
@@ -121,8 +125,12 @@
       "class": "B (owners), as a trial"
     },
     {
-      "paths": "engine.*, autonomy.*, budgets.*",
+      "paths": "engine.*, autonomy.*",
       "class": "B (owners)"
+    },
+    {
+      "paths": "budgets.*",
+      "class": "A when lower (editors apply it at once), else B (owners)"
     },
     {
       "paths": "product.*, strategy.*",
@@ -138,7 +146,7 @@
     },
     {
       "paths": "discovery.budgets.*",
-      "class": "A when lower, else B (owners)"
+      "class": "A when lower (editors apply it at once), else B (owners)"
     },
     {
       "paths": "discovery.cadence.*",
@@ -155,6 +163,18 @@
     {
       "paths": "briefs.*, role_defaults.*",
       "class": "B (owners)"
+    },
+    {
+      "paths": "team.templates.*",
+      "class": "B (owners); never on trial (it reaches a project on a switch)"
+    },
+    {
+      "paths": "team.projects.<slug> members",
+      "class": "adding a member, a vendor or model change, a brief: B (owners); removing one or a new handle: A (editors apply it)"
+    },
+    {
+      "paths": "team.projects.<slug>.builders_at_once|budget_usd",
+      "class": "A when lower, else B (owners); never on trial (too few PRs per team)"
     },
     {
       "paths": "owner-only paths, proposed by an agent",

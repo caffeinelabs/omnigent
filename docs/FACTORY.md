@@ -924,16 +924,19 @@ previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
 | Paths | Class |
 |---|---|
 | `cadence.*` | A when slower, else B (0 = off is B) |
-| `loops.*.attempts\|rounds\|per_head\|usd` | A when lower, else B |
+| `loops.*.attempts\|rounds\|per_head` | A when lower, else B |
+| `loops.*.usd` | A when lower (editors apply it at once), else B |
 | other `loops.*` | B |
 | `mail.*` | A when lower, else B |
 | `supervisor.*`, `alerts.*`, `decisions.*` | A |
 | `previews.*`, `caps.*`, `rules` | B |
-| `engine.*`, `autonomy.*`, `budgets.*` | B (owners) |
+| `engine.*`, `autonomy.*` | B (owners) |
+| `budgets.*` | A when lower (editors apply it at once), else B (owners) |
 | `product.*`, `strategy.*` | B (owners); never a trial, applies as a version |
 | `discovery.enabled` | A when turning it off, else B (owners) |
 | `discovery.sources.<id>` | A when it only narrows (pause, less budget, fewer roles), else B |
-| `discovery.budgets.*`, `discovery.cadence.*` | A when lower or slower, else B (owners) |
+| `discovery.budgets.*` | A when lower (editors apply it at once), else B (owners) |
+| `discovery.cadence.*` | A when slower or off, else B (owners) |
 | other `discovery.*`, `briefs.*`, `role_defaults.*` | B (owners) |
 | `team.templates.*` | B (owners); never a trial (a template reaches a project only on a switch) |
 | `team.projects.<slug>` member added, vendor or model changed, brief | B (owners) |
@@ -941,13 +944,21 @@ previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
 | `team.projects.<slug>.builders_at_once`, `.budget_usd` | A when lower, else B |
 | any `team.projects.<slug>` change | never a trial (one team merges about one PR a day) |
 
-Only owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`,
-and the five blocks), so their class matters only for agents: an agent's
-proposal of one always waits for the owners (class B), whatever the table
-says. The preview shows the table's class. In the blocks, agents
-propose only their seat's paths (403 `path_not_allowed` otherwise): Scout
-`product`, `strategy` and `discovery.sources`; Sentinel `discovery.rubric`,
-`discovery.thresholds` and `briefs.scout`; Atlas none.
+Owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`, and
+the five blocks), except the class-A changes editors apply (below). For agents
+the class of those paths does not matter: an agent's proposal of one always
+waits for the owners (class B), whatever the table says. Editors
+(`PUT …/definition`) apply a change that only narrows a team or a source, or
+only lowers dollar budgets (`budgets.*`, `discovery.budgets.*`, `loops.*.usd`:
+lowering one only reduces spend), and may Undo their own for 10 minutes;
+raising a budget stays the owners', and so do trials (an editor's change
+applies at once, never as a trial: 403 `owners_only`). A $0 budget is a cap
+like any other: with `discovery.budgets.per_ask` at 0, a research ask that
+spends anything waits for an owner. The preview shows the table's class. In
+the blocks, agents propose only their seat's paths (403
+`path_not_allowed` otherwise): Scout `product`, `strategy` and
+`discovery.sources`; Sentinel `discovery.rubric`, `discovery.thresholds` and
+`briefs.scout`; Atlas none.
 
 **Proposals** (`C-n`, `sys_factory_propose`): leads propose tuning, rules and
 code; a PL proposes rules for its own project. Each cites evidence ids (422
@@ -1240,7 +1251,8 @@ like the rest of discovery.
   requested, hunch; requested work without a plan is shipped, never
   measured), each with n and grouped by the definition version that ranked the
   bet (a filed bet snapshots its opportunity's score). The discovery guards
-  are in the same family: `quote_failures`, `privacy_events` (source reads
+  are in the same family: `quote_failures` (every `*.quote_refused`: a bet,
+  an opportunity or Scout's signal paraphrase), `privacy_events` (source reads
   refused for privacy: the gateway logs each as `privacy.source_refused`
   besides its access-log row, so the guard never scans the access log),
   `bet_acceptance`, `cost_per_accepted_bet` (the discovery seat's spend). The
