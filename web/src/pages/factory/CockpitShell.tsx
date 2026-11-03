@@ -14,6 +14,7 @@
  */
 
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AddProjectDialog } from "@/components/factory/controls/AddProjectDialog";
 import { CockpitPalette } from "@/components/factory/cmdk/CockpitPalette";
 import { KeyboardHelp } from "@/components/factory/cmdk/KeyboardHelp";
@@ -57,8 +58,10 @@ import {
   NodeChatSlotContext,
   createNodeChatSlot,
 } from "@/components/factory/v3/chat/chatLayout";
-import { threadNodeRef } from "@/components/factory/v3/chat/nodeThread";
+import { DISCOVERY_THREAD, chatNodeRef } from "@/components/factory/v3/chat/nodeThread";
+import { NODE_STALE_MS, nodeQueryKeys } from "@/components/factory/v3/nodeQueries";
 import { PRODUCT_REF, nodeHref } from "@/components/factory/v3/nodeRoutes";
+import { useNodeSource } from "@/components/factory/v3/nodeSource";
 import { DecisionsPage } from "./DecisionsPage";
 
 /** The id of the page's main region (the skip link's target). */
@@ -144,21 +147,48 @@ export function CockpitShell({
   const peek = params.get(PEEK_PARAM);
   const v3 = variant === "v3";
   const [chatSlot] = useState(createNodeChatSlot);
-  /** v3: the node page a thread is about, with its chat open. */
+  const queryClient = useQueryClient();
+  const nodeSource = useNodeSource(v3);
+  /**
+   * v3: the node page whose chat shows a thread, with its chat open (on
+   * sample data, the product's: sample nodes have no threads). #discovery
+   * reads the product's page for a need to open.
+   */
   const nodeChatHref = useCallback(
-    (thread: string) =>
-      `${nodeHref(fid, threadNodeRef(thread, snapshot) ?? PRODUCT_REF)}?${CHAT_PARAM}=1`,
-    [fid, snapshot],
+    async (thread: string): Promise<string> => {
+      const sample = nodeSource?.kind !== "live";
+      const root =
+        !sample && thread === DISCOVERY_THREAD && nodeSource
+          ? await queryClient
+              .fetchQuery({
+                queryKey: nodeQueryKeys.node(fid, nodeSource.kind, PRODUCT_REF),
+                queryFn: ({ signal }) => nodeSource.node(fid, PRODUCT_REF, signal),
+                staleTime: NODE_STALE_MS,
+              })
+              .catch(() => null)
+          : null;
+      const ref = chatNodeRef(thread, { snapshot, sample, root });
+      return `${nodeHref(fid, ref)}?${CHAT_PARAM}=1`;
+    },
+    [fid, nodeSource, queryClient, snapshot],
+  );
+  const openThreadChat = useCallback(
+    (thread: string, replace = false) => {
+      void nodeChatHref(thread).then((href) => navigate(href, { replace }));
+    },
+    [navigate, nodeChatHref],
   );
   /** v3: focus the chat on this page, else open the chat of the page's thread. */
   const openChat = useCallback(() => {
     if (chatSlot.focus()) return;
-    navigate(nodeChatHref(pageThread(snapshot, location, null)));
-  }, [chatSlot, location, navigate, nodeChatHref, snapshot]);
-  // An old `?room=` link under v3 opens that thread's node with its chat.
+    openThreadChat(pageThread(snapshot, location, null));
+  }, [chatSlot, location, openThreadChat, snapshot]);
+  // An old `?room=` link under v3 opens that thread's node with its chat
+  // (once the shell knows whether the nodes are this factory's or the sample's).
+  const sourceKnown = nodeSource != null;
   useEffect(() => {
-    if (v3 && room != null) navigate(nodeChatHref(room || "factory"), { replace: true });
-  }, [navigate, nodeChatHref, room, v3]);
+    if (v3 && room != null && sourceKnown) openThreadChat(room || "factory", true);
+  }, [openThreadChat, room, sourceKnown, v3]);
 
   const setParam = useCallback(
     (key: string, value: string | null) =>
@@ -256,9 +286,7 @@ export function CockpitShell({
               onOpenChange={setPalette}
               onShare={() => setSharing(true)}
               onAddProject={() => setAdding({ title: null })}
-              onRoom={(thread) =>
-                v3 ? navigate(nodeChatHref(thread)) : setParam(ROOM_PARAM, thread)
-              }
+              onRoom={(thread) => (v3 ? openThreadChat(thread) : setParam(ROOM_PARAM, thread))}
             />
             <KeyboardHelp open={keys} onOpenChange={setKeys} nodes={variant === "v3"} />
           </FactoryToastProvider>

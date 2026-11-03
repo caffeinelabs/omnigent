@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { matchingNodeVerbs, nodeVerbCommands } from "../../cmdk/slashCommands";
 import { sampleEngine } from "../fixture/sampleNodeSource";
-import { namedChild, pageDecisions, parseIntent } from "./chatIntents";
+import { isBareWhy, namedChild, pageDecisions, parseIntent } from "./chatIntents";
 
 const engine = sampleEngine();
 
@@ -12,16 +12,14 @@ function page(ref: string) {
 }
 
 describe("cockpit v3 · plain words in a node's chat", () => {
-  it("reads “why” in its usual spellings", () => {
-    for (const text of [
-      "why",
-      "Why?",
-      "/why",
-      "why is it not moving",
-      "why hasn't it started",
-      "what is it waiting on",
-    ]) {
-      expect(parseIntent(text, page("assistant-panel-ux"))).toEqual({ kind: "why" });
+  it("reads “why” in its usual spellings; only a bare “why” stays off the thread", () => {
+    for (const text of ["why", "Why?", "/why"]) {
+      expect(parseIntent(text, page("assistant-panel-ux"))).toEqual({ kind: "why", bare: true });
+      expect(isBareWhy(text)).toBe(true);
+    }
+    for (const text of ["why is it not moving", "why hasn't it started", "what is it waiting on"]) {
+      expect(parseIntent(text, page("assistant-panel-ux"))).toEqual({ kind: "why", bare: false });
+      expect(isBareWhy(text)).toBe(false);
     }
   });
 
@@ -84,6 +82,26 @@ describe("cockpit v3 · plain words in a node's chat", () => {
   it("leaves anything else as a message", () => {
     for (const text of ["what does wave 2 need?", "thanks", "ship it", ""]) {
       expect(parseIntent(text, page("I-1"))).toBeNull();
+    }
+  });
+
+  it("opens nothing for a sentence to the agent, even one that names a verb", () => {
+    // Long, negated, a question, or swapping to something that is not a vendor or model.
+    const sentences: [string, string][] = [
+      ["Please don't auto-merge this, I want to review the migration first", "I-1"],
+      ["add logging to the payment handler before you open the PR", "assistant-core"],
+      ["hold on, I think the spec for T-16 is wrong", "assistant-core"],
+      ["can you change it to use the v2 billing endpoint", "assistant-core"],
+      ["why does the debit test fail on staging? please fix it", "assistant-panel-ux"],
+      ["plan the rollout carefully and tell me the risks", "assistant-core"],
+      ["this study looks too expensive, what else could we do?", "R-1"],
+      ["don't pause", "assistant-core"],
+      ["hold on", "assistant-core"],
+      ["swap luz to the other one", "assistant-core"],
+      ["start it now?", "assistant-panel-ux"],
+    ];
+    for (const [text, ref] of sentences) {
+      expect({ text, intent: parseIntent(text, page(ref)) }).toEqual({ text, intent: null });
     }
   });
 

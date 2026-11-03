@@ -4,7 +4,7 @@
 // screen (`?chat=1`, so Back closes it). The shell reaches the chat through a
 // slot: `/`, `r` and the top bar's Room button focus it.
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 /** Wide enough for the chat beside the page. */
 export const CHAT_BESIDE_QUERY = "(min-width: 1024px)";
@@ -52,15 +52,25 @@ function saveChatWidth(px: number): void {
   }
 }
 
-/** The column's width, kept in this browser; `setWidth` clamps and stores it. */
+/**
+ * The column's width, kept in this browser and clamped to the window as it is
+ * now: a narrower window (after a resize) narrows the column with it, and a
+ * wider one gives the kept width back. `setWidth` clamps and stores it.
+ */
 export function useChatWidth(): [number, (px: number) => void] {
   const [width, setState] = useState(() => loadChatWidth(viewportWidth()));
+  const [viewport, setViewport] = useState(viewportWidth);
+  useEffect(() => {
+    const onResize = () => setViewport(viewportWidth());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const setWidth = useCallback((px: number) => {
     const next = clampChatWidth(px, viewportWidth());
     setState(next);
     saveChatWidth(next);
   }, []);
-  return [width, setWidth];
+  return [clampChatWidth(width, viewport), setWidth];
 }
 
 /** How the shell reaches the node chat on the page. */

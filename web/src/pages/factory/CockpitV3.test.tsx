@@ -257,4 +257,14 @@ describe("cockpit v3 · the node chat in the shell", () => {
     await waitFor(() => expect(location).toBe(`${BASE}/n/product?chat=1`));
     expect(screen.queryByTestId("room-drawer")).toBeNull();
   });
+
+  it("sends a project's ?room= link on sample data to the product's chat, never a missing page", async () => {
+    serve({ choice: null });
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    renderAt("?room=project:db-version");
+
+    expect(await screen.findByTestId("v3-chat-full")).toBeInTheDocument();
+    await waitFor(() => expect(location).toBe(`${BASE}/n/product?chat=1`));
+    expect(screen.queryByTestId("v3-node-missing")).toBeNull();
+  });
 });

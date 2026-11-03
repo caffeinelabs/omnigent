@@ -6,9 +6,11 @@
  * "Posting as <name> · <role>" says who speaks; viewers watch, disabled.
  *
  * Cockpit v3's node chat passes `node`: who answers ("To Juno"), the node a
- * shared thread's message names, the node's verbs first in the `/` menu,
- * plain words it handles itself (they open previews), quick verbs above the
- * box and its keys below. A click anywhere in the box puts the caret in it.
+ * shared thread's message names, the node's verbs first in the `/` menu (the
+ * Room's structural commands give way to them: `/pause` opens the node's
+ * Pause preview), plain words it reads too (posted first, then they open a
+ * card or a preview), quick verbs above the box and its keys below. A click
+ * anywhere in the box puts the caret in it.
  */
 
 import {
@@ -61,8 +63,12 @@ export interface RoomComposerNodeOptions {
   placeholder?: string;
   /** The body as it is posted (it names the node in a shared thread). */
   prepare?: (body: string) => string;
-  /** Plain words the page handles itself (they only open previews): true posts nothing. */
-  intercept?: (body: string) => boolean;
+  /**
+   * Plain words the page reads too. `local` keeps them off the thread (a bare
+   * "why"); otherwise they are posted first, then `run` opens what they name
+   * (a card, or a verb's preview). Null: only a message.
+   */
+  interpret?: (body: string) => { local: boolean; run: () => void } | null;
   /** The node's verbs for what follows a `/`, listed before the Room's commands. */
   verbs?: (query: string) => NodeVerbCommand[];
   /** A verb picked from the `/` menu (the box empties). */
@@ -81,6 +87,29 @@ function focusFromBox(event: MouseEvent<HTMLElement>, input: HTMLTextAreaElement
   const target = event.target as HTMLElement | null;
   if (!input || target?.closest("button,a,textarea,input,select,[role=option]")) return;
   input.focus();
+}
+
+/**
+ * Room commands that change the factory's structure. A node chat never runs
+ * them as they are: each opens the node's own verb (its preview first), or
+ * says which verb to use.
+ */
+const STRUCTURAL: Record<string, string | null> = {
+  pause: "pause",
+  resume: "resume",
+  task: "add",
+  project: "add",
+  charter: null,
+  cadence: null,
+};
+
+/** The structural Room command `text` starts (`/pause #x` → `pause`), or null. */
+function structuralName(text: string): string | null {
+  const name = text
+    .trimStart()
+    .match(/^\/([a-z]+)(?:\s|$)/i)?.[1]
+    ?.toLowerCase();
+  return name && Object.hasOwn(STRUCTURAL, name) ? name : null;
 }
 
 const KIND_GLYPH: Record<RoomCandidate["kind"], string> = {
@@ -154,16 +183,31 @@ export function RoomComposer({
   const active = useMemo(() => detectRoomTokenAt(text, caret), [text, caret]);
   const command = isRoomCommand(text);
   const nodeVerbs = node?.verbs;
+  const inNode = node != null;
+  // In a node chat, `/pause #x` opens the node's Pause (its preview), never the Room's control.
+  const structural = inNode && command ? structuralName(text) : null;
+  const structuralVerb = useMemo(() => {
+    const verb = structural ? STRUCTURAL[structural] : null;
+    return verb ? (nodeVerbs?.("").find((v) => v.id === `verb:${verb}`) ?? null) : null;
+  }, [structural, nodeVerbs]);
+  const structuralNote = structural
+    ? structuralVerb
+      ? `In this chat /${structural} opens ${structuralVerb.label}: a preview first`
+      : `/${structural} is not a verb of this node · / lists its verbs`
+    : null;
   const menu: MenuItem[] = useMemo(() => {
     if (dismissed) return [];
     // The node's verbs come first for anything typed after a lone `/`.
-    const slash = /^\/([^\n]*)$/.exec(text.trimStart());
+    const slash = text.trimStart().match(/^\/([^\n]*)$/);
     const verbs: MenuItem[] =
       slash && nodeVerbs ? nodeVerbs(slash[1]!).map((verb) => ({ type: "verb", verb })) : [];
     // `/pa` lists commands; past the name, `#db` completes the argument.
-    const name = /^\/([a-z]*)$/i.exec(text.trimStart());
+    const name = text.trimStart().match(/^\/([a-z]*)$/i);
     if (name) {
-      const specs = matchingRoomCommands(text);
+      // A node chat lists its own verbs in place of the Room's structural commands.
+      const specs = matchingRoomCommands(text).filter(
+        (spec) => !(inNode && Object.hasOwn(STRUCTURAL, spec.name)),
+      );
       // `/status` typed out in full: Enter runs it.
       if (!verbs.length && specs.length === 1 && specs[0]!.name === name[1]!.toLowerCase()) {
         return [];
@@ -179,10 +223,13 @@ export function RoomComposer({
       type: "candidate",
       candidate,
     }));
-  }, [dismissed, text, active, candidates, nodeVerbs]);
+  }, [dismissed, text, active, candidates, nodeVerbs, inNode]);
   const parse = useMemo(
-    () => (command && menu.length === 0 ? parseRoomCommand(text, { snapshot, people }) : null),
-    [command, menu.length, text, snapshot, people],
+    () =>
+      command && !structural && menu.length === 0
+        ? parseRoomCommand(text, { snapshot, people })
+        : null,
+    [command, structural, menu.length, text, snapshot, people],
   );
   const lever = parse?.ok ? roomCommandLever(parse.command) : null;
   const leverReason = lever ? gate(lever).reason : null;
@@ -236,6 +283,15 @@ export function RoomComposer({
   const submit = async () => {
     const body = text.trim();
     if (!body || sending || !canPost) return;
+    if (structural) {
+      if (!structuralVerb) {
+        setError(structuralNote);
+        return;
+      }
+      update("", 0);
+      node?.onVerb?.(structuralVerb);
+      return;
+    }
     if (command) {
       const parsed = parse ?? parseRoomCommand(body, { snapshot, people });
       if (!parsed.ok) {
@@ -256,9 +312,12 @@ export function RoomComposer({
       }
       return;
     }
-    // Plain words the page handles (they open previews); nothing is posted.
-    if (node?.intercept?.(body)) {
+    // Plain words the page reads too: a bare "why" stays here; anything else
+    // is posted first and then opens what it names beside the words.
+    const intent = node?.interpret?.(body) ?? null;
+    if (intent?.local) {
       update("", 0);
+      intent.run();
       return;
     }
     setSending(true);
@@ -266,6 +325,7 @@ export function RoomComposer({
     try {
       await onSend(node?.prepare ? node.prepare(body) : body, roomMentions(body));
       update("", 0);
+      intent?.run();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -440,7 +500,7 @@ export function RoomComposer({
               ),
             trailing: (
               <ComposerSendButton
-                label={command ? "Run command" : "Send"}
+                label={structuralVerb ? "Open preview" : command ? "Run command" : "Send"}
                 busy={sending}
                 disabled={!canPost || !text.trim() || sending}
                 data-testid="room-composer-send"
@@ -449,6 +509,23 @@ export function RoomComposer({
           }}
         />
       </form>
+      {structuralNote && !error && canPost && (
+        <p
+          data-testid="room-composer-hint"
+          data-ok={structuralVerb ? "true" : "false"}
+          className={cn(
+            "flex min-w-0 items-center gap-1.5 px-1 text-xs",
+            structuralVerb ? "text-muted-foreground" : "text-destructive",
+          )}
+        >
+          {structuralVerb ? (
+            <CornerDownLeftIcon aria-hidden className="size-3 shrink-0" />
+          ) : (
+            <TriangleAlertIcon aria-hidden className="size-3 shrink-0" />
+          )}
+          <span className="min-w-0 truncate">{structuralNote}</span>
+        </p>
+      )}
       {(parse || error) && canPost && (
         <p
           data-testid="room-composer-hint"

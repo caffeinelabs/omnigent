@@ -48,15 +48,30 @@ import { WhyCard } from "../WhyCard";
 import { AskCard, ClosedAlarmCard, OfferCard } from "./ChatCards";
 import { CHAT_BESIDE_QUERY, CHAT_PARAM, useChatWidth, useNodeChatSlot } from "./chatLayout";
 import { parseIntent } from "./chatIntents";
-import { CHILD_NEWS_SHOWN, childNews, namedBody, nodeThread, threadOwnerRef } from "./nodeThread";
+import {
+  CHILD_NEWS_SHOWN,
+  FACTORY_THREAD,
+  childNews,
+  factoryLeadTitle,
+  namedBody,
+  nodeThread,
+  threadOwnerRef,
+} from "./nodeThread";
 
-/** Buttons that answer an ask in the Room's cards: Enter never presses them. */
+/** The Room's cards that answer an ask: a key never answers them (Enter, or 1-5 for an option). */
 const ANSWER_CARDS =
   '[data-testid^="decision-card-"],[data-testid^="proposal-card-"],[data-testid^="loop-card-"]';
 
-function swallowAnswerEnter(event: ReactKeyboardEvent<HTMLElement>) {
+function swallowAnswerKeys(event: ReactKeyboardEvent<HTMLElement>) {
   const target = event.target as HTMLElement;
-  if (target.tagName === "BUTTON" && target.closest(ANSWER_CARDS)) swallowEnter(event);
+  if (!target.closest(ANSWER_CARDS)) return;
+  const typing = target.closest("textarea,input,select,[contenteditable=true]");
+  if (!typing && /^[1-5]$/.test(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (target.tagName === "BUTTON") swallowEnter(event);
 }
 
 /** A card only this viewer sees, after the thread's messages. */
@@ -77,10 +92,21 @@ function StatusCard({ title, line }: { title: string; line: StatusLine }) {
 }
 
 /** The why card for a node: the chat's own node, or another one a message names. */
-function WhyOf({ nodeRef, chat, here }: { nodeRef: string; chat: NodePage; here: NodePage }) {
+function WhyOf({
+  nodeRef,
+  chat,
+  here,
+  fallback = null,
+}: {
+  nodeRef: string;
+  chat: NodePage;
+  here: NodePage;
+  /** What shows while the node loads, or when no node has that ref (the message's own line). */
+  fallback?: ReactNode;
+}) {
   const other = useNode(nodeRef === chat.node.ref ? "" : nodeRef);
   const page = nodeRef === chat.node.ref ? chat : other.data;
-  if (!page) return null;
+  if (!page) return fallback;
   if (!page.status.why?.length) return <StatusCard title={page.node.title} line={page.status} />;
   const start =
     page.node.ref === here.node.ref ? (page.verbs.find((v) => v.verb === "start") ?? null) : null;
@@ -94,22 +120,25 @@ function OfferOf({
   nodeRef,
   chat,
   onVerb,
+  fallback,
 }: {
   message: ChatMessageView;
   attached: boolean;
   nodeRef: string;
   chat: NodePage;
   onVerb: (verb: string, at: string) => void;
+  fallback: ReactNode;
 }) {
   const other = useNode(nodeRef === chat.node.ref ? "" : nodeRef);
   const page = nodeRef === chat.node.ref ? chat : other.data;
+  if (!page) return fallback;
   const meta = message.card?.meta?.kind === "offer" ? message.card.meta : null;
   const verbKey = meta?.verb ?? "start";
-  const verb = page?.verbs.find((v) => v.verb === verbKey && v.enabled) ?? null;
-  const state = page?.node.state;
+  const verb = page.verbs.find((v) => v.verb === verbKey && v.enabled) ?? null;
+  const state = page.node.state;
   const started =
     state === "moving" || state === "done"
-      ? (page?.status.moving?.activity ?? `${page?.node.title} is ${STATE_WORDS[state]}.`)
+      ? (page.status.moving?.activity ?? `${page.node.title} is ${STATE_WORDS[state]}.`)
       : null;
   return (
     <OfferCard
@@ -123,27 +152,33 @@ function OfferOf({
   );
 }
 
-/** The cards the Room leaves to the node chat: why, closed alarm, offer. */
+/**
+ * The cards the Room leaves to the node chat: why, closed alarm, offer. One
+ * it cannot draw (its node loading or gone, an alarm it knows nothing of)
+ * shows `fallback`, the message's own line, so it never renders empty.
+ */
 function NodeMessageCard({
   message,
   attached,
   chat,
   here,
   onVerb,
+  fallback,
 }: {
   message: ChatMessageView;
   attached: boolean;
   chat: NodePage;
   here: NodePage;
   onVerb: (verb: string, at: string) => void;
+  fallback: ReactNode;
 }) {
   const { snapshot } = useFactoryShell();
   const card = message.card;
-  if (!card) return null;
+  if (!card) return fallback;
   const nodeRef = card.ref ?? chat.node.ref;
   switch (card.type) {
     case "why":
-      return <WhyOf nodeRef={nodeRef} chat={chat} here={here} />;
+      return <WhyOf nodeRef={nodeRef} chat={chat} here={here} fallback={fallback} />;
     case "offer":
       return (
         <OfferOf
@@ -152,6 +187,7 @@ function NodeMessageCard({
           nodeRef={nodeRef}
           chat={chat}
           onVerb={onVerb}
+          fallback={fallback}
         />
       );
     case "closed_alarm": {
@@ -159,7 +195,7 @@ function NodeMessageCard({
       const asked = snapshot.decisions.find((d) => d.ref === card.ref || d.id === card.id);
       const id = card.ref ?? asked?.ref;
       const was = meta?.was ?? asked?.question;
-      if (!id || !was) return null;
+      if (!id || !was) return fallback;
       return (
         <ClosedAlarmCard
           alarm={{
@@ -172,7 +208,7 @@ function NodeMessageCard({
       );
     }
     default:
-      return null;
+      return fallback;
   }
 }
 
@@ -260,7 +296,14 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   const threads = useRoomThreads(fid).data?.data ?? null;
   const thread = nodeThread(chat, { snapshot, threads, perNode, sample });
   const room = threads?.find((t) => t.key === thread.key) ?? null;
-  const responder = chat.thread.responder ?? room?.responder_title ?? null;
+  // Who answers the thread the chat actually posts to: the node's own
+  // responder only when that thread is the node's own (else a borrowed
+  // thread's, e.g. #factory's Atlas for a sample node or a need without #discovery).
+  const own = perNode || thread.key === chat.thread.key;
+  const responder =
+    (own ? chat.thread.responder : null) ??
+    room?.responder_title ??
+    (thread.key === FACTORY_THREAD ? factoryLeadTitle(snapshot) : null);
   const roomTitle = threadTitle(snapshot, thread.key);
   const node = chat.node;
   const relay =
@@ -388,27 +431,33 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
     [addCard, decision, node.ref, runVerb],
   );
 
-  /** Plain words: true when they opened something here (nothing is posted). */
-  const intercept = useCallback(
+  /**
+   * Plain words the chat reads too. They are posted first (a bare "why" stays
+   * here); short command-shaped words then open the why card, the ask's card
+   * or a verb's preview beside them.
+   */
+  const interpret = useCallback(
     (body: string) => {
       const intent = parseIntent(body, chat);
-      if (!intent) return false;
-      if (intent.kind === "why") addCard({ kind: "why" });
-      else if (intent.kind === "answer") addCard({ kind: "ask", decision: intent.decision });
-      else {
-        const target =
-          intent.at === node.ref
-            ? node.title
-            : ([...chat.children.items, ...chat.children.later].find((k) => k.ref === intent.at)
-                ?.title ?? intent.at);
-        const label = chat.verbs.find((v) => v.verb === intent.verb)?.label ?? intent.verb;
-        addCard({
-          kind: "note",
-          text: `“${body}”: ${label} on ${target} opens a preview first; nothing changes until you confirm it.`,
-        });
-        runVerb(intent.verb, intent.at, intent.args);
-      }
-      return true;
+      if (!intent) return null;
+      const run = () => {
+        if (intent.kind === "why") addCard({ kind: "why" });
+        else if (intent.kind === "answer") addCard({ kind: "ask", decision: intent.decision });
+        else {
+          const target =
+            intent.at === node.ref
+              ? node.title
+              : ([...chat.children.items, ...chat.children.later].find((k) => k.ref === intent.at)
+                  ?.title ?? intent.at);
+          const label = chat.verbs.find((v) => v.verb === intent.verb)?.label ?? intent.verb;
+          addCard({
+            kind: "note",
+            text: `“${body}”: ${label} on ${target} opens a preview first; nothing changes until you confirm it.`,
+          });
+          runVerb(intent.verb, intent.at, intent.args);
+        }
+      };
+      return { local: intent.kind === "why" && intent.bare, run };
     },
     [addCard, chat, node.ref, node.title, runVerb],
   );
@@ -430,7 +479,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
     quick.push({ id: v.verb, label: v.label, run: () => runVerb(v.verb, node.ref) });
   }
 
-  const news = childNews(chat, threads, thread.key, snapshot);
+  const news = childNews(chat, threads, thread.key, snapshot, sample);
   const level = levelName(here.node.level, here.node.level_name).toLowerCase();
   const subtitle = [
     responder ? `with ${responder}${relay ? ` (relays to ${relay})` : ""}` : null,
@@ -469,8 +518,8 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
         key: n.key,
         title: n.title,
         unread: n.unread,
-        text: n.mention,
-        href: nodeHref(fid, n.ref),
+        text: n.text,
+        href: nodeHref(fid, n.ref, n.level),
       }))}
     />
   );
@@ -489,13 +538,14 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   ));
 
   const renderCard = useCallback(
-    (message: ChatMessageView, attached: boolean) => (
+    (message: ChatMessageView, attached: boolean, fallback: ReactNode) => (
       <NodeMessageCard
         message={message}
         attached={attached}
         chat={chat}
         here={here}
         onVerb={(verb, at) => runVerb(verb, at)}
+        fallback={fallback}
       />
     ),
     [chat, here, runVerb],
@@ -504,7 +554,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   const threadView = (autoFocus: boolean, className: string) => (
     <div
       className={cn("flex min-h-0 min-w-0 flex-col", className)}
-      onKeyDownCapture={swallowAnswerEnter}
+      onKeyDownCapture={swallowAnswerKeys}
     >
       <RoomThreadView
         snapshot={snapshot}
@@ -535,7 +585,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
             about: thread.about?.label ?? null,
             placeholder: `Message about ${node.title}, or / for verbs`,
             prepare: (body) => namedBody(body, thread.about),
-            intercept,
+            interpret,
             verbs: verbsFor,
             onVerb: onMenuVerb,
             above: <QuickVerbs verbs={quick} />,
@@ -601,6 +651,7 @@ function aboutCode(node: NodePage["node"]): string {
 function ChatColumn({ here, children }: { here: NodePage; children: ReactNode }) {
   const ref = useRef<HTMLElement>(null);
   const top = useStickyTop(ref);
+  // Clamped to the window as it is now (60 % at most), also after a resize.
   const [width, setWidth] = useChatWidth();
   return (
     <aside

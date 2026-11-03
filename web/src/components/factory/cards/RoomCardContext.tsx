@@ -28,9 +28,11 @@ export interface RoomCardData {
   compact: boolean;
   /**
    * Cards the Room does not draw (cockpit v3's `why`, `closed_alarm` and
-   * `offer`); null leaves the message's own line. Absent elsewhere.
+   * `offer`). A card it cannot draw renders `fallback` (the message's own
+   * line, null under a message), so it never renders empty. Absent elsewhere.
    */
-  nodeCard?: ((message: ChatMessageView, attached: boolean) => ReactNode) | null;
+  nodeCard?:
+    ((message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode) | null;
 }
 
 export const RoomCardContext = createContext<RoomCardData | null>(null);

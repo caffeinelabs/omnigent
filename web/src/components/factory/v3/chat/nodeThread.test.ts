@@ -4,6 +4,7 @@ import { sampleRoomSnapshot, sampleRoomThreads } from "../fixture/sampleRoom";
 import { sampleEngine } from "../fixture/sampleNodeSource";
 import {
   aboutLabel,
+  chatNodeRef,
   childNews,
   keyRef,
   namedBody,
@@ -88,6 +89,25 @@ describe("cockpit v3 · which Room thread a node's chat uses (until per-node thr
   });
 });
 
+describe("cockpit v3 · the node whose chat shows a Room thread", () => {
+  const root = page("product");
+
+  it("opens the node a thread is about, and a need for #discovery", () => {
+    const live = { snapshot, sample: false, root };
+    expect(chatNodeRef("project:assistant-core", live)).toBe("assistant-core");
+    expect(chatNodeRef("factory", live)).toBe("product");
+    expect(chatNodeRef("discovery", live)).toBe("ask:m-0555");
+    expect(chatNodeRef("discovery", { ...live, root: null })).toBe("product");
+    expect(chatNodeRef("pr:unknown", live)).toBe("product");
+  });
+
+  it("opens the product's chat for every thread on sample data", () => {
+    const sample = { snapshot, sample: true, root };
+    expect(chatNodeRef("project:assistant-core", sample)).toBe("product");
+    expect(chatNodeRef("discovery", sample)).toBe("product");
+  });
+});
+
 describe("cockpit v3 · thread keys and refs", () => {
   it("reads the node a per-node key names", () => {
     expect(keyRef("factory")).toBe("product");
@@ -126,14 +146,40 @@ describe("cockpit v3 · thread keys and refs", () => {
 });
 
 describe("cockpit v3 · children with news", () => {
-  it("lists every other thread of its tree with news at a root, most news first", () => {
+  it("at a root, keeps its direct children and folds deeper threads into one line per level", () => {
     const news = childNews(page("product"), threads, "factory", snapshot);
-    expect(news.map((n) => [n.ref, n.unread])).toEqual([
-      ["connectors-core", 2],
-      ["build-tier-drafts-3", 1],
-      ["skill-discovery", 1],
+    // build-tier-drafts-3 shows on the root (its one-child parents fold); the
+    // two other projects sit two levels down: one line opens the Project level.
+    expect(news.map((n) => [n.ref, n.level ?? null, n.title, n.unread, n.text])).toEqual([
+      ["product", "project", "Projects", 3, "in 2 threads"],
+      [
+        "build-tier-drafts-3",
+        null,
+        "build-tier-drafts-3",
+        1,
+        "Nova: !9856 and !9857 are ready: checks green, demos pass.",
+      ],
     ]);
-    expect(news[0]!.mention).toContain("connectors-core merged");
+  });
+
+  it("opens a need from Scout's #discovery at the root, and never links a root to itself", () => {
+    const scout: ThreadView = {
+      ...threads[0]!,
+      key: "discovery",
+      kind: "discovery",
+      title: "#discovery",
+      unread: 4,
+    };
+    const lead: ThreadView = { ...threads[0]!, unread: 5 };
+    const news = childNews(page("product"), [...threads, scout, lead], "improvements", snapshot);
+    const line = news.find((n) => n.key === "discovery");
+    expect(line).toMatchObject({ ref: "ask:m-0555", title: "#discovery", unread: 4 });
+    expect(line?.level).toBeUndefined();
+    expect(news.some((n) => n.ref === "product" && !n.level)).toBe(false);
+  });
+
+  it("shows no lines on sample data (its nodes are not this factory's)", () => {
+    expect(childNews(page("product"), threads, "factory", snapshot, true)).toEqual([]);
   });
 
   it("lists only direct children below a root, by their node titles", () => {

@@ -1,7 +1,8 @@
 // Test-only: a node page with its chat over the sample factory and its Room.
 // Node pages come from the sample engine; the Room (threads, messages, read
 // marks, posts) and preflight answer through a fake `authenticatedFetch`
-// (`fetchOf`), so the chat runs its real hooks. Posts are recorded.
+// (`fetchOf`), so the chat runs its real hooks. Posts and every request
+// that changes something are recorded.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
@@ -23,6 +24,8 @@ export interface FakeFetch {
   (path: string, init?: RequestInit): Promise<Response>;
   /** Bodies posted to `…/chat`, in order. */
   posts: PostChatRequest[];
+  /** Every request but a GET (`POST …/chat` too), as "METHOD path", in order. */
+  writes: string[];
 }
 
 function reply(response: StoryResponse): Response {
@@ -42,8 +45,11 @@ function reply(response: StoryResponse): Response {
 /** A fake `authenticatedFetch` over story routes; a post to `…/chat` echoes the message. */
 export function fetchOf(routes: StoryRoutes, factoryId: string): FakeFetch {
   const posts: PostChatRequest[] = [];
+  const writes: string[] = [];
   const fake = (async (path: string, init?: RequestInit) => {
     const bare = path.split("?")[0] ?? path;
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method !== "GET") writes.push(`${method} ${bare}`);
     if (init?.method === "POST" && bare.endsWith(`/factories/${factoryId}/chat`)) {
       const request = JSON.parse(String(init.body)) as PostChatRequest;
       posts.push(request);
@@ -72,6 +78,7 @@ export function fetchOf(routes: StoryRoutes, factoryId: string): FakeFetch {
     return reply(typeof route === "function" ? route(path) : route);
   }) as FakeFetch;
   fake.posts = posts;
+  fake.writes = writes;
   return fake;
 }
 
@@ -84,13 +91,12 @@ function Probe() {
   return null;
 }
 
-function Routed({ actions }: { actions?: NodeActions }) {
+function Routed({ actions, sample }: { actions?: NodeActions; sample: boolean }) {
   const { ref = "product" } = useParams<{ ref: string }>();
-  return <NodePage key={ref} factoryId={FID} nodeRef={ref} actions={actions} chat={CHAT} />;
+  return <NodePage key={ref} factoryId={FID} nodeRef={ref} actions={actions} chat={{ sample }} />;
 }
 
 const FID = sampleRoomSnapshot().factory.id;
-const CHAT = { sample: false };
 
 function shellOf(snapshot: FactorySnapshot): FactoryShellValue {
   return {
@@ -119,12 +125,24 @@ export function renderChat(
     actions?: NodeActions;
     slot?: NodeChatSlot;
     search?: string;
+    /** The Room's messages (default: the sample's). */
+    messages?: ChatMessageView[];
+    /** The page says its nodes are the sample's, not this factory's (`chat.sample`). */
+    sampleNodes?: boolean;
     install: (fetch: FakeFetch) => void;
   },
 ) {
-  const { actions, slot, search: query = "", install, ...sample } = options;
+  const {
+    actions,
+    slot,
+    search: query = "",
+    messages,
+    sampleNodes = false,
+    install,
+    ...sample
+  } = options;
   const snapshot = sampleRoomSnapshot();
-  const fetch = fetchOf(sampleRoomRoutes({ snapshot, ...sample }), snapshot.factory.id);
+  const fetch = fetchOf(sampleRoomRoutes({ snapshot, messages, ...sample }), snapshot.factory.id);
   install(fetch);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const shell = shellOf(snapshot);
@@ -136,7 +154,10 @@ export function renderChat(
           <FactoryShellContext.Provider value={shell}>
             <NodeChatSlotContext.Provider value={chatSlot}>
               <Routes>
-                <Route path="/factory/:factoryId/n/:ref" element={<Routed actions={actions} />} />
+                <Route
+                  path="/factory/:factoryId/n/:ref"
+                  element={<Routed actions={actions} sample={sampleNodes} />}
+                />
               </Routes>
               <Probe />
             </NodeChatSlotContext.Provider>

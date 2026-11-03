@@ -1,31 +1,45 @@
 // Plain words in a node's chat, read on the client: "why", "apply c-16",
 // "start the panel now", "also plan google ads", "swap luz to codex",
-// "auto-merge this", "research …", "pause". Each one only opens something:
-// the why card, the ask's card (its answer stays a click), or a verb's
-// preview. Nothing here applies a change. Anything else is a message.
+// "auto-merge this", "research …", "pause". The words are always posted
+// first (a bare "why" stays here); then a short, command-shaped message also
+// opens something beside them: the why card, the ask's card (its answer
+// stays a click), or a verb's preview. Nothing here applies a change, and a
+// sentence ("please don't auto-merge this, …") is only a message.
 
 import type { DecisionRef, NodePage, NodeSummary, VerbArgs, VerbAvail } from "../nodeTypes";
 
 export type ChatIntent =
-  | { kind: "why" }
+  /** `bare`: the words were only "why" (they stay here; nothing is posted). */
+  | { kind: "why"; bare: boolean }
   /** Show the ask's card; answering stays a click on it. */
   | { kind: "answer"; decision: DecisionRef }
   /** Open a verb's preview on `at` (this node or a child it names). */
   | { kind: "verb"; verb: string; at: string; args?: VerbArgs };
 
+/** Only "why" ("Why?", "/why"): the why card, nothing posted. */
+const BARE_WHY = /^\/?why[?!.]*$/;
+/** "why is it not moving", "why hasn't it started", "what is it waiting on": the whole message. */
 const WHY =
-  /^\/?why\b|\bwhy (is|isn'?t|not|has|hasn'?t|did|does|doesn'?t|are|aren'?t)\b|\bwhat('?s| is) (it |this )?waiting\b/;
-const ANSWER = /\b(apply|approve|accept|reject|merge)\s+(?:#|!)?([a-z]{1,3}-?\d+|\d+)\b/;
-const START = /\bstart\b/;
-const ADD =
-  /^(?:also\s+)?(?:plan|add)\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:\s+(?:now|too|as well))?[.!]?$/i;
-const MOVE = /^move\s+(?:this|it)\b/;
-const SWAP = /\b(?:swap|switch|change)\s+@?([\w.-]+)\s+(?:to|with|for)\s+(.+?)[.!]?$/;
-const AUTO = /\bauto-?merge\b|\bmerge (?:it |this )?(?:by )?itself\b/;
-const RESEARCH = /\b(?:research|study|look into)\b/;
-const PAUSE = /^(?:pause|hold)\b/;
-const RESUME = /^(?:resume|unpause)\b/;
-const NAME = /^(?:name|file)\s+(?:it|this)\b/;
+  /^(?:why (?:is|isn'?t|has|hasn'?t|did|does|doesn'?t|are|aren'?t) (?:it|this|that)(?: not)? (?:moving|started|starting|running|stuck|waiting|blocked|done|finished|merged|going)|what(?:'?s| is) (?:it|this) waiting (?:on|for))[?!.]*$/;
+/** A command is short: at most this many words. */
+const COMMAND_WORDS = 6;
+/** Words that turn a verb around ("don't auto-merge this"): never a command. */
+const NEGATION = /\b(?:don'?t|do not|not|never|no|won'?t|can'?t|cannot|shouldn'?t|stop|without)\b/;
+const ANSWER = /^(apply|approve|accept|reject|merge) (?:#|!)?([a-z]{1,3}-?\d+|\d+)$/;
+/** Fillers a short command may carry ("start it now please"). */
+const FILL = "(?: (?:it|this|that|now|please|today|again|for now))*";
+const START = /^(?:please )?start\b/;
+const ADD = /^(?:also )?(?:plan|add) (?:a |an |the )?(.+?)(?: (?:now|too|as well))?$/i;
+const MOVE = /^move (?:this|it)\b/;
+const SWAP = /^(?:swap|switch|change) @?([\w.-]+) (?:to|with|for) ([\w.-]+)$/;
+const AUTO = new RegExp(`^(?:please )?(?:auto-?merge|merge (?:it |this )?(?:by )?itself)${FILL}$`);
+const RESEARCH = /^(?:research|study|look into)\b/;
+const PAUSE = new RegExp(`^(?:please )?(?:pause|hold)${FILL}$`);
+const RESUME = new RegExp(`^(?:please )?(?:resume|unpause)${FILL}$`);
+const NAME = /^(?:name|file) (?:it|this)\b/;
+/** What a member can be swapped to: a coding-agent vendor or a model family. */
+const KNOWN_MODEL =
+  /^(?:claude|codex|opus|sonnet|haiku|gpt[\w.-]*|o[1-9][\w.-]*|gemini[\w.-]*|cursor|copilot|antigravity|pi)$/;
 
 /** Words that say what to do, not which node. */
 const COMMON = new Set([
@@ -101,34 +115,52 @@ function has(verbs: readonly VerbAvail[], verb: string): boolean {
   return verbs.some((v) => v.verb === verb && v.enabled);
 }
 
+/** Only "why" ("Why?", "/why"): it stays in this viewer's chat, nothing is posted. */
+export function isBareWhy(text: string): boolean {
+  return BARE_WHY.test(text.trim().toLowerCase());
+}
+
 /**
- * What plain words in the chat mean on this node, or null when they are a
- * message for the responder.
+ * What plain words in the chat open on this node, or null when they are only
+ * a message for the responder. Only short, command-shaped words open
+ * anything: from their first word, at most six words, no question (but
+ * "why"), no negation.
  */
 export function parseIntent(text: string, page: NodePage): ChatIntent | null {
-  const t = text.trim().toLowerCase().replace(/\s+/g, " ");
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.!]+$/, "");
   if (!t) return null;
-  if (WHY.test(t)) return { kind: "why" };
+  if (BARE_WHY.test(t)) return { kind: "why", bare: true };
+  if (WHY.test(t)) return { kind: "why", bare: false };
+  if (t.includes("?") || NEGATION.test(t) || t.split(" ").length > COMMAND_WORDS) return null;
   const verbs = page.verbs;
   const here = page.node.ref;
-  const answer = ANSWER.exec(t);
+  const answer = t.match(ANSWER);
   if (answer) {
     const decision = findDecision(page, answer[2]!);
-    if (decision) return { kind: "answer", decision };
+    return decision ? { kind: "answer", decision } : null;
   }
-  if (START.test(t) && (/\bnow\b/.test(t) || /^start\b/.test(t))) {
+  if (START.test(t)) {
     const kids = [...page.children.items, ...page.children.later];
     const kid = namedChild(t.replace(START, ""), kids);
     if (kid && kid.ref !== here) return { kind: "verb", verb: "start", at: kid.ref };
     if (has(verbs, "start")) return { kind: "verb", verb: "start", at: here };
+    return null;
   }
   if (MOVE.test(t) && has(verbs, "move")) return { kind: "verb", verb: "move", at: here };
-  const swap = SWAP.exec(t);
-  if (swap && has(verbs, "team")) {
+  const swap = t.match(SWAP);
+  if (swap && KNOWN_MODEL.test(swap[2]!) && has(verbs, "team")) {
     return { kind: "verb", verb: "team", at: here, args: { member: swap[1]!, to: swap[2]! } };
   }
   if (AUTO.test(t) && has(verbs, "auto")) return { kind: "verb", verb: "auto", at: here };
-  const add = ADD.exec(text.trim());
+  const add = text
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[.!]+$/, "")
+    .match(ADD);
   if (add && has(verbs, "add")) {
     return { kind: "verb", verb: "add", at: here, args: { title: add[1]!.trim() } };
   }

@@ -1,6 +1,7 @@
 /* oxlint-disable no-await-in-loop -- pages render one at a time, in order */
 import { screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { type FakeFetch, renderChat } from "./fixture/renderChat";
 import { renderNode } from "./fixture/renderNode";
 import { type SampleOptions, sampleEngine, sampleNodeSource } from "./fixture/sampleNodeSource";
 import type { NodePage } from "./nodeTypes";
@@ -9,7 +10,15 @@ import type { NodePage } from "./nodeTypes";
 // synthetic big product): levels, not spaghetti, so no SVG ever draws a line
 // or a curve between nodes (rings are circles inside one node); and nothing
 // renders empty, so no cell says "0", "0 later", "none" or "—". Every surface
-// is a solid card, so dark mode's glass rule never drops a state edge.
+// is a solid card, so dark mode's glass rule never drops a state edge. The
+// node chat beside each page (news lines, quick verbs, cards, the box) is
+// held to the same "nothing empty" rule.
+
+let fake: FakeFetch | null = null;
+vi.mock("@/lib/identity", async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  authenticatedFetch: (path: string, init?: RequestInit) => fake!(path, init),
+}));
 
 const EMPTY = new Set(["none", "None", "—", "-"]);
 /** "0", "0 later", "0 you": a count of nothing (a "0/3" progress label is not one). */
@@ -29,6 +38,7 @@ function setPhone(phone: boolean) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  fake = null;
 });
 
 /** Every page a person can open: each node, and each level under each node. */
@@ -146,6 +156,47 @@ describe("cockpit v3 · levels, not spaghetti; nothing empty", () => {
       view.unmount();
     }
   });
+
+  it(
+    "the node chat beside every page: nothing empty, and no line between nodes on the page",
+    async () => {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query.includes("min-width: 1024px"),
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+      for (const ref of sampleEngine().refs()) {
+        const view = renderChat(ref, {
+          install: (f) => {
+            fake = f;
+          },
+        });
+        await settle(view.container);
+        const chat = await screen.findByTestId("v3-chat");
+        await waitFor(() =>
+          expect(
+            chat.querySelector(
+              '[data-testid="room-message-list"] li, [data-testid="v3-chat-empty"]',
+            ),
+          ).not.toBeNull(),
+        );
+        expect({ ref, empty: emptyCells(chat) }).toEqual({ ref, empty: [] });
+        // The page body draws no line; the chat's icons (lucide paths) are not between nodes.
+        const body = screen.getByTestId("v3-node-page");
+        const lines = [...body.querySelectorAll("svg line, svg path, svg polyline, svg polygon")];
+        expect({ ref, lines: lines.filter((el) => !chat.contains(el)).length }).toEqual({
+          ref,
+          lines: 0,
+        });
+        view.unmount();
+      }
+    },
+    SWEEP_MS,
+  );
 
   it("the sample keeps one parent per node, one level up (the server's 422 wrong_level)", () => {
     expect(sampleEngine().checkStructure()).toEqual([]);
