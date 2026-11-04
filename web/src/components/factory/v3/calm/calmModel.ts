@@ -271,8 +271,11 @@ export function askName(decision: DecisionRef, text: string, max = 5): string | 
     .trim();
   if (!t || tail.some((code) => t.includes(code))) return null;
   if (t.toLowerCase() === text.toLowerCase()) return null;
-  const name = shortTitle(t, max);
-  // A continuation reads in lower case ("Apply C-16 · update assistant core"), an acronym stays.
+  return continued(shortTitle(t, max));
+}
+
+/** A continuation reads in lower case ("Apply C-16 · update assistant core"); an acronym stays. */
+function continued(name: string): string {
   return /^[A-Z][a-z]/.test(name) ? `${name[0]!.toLowerCase()}${name.slice(1)}` : name;
 }
 
@@ -499,7 +502,11 @@ function itemRow(item: YourMoveItem, page: NodePage, names: Map<string, string>)
     id: item.id,
     decision: item.decision,
     text,
-    name: item.object_name ?? (item.about ? null : askName(item.decision, text)),
+    name: item.object_name
+      ? continued(item.object_name)
+      : item.about
+        ? null
+        : askName(item.decision, text),
     unblocks,
     quiet,
     at: item.ref,

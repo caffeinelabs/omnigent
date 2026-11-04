@@ -277,6 +277,12 @@ describe("calm · Your move", () => {
     expect(row.quiet).toBe(false);
     expect(row.unblocks).toBe("this project");
     expect(row.name).toBeNull();
+    // The server's short name for what is applied wins, read as a continuation.
+    const named = normalizeYourMove(
+      { items: [{ ...merge, object: "C-16", object_name: "Debit each turn" }], more: 0 },
+      status,
+    )!;
+    expect(moveView({ ...page, your_move: named }, []).rows[0]!.name).toBe("debit each turn");
     const idle = normalizeYourMove(
       { items: [{ ...merge, blocks_nothing: true }], more: 0 },
       status,

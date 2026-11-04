@@ -449,7 +449,8 @@ def test_needs_you_ranks_each_ask_by_what_it_holds(
     expect(items.nth(0)).not_to_contain_text("**")
     expect(items.nth(1)).to_have_attribute("data-decision", re.compile(r"^merge:"))
     expect(items.nth(1)).to_contain_text("Merge #9856 and #9857")
-    expect(items.nth(2)).to_contain_text("unblocks")
+    # It holds work (Needs you ranks it with the asks that do): never "blocks nothing".
+    expect(items.nth(2)).not_to_contain_text("blocks nothing")
     expect(items.last).to_contain_text("blocks nothing")
     # One filled answer in the sheet; the alarms the server closed live under Factory › Health.
     expect(sheet.locator('[data-testid="v3-answer"].bg-status-yellow')).to_have_count(1)
