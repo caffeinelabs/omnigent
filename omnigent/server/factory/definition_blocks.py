@@ -1219,11 +1219,13 @@ from before the level drops only it on a rollback (it reads ``careful``, the saf
 direction) and still reads ``autonomy.projects`` as the owners set it."""
 AUTO_MERGE_SCOPES_KEY: Final = "auto_merge_scopes"
 """Where a version stores ``product.delivery.auto_merge_scopes``: a server from before
-the scopes drops only them on a rollback (nothing merges by a scope then, the safe
-direction) and still reads the profile."""
+the scopes drops only them on a rollback and still reads the profile. That is not
+always the safe direction: nothing merges by a scope then, but a ``merge: false``
+scope is dropped too, so the factory-wide targets merge the PRs it kept for people."""
 AUTONOMY_SCOPES_KEY: Final = "autonomy_scopes"
 """Where a version stores ``autonomy.scopes``: a server from before them drops only
-them and keeps ``autonomy.projects`` and the level."""
+them and keeps ``autonomy.projects`` and the level, so every op is decided at
+``autonomy.level`` again: looser than a scope that was stricter than it."""
 _LIFTED: Final[tuple[tuple[str, str], ...]] = (
     ("product.delivery.auto_merge_scopes", AUTO_MERGE_SCOPES_KEY),
     ("autonomy.scopes", AUTONOMY_SCOPES_KEY),

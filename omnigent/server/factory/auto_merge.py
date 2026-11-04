@@ -225,13 +225,19 @@ def is_target(
 
 
 def factory_targets(
-    deps: FactoryDeps | None, factory_id: str | None, *, fresh: bool = False
+    deps: FactoryDeps | None,
+    factory_id: str | None,
+    *,
+    fresh: bool = False,
+    lineage: bool = True,
 ) -> Targets:
     """
     The factory's targets, with the lineage its scopes need read from the store
     (synchronous: call it in a worker thread).
 
     :param fresh: Read the definition in force now, past its short cache.
+    :param lineage: Read where the projects sit; ``False`` for a caller that
+        attaches a lineage it read itself (:meth:`Targets.with_lineage`).
     :returns: The factory's targets (none when its definition is unresolved). Never raises.
     """
     from omnigent.server.factory import definition, product_profile, subtrees
@@ -248,9 +254,9 @@ def factory_targets(
             found = product_profile.delivery(deps, factory_id)
             goals = definition.value(deps, factory_id, "strategy.goals")
         targets = targets_from(found if isinstance(found, Mapping) else None)
-        if not targets.scopes or deps is None or not factory_id:
+        if not lineage or not targets.scopes or deps is None or not factory_id:
             return targets
-        lineage = subtrees.load(
+        placed = subtrees.load(
             deps.factory_store,
             factory_id,
             targets.scopes,
@@ -259,7 +265,7 @@ def factory_targets(
     except Exception:  # noqa: BLE001 - no targets: nothing merges
         _logger.warning("factory %s: could not read the auto-merge targets", factory_id)
         return Targets()
-    return targets.with_lineage(lineage)
+    return targets.with_lineage(placed)
 
 
 def merger_on(app_state: Any) -> bool:

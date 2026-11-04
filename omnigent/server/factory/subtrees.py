@@ -12,9 +12,12 @@ every node under it, also the ones added later:
   whatever an ancestor or the factory-wide targets say.
 
 The nearest scoped ancestor decides, the node's own entry first. A project's
-ancestors are read from the store the way the node tree files them: its home
-feature (:mod:`.features`), that feature's need (``plan.opportunity``, a live
-opportunity) and the need's goal (one of ``strategy.goals``).
+ancestors are read from the store the way the node tree (:class:`.nodes.Tree`)
+files them: its home feature (:mod:`.features`), that feature's need (its
+``plan.opportunity``, else the opportunity of the proposal that started it,
+a live one) and the need's goal (one of ``strategy.goals``). A project with no
+home sits in the implicit feature of the proposal that created it, under that
+proposal's opportunity: a scope on the need or its goal covers it too.
 
 Only owners set either list (class B, a person's edit). No agent proposes them
 (:data:`.definition_blocks.AGENT_NEVER`), so no agent adds or widens a scope.
@@ -24,7 +27,7 @@ No base is ever inferred: an auto-merge scope names its repo and base.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Final, TypeVar
 
@@ -33,8 +36,9 @@ from pydantic import AfterValidator
 from omnigent.factory import PROJECT_SLUG_RE, THREAD_FACTORY
 
 if TYPE_CHECKING:
-    from omnigent.entities.factory import FactoryInitiative, FactoryProject
+    from omnigent.entities.factory import FactoryInitiative, FactoryProject, FactoryProposal
     from omnigent.entities.factory_discovery import FactoryOpportunity
+    from omnigent.server.factory.features import Home
 
 SCOPES_MAX: Final = 50
 """Entries per scope list."""
@@ -96,56 +100,85 @@ class Lineage:
     """
     The stored ancestors of projects, as the node tree files them.
 
-    :param initiatives: The factory's initiatives that are someone's home
-        (not cancelled).
+    :param initiatives: The factory's initiatives (closed ones are nobody's
+        home); ``None``: not read, a project is placed by its stored feature.
     :param opportunities: Live opportunities (not killed or merged) by ``O-n``.
     :param goals: The goal ids of ``strategy.goals``.
+    :param proposal_needs: ``C-n`` -> the opportunity it planned (``O-n``): the
+        need of the implicit feature of the projects it created with no home,
+        and of an initiative it started that names no need of its own.
+    :param creators: Project slug -> the applied ``C-n`` that created it
+        (``result.created``), for a project whose charter names no proposal.
     """
 
-    initiatives: Sequence[FactoryInitiative] = ()
+    initiatives: Sequence[FactoryInitiative] | None = None
     opportunities: Mapping[str, FactoryOpportunity] = field(default_factory=dict)
     goals: frozenset[str] = frozenset()
-    _homes: dict[str, str | None] = field(default_factory=dict, repr=False)
+    proposal_needs: Mapping[str, str] = field(default_factory=dict)
+    creators: Mapping[str, str] = field(default_factory=dict)
+    _homes: dict[str, Home] = field(default_factory=dict, repr=False)
     _by_ref: dict[str, FactoryInitiative] | None = field(default=None, repr=False)
-    _started: dict[str, str] | None = field(default=None, repr=False)
+    _find: Callable[[FactoryProject], Home] | None = field(default=None, repr=False)
 
     def _initiative(self, ref: str) -> FactoryInitiative | None:
         if self._by_ref is None:
-            self._by_ref = {r.ref: r for r in self.initiatives}
+            self._by_ref = {r.ref: r for r in self.initiatives or ()}
         return self._by_ref.get(ref)
+
+    def home(self, project: FactoryProject) -> Home:
+        """:returns: *project*'s home feature and the other features that list it."""
+        from omnigent.server.factory.features import Home, HomeFinder
+
+        found = self._homes.get(project.slug)
+        if found is None:
+            if self.initiatives is None:
+                found = Home(project.feature or None, "stored" if project.feature else "none")
+            else:
+                if self._find is None:
+                    self._find = HomeFinder(self.initiatives)
+                found = self._find(project)
+            self._homes[project.slug] = found
+        return found
 
     def feature_of(self, project: FactoryProject) -> str | None:
         """:returns: *project*'s home feature (``I-n``), else ``None`` (implicit)."""
-        if project.slug not in self._homes:
-            if self.initiatives:
-                from omnigent.server.factory.features import homes
+        return self.home(project).feature
 
-                self._homes[project.slug] = homes([project], self.initiatives)[
-                    project.slug
-                ].feature
-            else:
-                self._homes[project.slug] = project.feature or None
-        return self._homes[project.slug]
+    def origin_of(self, project: FactoryProject) -> str | None:
+        """:returns: The ``C-n`` that created *project* (charter, else ``result.created``)."""
+        from omnigent.server.factory.features import origin_proposal
 
-    def started_by(self, proposal: str | None) -> str | None:
-        """:returns: The feature (``I-n``) proposal *proposal* (``C-n``) started or extended."""
-        if not proposal:
-            return None
-        if self._started is None:
-            from omnigent.server.factory.features import by_proposal
+        return origin_proposal(project) or self.creators.get(project.slug)
 
-            self._started = by_proposal(list(self.initiatives))
-        return self._started.get(proposal)
+    def _live(self, ref: object) -> str | None:
+        return ref if isinstance(ref, str) and ref in self.opportunities else None
+
+    def proposal_need(self, proposal: str | None) -> str | None:
+        """:returns: The live opportunity (``O-n``) proposal *proposal* planned, else ``None``."""
+        return self._live(self.proposal_needs.get(proposal)) if proposal else None
 
     def need_of(self, feature: str | None) -> str | None:
-        """:returns: The live opportunity (``O-n``) *feature* serves, else ``None``."""
+        """
+        :returns: The live opportunity (``O-n``) *feature* serves, else ``None``
+            (it sits under a person's ask or an implicit need).
+        """
         row = self._initiative(feature) if feature else None
         if row is None:
             return None
+        from omnigent.server.factory import node_refs
         from omnigent.server.factory.initiative_view import plan_of
 
-        ref = plan_of(row).get("opportunity")
-        return ref if isinstance(ref, str) and ref in self.opportunities else None
+        plan = plan_of(row)
+        if found := self._live(plan.get("opportunity")):
+            return found
+        asker = row.requested_by or {}
+        if asker.get("kind") == "human" and _is_id((row.ask_ref or "").removeprefix("chat_")):
+            return None
+        named = node_refs.parse(plan.get("need"))
+        if named is not None and named.kind == "need" and named.id.startswith("by-"):
+            return None
+        origin = row.created_by if (row.created_by or "").startswith("C-") else row.ref
+        return self.proposal_need(origin)
 
     def goal_of(self, need: str | None) -> str | None:
         """:returns: The goal (``G-n``) *need* sits under, else ``None``."""
@@ -154,24 +187,47 @@ class Lineage:
         return goal if goal and goal in self.goals else None
 
     def above(self, feature: str | None, need: str | None = None) -> tuple[str, ...]:
-        """:returns: *feature*, then its need and goal (or *need*'s, for a new feature)."""
+        """
+        :returns: *feature*, then its need and goal; with no *feature*, the live
+            need *need* and its goal (an implicit feature's).
+        """
         out: list[str] = [feature] if feature else []
-        need = self.need_of(feature) or (need if need in self.opportunities else None)
-        if need:
-            out.append(need)
-            if goal := self.goal_of(need):
+        found = self.need_of(feature) if feature else self._live(need)
+        if found:
+            out.append(found)
+            if goal := self.goal_of(found):
                 out.append(goal)
         return tuple(out)
 
     def chain(self, project: FactoryProject) -> tuple[str, ...]:
         """:returns: *project*'s slug, then its feature, need and goal (those it has)."""
-        return (project.slug, *self.above(self.feature_of(project)))
+        if self.initiatives is not None:
+            from omnigent.factory import PROJECT_KIND_WORK
+            from omnigent.server.factory.charter import project_kind
+
+            if project_kind(project) != PROJECT_KIND_WORK:
+                return (project.slug,)  # the factory tree's: no product node holds it
+        if feature := self.feature_of(project):
+            return (project.slug, *self.above(feature))
+        return (project.slug, *self.above(None, self.proposal_need(self.origin_of(project))))
+
+
+def _is_id(value: str) -> bool:
+    """Whether *value* is a row id (a person's ask in the Room is one message)."""
+    from omnigent.stores.factory_store import norm_id
+
+    try:
+        norm_id(value)
+    except ValueError:
+        return False
+    return bool(value)
 
 
 def needs_rows(refs: Iterable[str]) -> tuple[bool, bool]:
     """
-    :returns: ``(initiatives, opportunities)``: which rows a lineage must read
-        to place the projects under *refs* (a project slug needs neither).
+    :returns: ``(initiatives, needs)``: which rows a lineage must read to place
+        the projects under *refs* (a project slug needs neither; a need or a
+        goal also needs the opportunities and the applied proposals).
     """
     kinds = {ref.split("-", 1)[0] for ref in refs if _NUMBERED_RE.match(ref)}
     return bool(kinds), bool(kinds & {"O", "G"})
@@ -186,24 +242,45 @@ def load(store: Any, factory_id: str, refs: Iterable[str], goals: Iterable[Any] 
     wanted = list(refs)
     initiatives, needs = needs_rows(wanted)
     return lineage_of(
-        store.list_initiatives(factory_id, limit=5000) if initiatives else (),
+        store.list_initiatives(factory_id, limit=5000) if initiatives else None,
         store.list_opportunities(factory_id, limit=5000) if needs else (),
         goals,
+        store.list_proposals(factory_id, status=["applied"], limit=5000) if needs else (),
     )
 
 
 def lineage_of(
-    initiatives: Iterable[FactoryInitiative],
+    initiatives: Iterable[FactoryInitiative] | None,
     opportunities: Iterable[FactoryOpportunity],
     goals: Iterable[Any] = (),
+    proposals: Iterable[FactoryProposal] = (),
 ) -> Lineage:
-    """A :class:`Lineage` from rows already read (``goals``: ``strategy.goals``)."""
+    """
+    A :class:`Lineage` from rows already read.
+
+    :param initiatives: ``None``: not read (projects placed by their stored feature).
+    :param goals: ``strategy.goals``.
+    :param proposals: Proposals read (the applied ones say what created a
+        project; any one may have planned an opportunity).
+    """
     from omnigent.server.factory.features import CLOSED
 
+    needs: dict[str, str] = {}
+    creators: dict[str, str] = {}
+    for row in sorted(proposals, key=lambda p: p.number):
+        if row.opportunity:
+            needs.setdefault(row.ref, row.opportunity)
+        created = (row.result or {}).get("created") if row.status == "applied" else None
+        for slug in created if isinstance(created, list) else []:
+            creators.setdefault(str(slug), row.ref)
     return Lineage(
-        initiatives=[r for r in initiatives if r.status not in CLOSED],
+        initiatives=None
+        if initiatives is None
+        else [r for r in initiatives if r.status not in CLOSED],
         opportunities={o.ref: o for o in opportunities if not o.kill and not o.merged_into},
         goals=frozenset(str(g.get("id")) for g in goals if isinstance(g, Mapping) and g.get("id")),
+        proposal_needs=needs,
+        creators=creators,
     )
 
 

@@ -479,7 +479,21 @@ export class SampleSteerEngine extends SampleLensEngine {
         };
       }
       case "auto": {
-        const on = request.args.auto_merge !== false;
+        // What is left out stays as it is: `auto_merge` and `autonomy` each optional.
+        const merge = request.args.auto_merge;
+        const on = merge === true;
+        const level = typeof request.args.autonomy === "string" ? request.args.autonomy : null;
+        const named = typeof request.args.base === "string" ? request.args.base : null;
+        if (on && !named && (n.base === "main" || n.base === "master")) {
+          // The server never chooses main for the owner: they name it.
+          throw new FactoryApiError(
+            `name the base to auto-merge into: ${n.base} is never chosen for you (main stays merged by people unless an owner names it)`,
+            400,
+            "invalid_args",
+            "args.base",
+            { error: { code: "invalid_args", field: "args.base" }, base: n.base },
+          );
+        }
         const projects = [n, ...this.subtree(n.id)].filter(
           (k) => k.lvl === "project" && !k.ghost && k.state !== "later",
         );
@@ -490,59 +504,74 @@ export class SampleSteerEngine extends SampleLensEngine {
         const outside = this.data.nodes.filter(
           (k) => k.lvl === "project" && k.base && !inside.has(k.id) && !k.closed,
         );
-        const target = this.data.product.base;
+        const target = named ?? n.base ?? this.data.product.base;
+        const mergeLines =
+          typeof merge === "boolean"
+            ? [
+                line(
+                  "Merges into",
+                  `<b>${esc(target)}</b> · the base env picks each merge up: it ${esc(this.data.env.follows)}`,
+                ),
+                line(
+                  "Covers",
+                  `${projects.length} project${projects.length === 1 ? "" : "s"} now (${projects.map((p) => esc(p.title)).join(", ")}) and any added under it later`,
+                ),
+                ...(on
+                  ? [
+                      line(
+                        "First effect",
+                        open.length
+                          ? `${open
+                              .map((o) =>
+                                o.kind === "commit"
+                                  ? `the PR for ${esc(this.nm(o.parent ?? ""))} (${esc(o.tag ?? o.id)})`
+                                  : esc(o.tag ?? o.id),
+                              )
+                              .join(", ")} merges itself once its demo passes`
+                          : "the next PR here merges itself once its demo passes",
+                      ),
+                    ]
+                  : []),
+                ...outside.map((p) =>
+                  line(
+                    "Not affected",
+                    `${esc(p.base ?? "")} stays merged by people (${esc(p.title)} is outside this subtree)`,
+                  ),
+                ),
+              ]
+            : [];
         return {
           ...base,
           title: `Autonomy for ${n.title} and everything under it`,
           rollup_delta: [
-            line(
-              "Auto-merge",
-              `${on ? "off" : "on"} → <b>${on ? "on" : "off"}</b> for ${esc(n.title)} and everything under it`,
-            ),
-          ],
-          effects: [
-            line(
-              "Merges into",
-              `<b>${esc(target)}</b> · the base env picks each merge up: it ${esc(this.data.env.follows)}`,
-            ),
-            line(
-              "Covers",
-              `${projects.length} project${projects.length === 1 ? "" : "s"} now (${projects.map((p) => esc(p.title)).join(", ")}) and any added under it later`,
-            ),
-            ...(on
+            ...(typeof merge === "boolean"
               ? [
                   line(
-                    "First effect",
-                    open.length
-                      ? `${open
-                          .map((o) =>
-                            o.kind === "commit"
-                              ? `the PR for ${esc(this.nm(o.parent ?? ""))} (${esc(o.tag ?? o.id)})`
-                              : esc(o.tag ?? o.id),
-                          )
-                          .join(", ")} merges itself once its demo passes`
-                      : "the next PR here merges itself once its demo passes",
+                    "Auto-merge",
+                    `${on ? "off" : "on"} → <b>${on ? "on" : "off"}</b> for ${esc(n.title)} and everything under it`,
                   ),
                 ]
               : []),
-            ...outside.map((p) =>
-              line(
-                "Not affected",
-                `${esc(p.base ?? "")} stays merged by people (${esc(p.title)} is outside this subtree)`,
-              ),
-            ),
-            ...(typeof request.args.autonomy === "string"
+            ...(level ? [line("Autonomy level", `→ <b>${esc(level)}</b>`)] : []),
+          ],
+          effects: [
+            ...mergeLines,
+            ...(level
               ? [
                   line(
                     "Autonomy",
-                    request.args.autonomy === "inherit"
+                    level === "inherit"
                       ? "as the node above"
-                      : `${esc(request.args.autonomy)} here and everything under it`,
+                      : `${esc(level)} here and everything under it`,
                   ),
                 ]
               : []),
           ],
-          apply_label: on ? "Turn on for this subtree" : "Turn off for this subtree",
+          apply_label: on
+            ? "Turn on for this subtree"
+            : merge === false
+              ? "Turn off for this subtree"
+              : "Apply to this subtree",
         };
       }
       case "pause":
@@ -748,10 +777,15 @@ export class SampleSteerEngine extends SampleLensEngine {
         break;
       }
       case "auto": {
-        n.automerge = request.args.auto_merge !== false;
-        message = n.automerge
-          ? `Auto-merge to ${this.data.product.base} on for ${n.title} and everything under it`
-          : `Auto-merge off for ${n.title}`;
+        const merge = request.args.auto_merge;
+        if (typeof merge === "boolean") n.automerge = merge;
+        const into = typeof request.args.base === "string" ? request.args.base : null;
+        message =
+          merge === true
+            ? `Auto-merge to ${into ?? this.data.product.base} on for ${n.title} and everything under it`
+            : merge === false
+              ? `Auto-merge off for ${n.title}`
+              : `Autonomy set for ${n.title} and everything under it`;
         break;
       }
       case "pause":

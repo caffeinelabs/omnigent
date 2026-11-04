@@ -2204,7 +2204,7 @@ def _under(tree: nodes.Tree, ref: str, pair: tuple[str, str] | None) -> _Under:
     for row in sorted(tree.project_rows.values(), key=lambda r: r.slug):
         if row.status != projects.STATUS_ACTIVE:
             continue
-        chain = tree.facts.lineage.chain(row)
+        chain = tree.lineage.chain(row)
         if ref not in chain:
             continue
         if any(r in scopes for r in chain[: chain.index(ref)]):
@@ -2250,6 +2250,7 @@ def _scope_pair(
             f"name the base to auto-merge into: {base or 'none'} is never chosen for you "
             "(main stays merged by people unless an owner names it)",
             field="args.base",
+            base=base or None,
         )
     try:
         blocks.AutoMergeScopeDef(ref=node.ref, repo=repo, base=base)
@@ -2396,7 +2397,7 @@ async def _plan_auto(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
             skipped = [f"{r.slug} (into {project_base_branch(r)})" for r in under.other_base]
             skipped += [f"{slug} (its own setting)" for slug in under.apart]
             inside = {r.slug for r in (*under.covered, *under.other_base)} | set(under.apart)
-            now = auto_merge.targets_from(delivery, tree.facts.lineage)
+            now = auto_merge.targets_from(delivery, tree.lineage)
             kept: dict[str, list[str]] = {}
             for row in sorted(tree.project_rows.values(), key=lambda r: r.slug):
                 base = project_base_branch(row)

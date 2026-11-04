@@ -1458,7 +1458,6 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
                 scopes=scopes,
                 extends=extends.ref if extends is not None else None,
                 opportunity=body.opportunity,
-                joined=joined,
             )
         )
         if scopes
@@ -1623,16 +1622,18 @@ def scoped_levels(
     scopes: Mapping[str, str],
     extends: str | None = None,
     opportunity: str | None = None,
-    joined: Mapping[str, str] | None = None,
 ) -> list[tuple[str, str | None]]:
     """
     Each change's autonomy level (synchronous): the level of the nearest scoped
     ancestor (``autonomy.scopes``) of each project it touches, the strictest of
     those, else the factory's *level* (:func:`.autonomy.op_level`).
 
-    A new project is placed where it will land: the feature *extends* names, else
-    the one its joined initiative (*joined*) started, else under the need
-    *opportunity*. A move counts where the project is and where it goes.
+    A new project is placed where applying files it: in the feature the plan
+    extends (*extends*, ``analysis.initiative.id``: :func:`.initiatives.link_created`
+    files it there), else in a new or implicit feature under the need
+    *opportunity*. A create that only joins a person's ask (``create_joined``)
+    without extending its feature lands outside it, so that feature's level
+    does not decide it. A move counts where the project is and where it goes.
 
     :returns: ``(level, the scope ref that set it or None)`` per change, in order.
     """
@@ -1650,11 +1651,7 @@ def scoped_levels(
         return lineage.chain(row) if row is not None else (slug,)
 
     def landing(slug: str) -> tuple[str, ...]:
-        joins = (joined or {}).get(slug)
-        feature = extends or (
-            joins if joins and joins.startswith("I-") else lineage.started_by(joins)
-        )
-        return (slug, *lineage.above(feature, opportunity))
+        return (slug, *lineage.above(extends, opportunity))
 
     out: list[tuple[str, str | None]] = []
     for change in plan.changes:

@@ -15,7 +15,8 @@ widen a scope. Every name is sample data.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import dataclasses
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Literal
 
 import pytest
@@ -23,6 +24,7 @@ import pytest_asyncio
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from omnigent.entities.factory import FactoryPr
+from omnigent.entities.factory_discovery import FactoryOpportunity
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.factory import (
     auto_merge,
@@ -32,13 +34,16 @@ from omnigent.server.factory import (
     nodes,
     proposals,
     snapshot,
+    subtrees,
 )
 from omnigent.server.factory import definition_blocks as blocks
+from omnigent.server.factory.charter import project_base_branch
 from omnigent.server.factory.node_views import validate_page
 from omnigent.server.factory.subtrees import Lineage
 from tests.server.factory import definition_helpers as defs
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
+from tests.server.factory.node_fixtures import FID, factory_1340, scale_factory
 from tests.server.factory.projects_helpers import BASE, REPO, header_cockpit, project, propose
 
 ASK = "Build an in-app helper (sample): a side panel and a core behind it."
@@ -265,14 +270,18 @@ async def test_an_outcome_on_the_tryout_base_covers_its_projects_and_future_ones
         "ref": "I-1",
         "title": BASE,
         "state": "this subtree",
+        "tone": "acc",
     }
     assert _merge_chip(core) == {
         "kind": "auto-merge →",
         "ref": "I-1",
         "title": BASE,
         "state": f"from {FEATURE}",
+        "tone": "acc",
     }
     assert _merge_chip(drafts) is None
+    # The subtree's setting comes before the links, so it is never folded into "+n".
+    assert (await _page(cockpit, "panel"))["chips"][0]["kind"] == "auto-merge →"
     assert feature["node"].get("auto_merge") is True
     tiles = {k["ref"]: k for k in feature["children"]["items"]}
     assert tiles["core"].get("auto_merge") is True and tiles["panel"].get("auto_merge") is True
@@ -300,6 +309,7 @@ async def test_main_is_never_auto_merged_unless_the_owner_names_it(cockpit: Cock
     for resp in (unnamed, via_feature):
         assert (resp.status_code, error_code(resp)) == (400, "invalid_args"), resp.text
         assert resp.json()["error"]["field"] == "args.base"
+        assert resp.json()["base"] == "main"  # what the cockpit offers the owner to name
         assert "main stays merged by people unless an owner names it" in resp.text
     assert _scopes(cockpit) == []
 
@@ -330,6 +340,7 @@ async def test_the_nearest_scope_decides_and_off_keeps_people_merging(cockpit: C
         "title": "off",
         "state": "this subtree",
     }
+    assert panel["node"].get("auto_merge") is None
     assert "panel (its own setting)" in _effects(
         await _ok_preview(cockpit, "I-1", base="main", auto_merge=True)
     )
@@ -414,30 +425,46 @@ async def test_a_tryout_outcome_grows_by_itself_while_the_factory_stays_careful(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ask = await _ask_again(cockpit, monkeypatch)
-    before = await propose(
-        cockpit, {"op": "create", "project": project("export-ui")}, reply_to=ask
-    )
+    routine = {"dod": ["the core answers in under a second (sample)"]}
+
+    async def grow(slug: str, touches: str) -> Any:
+        """A lead's own plan inside the outcome: a new project and a routine update."""
+        return await propose(
+            cockpit,
+            {"op": "create", "project": project(slug)},
+            {"op": "update", "slug": touches, "patch": routine},
+            reply_to=ask,
+            analysis={"initiative": {"id": "I-1"}},
+        )
+
+    before = await grow("export-ui", "core")
     assert before.json()["status"] == "pending", before.text
 
-    preview = await _ok_preview(cockpit, "I-1", autonomy="tryout")
-    assert preview["apply_label"] == "Apply to this subtree"
+    preview = await _ok_preview(cockpit, "I-1", autonomy="tryout", auto_merge=True)
     assert "Autonomy: Tryout (here)." in _effects(preview)
     assert (await _apply(cockpit, "I-1", preview)).status_code == 200
     assert autonomy.factory_level(cockpit.deps, cockpit.fid) == "careful"
 
-    joined = await propose(
-        cockpit, {"op": "create", "project": project("export-api")}, reply_to=ask
-    )
+    grown = await grow("export-api", "panel")
+    joined = await propose(cockpit, {"op": "create", "project": project("side-api")}, reply_to=ask)
     unasked = await propose(cockpit, {"op": "create", "project": project("side-quest")})
 
-    assert joined.json()["status"] == "applied", joined.text
-    [opened] = [
-        e
-        for e in cockpit.events("proposal.opened")
-        if e.subject == f"proposal:{joined.json()['proposal']}"
-    ]
+    assert grown.json()["status"] == "applied", grown.text
+    opened = _opened(cockpit, grown.json()["proposal"])
     assert opened.data["level"] == "careful" and opened.data["by_level"] == "tryout"
-    assert opened.data["scoped"] == [{"op": 0, "ref": "I-1", "level": "tryout"}]
+    assert opened.data["scoped"] == [
+        {"op": 0, "ref": "I-1", "level": "tryout"},
+        {"op": 1, "ref": "I-1", "level": "tryout"},
+    ]
+    # It lands where it was decided: in the outcome, whose auto-merge covers it.
+    page = await _page(cockpit, "export-api")
+    assert "I-1" in [c["ref"] for c in page["breadcrumb"]]
+    assert _merge_chip(page) is not None and _merge_chip(page)["ref"] == "I-1"
+    assert _merger_says(cockpit, "export-api", 9100) is None
+    # Citing the ask that started the outcome is not extending it: the project
+    # would land outside it, so the factory's level decides, and it waits.
+    assert joined.json()["status"] == "pending", joined.text
+    assert _opened(cockpit, joined.json()["proposal"]).data["scoped"] is None
     assert unasked.json()["status"] == "pending", unasked.text
     chip = next(c for c in _chips(await _page(cockpit, "core")) if c.get("kind") == "autonomy")
     assert chip == {
@@ -445,7 +472,43 @@ async def test_a_tryout_outcome_grows_by_itself_while_the_factory_stays_careful(
         "ref": "I-1",
         "title": "Tryout",
         "state": f"from {FEATURE}",
+        "tone": "acc",
     }
+
+
+def _opened(cockpit: Cockpit, ref: str) -> Any:
+    [opened] = [e for e in cockpit.events("proposal.opened") if e.subject == f"proposal:{ref}"]
+    return opened
+
+
+async def test_a_factory_wide_target_counts_on_the_nodes_it_covers(cockpit: Cockpit) -> None:
+    definition.set_values(
+        cockpit.deps,
+        cockpit.fid,
+        {"product.delivery.auto_merge": [{"repo": REPO, "base": BASE}]},
+        created_by="alice",
+    )
+
+    feature = await _page(cockpit, "I-1")
+    drafts = await _page(cockpit, "drafts")
+
+    # "Own or inherited": the factory's target covers the outcome and its projects.
+    assert feature["node"].get("auto_merge") is True
+    tiles = {k["ref"]: k for k in feature["children"]["items"]}
+    assert tiles["core"].get("auto_merge") is True
+    assert drafts["node"].get("auto_merge") is None  # main is no target
+    assert _merge_chip(feature) is None  # no subtree setting: no chip
+    # So the verb opens on what changes something: turning it off here.
+    again = await _preview(cockpit, "I-1", auto_merge=True)
+    assert (again.status_code, error_code(again)) == (409, "nothing_to_do")
+    off = await _ok_preview(cockpit, "I-1", auto_merge=False)
+    assert off["apply_label"] == "Turn off for this subtree"
+    [delta] = off["rollup_delta"]["nodes"]
+    assert delta["items"][0]["before"] == f"→ {BASE} (the factory's)"
+    assert (await _apply(cockpit, "I-1", off)).status_code == 200
+    assert _scopes(cockpit) == [{"ref": "I-1", "merge": False, "repo": None, "base": None}]
+    assert (await _page(cockpit, "I-1"))["node"].get("auto_merge") is None
+    assert _merger_says(cockpit, "core", 9001) == "people merge I-1 and everything under it"
 
 
 async def test_a_projects_level_covers_only_that_project(cockpit: Cockpit) -> None:
@@ -607,3 +670,132 @@ def test_a_scope_adds_its_base_and_off_takes_every_base_away() -> None:
     assert not auto_merge.targets_from({"auto_merge_scopes": [{"ref": "x", "merge": False}]})
     # Without the initiatives read, a project is placed by its stored feature.
     assert Lineage().chain(core) == ("core", "I-1")  # type: ignore[arg-type]
+
+
+# ── Where a project sits: as the tree files it ────────────────
+
+
+def _needs(facts: nodes.NodeFacts) -> nodes.NodeFacts:
+    """The sample factory with a goal and two needs: C-12 planned ``O-1`` (under ``G-1``)."""
+    opportunities = [
+        FactoryOpportunity(
+            factory_id=FID,
+            number=n,
+            title=f"Need {n} (sample)",
+            statement="When I build, I want help (sample)",
+            created_by="scout",
+            goal=goal,
+        )
+        for n, goal in ((1, "G-1"), (2, None))
+    ]
+    return dataclasses.replace(
+        facts,
+        goals=[{"id": "G-1", "statement": "Users build faster (sample)"}],
+        opportunities=opportunities,
+        proposals=[
+            dataclasses.replace(p, opportunity="O-1") if p.number == 12 else p
+            for p in facts.proposals
+        ],
+    )
+
+
+def _agents_feature(facts: nodes.NodeFacts) -> nodes.NodeFacts:
+    """``I-1`` started by an agent's C-11, which planned ``O-2``: the feature sits under it."""
+    return dataclasses.replace(
+        _needs(facts),
+        initiatives=[
+            dataclasses.replace(i, requested_by={"kind": "agent", "name": "Atlas"})
+            for i in facts.initiatives
+        ],
+        proposals=[
+            dataclasses.replace(p, opportunity={11: "O-2", 12: "O-1"}.get(p.number))
+            for p in facts.proposals
+        ],
+    )
+
+
+def _planned_feature(facts: nodes.NodeFacts) -> nodes.NodeFacts:
+    """``I-1`` names its need itself (``plan.opportunity``)."""
+    return dataclasses.replace(
+        _needs(facts),
+        initiatives=[
+            dataclasses.replace(i, plan={**i.plan, "opportunity": "O-1"})
+            for i in facts.initiatives
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        factory_1340,
+        lambda: _needs(factory_1340()),
+        lambda: _agents_feature(factory_1340()),
+        lambda: _planned_feature(factory_1340()),
+        lambda: scale_factory(features=4, projects=12, tasks=24),
+    ],
+    ids=["sample", "implicit-under-need", "agents-feature", "planned-feature", "scale"],
+)
+def test_a_projects_scope_chain_is_its_place_in_the_tree(make: Callable[[], Any]) -> None:
+    tree = nodes.Tree(make())
+    checked = 0
+
+    for row in tree.project_rows.values():
+        node = tree.lookup(row.slug)
+        if node is None or node.tree != nodes.PRODUCT_TREE:
+            continue
+        stored = [a.ref for a in reversed(tree.ancestors(node.ref))]
+        assert tree.lineage.chain(row) == (
+            row.slug,
+            *(r for r in stored if subtrees.is_scope_ref(r)),
+        ), (row.slug, stored)
+        checked += 1
+
+    assert checked >= 4
+
+
+def test_a_scope_on_a_need_covers_the_projects_in_its_implicit_features() -> None:
+    facts = _needs(factory_1340())
+    row = next(p for p in facts.projects if p.slug == "build-tier-drafts-3")
+    pair = ((row.repo or "").lower(), project_base_branch(row))
+    scope = {"G-1": auto_merge.MergeScope("G-1", pair)}
+    tree = nodes.Tree(
+        dataclasses.replace(
+            facts,
+            merge_scopes=scope,
+            autonomy_scopes={"O-1": "tryout"},
+            targets=auto_merge.Targets(frozenset(), scope),
+        )
+    )
+    node = tree.lookup(row.slug)
+    assert node is not None
+
+    # The tree files it in C-12's implicit feature, under the need C-12 planned.
+    assert [a.ref for a in tree.ancestors(node.ref)] == [
+        "product",
+        "G-1",
+        "O-1",
+        "feature:from-C-12",
+    ]
+    assert tree.lineage.chain(row) == (row.slug, "O-1", "G-1")
+    assert tree.merge_scope(node) == ("G-1", scope["G-1"])
+    assert tree.autonomy_scope(node) == ("O-1", "tryout")
+    assert tree.auto_merged(node)
+    # The merger reads the same place.
+    assert auto_merge.as_targets(tree.wfacts.targets).cover(row).pairs == {pair}
+    assert subtrees.lineage_of(
+        facts.initiatives, facts.opportunities, facts.goals, facts.proposals
+    ).chain(row) == (row.slug, "O-1", "G-1")
+
+
+def test_a_new_feature_s_need_is_its_own_and_an_extended_one_keeps_its_need() -> None:
+    facts = _planned_feature(factory_1340())
+    lineage = subtrees.lineage_of(
+        facts.initiatives, facts.opportunities, facts.goals, facts.proposals
+    )
+
+    # Extending I-1 lands there, whatever opportunity the proposal names.
+    assert lineage.above("I-1", "O-2") == ("I-1", "O-1", "G-1")
+    # A new or implicit feature sits under the proposal's opportunity.
+    assert lineage.above(None, "O-2") == ("O-2",)
+    assert lineage.above(None, "O-9") == ()

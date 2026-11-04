@@ -89,7 +89,7 @@ def _listed(rows: Sequence[FactoryInitiative]) -> dict[str, list[tuple[int, int,
     return out
 
 
-def by_proposal(rows: Sequence[FactoryInitiative]) -> dict[str, str]:
+def _by_proposal(rows: Sequence[FactoryInitiative]) -> dict[str, str]:
     """``C-n`` -> the initiative it started or extended (the lowest number on a tie)."""
     out: dict[str, str] = {}
     for row in sorted(rows, key=lambda r: r.number):
@@ -102,6 +102,32 @@ def by_proposal(rows: Sequence[FactoryInitiative]) -> dict[str, str]:
     return out
 
 
+class HomeFinder:
+    """Each project's :class:`Home` among *initiatives*, their lookups built once. Pure."""
+
+    def __init__(self, initiatives: Iterable[FactoryInitiative]) -> None:
+        rows = [r for r in initiatives if r.status not in CLOSED]
+        self._known = {r.ref for r in rows}
+        self._listed = _listed(rows)
+        self._started = _by_proposal(rows)
+
+    def __call__(self, project: FactoryProject) -> Home:
+        """:returns: *project*'s home feature and the other features that list it."""
+        found = [ref for _at, _n, ref in self._listed.get(project.slug, [])]
+        home: str | None
+        source: Source
+        if project.feature and project.feature in self._known:
+            home, source = project.feature, "stored"
+        elif found:
+            home, source = found[0], "plan"
+        elif (origin := origin_proposal(project)) is not None and origin in self._started:
+            home, source = self._started[origin], "proposal"
+        else:
+            home, source = None, "none"
+        also = tuple(ref for ref in dict.fromkeys(found) if ref != home)
+        return Home(home, source, also)
+
+
 def homes(
     projects: Iterable[FactoryProject], initiatives: Iterable[FactoryInitiative]
 ) -> dict[str, Home]:
@@ -110,26 +136,8 @@ def homes(
 
     :returns: Slug -> :class:`Home`.
     """
-    rows = [r for r in initiatives if r.status not in CLOSED]
-    known = {r.ref for r in rows}
-    listed = _listed(rows)
-    started = by_proposal(rows)
-    out: dict[str, Home] = {}
-    for project in projects:
-        found = [ref for _at, _n, ref in listed.get(project.slug, [])]
-        home: str | None
-        source: Source
-        if project.feature and project.feature in known:
-            home, source = project.feature, "stored"
-        elif found:
-            home, source = found[0], "plan"
-        elif (origin := origin_proposal(project)) is not None and origin in started:
-            home, source = started[origin], "proposal"
-        else:
-            home, source = None, "none"
-        also = tuple(ref for ref in dict.fromkeys(found) if ref != home)
-        out[project.slug] = Home(home, source, also)
-    return out
+    find = HomeFinder(initiatives)
+    return {project.slug: find(project) for project in projects}
 
 
 _settled: dict[str, frozenset[tuple[str, ...]]] = {}
@@ -188,4 +196,4 @@ def backfill(
     return written
 
 
-__all__ = ["CLOSED", "Home", "Source", "backfill", "by_proposal", "homes", "origin_proposal"]
+__all__ = ["CLOSED", "Home", "HomeFinder", "Source", "backfill", "homes", "origin_proposal"]

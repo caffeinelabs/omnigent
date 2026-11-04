@@ -1306,8 +1306,9 @@ server's `{nodes: [{ref, title, items: [{key, label, before, after}]}],
 text}` (one line per changed item, then the sentence; `null` when nothing in
 the roll-up changes). The arguments
 the web sends: add `{title, col, depends_on?, because?, held_for?}`, start,
-pause and resume `{}`, auto `{auto_merge, autonomy?}` (the server also takes
-`base` and `repo`, and sends its effects as `{label, text}` lines), move `{to?}`, name
+pause and resume `{}`, auto `{auto_merge?, autonomy?, base?}` (what is left out
+stays as it is; `base` once the preview asks for it, `args.base`; the server
+also takes `repo`, and sends its effects as `{label, text}` lines), move `{to?}`, name
 `{title?, to?}`; a blocked form (Add child without a title, Team with
 nothing picked) asks no preview. The apply's one-line result is read from
 `message`, and its `undo.expires_at` is an ISO time.
@@ -2138,8 +2139,13 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   autonomy level for proposals about the projects under it. The nearest
   scoped ancestor decides, the node's own entry first; a project's ancestors
   are read the way the node tree files them (its home feature, that
-  feature's need, the need's goal), so a project filed under the node later
-  is covered too. A scope always names its base: the verb takes the node's
+  feature's need, the need's goal; a project with no home feature sits under
+  the opportunity of the proposal that created it), so a project filed under
+  the node later is covered too. A new project an agent proposes is decided
+  where applying files it: in the feature its plan extends
+  (`analysis.initiative.id`), else under the proposal's opportunity, so a
+  create that only cites the ask that started a feature is not decided at
+  that feature's level. A scope always names its base: the verb takes the node's
   projects' one base (or the factory's) but never `main`, `master` or a
   protected branch unless an owner names it (`args.base`); the preview lists
   what it covers now, its first effect and what it does not touch ("main
@@ -2150,7 +2156,11 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   the autonomy level where it differs from the factory's) on the node and
   everything under it. A version stores the lists under their own top-level
   keys (`auto_merge_scopes`, `autonomy_scopes`): a server from before them
-  drops only them on a rollback (nothing merges by a scope then).
+  drops only them on a rollback. Nothing merges by a scope then, but the
+  rollback widens where a scope was stricter: a `merge: false` scope is
+  dropped, so the factory-wide targets merge the PRs it kept for people, and
+  ops under a scope stricter than `autonomy.level` are decided at the looser
+  factory level.
 - **Merge gate.** `python -m omnigent.factory_merge <pr-url> [--admin-fallback] [--dry-run]`
   is a verdict tool for agents: the guard admits it only with `--dry-run`
   (see Invariants). Run by a human, it

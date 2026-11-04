@@ -345,18 +345,22 @@ def _norm_or_none(value: str | None) -> str | None:
         return None
 
 
-def auto_targets(app_state: Any, deps: FactoryDeps, factory_id: str) -> Targets:
+def auto_targets(
+    app_state: Any, deps: FactoryDeps, factory_id: str, *, lineage: bool = True
+) -> Targets:
     """
     The owner-set auto-merge targets the server merges into now, per subtree
     too: none while this server runs no merger (a person merges, as before).
     Synchronous; never raises.
+
+    :param lineage: Read where the projects sit (``False``: the caller attaches its own).
     """
     from omnigent.server.factory import auto_merge
 
     try:
         if app_state is None or not auto_merge.merger_on(app_state):
             return auto_merge.Targets()
-        return auto_merge.factory_targets(deps, factory_id)
+        return auto_merge.factory_targets(deps, factory_id, lineage=lineage)
     except Exception:  # noqa: BLE001 - a person merges: the waits say so
         return auto_merge.Targets()
 
