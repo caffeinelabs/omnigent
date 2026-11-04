@@ -14,11 +14,11 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
 from omnigent.entities import Conversation
-from omnigent.entities.factory import FactoryPr, FactoryProject
+from omnigent.entities.factory import FactoryEvent, FactoryPr, FactoryProject
 from omnigent.factory import (
     LABEL_ID,
     LABEL_PROJECT,
@@ -31,12 +31,15 @@ from omnigent.factory import (
 from omnigent.factory_gates import (
     DEMO_GATE,
     GATE_FAIL,
+    GATE_PASS,
+    GATE_PENDING,
+    GATE_SKIP,
     READY_GATES,
     GateReport,
     evaluate_snapshot,
     parse_time,
 )
-from omnigent.server.factory import events, live, nudge
+from omnigent.server.factory import events, live, nudge, ready_notices
 from omnigent.server.factory.auto_merge import (
     INCIDENT_RULES,
     factory_targets,
@@ -317,10 +320,10 @@ def _teardown(preview: Mapping[str, Any] | None, number: int) -> str:
     return f" · tear down preview p{number}"
 
 
-def ready_notice(
-    pr: FactoryPr, gate_count: int, *, for_lead: bool = False, auto_merge: bool = False
-) -> str:
+def ready_notice(pr: FactoryPr, gate_count: int, *, auto_merge: bool = False) -> str:
     """``[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 6/6 gates · head <sha7>]``.
+
+    Sent to the PR's lead once per head and gate states (see :mod:`.ready_notices`).
 
     :param auto_merge: The PR targets an owner-set auto-merge base: the
         server, not a person, merges it once its checks pass.
@@ -329,14 +332,6 @@ def ready_notice(
         f"[Factory notice · PR {pr.repo}#{pr.number} READY FOR HUMAN MERGE · "
         f"{gate_count}/{gate_count} gates · head {_sha7(pr.head_sha)}]"
     )
-    if for_lead:
-        project = pr.project_slug or "?"
-        who = (
-            "the factory's server merges it when its checks pass"
-            if auto_merge
-            else "the cockpit lists it for the human"
-        )
-        return f"{head} Info only (project {project}): {who}. {pr.url}"
     if auto_merge:
         return (
             f"{head} {pr.base_ref} is an auto-merge target: the factory's server merges it "
@@ -364,7 +359,7 @@ def base_notice(pr: FactoryPr, actual: str | None, expected: str | None) -> str:
     )
 
 
-def merged_notice(pr: FactoryPr, *, for_lead: bool = False) -> str:
+def merged_notice(pr: FactoryPr) -> str:
     """``[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url>]``.
 
     With a live preview the header ends ``· tear down preview p<n>``.
@@ -373,11 +368,6 @@ def merged_notice(pr: FactoryPr, *, for_lead: bool = False) -> str:
         f"[Factory notice · PR {pr.repo}#{pr.number} merged by @{pr.merged_by or 'unknown'} "
         f"as {_sha7(pr.merged_sha)} · {pr.url}"
     )
-    if for_lead:
-        project = pr.project_slug or "?"
-        return (
-            f"{head}] Info only (project {project}): its project lead runs the post-merge steps."
-        )
     teardown = _teardown(pr.preview, pr.number)
     base = pr.base_ref or DEFAULT_BASE_BRANCH
     env_step = f"env_keeper MERGED pr={pr.number} base={base}" + (
@@ -700,6 +690,54 @@ def _event(kind: str, summary: str, severity: str = "info", **data: Any) -> dict
     return {"kind": kind, "summary": summary, "severity": severity, "data": data}
 
 
+MERGEABLE_HELD_NOTE: Final = (
+    "mergeable=UNKNOWN: GitHub is recomputing it (the base moved); the last read, "
+    "MERGEABLE at this head, stands for one poll"
+)
+
+
+def hold_mergeable(row: FactoryPr, report: GateReport, head: str, state: str) -> GateReport:
+    """
+    Keep the ``mergeable`` gate passing through one ``UNKNOWN`` read at the same head.
+
+    GitHub recomputes mergeability after every move of the base and answers
+    ``UNKNOWN`` until it is done, so on a busy base a PR would turn not ready
+    and ready again on every merge. The previous read stands for one poll: a
+    second ``UNKNOWN`` in a row (or a conflict) holds the gate as before.
+    The server's merger reads ``MERGEABLE`` from GitHub itself before merging.
+
+    :param row: The stored PR before this refresh.
+    :param report: This refresh's gates.
+    :param head: The head GitHub reports now.
+    :param state: The PR state GitHub reports now.
+    :returns: *report*, or a copy whose ``mergeable`` gate passes with a note.
+    """
+    previous = row.gates if isinstance(row.gates, Mapping) else {}
+    evidence = previous.get("evidence")
+    if (
+        state != "open"
+        or not head
+        or row.state != "open"
+        or (row.head_sha or "").lower() != head
+        or report.gates.get("mergeable") != GATE_PENDING
+        or report.evidence.get("mergeable") != "UNKNOWN"
+        or previous.get("mergeable") != GATE_PASS
+        or not isinstance(evidence, Mapping)
+        or evidence.get("mergeable") != "MERGEABLE"
+    ):
+        return report
+    gates = {**report.gates, "mergeable": GATE_PASS}
+    reason = report.gate_reasons.get("mergeable")
+    return replace(
+        report,
+        gates=gates,
+        reasons=[r for r in report.reasons if r != reason],
+        gate_reasons={k: v for k, v in report.gate_reasons.items() if k != "mergeable"},
+        notes=[*report.notes, MERGEABLE_HELD_NOTE],
+        ready=all(s in (GATE_PASS, GATE_SKIP) for s in gates.values()),
+    )
+
+
 async def apply_refresh(
     app_state: Any,
     row: FactoryPr,
@@ -715,8 +753,9 @@ async def apply_refresh(
 
     Writes the gates (with evidence), head, draft/state, sizes and the
     merge/close facts; then emits ``gate.changed``, ``pr.ready`` /
-    ``pr.not_ready``, ``pr.merged``, ``pr.closed`` and ``pr.human_review``,
-    sends the PL (and the lead) their notices once per transition, opens a
+    ``pr.not_ready`` (``info``: no lead acts on it), ``pr.merged``,
+    ``pr.closed`` and ``pr.human_review``, sends the PL its notices once per
+    transition (READY once per head and gates), opens a
     ``pr_closed`` decision for a PR closed without merge, and re-derives the
     project's stage. A human change request on the head holds it not ready;
     a GitHub one lifts when its reviewer approves or it is dismissed on GitHub.
@@ -763,10 +802,11 @@ async def apply_refresh(
         # A PR opened against another branch than the project's base never reads ready.
         expected_base=project_base_branch(project) if project is not None else None,
     )
-    gates = report.to_json()
-    gates.setdefault(DEMO_GATE, None)
     head = str(pr_json.get("headRefOid") or "").lower()
     state = _STATES.get(str(pr_json.get("state") or "").upper(), row.state)
+    report = hold_mergeable(row, report, head, state)
+    gates = report.to_json()
+    gates.setdefault(DEMO_GATE, None)
     review = _changes_request(pr_json, row, head) if state == "open" else None
     lift = _github_lift(pr_json, row, head) if state == "open" and review is None else None
     human = review[0] if review is not None else row.human_review
@@ -878,6 +918,77 @@ def _announce_lift(pr: FactoryPr, lift: _Lift, target: str, out: _Outcome) -> No
     out.notices.append((target, notice))
 
 
+def _last_ready_event(deps: FactoryDeps, pr: FactoryPr) -> FactoryEvent | None:
+    """The PR's newest ``pr.ready`` event, or ``None`` (never raises)."""
+    try:
+        found = deps.factory_store.find_events(
+            pr.factory_id,
+            "pr.ready",
+            0,
+            pr_subject(pr.repo, pr.number),
+            limit=5,
+            newest_first=True,
+        )
+    except Exception:  # noqa: BLE001 - unreadable history: announce it, as before
+        _logger.warning("factory: could not read the ready events of %s", pr.id, exc_info=True)
+        return None
+    for event in found:
+        pr_id = (event.data or {}).get("pr_id")
+        if pr_id is None or norm_id(str(pr_id)) == pr.id:
+            return event
+    return None
+
+
+async def _announce_ready(
+    deps: FactoryDeps,
+    pr: FactoryPr,
+    report: GateReport,
+    auto: bool,
+    pl_target: str,
+    out: _Outcome,
+    *,
+    head_moved: bool,
+) -> None:
+    """
+    ``pr.ready`` for a PR that turned ready, and its lead's READY notice once per head and gates.
+
+    A lead that is not the PR's PL is never mailed: the ``pr.ready`` notice
+    reaches it in its next heartbeat's delta. See :mod:`.ready_notices`.
+
+    :param head_moved: The head differs from the stored row's (always news).
+    """
+    key = ready_notices.ready_key(pr.head_sha, pr.gates, auto=auto, human_review=pr.human_review)
+    last = await asyncio.to_thread(_last_ready_event, deps, pr)
+    plan = ready_notices.plan_ready(
+        key,
+        last.data if last is not None else None,
+        last.ts / 1000 if last is not None else None,
+        now=float(pr.last_polled_at or pr.updated_at),
+        reminder=ready_notices.reminder_s(),
+        head_moved=head_moved,
+    )
+    data = {"auto_merge": auto, "head_sha": pr.head_sha, **plan.event_data(key)}
+    if plan.kind == ready_notices.REPEAT:
+        summary = f"PR #{pr.number} ready again at the same head and gates (not re-announced)"
+        out.events.append(_event("pr.ready", summary, "info", **data))
+        return
+    if plan.kind == ready_notices.REMINDER:
+        summary = (
+            f"PR #{pr.number} still ready; the factory merges it when checks pass"
+            if auto
+            else f"PR #{pr.number} still ready for human merge"
+        )
+        out.events.append(_event("pr.ready", summary, "info", **data))
+        return
+    summary = (
+        f"PR #{pr.number} ready; the factory merges it when checks pass"
+        if auto
+        else f"PR #{pr.number} ready for human merge"
+    )
+    out.events.append(_event("pr.ready", summary, "notice", **data))
+    out.notices.append((pl_target, ready_notice(pr, len(report.gates), auto_merge=auto)))
+
+
 async def _announce(
     app_state: Any,
     deps: FactoryDeps,
@@ -915,23 +1026,23 @@ async def _announce(
         and merger_on(app_state)
         and await asyncio.to_thread(_auto_merge_target, deps, pr, project)
     )
-    if pr.ready and not row.ready:
-        summary = (
-            f"PR #{pr.number} ready; the factory merges it when checks pass"
-            if auto
-            else f"PR #{pr.number} ready for human merge"
-        )
-        out.events.append(_event("pr.ready", summary, "notice", auto_merge=auto))
-        count = len(report.gates)
-        out.notices.append((pl_target, ready_notice(pr, count, auto_merge=auto)))
-        if pl_id and pl_id != lead_id:
-            out.notices.append((lead_id, ready_notice(pr, count, for_lead=True, auto_merge=auto)))
+    # Ready again, or still ready at another head or other gate states: maybe news.
+    head_moved = (row.head_sha or "").lower() != (pr.head_sha or "").lower()
+    moved = pr.ready and (
+        not row.ready
+        or head_moved
+        or ready_notices.gate_states(row.gates) != ready_notices.gate_states(pr.gates)
+    )
+    if moved:
+        await _announce_ready(deps, pr, report, auto, pl_target, out, head_moved=head_moved)
     elif row.ready and not pr.ready and pr.state == "open":
         reasons = report.reasons[:3]
         if changes_requested_on_head(pr.human_review, pr.head_sha):
             reasons = [human_hold_reason(pr.human_review or {}), *reasons][:3]
+        # info: its PL reads it (every event of its project); a lead never acts on it,
+        # so a gate that dips and comes back leaves the lead's last word "ready".
         out.events.append(
-            _event("pr.not_ready", f"PR #{pr.number} no longer ready", "notice", reasons=reasons)
+            _event("pr.not_ready", f"PR #{pr.number} no longer ready", "info", reasons=reasons)
         )
     if pr.state == "merged" and row.merged_at is None:
         out.events.append(
@@ -944,9 +1055,8 @@ async def _announce(
                 merged_by=pr.merged_by,
             )
         )
+        # A lead that is not the PR's PL reads the merge in its next heartbeat's delta.
         out.notices.append((pl_target, merged_notice(pr)))
-        if pl_id and pl_id != lead_id:
-            out.notices.append((lead_id, merged_notice(pr, for_lead=True)))
     decision_ref = None
     if out.open_closed_decision:
         decision_ref = await _open_closed_decision(app_state, deps, pr, pl_id, out.closed_by)
@@ -1209,6 +1319,7 @@ async def refresh_now(app_state: Any, pr_id: str) -> bool:
 
 __all__ = [
     "BRANCH_RE",
+    "MERGEABLE_HELD_NOTE",
     "NUDGE_TOPIC",
     "FactoryScope",
     "active_factories",
@@ -1220,6 +1331,7 @@ __all__ = [
     "closed_notice",
     "files_gap",
     "head_checks",
+    "hold_mergeable",
     "human_hold_reason",
     "merged_notice",
     "normalize_pr",

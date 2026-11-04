@@ -59,6 +59,8 @@ LEDGER_DAYS: Final = 30
 REPLAY_S: Final = rules.EDGE_MAX_AGE_S
 EVENTS_PER_TICK: Final = 1000
 IDLE_SAMPLE_S: Final = 300.0
+IDLE_READY_SCAN: Final = 500
+"""Newest ``pr.ready`` rows the E9 idle check reads for one that is not a repeat."""
 DIGEST_LATE_S: Final = 12 * 3600
 LEDGER_PAGE: Final = 5000
 RECHECK_ROWS: Final = 1000
@@ -626,11 +628,19 @@ class Engine:
             return []
         if root.labels.get(LABEL_STATE) in ("paused", "stopped"):
             return []
+        since_ms = int((now - state[1]) * 1000)
+        others = [k for k in rules.PROGRESS_KINDS if k != "pr.ready"]
         progress = await asyncio.to_thread(
-            lambda: deps.factory_store.find_events(
-                root.id, list(rules.PROGRESS_KINDS), int((now - state[1]) * 1000), limit=1
-            )
+            lambda: deps.factory_store.find_events(root.id, others, since_ms, limit=1)
         )
+        if not progress:
+            # A PR ready again unchanged (or reminded) is not progress.
+            ready = await asyncio.to_thread(
+                lambda: deps.factory_store.find_events(
+                    root.id, "pr.ready", since_ms, limit=IDLE_READY_SCAN, newest_first=True
+                )
+            )
+            progress = [e for e in ready if rules.is_progress(e)]
         if progress:
             return []
         from omnigent.server.factory import detectors

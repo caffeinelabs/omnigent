@@ -56,8 +56,9 @@ STEPS: Final = (FIX_CI, REVIEW, PREVIEW, DEMO, ASK_SENTINEL, HANDOVER, WAIT_HUMA
 MAILED: Final = frozenset({REVIEW, PREVIEW, DEMO})
 """
 Steps the PL is mailed. ``FIX_CI`` and ``HANDOVER`` already reach it as the
-PR poller's ``checks failed`` and ``READY FOR HUMAN MERGE`` notices, and the
-lead gets the ready notice (``ASK_SENTINEL``).
+PR poller's ``checks failed`` and ``READY FOR HUMAN MERGE`` notices; the lead
+learns of a ready PR (``ASK_SENTINEL``) from the PL's ``READY FOR HUMAN MERGE``
+post and the ``pr.ready`` bullet of its heartbeat delta.
 """
 
 WAKE_COALESCE_S: Final = 120.0

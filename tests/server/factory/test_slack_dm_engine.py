@@ -858,6 +858,40 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
     assert f"<https://{DOMAIN}/v1/factory/prs/{pr.id}/preview|preview>" in text
 
 
+async def test_a_repeated_or_reminder_ready_pr_sends_no_dm(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    link(cockpit, "carol")
+    cockpit.store.upsert_project(
+        cockpit.fid, "api-version", title="API version", charter={"human_owner": "carol"}
+    )
+    for number, flag in ((9783, "repeat"), (9784, "reminder")):
+        row, _ = cockpit.store.upsert_pr(
+            cockpit.fid,
+            "sample-org/sample-app",
+            number,
+            project_slug="api-version",
+            ready=True,
+            ready_at=int(time.time()),
+            head_sha=f"{number}".ljust(40, "c"),
+        )
+        await events.emit(
+            cockpit.app.state,
+            cockpit.fid,
+            "pr.ready",
+            project="api-version",
+            subject=f"pr:sample-org/sample-app#{number}",
+            summary="ready",
+            data={"pr_id": row.id, flag: True},
+        )
+
+    await rig.tick()
+    await rig.tick(31)
+
+    # People are reminded by the digest's Waiting on you list instead.
+    assert fake_slack.dms_to("U0CAROL") == []
+
+
 async def test_pauses_budgets_and_warnings_reach_owners_but_not_the_actor(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:
@@ -1037,6 +1071,40 @@ async def test_idle_spend_tells_the_owners_once_a_day(
     [text] = fake_slack.texts_to("U0ALICE")
     assert "The factory is idling" in text and "$16.27 spent in the last 6 h" in text
     assert fake_slack.dms_to("U0CAROL") == []
+
+
+@pytest.mark.parametrize(
+    ("data", "idle"),
+    [({"repeat": True}, True), ({"reminder": True}, True), ({}, False)],
+)
+async def test_a_pr_ready_again_unchanged_is_not_progress(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack, data: dict[str, Any], idle: bool
+) -> None:
+    link(cockpit, "alice")
+    start = rig.clock.now
+    rig.engine.samples[snapshot.bare_id(cockpit.fid)] = deque(
+        [(start - 6 * H, 100.0), (start - 3 * H, 108.0)]
+    )
+    rig.cost = 116.27
+    for n in range(3):
+        await events.emit(
+            cockpit.app.state,
+            cockpit.fid,
+            "pr.ready",
+            severity="info" if data else "notice",
+            subject=f"pr:sample-org/sample-app#{9945 + n}",
+            summary="ready",
+            # The server merges these, so E5 sends nothing either way.
+            data={"pr_id": f"{n:032x}", "auto_merge": True, **data},
+        )
+
+    await rig.tick()
+    await rig.tick(31)
+    await rig.tick(engine_mod.IDLE_SAMPLE_S)
+    await rig.tick(31)
+
+    texts = fake_slack.texts_to("U0ALICE")
+    assert any("The factory is idling" in t for t in texts) is idle
 
 
 async def test_a_paused_factory_is_not_idling(

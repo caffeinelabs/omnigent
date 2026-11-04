@@ -7,9 +7,12 @@ description: Lead heartbeat sweep for the Omnigent software factory - run on eve
 
 The server sends `[Factory heartbeat #<n> · <iso>]` when you have been idle for
 `heartbeat_s`, often followed by `<k> changes since #<m>: • … • …`: the
-delta. PR readiness, merges and closes reach you as `[Factory notice · PR …]`
-messages and the cockpit shows the gates; the heartbeat never polls GitHub.
-Do the sweep in one turn.
+delta. A PR of another lead's project that turns ready or merges reaches you
+only in the delta (`• PR #<n> ready for human merge`, `• PR #<n> merged by
+@<login> …`): handle it like the READY or merged row of the playbook's dispatch
+table, once per head. Your own PRs' notices and closes still come as
+`[Factory notice · PR …]` messages, and the cockpit shows the gates; the
+heartbeat never polls GitHub. Do the sweep in one turn.
 
 1. Read `~/factory/ledger.md`. Handle only the items listed in the delta,
    plus anything the ledger marks as waiting on a deadline.

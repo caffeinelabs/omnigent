@@ -239,15 +239,45 @@ def test_relevance_rules(supervision: Supervision) -> None:
         _ev("decision.opened", from_id=lead.id, severity="warning", summary="its own question"),
         _ev("message.queued", to_id=pl.id, summary="still queued"),
         _ev(severity="warning", summary="a warning elsewhere"),
+        _ev(to_id=pl.id, project_slug="api-version", data={"repeat": True}, summary="again"),
+        _ev(severity="notice", project_slug="api-version", data={"reminder": True}, summary="r"),
+        _ev("decision.opened", severity="notice", data={"reminder": True}, summary="not a PR"),
     ]
 
+    # A ready repeat follows the not-ready that woke the PL; a reminder is for people.
     assert [e.summary for e in quiet_beats.relevant_events(pl, events)] == [
         "to the PL",
         "in its project",
+        "again",
     ]
+    # The flags only mean something on pr.ready events.
     assert [e.summary for e in quiet_beats.relevant_events(lead, events)] == [
-        "a warning elsewhere"
+        "a warning elsewhere",
+        "not a PR",
     ]
+
+
+def test_the_delta_keeps_every_prs_ready_or_merged_news() -> None:
+    def pr_ev(kind: str, n: int, summary: str) -> FactoryEvent:
+        return _ev(kind, subject=f"pr:sample-org/sample-app#{n}", summary=summary)
+
+    events = [
+        pr_ev("pr.ready", 1, "PR #1 ready for human merge"),
+        pr_ev("pr.merged", 2, "PR #2 merged by @lena"),
+        pr_ev("pr.ready", 3, "PR #3 ready for human merge"),
+        pr_ev("pr.not_ready", 3, "PR #3 no longer ready"),
+        *(_ev("task.done", summary=f"T-{n} done") for n in range(5)),
+    ]
+    delta = quiet_beats.delta_text(events, 7)
+    assert delta == (
+        "9 changes since #7: • PR #1 ready for human merge • PR #2 merged by @lena "
+        "• T-0 done • T-1 done • T-2 done • T-3 done • T-4 done"
+    )
+    # Without PR news it is the newest five.
+    tasks = [_ev("task.done", summary=f"T-{n} done") for n in range(7)]
+    assert quiet_beats.delta_text(tasks, 2) == (
+        "7 changes since #2: • T-2 done • T-3 done • T-4 done • T-5 done • T-6 done"
+    )
 
 
 def test_plan_beat_rules() -> None:
