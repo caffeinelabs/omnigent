@@ -289,6 +289,28 @@ describe("cockpit v3 · the steering routes (api.md §3.8, §4)", () => {
     ]);
     expect(p.effects).toEqual([{ label: "Burn", html: "<b>+$19/h</b>" }]);
     expect(p.warnings).toEqual([]);
+    // The S12 server's form: each node's changed items, then its sentence.
+    const s12 = normalizePreview({
+      preview_id: "p",
+      rollup_delta: {
+        nodes: [
+          {
+            ref: "I-1",
+            title: "Agent assistant",
+            items: [{ key: "projects", label: "Projects", before: 2, after: 3 }],
+          },
+        ],
+        text: "Agent assistant: one more project.",
+      } as never,
+      effects: ["Creates the project usage-report in First."] as never,
+      approver: "you",
+      warnings: [],
+    });
+    expect(s12.rollup_delta).toEqual([
+      { label: "Agent assistant · Projects", html: "2 → <b>3</b>" },
+      { label: "", html: "Agent assistant: one more project." },
+    ]);
+    expect(normalizePreview({ ...s12, rollup_delta: null as never }).rollup_delta).toEqual([]);
     expect(normalizeFind([{ ref: "C-16", title: "C-16", level: "item" }])).toEqual([
       { ref: "C-16", title: "C-16", level: "item", breadcrumb: [] },
     ]);

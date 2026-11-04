@@ -101,6 +101,7 @@ from omnigent.server.factory.chat import derived_id
 from omnigent.server.factory.context import FactoryDeps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.initiative_view import plan_of
+from omnigent.server.factory.notify import iso_utc
 from omnigent.server.factory.start import parse_body
 from omnigent.stores.factory_store import now_s
 
@@ -181,6 +182,10 @@ class Plan:
     :param authority: ``(level key, "create" | "move")``: the definition's
         ``structure.levels[key].authority`` that says who changes the nodes it
         changes (``None``: the core it runs checks its own, e.g. controls).
+    :param ready: ``False`` for a form's first read (Move or Name it with no
+        parent picked yet): it lists the ``parents`` and applies nothing.
+    :param extra: The preview fields cockpit v3 reads beyond ``api.md``
+        (``moved_from``, ``pulls_forward``, ``parents``, ``apply_label``).
     """
 
     verb: str
@@ -197,6 +202,8 @@ class Plan:
     undo: bool = True
     filed: str | None = None
     authority: tuple[str, str] | None = None
+    ready: bool = True
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -433,6 +440,47 @@ def _rollup(*nodes_: dict[str, Any], text: str) -> dict[str, Any] | None:
 
 def _children_count(tree: nodes.Tree, node: Any, *, later: bool = False) -> int:
     return sum(1 for k in tree.shown_children(node.ref) if not k.ghost and bool(k.later) == later)
+
+
+PARENTS_MAX: Final = 50
+
+
+def _parents(tree: nodes.Tree, kind: str) -> list[dict[str, str]]:
+    """The stored nodes of *kind* (``feature``, ``opportunity``) a node may go under."""
+    found = [
+        {"ref": n.ref, "title": n.title}
+        for n in tree.nodes.values()
+        if n.kind == kind and not n.implicit and not n.ghost and not n.later
+    ]
+    return found[:PARENTS_MAX]
+
+
+def _pick_parent(
+    tree: nodes.Tree, node: Any, verb: str, parents: list[dict[str, str]], what: str
+) -> Plan:
+    """A Move or Name it form's first read: the parents it may go under, nothing to apply."""
+
+    async def run() -> Applied:
+        raise _err(
+            400, "invalid_args", f"args.to (or a name) is required: {what}", field="args.to"
+        )
+
+    up = tree.level_name(tree.ladder[node.tree][max(0, tree.level_index(node) - 1)]).lower()
+    return Plan(
+        verb,
+        node.ref,
+        f"{'Name' if verb == 'name' else 'Move'} {node.title}",
+        {},
+        [f"parents:{_digest([p['ref'] for p in parents])}"],
+        [
+            f"{what.capitalize()}: only a {up} one level up is offered."
+            if parents
+            else f"No stored {up} to put it under yet."
+        ],
+        run,
+        ready=False,
+        extra={"parents": parents},
+    )
 
 
 # ── Filing a person's projects proposal, applied at once ───────
@@ -693,6 +741,13 @@ async def _plan_add_project(env: Env, tree: nodes.Tree, node: Any, args: dict[st
         warnings=warnings,
         filed="a projects proposal",
         authority=("project", "create"),
+        extra={
+            "pulls_forward": {"ref": held.ref, "title": held.title, "held_for": held.held_for},
+            "moved_from": {"ref": held.ref, "col": "later"},
+            "apply_label": "Pull forward and plan",
+        }
+        if held is not None
+        else {"apply_label": "Add and plan"},
     )
 
 
@@ -775,6 +830,7 @@ def _plan_hold(
             tree, node, add=[_ghost(tree, "project", _project_ref(slug), title, "later")]
         ),
         authority=("project", "create"),
+        extra={"apply_label": "Hold for later"},
     )
 
 
@@ -1066,6 +1122,7 @@ async def _plan_start(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any
         undo=patch is not None,
         filed="a projects proposal" if patch is not None else None,
         authority=("project", "create"),
+        extra={"moved_from": {"ref": node.ref, "col": node.col or 0}, "apply_label": "Start now"},
     )
 
 
@@ -1249,9 +1306,20 @@ async def _plan_pause_task(env: Env, tree: nodes.Tree, node: Any, verb: str) -> 
 
 
 async def _plan_move(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]) -> Plan:
-    to = _text(args, "to", 200, required=True)
     if node.implicit or node.ghost or node.later:
         raise _not_here("move", node, tree, "only a stored, planned node moves")
+    if node.level == "project" and node.tree == "product":
+        kind = "feature"
+    elif node.level == "feature" and node.kind == "feature":
+        kind = "opportunity"
+    else:
+        raise _not_here("move", node, tree, "a task moves with its lead (ask in its thread)")
+    parents = _parents(tree, kind)
+    to = _text(args, "to", 200)
+    if not to:
+        form = _pick_parent(tree, node, "move", parents, "pick the parent to move it under")
+        form.authority = (node.level, "move")
+        return form
     target = tree.lookup(to)
     if target is None:
         raise _err(404, "unknown_node", f"no node {to!r} in this factory", field="args.to")
@@ -1260,11 +1328,12 @@ async def _plan_move(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
         raise _wrong_level(node, target, tree)
     if node.parent == target.ref:
         raise _err(409, "nothing_to_do", f"{node.title} is already under {target.title}")
-    if node.level == "project" and node.tree == "product":
-        return await _plan_move_project(env, tree, node, target)
-    if node.level == "feature" and node.kind == "feature":
-        return await _plan_move_feature(env, tree, node, target)
-    raise _not_here("move", node, tree, "a task moves with its lead (ask in its thread)")
+    if kind == "feature":
+        plan = await _plan_move_project(env, tree, node, target)
+    else:
+        plan = await _plan_move_feature(env, tree, node, target)
+    plan.extra["parents"] = parents
+    return plan
 
 
 def _cost(tree: nodes.Tree, node: Any) -> float:
@@ -1536,6 +1605,7 @@ async def _plan_reorder(env: Env, tree: nodes.Tree, node: Any, args: dict[str, A
         warnings=[*plan.warnings, *warnings],
         filed="a projects proposal",
         authority=("project", "create"),
+        extra={"moved_from": {"ref": node.ref, "col": node.col or 0}},
     )
 
 
@@ -1691,11 +1761,11 @@ async def _plan_name(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
         raise _not_here("name", node, tree, "it is already a stored node")
     title = _text(args, "title", 80)
     to = _text(args, "to", 200)
-    if bool(title) == bool(to):
+    if title and to:
         raise _err(
             400,
             "invalid_args",
-            "send args.title (name it) or args.to (file it under)",
+            "send args.title (name it) or args.to (file it under), not both",
             field="args",
         )
     if node.level == "feature":
@@ -1706,6 +1776,13 @@ async def _plan_name(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
 
 
 async def _plan_name_feature(env: Env, tree: nodes.Tree, node: Any, title: str, to: str) -> Plan:
+    parents = _parents(tree, "feature")
+    if not title and not to:
+        form = _pick_parent(
+            tree, node, "name", parents, "name it, or pick the feature to file it under"
+        )
+        form.authority = ("feature", "create")
+        return form
     kids = [k for k in tree.real_children(node.ref) if k.level == "project"]
     slugs = [k.order for k in kids if k.order and k.order in tree.project_rows]
     before = {s: tree.project_rows[s].feature for s in slugs}
@@ -1753,6 +1830,7 @@ async def _plan_name_feature(env: Env, tree: nodes.Tree, node: Any, title: str, 
             warnings=list(checked.warnings),
             filed="a projects proposal",
             authority=("project", "move"),
+            extra={"parents": parents},
         )
     origin = node.ref.removeprefix("feature:").removeprefix("from-")
     from_proposal = node_refs.parse(origin)
@@ -1829,6 +1907,13 @@ async def _plan_name_need(env: Env, tree: nodes.Tree, node: Any, title: str, to:
     )
     if proposal is None:
         raise _not_here("name", node, tree, "only a need that comes from a proposal is named here")
+    parents = _parents(tree, "opportunity")
+    if not title and not to:
+        form = _pick_parent(
+            tree, node, "name", parents, "name it, or pick the need to file it under"
+        )
+        form.authority = ("need", "create")
+        return form
     before = proposal.opportunity
     deps, fid = env.deps, env.fid
     touched = [node.ref, f"{proposal.ref}:{before}"]
@@ -1858,6 +1943,7 @@ async def _plan_name_need(env: Env, tree: nodes.Tree, node: Any, title: str, to:
             [f"Files what {proposal.ref} planned under {target.title}."],
             run_to,
             authority=("feature", "move"),
+            extra={"parents": parents},
         )
 
     async def run() -> Applied:
@@ -2177,7 +2263,7 @@ def preview_view(env: Env, tree: nodes.Tree, plan: Plan, body: VerbIn) -> dict[s
         warnings.append(
             "The factory changed since this page loaded; this preview reads it as it is now."
         )
-    can = env.level >= plan.level
+    can = env.level >= plan.level and plan.ready
     return {
         "preview_id": preview_id(env.fid, plan),
         "verb": plan.verb,
@@ -2188,13 +2274,26 @@ def preview_view(env: Env, tree: nodes.Tree, plan: Plan, body: VerbIn) -> dict[s
         "rollup_delta": plan.rollup_delta,
         "columns_after": plan.columns_after,
         "approver": _approver(env, plan),
+        "approver_note": _approver_note(env, plan),
         "can_apply": can,
         "who_may": _who(plan.level),
         "undo": plan.undo,
         "filed": plan.filed,
         "warnings": warnings,
         "based_on": tree.version,
+        **plan.extra,
     }
+
+
+def _approver_note(env: Env, plan: Plan) -> str:
+    """Who approves, in words ("You, as owner. Applies now; Undo for 10 min.")."""
+    if not plan.ready:
+        return "Pick what it changes first; nothing applies yet."
+    if env.level < plan.level:
+        return f"{_who(plan.level).capitalize()} applies this; you can read what it would do."
+    who = "You, as owner" if env.level >= LEVEL_MANAGE else "You"
+    then = f"Undo for {UNDO_WINDOW_S // 60} min." if plan.undo else "It cannot be undone."
+    return f"{who}. Applies now; {then}"
 
 
 async def preview(env: Env, ref: str, payload: Any) -> dict[str, Any]:
@@ -2239,6 +2338,8 @@ async def apply(env: Env, ref: str, payload: Any) -> dict[str, Any]:
                 "apply that",
                 preview=preview_view(env, tree, plan, body),
             )
+        if not plan.ready:
+            raise _err(400, "invalid_args", "pick what it changes first", field="args.to")
         if env.level < plan.level:
             raise _err(403, "authority", f"{_who(plan.level)} applies this", who=_who(plan.level))
         applied = await plan.run()
@@ -2251,11 +2352,14 @@ async def apply(env: Env, ref: str, payload: Any) -> dict[str, Any]:
         page = fresh.page(node.parent or node_refs.PRODUCT, can_edit=True) if node else None
     return {
         "result": page,
-        "undo": undo,
+        "undo": {"token": undo["token"], "expires_at": iso_utc(undo["expires_at"])}
+        if undo
+        else None,
         "filed": applied.filed,
         "verb": plan.verb,
         "ref": plan.ref,
         "line": applied.line,
+        "message": applied.line,
     }
 
 
@@ -2365,7 +2469,14 @@ async def undo(env: Env, token: str) -> dict[str, Any]:
     )
     fresh = await env.tree(fresh=True)
     page = fresh.page(ref, can_edit=True)
-    return {"undone": True, "verb": data.get("verb"), "ref": ref, "line": line, "result": page}
+    return {
+        "undone": True,
+        "verb": data.get("verb"),
+        "ref": ref,
+        "line": line,
+        "message": f"Undone: {line}.",
+        "result": page,
+    }
 
 
 async def _undo(env: Env, record: Mapping[str, Any]) -> str:

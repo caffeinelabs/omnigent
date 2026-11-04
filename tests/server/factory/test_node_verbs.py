@@ -11,6 +11,7 @@ change it needs (``PR-9001 · met``). Every name is sample data.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -909,3 +910,54 @@ async def test_an_agents_reorder_after_a_sibling_says_why(cockpit: Cockpit) -> N
 
     assert (bare.status_code, error_code(bare)) == (400, "dependency_reason_required")
     assert said.status_code in (200, 201), said.text
+
+
+# ── What cockpit v3 reads beyond api.md (docs/FACTORY.md, the S12 contract) ──
+
+
+async def test_move_and_name_first_read_lists_the_parents(cockpit: Cockpit) -> None:
+    other = cockpit.store.create_initiative(
+        cockpit.fid, title="Second (sample)", ask="Another outcome", plan={"projects": []}
+    )
+
+    move = await _preview(cockpit, "panel", "move")
+    name = await _preview(cockpit, "feature:by-server", "name")
+    applied = await cockpit.post(
+        _url(cockpit, "panel", "apply"),
+        {"verb": "move", "args": {}, "preview_id": move["preview_id"]},
+    )
+    picked = await _preview(cockpit, "panel", "move", to=other.ref)
+
+    assert {p["ref"] for p in move["parents"]} == {"I-1", other.ref}
+    assert move["can_apply"] is False and "one level up" in move["effects"][0]
+    assert {p["ref"] for p in name["parents"]} == {"I-1", other.ref}
+    assert (applied.status_code, error_code(applied)) == (400, "invalid_args")
+    assert picked["can_apply"] is True and picked["parents"] == move["parents"]
+
+
+async def test_a_preview_says_who_approves_and_what_a_pull_forward_takes(
+    cockpit: Cockpit,
+) -> None:
+    pulled = await _preview(cockpit, "I-1", "add", title="ads sync")
+    start = await _preview(cockpit, "panel", "start")
+    reader = await _preview(cockpit, "I-1", "add", user="carol", title="Usage")
+    await _structure(cockpit, "levels.project.authority.approval", "owner")
+    owners = await _preview(cockpit, "I-1", "add", user="carol", title="Usage")
+
+    assert pulled["pulls_forward"]["ref"] == "ads-sync"
+    assert pulled["moved_from"] == {"ref": "ads-sync", "col": "later"}
+    assert pulled["apply_label"] == "Pull forward and plan"
+    assert pulled["approver_note"] == "You, as owner. Applies now; Undo for 10 min."
+    assert start["moved_from"] == {"ref": "panel", "col": 1}
+    assert reader["approver_note"].startswith("You. Applies now")
+    assert owners["approver_note"].startswith("An owner applies this")
+
+
+async def test_apply_answers_in_one_line_with_an_undo_until_a_time(cockpit: Cockpit) -> None:
+    applied = await _apply(cockpit, "core", await _preview(cockpit, "core", "add", title="Docs"))
+
+    undone = await _undo(cockpit, applied["undo"]["token"])
+
+    assert applied["message"] == applied["line"] and "Docs" in applied["message"]
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", applied["undo"]["expires_at"])
+    assert undone.json()["message"].startswith("Undone: ")

@@ -145,17 +145,46 @@ export const CLIENT_PREVIEW_FIELDS = [
   "apply_label",
 ] as const satisfies readonly (keyof VerbPreview)[];
 
+/** The S12 server's roll-up: each node's changed items, and one sentence for them all. */
+interface WireNodeDelta {
+  nodes: { ref?: string; title?: string; items?: ({ label?: string } & WireDelta)[] }[];
+  text?: string;
+}
+
+function isNodeDelta(value: unknown): value is WireNodeDelta {
+  return (
+    value != null && typeof value === "object" && Array.isArray((value as WireNodeDelta).nodes)
+  );
+}
+
+/** "Agent assistant · Projects: 2 → 3" per changed item, then the server's sentence. */
+function nodeDeltaLines(delta: WireNodeDelta): PreviewLine[] {
+  const lines = delta.nodes.flatMap((node) =>
+    (node.items ?? [])
+      .map((item) =>
+        deltaLine([node.title, item.label].filter(Boolean).join(" · "), {
+          before: item.before,
+          after: item.after,
+        }),
+      )
+      .filter((line): line is PreviewLine => line != null),
+  );
+  return delta.text ? [...lines, { label: "", html: escText(delta.text) }] : lines;
+}
+
 export function normalizePreview(preview: VerbPreview): VerbPreview {
   const wire = preview as unknown as Omit<VerbPreview, "effects" | "rollup_delta"> & {
     effects?: WirePreviewLine[];
-    rollup_delta?: WirePreviewLine[] | Record<string, unknown>;
+    rollup_delta?: WirePreviewLine[] | Record<string, unknown> | WireNodeDelta | null;
   };
   const delta = wire.rollup_delta;
   const rollup: PreviewLine[] = Array.isArray(delta)
     ? delta.map(lineOf)
-    : Object.entries(delta ?? {})
-        .map(([key, value]) => deltaLine(fieldWords(key), value))
-        .filter((line): line is PreviewLine => line != null);
+    : isNodeDelta(delta)
+      ? nodeDeltaLines(delta)
+      : Object.entries(delta ?? {})
+          .map(([key, value]) => deltaLine(fieldWords(key), value))
+          .filter((line): line is PreviewLine => line != null);
   return {
     ...preview,
     rollup_delta: rollup,

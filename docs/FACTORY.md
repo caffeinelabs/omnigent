@@ -1207,7 +1207,14 @@ otherwise), and the node page offers exactly the verbs served there. Who
 applies it follows `structure.levels[<level it changes>].authority`: empty
 seats mean nobody (422 `not_here`); an `owner` approval, or seats with
 `owner` but not `operator`, leave it to owners; otherwise editors apply it
-(403 `authority` with `who` when the viewer may not).
+(403 `authority` with `who` when the viewer may not). Beside `api.md`'s
+fields a preview carries what cockpit v3 reads (below): `title`,
+`approver_note`, `moved_from` (Start now, Order, a pull forward),
+`pulls_forward` and `apply_label` (Add child), and `parents` (Move and Name
+it: the stored nodes one level up). Move and Name it with no parent and no
+name are the form's first read: a 200 with `parents`, `can_apply: false` and
+nothing to apply (400 `invalid_args` if applied). Apply and Undo answer with
+a one-line `message`; Undo's `expires_at` is an ISO time.
 
 **Steering at the node (cockpit v3).** Every structural verb on a node page
 (Add child, Start now, Team, Autonomy & merge, Pause / Resume, Move, Name it /
@@ -1261,12 +1268,15 @@ by `nodeSteer.test.tsx`):
 - `apply_label`: Apply's words ("Pull forward and plan").
 
 `rollup_delta` and `effects` are read as `[{label, html}]` lines, as
-sentences, or (`rollup_delta`) as `{field: {before, after}}`. The arguments
+sentences, or (`rollup_delta`) as `{field: {before, after}}` or the S12
+server's `{nodes: [{ref, title, items: [{key, label, before, after}]}],
+text}` (one line per changed item, then the sentence; `null` when nothing in
+the roll-up changes). The arguments
 the web sends: add `{title, col, depends_on?, because?, held_for?}`, start,
 pause and resume `{}`, auto `{auto_merge}`, move `{to?}`, name
 `{title?, to?}`; a blocked form (Add child without a title, Team with
 nothing picked) asks no preview. The apply's one-line result is read from
-`message`.
+`message`, and its `undo.expires_at` is an ISO time.
 
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to
