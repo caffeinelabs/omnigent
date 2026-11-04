@@ -25,6 +25,7 @@ from typing import Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.factory import FactoryInitiative
+from omnigent.server.factory.charter import change_dependency
 
 DONE_SHOWN_S: Final = 3 * 86_400
 """A finished or closed initiative stays on Home and in the digest this long."""
@@ -100,6 +101,19 @@ def _dep_met(dep: Mapping[str, Any] | None, prs: Sequence[Mapping[str, Any]], mo
     return mode == "ready" and any(p.get("ready") for p in mine)
 
 
+def _item_met(
+    item: str,
+    by_slug: Mapping[str, Mapping[str, Any]],
+    prs: Sequence[Mapping[str, Any]],
+    mode: str,
+) -> bool:
+    """A ``depends_on`` item is met: its project's work is there, or its change merged."""
+    number = change_dependency(item)
+    if number is not None:
+        return any(p.get("number") == number and p.get("state") == "merged" for p in prs)
+    return _dep_met(by_slug.get(item), prs, mode)
+
+
 def _waiting_on(
     project: Mapping[str, Any],
     by_slug: Mapping[str, Mapping[str, Any]],
@@ -122,7 +136,7 @@ def _waiting_on(
     out: list[str] = []
     mode = str(project.get("depends_mode") or "merged")
     for dep in project.get("depends_on") or []:
-        if not _dep_met(by_slug.get(dep), prs, mode):
+        if not _item_met(dep, by_slug, prs, mode):
             out.append(dep)
     mine = _project_prs(prs, str(project.get("slug")))
     ready = [p for p in mine if p.get("state") == "open" and p.get("ready")]
@@ -268,8 +282,8 @@ def initiative_view(
                     {
                         "slug": dep,
                         "why": reasons.get(dep),
-                        "met": _dep_met(
-                            by_slug.get(dep), prs, str(view.get("depends_mode") or "merged")
+                        "met": _item_met(
+                            dep, by_slug, prs, str(view.get("depends_mode") or "merged")
                         ),
                     }
                     for dep in view.get("depends_on") or []

@@ -14,7 +14,7 @@ C-16, which waits on a person to apply it (D-45). Checked in the browser, at
 - Apply on the status line answers through ``POST /decisions/{id}/answer``
   and the page reads again: the line no longer ends at D-45 but at the lead
   who starts T-16, and Home's at the merges;
-- the chat column posts in the thread of the node it is on;
+- the chat column posts in the thread of the node it is on (a task in its own);
 - the keyboard walks from Home down to the task and back.
 """
 
@@ -196,11 +196,12 @@ def test_the_chat_column_posts_in_the_thread_of_the_node(
     cockpit = open_cockpit(1440, 900, "light")
     page = cockpit.page
     sent = {
-        # The product's thread is #factory; a project's is its own; a task chats
-        # in its project's thread and names itself (no per-node threads yet).
+        # The product's thread is #factory; a project's is its own; a task has a
+        # thread of its own (the server routes per-node threads: preflight
+        # node_threads), answered by its project's lead.
         "product": ("factory", "Where are we on the assistant? (e2e)"),
         factory.project: (f"project:{factory.project}", "What does T-16 wait on? (e2e)"),
-        factory.held_task: (f"project:{factory.project}", "Start this one after C-16. (e2e)"),
+        factory.held_task: (f"task:{factory.held_task}", "Start this one after C-16. (e2e)"),
     }
     for ref, (key, text) in sent.items():
         cockpit.open(ref)
@@ -211,8 +212,7 @@ def test_the_chat_column_posts_in_the_thread_of_the_node(
 
     for ref, (key, text) in sent.items():
         bodies = _thread(v3_server, factory, key)
-        named = f"About {factory.held_task} · Debit each turn: {text}"
-        assert (named if ref == factory.held_task else text) in bodies, (ref, key, bodies)
+        assert text in bodies, (ref, key, bodies)
     assert cockpit.errors == [], cockpit.errors
 
 

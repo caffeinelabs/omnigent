@@ -1184,12 +1184,6 @@
         "key": "p",
         "label": "Pause",
         "verb": "pause"
-      },
-      {
-        "enabled": true,
-        "key": "m",
-        "label": "Move",
-        "verb": "move"
       }
     ],
     "version": "bf03ded18b13b923"
@@ -4794,12 +4788,6 @@
         "key": "/",
         "label": "Talk",
         "verb": "talk"
-      },
-      {
-        "enabled": true,
-        "key": "a",
-        "label": "Add child",
-        "verb": "add"
       }
     ],
     "version": "bf03ded18b13b923"

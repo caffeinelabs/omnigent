@@ -86,6 +86,7 @@ from omnigent.tools.builtins.factory import (
     SYS_FACTORY_DEMO,
     SYS_FACTORY_ENV,
     SYS_FACTORY_INSIGHTS,
+    SYS_FACTORY_NODE,
     SYS_FACTORY_PR,
     SYS_FACTORY_PROJECT,
     SYS_FACTORY_PROPOSE,
@@ -205,6 +206,8 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "invalid_definition",
         "unknown_rule",
         "not_allowed",
+        "unknown_node",
+        "bad_cursor",
     }
 )
 # The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
@@ -457,6 +460,8 @@ async def execute_factory_tool(
         return await _task(args, server_client=server_client, caller=conversation_id)
     if tool_name == SYS_FACTORY_CHAT:
         return await _post_chat(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_NODE:
+        return await _read_node(args, server_client=server_client, caller=conversation_id)
     if tool_name in _LEARNING_TOOLS:
         return await _learning(
             tool_name, args, server_client=server_client, caller=conversation_id
@@ -2181,6 +2186,59 @@ async def _post_chat(args: _JsonObject, *, server_client: httpx.AsyncClient, cal
     return await _passthrough(
         server_client, "POST", "/v1/factory/agent/chat", tool_name=tool, body=body
     )
+
+
+_NODE_REF_MAX: Final = 200
+_NODE_PATH: Final = "/v1/factory/agent/node"
+
+
+def _route_missing(body: object) -> bool:
+    """
+    Whether a 404 says the route is missing (an older server), not that the node is:
+    FastAPI's bare ``{"detail": "Not Found"}``, or a server with the web UI mounted
+    answering ``{"error": {"code": "not_found"}}`` (a node that is missing is
+    ``unknown_node``).
+    """
+    if not isinstance(body, dict):
+        return False
+    if body.get("detail") == "Not Found":
+        return True
+    error = body.get("error")
+    return isinstance(error, dict) and error.get("code") == "not_found"
+
+
+async def _read_node(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """
+    ``sys_factory_node(op="read", ref)`` → ``GET /v1/factory/agent/node``.
+
+    A server from before node pages has no such route: its plain 404 becomes
+    ``not_served``, so the agent goes on with the header its Room messages carry.
+    """
+    tool = SYS_FACTORY_NODE
+    op = args.get("op", "read")
+    if op != "read":
+        return _error(f"{tool} 'op' must be 'read'")
+    ref = args.get("ref")
+    if not isinstance(ref, str) or not ref.strip() or len(ref) > _NODE_REF_MAX:
+        return _error(f"{tool} requires a 'ref', e.g. 'product', 'I-1', a project slug or 'T-16'")
+    params: dict[str, str | int] = {"from_session_id": caller, "ref": ref.strip()}
+    page = args.get("children_page")
+    if page is not None:
+        if not isinstance(page, str) or not page.strip():
+            return _error(f"{tool} 'children_page' must be the children.next of a previous read")
+        params["children_page"] = page.strip()
+    resp = await _request(server_client, "GET", _NODE_PATH, tool_name=tool, params=params)
+    if isinstance(resp, str):
+        return resp
+    body = _response_body(resp)
+    if resp.status_code == 404 and _route_missing(body):
+        return _error(
+            "not_served",
+            message="this server has no node pages yet; use the header in your Room messages",
+        )
+    if resp.status_code >= 400:
+        return json.dumps(_error_payload(resp.status_code, body, resp.text, tool))
+    return json.dumps(body) if body is not None else json.dumps({"result": resp.text})
 
 
 _LEARNING_TOOLS: Final = frozenset(

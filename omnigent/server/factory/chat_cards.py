@@ -28,6 +28,18 @@ findings and retros always)                     (findings: ``improvements``)
 row's id derives from the event id and thread, so a repeated event delivery
 writes nothing twice.
 
+Cards follow the node they are about (cockpit v3's threads per node,
+:func:`node_thread_key`):
+
+- a decision about a task, a need, a feature or a study (its subject names
+  one) is also carded in that node's own thread (``task:T-16`` …), the only
+  node thread it lands in; the thread above keeps its card, as before;
+- an alarm the server closed (:mod:`.alarms`) about a task (or another node
+  with a thread of its own) is a ``closed_alarm`` card in that node's thread,
+  with what it said, why it closed and the real ask;
+- the cockpit's own cards (``why``, ``offer``, ``preview_applied``) are posted
+  by :func:`post_node_card`, only in their node's thread.
+
 Two kinds update a row in place instead of adding one, so a long-running
 incident or a busy base does not bury what people and agents say:
 
@@ -64,9 +76,10 @@ from omnigent.factory import (
     ISSUE_SEVERITIES,
     THREAD_FACTORY,
     THREAD_IMPROVEMENTS,
+    THREAD_PR_PREFIX,
     thread_kind,
 )
-from omnigent.server.factory import events, live
+from omnigent.server.factory import alarms, events, live, node_refs
 from omnigent.server.factory.actor import (
     decision_ref,
     pr_ref,
@@ -124,6 +137,11 @@ BASE_SCAN: Final = 60
 _EVENTS_KEPT: Final = 10
 """Event ids a live card remembers, so a repeated delivery changes nothing."""
 _LOCKS_ATTR: Final = "factory_room_card_locks"
+NODE_CARD_TYPES: Final = frozenset({"why", "closed_alarm", "offer", "preview_applied"})
+"""Cards about one node, posted only in that node's thread (:func:`post_node_card`)."""
+NODE_THREAD_KINDS: Final = frozenset({"need", "feature", "study", "task"})
+"""Thread kinds only the node chat reads (the Room's list never shows them)."""
+CLOSED_KINDS: Final = frozenset({"decision.answered", "decision.expired"})
 
 
 @dataclass(frozen=True)
@@ -186,7 +204,132 @@ def _decision_rows(deps: FactoryDeps, event: Any) -> list[CardRow]:
     thread = decision.thread if decision.thread and thread_kind(decision.thread) else None
     thread = thread or _project_or_factory(slug)
     ref = decision_ref(decision.number)
-    return [CardRow(thread, event.summary, _card("decision", ref, decision.id))]
+    rows = [CardRow(thread, event.summary, _card("decision", ref, decision.id))]
+    closed = _closed_alarm_rows(deps, event, {thread}) if event.kind in CLOSED_KINDS else []
+    node = subject_node(deps, event.factory_id, decision.subject)
+    own = node_thread_key(deps, event.factory_id, node) if node else None
+    if (
+        own
+        and own != thread
+        and thread_kind(own) in NODE_THREAD_KINDS
+        and own not in {r.thread for r in closed}
+    ):
+        rows.append(CardRow(own, event.summary, _card("decision", ref, decision.id)))
+    return rows + closed
+
+
+def _closed_alarm_rows(deps: FactoryDeps, event: Any, carded: set[str]) -> list[CardRow]:
+    """
+    A ``closed_alarm`` card in the thread of the node an alarm the server closed
+    was about (in place of its decision's card there), unless that thread is the
+    Room's own one that carries the decision card.
+    """
+    found = alarms.read([event])
+    if not found or not found[0].about:
+        return []
+    alarm = found[0]
+    thread = node_thread_key(deps, event.factory_id, alarm.about)
+    if thread is None or thread in carded or thread_kind(thread) not in NODE_THREAD_KINDS:
+        return []
+    real = alarm.real_ask
+    if real and alarm.real_ask_verb:
+        real = f"{real} ({alarm.real_ask_verb})"
+    meta = {"kind": "closed_alarm", "was": alarm.was, "cause": alarm.cause, "real_ask": real}
+    card = {
+        **_card("closed_alarm", alarm.ref, (event.data or {}).get("decision_id")),
+        "meta": meta,
+    }
+    return [CardRow(thread, f"Closed by the server: {alarm.ref}. {alarm.cause}", card)]
+
+
+def subject_node(deps: FactoryDeps, factory_id: str, subject: str | None) -> str | None:
+    """
+    The node a decision's subject names (``task:T-16``, ``task:<slug>/<key>``,
+    ``opportunity:O-3``, ``initiative:I-1`` …), or ``None`` (synchronous).
+    """
+    text = (subject or "").strip()
+    head, sep, rest = text.partition(":")
+    if sep and head.lower() == "task" and "/" in rest:
+        slug, _s, key = rest.partition("/")
+        task = deps.factory_store.get_task_by_key(factory_id, slug, key)
+        return task.ref if task is not None else None
+    return node_refs.normalize(text) if text else None
+
+
+def node_thread_key(deps: FactoryDeps, factory_id: str, ref: str | None) -> str | None:
+    """
+    The thread of the node *ref* (synchronous): ``factory``, ``project:<slug>``,
+    ``pr:<id>``, ``task:T-16`` …; a run's is its task's. ``None`` for a node with
+    no thread of its own here (a commit, a rule, a member).
+    """
+    parsed = node_refs.parse(node_refs.normalize(ref) or "") if ref else None
+    if parsed is None:
+        return None
+    store = deps.factory_store
+    if parsed.kind == "run":
+        for task in store.list_tasks(factory_id):
+            if any(_bare(s) == parsed.id for s in task.session_ids or []):
+                return node_refs.thread_key(task.ref)
+        return None
+    if parsed.kind == "pr":
+        found = store.list_prs(factory_id, number=int(parsed.id))
+        return f"{THREAD_PR_PREFIX}{norm_id(found[0].id)}" if len(found) == 1 else None
+    return node_refs.thread_key(parsed.text)
+
+
+def _bare(value: str) -> str | None:
+    try:
+        return norm_id(value)
+    except ValueError:
+        return None
+
+
+async def post_node_card(
+    app_state: Any,
+    factory_id: str,
+    ref: str,
+    card_type: str,
+    body: str,
+    *,
+    meta: Mapping[str, Any] | None = None,
+    row_id: str | None = None,
+    message_id: str | None = None,
+) -> FactoryChatMessage | None:
+    """
+    Post one of the cockpit's node cards (:data:`NODE_CARD_TYPES`) in the thread
+    of the node *ref*, and only there. Never raises.
+
+    :param body: The card's line (what a reader without the card sees).
+    :param meta: What the card renders from (``{kind: card_type, …}``).
+    :param message_id: A stable id, so posting it twice adds nothing.
+    :returns: The row, or ``None`` when the node has no thread or it failed.
+    """
+    from omnigent.server.factory import chat
+    from omnigent.server.factory.context import factory_deps
+
+    if card_type not in NODE_CARD_TYPES:
+        raise ValueError(f"not a node card: {card_type!r}")
+    try:
+        deps = factory_deps(app_state)
+        thread = await asyncio.to_thread(node_thread_key, deps, factory_id, ref)
+        if thread is None:
+            return None
+        card: dict[str, Any] = {**_card(card_type, ref, row_id)}
+        if meta:
+            card["meta"] = {**dict(meta), "kind": card_type}
+        return await chat.post_system(
+            app_state,
+            factory_id,
+            thread,
+            body,
+            card=card,
+            message_id=message_id or chat.derived_id(factory_id, card_type, ref, body),
+        )
+    except Exception:  # noqa: BLE001 - a card is a mirror; what it shows is stored elsewhere
+        _logger.warning(
+            "factory room: could not post a %s card for %s", card_type, ref, exc_info=True
+        )
+        return None
 
 
 def _proposal_rows(deps: FactoryDeps, event: Any) -> list[CardRow]:
@@ -236,7 +379,7 @@ def _issue_rows(event: Any) -> list[CardRow]:
 
 _CARD_KINDS: Final = (
     DECISION_KINDS | PR_KINDS | LOOP_KINDS | FACTORY_LINE_KINDS | PROJECT_LINE_KINDS | ISSUE_KINDS
-) | {"demo.published"}
+) | {"demo.published", "decision.expired"}
 _CARD_PREFIXES: Final = ("proposal.", "control.", "people.")
 
 
@@ -258,6 +401,9 @@ def plan_cards(deps: FactoryDeps, event: Any) -> list[CardRow]:
         return []
     if kind in DECISION_KINDS:
         return _decision_rows(deps, event)
+    if kind == "decision.expired":
+        # Not carded itself: only an alarm the server closed shows, in its node's thread.
+        return _closed_alarm_rows(deps, event, set())
     if kind == PROPOSAL_LINE_KIND:
         # One quiet line in its thread, not another copy of the proposal card.
         return [
@@ -621,6 +767,7 @@ __all__ = [
     "DECISION_KINDS",
     "ISSUE_KINDS",
     "LOOP_KINDS",
+    "NODE_CARD_TYPES",
     "PROPOSAL_LINE_KIND",
     "PR_KINDS",
     "REPOST_AFTER_S",
@@ -632,9 +779,12 @@ __all__ = [
     "joinable_line",
     "live_issue_card",
     "mirror_event",
+    "node_thread_key",
     "plan_cards",
+    "post_node_card",
     "register",
     "repost_reason",
     "seen_before",
     "shows",
+    "subject_node",
 ]

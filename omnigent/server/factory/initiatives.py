@@ -143,10 +143,13 @@ class InitiativeIn(_In):
     ``analysis.initiative`` of a projects proposal.
 
     ``none`` opts out (the new projects are separate outcomes); ``id`` extends
-    an open initiative; otherwise it starts one.
+    an open initiative (as its next wave; with ``same_wave``, in the wave it builds
+    now, so its planned later waves stay ahead: a person's add from the cockpit);
+    otherwise it starts one.
     """
 
     id: str | None = Field(None, max_length=16)
+    same_wave: bool = False
     none: str | None = Field(None, max_length=REASON_MAX)
     title: str | None = Field(None, max_length=TITLE_MAX)
     outcome: str | None = Field(None, max_length=OUTCOME_MAX)
@@ -646,6 +649,24 @@ def _stamp(
     return stored or project
 
 
+def _pulled_forward(waves: Sequence[Any], slugs: Sequence[str], built: int) -> list[Any]:
+    """
+    *waves* without *slugs* (added now, so no later wave holds them any more); a
+    later wave left with nothing in it goes too, so nothing is left "to come".
+    """
+    out: list[Any] = []
+    for wave in waves:
+        if not isinstance(wave, Mapping) or not any(
+            s in (wave.get("projects") or []) for s in slugs
+        ):
+            out.append(wave)
+            continue
+        left = [p for p in wave.get("projects") or [] if p not in slugs]
+        if left or int(wave.get("n") or 0) <= built:
+            out.append({**wave, "projects": left})
+    return out
+
+
 def _apply_sync(
     deps: FactoryDeps,
     factory_id: str,
@@ -690,8 +711,11 @@ def _apply_sync(
 
         def change(current: FactoryInitiative) -> dict[str, Any]:
             plan = plan_of(current)
-            wave = max((int(h.get("wave") or 1) for h in plan["history"]), default=0) + 1
+            built = max((int(h.get("wave") or 1) for h in plan["history"]), default=0)
+            wave = max(built, 1) if body.same_wave else built + 1
             holder["wave"] = wave
+            if body.same_wave:
+                plan["waves"] = _pulled_forward(plan["waves"], slugs, wave)
             entry: dict[str, Any] = {"wave": wave, "proposal": row.ref, "added": slugs, "at": now}
             if body.acceptance:
                 entry["acceptance_before"] = plan["acceptance"]

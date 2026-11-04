@@ -57,6 +57,7 @@ from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_OWNER
 from omnigent.server.factory import chat, control, events, gating
 from omnigent.server.factory.charter import (
     BRANCH_RE,
+    CHANGE_DEP_RE,
     DEFAULT_BASE_BRANCH,
     DEFAULT_BUDGET_ICS,
     MAX_PREVIEW_SLOTS,
@@ -95,7 +96,8 @@ _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 DEPENDS_WHY_MAX = 200
 """A dependency's reason: one line, at most this long."""
 _DEP_WITH_WHY_RE = re.compile(
-    r"^(?P<slug>[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?)\s*(?::|—|–|\s-{1,2}\s)\s*(?P<why>\S.*)$"
+    r"^(?P<slug>[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?|PR-[1-9][0-9]{0,8})"
+    r"\s*(?::|—|–|\s-{1,2}\s)\s*(?P<why>\S.*)$"
 )
 
 
@@ -220,8 +222,10 @@ class _CharterFields(_Body):
             return None
         out: list[str] = []
         for slug in _check_items(value, "depends_on item", 48):
-            if not _SLUG_RE.match(slug):
-                raise ValueError(f"depends_on item {slug!r} is not a project slug")
+            if not _SLUG_RE.match(slug) and not CHANGE_DEP_RE.match(slug):
+                raise ValueError(
+                    f"depends_on item {slug!r} is not a project slug or a change (PR-<n>)"
+                )
             if slug not in out:
                 out.append(slug)
         return out
@@ -233,8 +237,8 @@ class _CharterFields(_Body):
             return None
         out: dict[str, str] = {}
         for slug, why in value.items():
-            if not _SLUG_RE.match(str(slug)):
-                raise ValueError(f"depends_why key {slug!r} is not a project slug")
+            if not _SLUG_RE.match(str(slug)) and not CHANGE_DEP_RE.match(str(slug)):
+                raise ValueError(f"depends_why key {slug!r} is not a project slug or a change")
             text = " ".join(str(why or "").split())
             if len(text) > DEPENDS_WHY_MAX:
                 raise ValueError(f"each depends_why reason is at most {DEPENDS_WHY_MAX} chars")

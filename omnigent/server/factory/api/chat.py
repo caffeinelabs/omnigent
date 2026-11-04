@@ -2,8 +2,11 @@
 
 People (user JWT; writes carry :data:`~omnigent.server.factory.origin.HUMAN_ORIGIN`):
 
-- ``GET /v1/factory/factories/{fid}/chat/threads``: every thread with its
-  responder, last ``seq`` and the caller's unread count. READ.
+- ``GET /v1/factory/factories/{fid}/chat/threads?nodes=``: every thread with its
+  responder, last ``seq``, the caller's unread count and ``node_ref`` (the node
+  it is about: ``product``, a project's slug, ``PR-<n>``, ``T-16`` …; ``null``
+  for ``#discovery``). ``nodes=1`` adds the node threads (``need:``,
+  ``feature:``, ``study:``, ``task:``) that have messages. READ.
 - ``GET /v1/factory/factories/{fid}/chat?thread=&before_seq=&after_seq=&limit=``:
   a page of messages, oldest first. READ.
 
@@ -41,9 +44,10 @@ from omnigent.factory import (
     THREAD_DISCOVERY,
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
+    thread_kind,
 )
 from omnigent.server.auth import LEVEL_EDIT, RESERVED_USER_LOCAL, runner_origin
-from omnigent.server.factory import chat, chat_cards, control, live
+from omnigent.server.factory import chat, chat_cards, chat_routing, control, live, node_refs
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
@@ -116,7 +120,7 @@ async def _hidden_projects(
     )
 
 
-def _thread_project(deps: FactoryDeps, key: str) -> str | None:
+def _thread_project(deps: FactoryDeps, factory_id: str, key: str) -> str | None:
     if key.startswith(THREAD_PROJECT_PREFIX):
         return key[len(THREAD_PROJECT_PREFIX) :]
     if key.startswith(THREAD_PR_PREFIX):
@@ -125,16 +129,48 @@ def _thread_project(deps: FactoryDeps, key: str) -> str | None:
         except ValueError:
             return None
         return pr.project_slug if pr is not None else None
+    if thread_kind(key) == "task":
+        return _task_thread_project(deps, factory_id, key)
     return None
 
 
-def _visible(deps: FactoryDeps, rows: Sequence[Any], hidden: frozenset[str]) -> list[Any]:
+def _task_thread_project(deps: FactoryDeps, factory_id: str, key: str) -> str | None:
+    """A task thread's project (``task:T-16``; a PR's implicit task's: its PR's project)."""
+    ref = node_refs.parse(node_refs.thread_ref(key) or "")
+    store = deps.factory_store
+    if ref is not None and ref.kind == "task":
+        task = store.get_task_by_number(factory_id, int(ref.id))
+        return task.project_slug if task is not None else None
+    if ref is not None and ref.kind == "adhoc":
+        try:
+            pr = store.get_pr(ref.id)
+        except ValueError:
+            return None
+        return pr.project_slug if pr is not None else None
+    return None
+
+
+def _visible(
+    deps: FactoryDeps, factory_id: str, rows: Sequence[Any], hidden: frozenset[str]
+) -> list[Any]:
     """:returns: *rows* without those of hidden projects' threads."""
-    projects = {key: _thread_project(deps, key) for key in {r.thread for r in rows}}
+    keys = {r.thread for r in rows}
+    projects = {key: _thread_project(deps, factory_id, key) for key in keys}
     return [r for r in rows if projects[r.thread] not in hidden]
 
 
 # ── Threads ────────────────────────────────────────────────────
+
+
+def _node_ref(thread: chat.Thread) -> str | None:
+    """The node a thread is about (``node_ref``)."""
+    if thread.node:
+        return thread.node
+    if thread.pr is not None:
+        return f"PR-{thread.pr.number}"
+    if thread.kind == "project" and thread.project:
+        return node_refs.Ref("project", thread.project).text
+    return node_refs.thread_ref(thread.key)
 
 
 def thread_views(
@@ -142,11 +178,15 @@ def thread_views(
     root: Conversation,
     user_id: str | None,
     hidden: frozenset[str] = frozenset(),
+    *,
+    nodes: bool = False,
 ) -> list[dict]:
     """
     Every thread of the Room: the fixed ones, one per project, and each PR thread with messages.
 
-    :param hidden: Project slugs left out, with their PR threads.
+    :param hidden: Project slugs left out, with their PR threads (and their tasks' threads).
+    :param nodes: Also the node threads (``need:``, ``feature:``, ``study:``, ``task:``)
+        that have messages, newest first, after the PRs.
     :returns: ``ThreadView`` JSON, fixed threads first, then projects, then PRs (newest first).
     """
     store = deps.factory_store
@@ -159,6 +199,10 @@ def thread_views(
     pr_keys = [k for k in stats if k.startswith(THREAD_PR_PREFIX)]
     pr_keys.sort(key=lambda k: -stats[k].last_seq)
     keys += [k for k in pr_keys if k not in keys]
+    if nodes:
+        node_keys = [k for k in stats if thread_kind(k) in chat_routing.NODE_KINDS]
+        node_keys.sort(key=lambda k: -stats[k].last_seq)
+        keys += [k for k in node_keys if k not in keys]
     threads: list[chat.Thread] = []
     for key in keys:
         try:
@@ -181,6 +225,7 @@ def thread_views(
                 "project_slug": thread.project,
                 "pr_id": norm_id(thread.pr.id) if thread.pr is not None else None,
                 "pr_number": thread.pr.number if thread.pr is not None else None,
+                "node_ref": _node_ref(thread),
                 "responder_session_id": norm_id(answer.session_id) if answer else None,
                 "responder_title": answer.name if answer else None,
                 "last_seq": stat.last_seq if stat else 0,
@@ -214,13 +259,18 @@ def _unread(
 
 
 @router.get("/factories/{factory_id}/chat/threads", response_model=None)
-async def list_threads(request: Request, factory_id: str) -> dict[str, Any] | JSONResponse:
-    """The Room's threads with responders and unread counts."""
+async def list_threads(
+    request: Request, factory_id: str, nodes: bool = Query(False)
+) -> dict[str, Any] | JSONResponse:
+    """The Room's threads with responders, unread counts and the node each is about."""
 
     async def run() -> dict[str, Any]:
         deps, user_id, root = await _root(request, factory_id)
         hidden = await _hidden_projects(request, deps, root, user_id)
-        return {"data": await asyncio.to_thread(thread_views, deps, root, user_id, hidden)}
+        views = await asyncio.to_thread(
+            lambda: thread_views(deps, root, user_id, hidden, nodes=nodes)
+        )
+        return {"data": views}
 
     return await _guard(run)
 
@@ -253,7 +303,7 @@ async def list_messages(
         more = len(rows) > limit
         rows = rows[:limit] if after_seq is not None else rows[-limit:]
         if hidden and key is None:
-            rows = await asyncio.to_thread(_visible, deps, rows, hidden)
+            rows = await asyncio.to_thread(_visible, deps, root.id, rows, hidden)
         views = await asyncio.to_thread(chat.message_views, deps, rows)
         return {"data": views, "has_more": more, "thread": key}
 

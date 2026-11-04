@@ -78,7 +78,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import alarms, features, levels, node_refs, node_status, waits
 from omnigent.server.factory.base import DeployedHead, contains, same_commit
-from omnigent.server.factory.charter import normalize_charter, project_kind
+from omnigent.server.factory.charter import change_dependency, normalize_charter, project_kind
 from omnigent.server.factory.definition_blocks import (
     FACTORY_TREE,
     KIND_IS_LEVEL,
@@ -494,6 +494,11 @@ def _who(value: str | None) -> str:
     return (_WHO_RE.sub("-", head).strip("-") or "unknown")[:40]
 
 
+def creator_words(value: str | None) -> str:
+    """The ``<who>`` of the implicit ``by-<who>`` parents of what *value* started."""
+    return _who(value)
+
+
 def _project_ref(slug: str) -> str:
     return node_refs.Ref("project", slug).text
 
@@ -762,6 +767,8 @@ class Tree:
                 need = found
             elif message and asker.get("kind") == "human":
                 need = self._ask_need(message, row.ask, str(asker.get("name") or ""), None)
+            elif (named := self._named_need(plan.get("need"))) is not None:
+                need = named
             else:
                 origin = row.created_by if (row.created_by or "").startswith("C-") else row.ref
                 need = self._proposal_need(self._proposals.get(origin or ""), str(origin))
@@ -783,6 +790,21 @@ class Tree:
             node.acceptance = _acceptance(row)
             node.steps = _steps(row, node.acceptance)
             node.surfaces = tuple(str(s) for s in plan.get("user_facing") or [])
+
+    def _named_need(self, ref: Any) -> str | None:
+        """
+        The implicit need a person named a feature under (``plan.need``): the need of
+        work started without a proposal keeps its place once that work is named.
+        """
+        parsed = node_refs.parse(ref) if isinstance(ref, str) else None
+        if parsed is None or parsed.kind != "need" or not parsed.id.startswith("by-"):
+            return None
+        who = parsed.id.removeprefix("by-")
+        return self._implicit_need(
+            parsed.id,
+            f"Started by {who}",
+            "Implicit: work started without a proposal. Name it, or file it under a need.",
+        )
 
     def _feature_of(self, project: FactoryProject, home: features.Home) -> str:
         """The project's feature: its home initiative, else the implicit one of its origin."""
@@ -1484,6 +1506,10 @@ class Tree:
         if key not in self._memo:
             self._memo[key] = make()
         return self._memo[key]
+
+    def pr_refs_by_id(self) -> dict[str, str]:
+        """:returns: PR row id (bare hex) -> its change's ref, for the PRs that are changes."""
+        return dict(self._pr_ref)
 
     def lookup(self, ref: str) -> _N | None:
         """:returns: The node *ref* names (any spelling :func:`.node_refs.normalize` reads)."""
@@ -2356,10 +2382,12 @@ class Tree:
         return found.ref if found is not None else None
 
     def met_links(self, node: _N) -> list[tuple[str, str]]:
-        """``(dependency, its ref)`` of the links that no longer hold *node* (history)."""
+        """``(dependency, its ref)`` of the project links that no longer hold *node* (history)."""
         done = self.state(node.ref) == "done"
         out: list[tuple[str, str]] = []
         for dep in node.depends_on:
+            if change_dependency(dep) is not None:
+                continue  # a change link is its own chip ("PR-9876 · met")
             target = self.nodes.get(_project_ref(dep))
             if target is not None and (done or self.state(target.ref) == "done"):
                 out.append((dep, target.ref))
@@ -2371,6 +2399,9 @@ class Tree:
         met = self.met_links(node)
         done = self.state(node.ref) == "done"
         for dep in node.depends_on:
+            if (change := self._change_chip(node, dep)) is not None:
+                out.append(change)
+                continue
             target = self.nodes.get(_project_ref(dep))
             if target is None or (dep, target.ref) in met:
                 continue
@@ -2424,6 +2455,31 @@ class Tree:
                 }
             )
         return out
+
+    def _change_chip(self, node: _N, dep: str) -> dict[str, Any] | None:
+        """
+        A ``depends_on`` item that names a change (``PR-9876``): ``met`` once it
+        merged, else the change's state; ``None`` for a project slug.
+        """
+        number = change_dependency(dep)
+        if number is None:
+            return None
+        from omnigent.server.factory.gating import change_met
+
+        project = self.project_rows.get(node.order or "") if node.level == "project" else None
+        # The gate's own rule: the dependent's repo first, then any of the factory's repos.
+        merged = change_met(number, self.facts.prs, project.repo if project else None)
+        target = self.nodes.get(dep)
+        chip: dict[str, Any] = {
+            "kind": "depends on",
+            "title": dep,
+            "state": "met" if merged else (self._words(dep) if target is not None else "open"),
+        }
+        if target is not None:
+            chip["ref"] = target.ref
+        if reason := node.depends_why.get(dep):
+            chip["reason"] = _clip(reason, _SHORT_MAX)
+        return chip
 
     def _alarms_about(self, node: _N) -> list[alarms.ClosedAlarm]:
         """The closed alarms that were about *node* (shown once, as a chip)."""
@@ -2575,19 +2631,64 @@ class Tree:
         return out
 
     def _verb_applies(self, verb: str, node: _N, state: str) -> bool:
+        """Whether *verb* applies to *node*: exactly what the verb routes serve here."""
+        stored = not node.implicit and not node.ghost and not node.later
         checks: dict[str, Callable[[], bool]] = {
             "talk": lambda: self.responder(node) is not None,
-            "add": lambda: not node.implicit and not node.ghost and state != "done",
-            "start": lambda: bool(node.depends_on) and state not in ("moving", "done"),
+            "add": lambda: stored and state != "done" and self._seats(self.adds(node), "create"),
+            "start": lambda: (
+                node.level == "project"
+                and stored
+                and bool(node.depends_on)
+                and state not in ("moving", "done")
+            ),
             "research": lambda: node.kind == "study",
             "team": lambda: node.level == "project" and not node.later and not node.ghost,
             "auto": lambda: state != "done" and not node.ghost,
             "pause": lambda: state not in ("done", "later", "offered") and not node.ghost,
-            "move": lambda: not node.implicit and not node.ghost,
-            "name": lambda: node.implicit,
+            "move": lambda: stored and self._seats(self.moves(node), "move"),
+            "name": lambda: node.implicit and self._nameable(node),
         }
         check = checks.get(verb)
         return check() if check is not None else True
+
+    def adds(self, node: _N) -> str | None:
+        """The level a person adds under *node* (feature -> project …), or ``None``."""
+        if node.level == "feature" and node.kind == "feature":
+            return "project"
+        if node.level == "project" and node.tree == PRODUCT_TREE:
+            return "task"
+        if node.level == "need" and node.kind in ("opportunity", "ask"):
+            return "feature"
+        return None
+
+    def moves(self, node: _N) -> str | None:
+        """*node*'s level when a person moves it under another parent, else ``None``."""
+        if node.level == "project" and node.tree == PRODUCT_TREE:
+            return "project"
+        if node.level == "feature" and node.kind == "feature":
+            return "feature"
+        return None
+
+    def _seats(self, level: str | None, which: str) -> bool:
+        """Whether anyone may make a *which* change to *level*'s nodes (its authority)."""
+        if level is None:
+            return False
+        authority = (self.level_defs.get(level) or {}).get("authority") or {}
+        return bool(authority.get(which))
+
+    def _nameable(self, node: _N) -> bool:
+        """An implicit feature, or an implicit need that comes from a proposal."""
+        if node.level == "feature":
+            return True
+        if node.level != "need":
+            return False
+        origin = node_refs.parse(node.ref.removeprefix("need:").removeprefix("from-"))
+        return (
+            origin is not None
+            and origin.kind == "proposal"
+            and (origin.text in self.proposals_by_ref)
+        )
 
     def thread(self, node: _N) -> dict[str, Any]:
         """The node's thread key and who answers it (a run shows its task's thread)."""
@@ -3196,6 +3297,7 @@ __all__ = [
     "Tree",
     "assert_levels",
     "check_levels",
+    "creator_words",
     "hidden_projects",
     "invalidate",
     "load_facts",

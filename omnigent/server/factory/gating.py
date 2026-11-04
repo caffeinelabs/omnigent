@@ -25,6 +25,7 @@ from omnigent.server.factory import events
 from omnigent.server.factory.charter import (
     DEPENDS_READY,
     SPAWN_SERVER,
+    change_dependency,
     project_base_branch,
     project_depends_on,
     spawn_owner,
@@ -94,6 +95,18 @@ def dependency_met(
     return False
 
 
+def change_met(number: int, prs: Sequence[FactoryPr], repo: str | None = None) -> bool:
+    """
+    Whether the change ``PR-<number>`` merged (a ``depends_on`` item that names one).
+
+    :param repo: The dependent's repo: its PR with that number counts first; a number
+        only another of the factory's repos has counts too.
+    """
+    found = [p for p in prs if p.number == number]
+    mine = [p for p in found if repo and p.repo.lower() == repo.lower()]
+    return any(p.state == "merged" for p in (mine or found))
+
+
 def unmet_dependencies(
     project: FactoryProject,
     projects: Mapping[str, FactoryProject],
@@ -101,7 +114,8 @@ def unmet_dependencies(
     tasks: Iterable[FactoryTask] = (),
 ) -> list[str]:
     """
-    The slugs *project* still waits for, in charter order.
+    The dependencies *project* still waits for, in charter order: slugs, and
+    change refs (``PR-9876``) whose pull request has not merged.
 
     :param projects: Every project of the factory by slug.
     :param prs: The factory's PRs.
@@ -112,6 +126,11 @@ def unmet_dependencies(
     rows = list(tasks)
     out: list[str] = []
     for slug in depends_on:
+        number = change_dependency(slug)
+        if number is not None:
+            if not change_met(number, prs, project.repo):
+                out.append(slug)
+            continue
         target = resolve_alias(slug, projects)
         if target is None or not dependency_met(target, prs, mode, rows):
             out.append(slug)
@@ -342,6 +361,7 @@ register()
 __all__ = [
     "OPEN_TASK_STATES",
     "RELEASE_EVENTS",
+    "change_met",
     "dependency_met",
     "find_cycle",
     "globs_overlap",

@@ -513,9 +513,11 @@ class ToolManager:
         ``sys_factory_task`` for ``lead``, ``project_lead`` and ``ic``;
         ``sys_factory_rules`` for every role, ``sys_factory_propose``,
         ``sys_factory_insights`` and ``sys_factory_retro`` for ``lead`` and
-        ``project_lead``. The read-only ``planner`` gets the roster, the rules
-        and the insights. The discovery seat (``scout``) gets the four
-        ``sys_discovery_*`` tools, the roster, its beacon, the rules, asks, the
+        ``project_lead``; ``sys_factory_node`` (one node of the cockpit's work
+        tree, read-only) for those two, Scout and the planner. The read-only
+        ``planner`` gets the roster, the rules and the insights. The discovery
+        seat (``scout``) gets the four ``sys_discovery_*`` tools, the roster,
+        its beacon, the rules, asks, the
         Room (its thread only, enforced by the server) and proposals (only
         the profile, strategy and sources, enforced by the server); no
         messaging, PR, project or spawn tool. Leads also read discovery and
@@ -541,6 +543,7 @@ class ToolManager:
             SysFactoryDemoTool,
             SysFactoryEnvTool,
             SysFactoryInsightsTool,
+            SysFactoryNodeTool,
             SysFactoryProjectTool,
             SysFactoryProposeTool,
             SysFactoryPrTool,
@@ -561,6 +564,7 @@ class ToolManager:
                 SysFactoryRosterTool(),
                 SysFactoryRulesTool(),
                 SysFactoryInsightsTool(),
+                SysFactoryNodeTool(),
             ):
                 self._tools[planner_tool.name()] = planner_tool
             return
@@ -576,6 +580,7 @@ class ToolManager:
                 SysFactoryAskTool(),
                 SysFactoryChatTool(),
                 SysFactoryProposeTool(),
+                SysFactoryNodeTool(),
             ):
                 self._tools[scout_tool.name()] = scout_tool
             return
@@ -593,6 +598,7 @@ class ToolManager:
             tools.append(SysFactoryProjectTool())
             tools.append(SysFactoryChatTool())
             tools += [SysFactoryProposeTool(), SysFactoryInsightsTool(), SysFactoryRetroTool()]
+            tools.append(SysFactoryNodeTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER):
             tools.append(SysFactoryEnvTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER, ROLE_DEMO):

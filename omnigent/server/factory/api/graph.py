@@ -39,7 +39,7 @@ from omnigent.factory import (
     LABEL_SUPERVISOR,
 )
 from omnigent.server.factory import control, graph, tasks
-from omnigent.server.factory.charter import project_depends_on
+from omnigent.server.factory.charter import change_dependency, project_depends_on
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import display_title
@@ -165,7 +165,8 @@ def work_graph(
                 work = open_tasks(deps.factory_store, factory_id)
             unmet = set(unmet_dependencies(project, data.projects, prs, work))
             for dep in _depends_on(project):
-                if dep not in hidden:
+                # A change (PR-9876) is no project: it draws no project edge.
+                if dep not in hidden and change_dependency(dep) is None:
                     out["project_edges"].append(
                         {"from": dep, "to": name, "kind": "depends_on", "met": dep not in unmet}
                     )

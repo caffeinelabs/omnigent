@@ -844,12 +844,14 @@ def _first_reason(project: FactoryProject, facts: Facts) -> str | None:
 
 def unmet_dependencies(project: FactoryProject, facts: Facts) -> list[tuple[FactoryProject, str]]:
     """:returns: ``(dependency, mode)`` pairs *project* still waits for, in charter order."""
-    from omnigent.server.factory.charter import project_depends_on
+    from omnigent.server.factory.charter import change_dependency, project_depends_on
     from omnigent.server.factory.gating import dependency_met, resolve_alias
 
     depends_on, mode = project_depends_on(project)
     out: list[tuple[FactoryProject, str]] = []
     for slug in depends_on:
+        if change_dependency(slug) is not None:
+            continue  # a change, not a project: :func:`unmet_changes`
         target = resolve_alias(slug, facts.projects)
         if target is None or dependency_met(target, facts.prs_of(target.slug), mode, facts.tasks):
             continue
@@ -857,15 +859,43 @@ def unmet_dependencies(project: FactoryProject, facts: Facts) -> list[tuple[Fact
     return out
 
 
+def unmet_changes(project: FactoryProject, facts: Facts) -> list[str]:
+    """:returns: The changes (``PR-9876``) *project* depends on that have not merged yet."""
+    from omnigent.server.factory.charter import change_dependency, project_depends_on
+    from omnigent.server.factory.gating import change_met
+
+    depends_on, _mode = project_depends_on(project)
+    return [
+        item
+        for item in depends_on
+        if (number := change_dependency(item)) is not None
+        and not change_met(number, facts.prs, project.repo)
+    ]
+
+
 def dependency_waits(project: FactoryProject, facts: Facts) -> list[Wait]:
-    """The projects *project* depends on that are not there yet (merge or dependency waits)."""
+    """
+    The projects *project* depends on that are not there yet (merge or dependency
+    waits), then the changes it depends on that have not merged.
+    """
     from omnigent.server.factory.charter import normalize_charter
 
     why = normalize_charter(project.charter).get("depends_why") or {}
-    return [
+    out = [
         _dependency_wait(target, facts, task=None, mode=mode, why=why.get(target.slug))
         for target, mode in unmet_dependencies(project, facts)
     ]
+    for item in unmet_changes(project, facts):
+        because = f" ({clip(why[item], 120)})" if why.get(item) else ""
+        out.append(
+            Wait(
+                kind="dependency",
+                ref=item,
+                label=clip(f"waiting on {item} to merge{because}"),
+                who="whoever merges it",
+            )
+        )
+    return out
 
 
 # ── Decisions and proposals about a task or project ────────────
@@ -1232,6 +1262,7 @@ __all__ = [
     "ref_number",
     "task_hold_view",
     "task_waits",
+    "unmet_changes",
     "unmet_dependencies",
     "update_holds",
     "who_of_decision",

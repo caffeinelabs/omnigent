@@ -421,6 +421,7 @@
         "show": "always"
       }
     },
+    "node_header": "node_threads",
     "order": {
       "cols": [
         "First",

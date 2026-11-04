@@ -1136,6 +1136,12 @@ class StructureDef(_Block):
     :param tiles_max: Children shown as tiles up to this many; rows past it.
     :param fold_single_child: ``implicit_only``: an implicit parent with one
         child shows as that child; ``never``: every parent shows.
+    :param node_header: Which Room deliveries carry the header of the node a
+        thread is about (path, why, status, roll-up, open asks):
+        ``node_threads``, only cockpit v3's per-node threads (``need:``,
+        ``feature:``, ``study:``, ``task:``), so the threads v2 shares
+        (``#factory``, a project's, a PR's) keep their envelopes; ``all``, those
+        too; ``off``, none.
     """
 
     levels: LevelsDef = Field(default_factory=LevelsDef)
@@ -1147,6 +1153,7 @@ class StructureDef(_Block):
     order: OrderDef = Field(default_factory=OrderDef)
     tiles_max: int = Field(12, ge=TILES_MAX_BOUNDS[0], le=TILES_MAX_BOUNDS[1])
     fold_single_child: Literal["implicit_only", "never"] = "implicit_only"
+    node_header: Literal["node_threads", "all", "off"] = "node_threads"
 
     @model_validator(mode="after")
     def _distinct_names(self) -> StructureDef:

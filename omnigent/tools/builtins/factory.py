@@ -13,6 +13,8 @@ ICs (report). Learning: ``sys_factory_rules`` for every role, ``sys_factory_prop
 ``sys_factory_retro`` for leads and project leads, ``sys_factory_insights`` for those and
 the planner. Discovery: the ``sys_discovery_*`` tools for the discovery seat (``scout``),
 ``sys_discovery_read`` and ``sys_discovery_opportunity`` (ideas only) for the leads.
+``sys_factory_node`` (read one node of the cockpit's work tree) for the leads, project
+leads, Scout and the planner; a server without node pages answers it with an error.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from omnigent.factory import (
     MIN_HEARTBEAT_S,
     PR_CLAIMS,
     PREVIEW_REPORT_STATES,
+    PROJECT_OPS,
     ROLE_PROJECT_LEAD,
     SENTINEL_VERDICTS,
     SPAWN_ROLES,
@@ -62,6 +65,9 @@ SYS_FACTORY_PROPOSE: Final = "sys_factory_propose"
 SYS_FACTORY_RULES: Final = "sys_factory_rules"
 SYS_FACTORY_INSIGHTS: Final = "sys_factory_insights"
 SYS_FACTORY_RETRO: Final = "sys_factory_retro"
+SYS_FACTORY_NODE: Final = "sys_factory_node"
+NODE_OPS: Final = ("read",)
+NODE_REF_MAX: Final = 200
 SYS_DISCOVERY_READ: Final = "sys_discovery_read"
 SYS_DISCOVERY_QUERY: Final = "sys_discovery_query"
 SYS_DISCOVERY_CODE: Final = "sys_discovery_code"
@@ -87,6 +93,7 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_RULES,
         SYS_FACTORY_INSIGHTS,
         SYS_FACTORY_RETRO,
+        SYS_FACTORY_NODE,
         *DISCOVERY_TOOL_NAMES,
     }
 )
@@ -915,7 +922,7 @@ def _bet_schema() -> dict[str, Any]:
 
 
 class SysFactoryProjectTool(Tool):
-    """Propose project changes: create, update, split, merge or cancel (one proposal C-n)."""
+    """Propose project changes: create, update, split, merge, cancel, move, reorder (one C-n)."""
 
     @classmethod
     def name(cls) -> str:
@@ -936,7 +943,10 @@ class SysFactoryProjectTool(Tool):
             "itself (you get `[Factory notice · PL·<slug> spawned by the server · C-<n>]`) "
             "and holds a project until its depends_on are met. The outcome arrives as "
             "`[Factory proposal · C-<n> applied|rejected|expired …]`. Leads may use every op "
-            "on every project; a project lead may update, split or cancel its own project. "
+            "on every project; a project lead may update, split, cancel or reorder its own "
+            "project. move files a project under another open feature (to='I-<n>'); reorder "
+            "puts it first among its feature's projects, or after='<sibling slug>' (it then "
+            "waits on that sibling, with reason). "
             "Split and merge move PRs only through pr_map ({'<PR number>': '<slug>'}). Call "
             "it without arguments to list the projects; withdraw='C-4' takes back a pending "
             "proposal of yours. While discovery is on (else 404 discovery_off): work from an "
@@ -952,9 +962,12 @@ class SysFactoryProjectTool(Tool):
         change = {
             "type": "object",
             "properties": {
-                "op": {"type": "string", "enum": ["create", "update", "split", "merge", "cancel"]},
+                "op": {"type": "string", "enum": list(PROJECT_OPS)},
                 "project": {**project, "description": "create: the new project."},
-                "slug": {"type": "string", "description": "update, split, cancel: the project."},
+                "slug": {
+                    "type": "string",
+                    "description": "update, split, cancel, move, reorder: the project.",
+                },
                 "patch": {
                     "type": "object",
                     "description": (
@@ -985,6 +998,12 @@ class SysFactoryProjectTool(Tool):
                     "description": "split/merge: open PR number -> the project that takes it.",
                 },
                 "teardown_previews": {"type": "boolean", "default": True},
+                "to": {"type": "string", "description": "move: the feature, e.g. 'I-2'."},
+                "after": {
+                    "type": "string",
+                    "description": "reorder: the sibling it waits on; leave out for first.",
+                },
+                "reason": {"type": "string", "maxLength": 200, "description": "reorder: why."},
             },
             "required": ["op"],
             "additionalProperties": False,
@@ -1217,9 +1236,12 @@ class SysFactoryChatTool(Tool):
             "is a person (or a colleague who @mentioned you) talking in a thread: answer "
             "it here, once, with reply_to=<that id> (for a batch, the last id). Threads: "
             "'factory' (Atlas), 'improvements' (Sentinel), 'discovery' (Scout, while "
-            "discovery runs), 'project:<slug>' (its PL) and 'pr:<number>' (the PR's PL). "
+            "discovery runs), 'project:<slug>' (its PL), 'pr:<number>' (the PR's PL), and "
+            "one per node of the cockpit: 'task:T-16' (its project's PL), 'feature:I-1' "
+            "(Atlas), 'need:O-3' and 'study:R-1' (Scout). "
             "Leads post anywhere; a project lead in 'factory' and its own project's "
-            "threads; Scout in 'discovery', and elsewhere only a reply (reply_to) to a "
+            "threads (its tasks' too); Scout in 'discovery', and elsewhere only a reply "
+            "(reply_to) to a "
             "message that reached it with @scout. @atlas, @sentinel, @scout or @pl:<slug> in "
             "the message hands it to that agent (Scout: @atlas or @sentinel only); "
             "@<person email> only notifies them. Keep it short "
@@ -1239,8 +1261,9 @@ class SysFactoryChatTool(Tool):
                     "thread": {
                         "type": "string",
                         "description": (
-                            "'factory', 'improvements', 'discovery', 'project:<slug>' or "
-                            "'pr:<number>' (the thread named in the message's header)."
+                            "'factory', 'improvements', 'discovery', 'project:<slug>', "
+                            "'pr:<number>' or a node's ('task:T-16' …): the thread named "
+                            "in the message's last line."
                         ),
                     },
                     "message": {
@@ -1265,6 +1288,55 @@ class SysFactoryChatTool(Tool):
                     },
                 },
                 "required": ["thread", "message"],
+                "additionalProperties": False,
+            },
+        )
+
+
+class SysFactoryNodeTool(Tool):
+    """Read one node of the factory's work tree, as people see it in the cockpit."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_node"``."""
+        return SYS_FACTORY_NODE
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Read one node of your factory's work tree as people see it in the cockpit "
+            "(read-only): op='read', ref='product', a feature ('I-1'), a project slug, a "
+            "task ('T-16'), a change ('PR-9876'), a need ('O-3'), or the factory tree "
+            "('fx', 'fx:health', 'C-17'). Returns {node, breadcrumb, status (what moves, or "
+            "the blocker path ending at whoever must act), rollup, chips (links to other "
+            "nodes), children (60 a page; pass children_page=<children.next> for more), "
+            "levels_below, thread}. A Room message about a node already carries its header; "
+            "read the page for its children or for another node. To change the structure, "
+            "propose with sys_factory_project; the verbs on the page are for people."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "op": {"type": "string", "enum": list(NODE_OPS), "default": "read"},
+                    "ref": {
+                        "type": "string",
+                        "maxLength": NODE_REF_MAX,
+                        "description": "The node, e.g. 'product', 'I-1', 'api-core', 'T-16'.",
+                    },
+                    "children_page": {
+                        "type": "string",
+                        "maxLength": 32,
+                        "description": "children.next of a previous read (the next 60).",
+                    },
+                },
+                "required": ["ref"],
                 "additionalProperties": False,
             },
         )

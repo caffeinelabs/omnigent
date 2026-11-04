@@ -63,8 +63,23 @@ DependsMode = Literal["merged", "ready"]
 EngineMode = Literal["observe", "assist", "enforce"]
 ActorKind = Literal["human", "agent", "server"]
 ChatAuthorKind = Literal["human", "agent", "system"]
-ChatCardType = Literal["decision", "proposal", "control", "pr", "demo", "loop", "issue", "system"]
-ThreadKind = Literal["factory", "improvements", "project", "pr"]
+ChatCardType = Literal[
+    "decision",
+    "proposal",
+    "control",
+    "pr",
+    "demo",
+    "loop",
+    "issue",
+    "system",
+    "why",
+    "closed_alarm",
+    "offer",
+    "preview_applied",
+]
+ThreadKind = Literal[
+    "factory", "improvements", "discovery", "project", "pr", "need", "feature", "study", "task"
+]
 ProposalKind = Literal["projects", "tuning", "rules", "code"]
 ProposalStatus = Literal[
     "pending",
@@ -1482,6 +1497,9 @@ class Preflight(_View):
     :param tier2: Whether agents may open code PRs to omnigent (off by default).
     :param cockpit_v2: Whether people may switch to the new cockpit
         (``OMNIGENT_FACTORY_COCKPIT_V2``; off by default, then a per-person choice).
+    :param node_threads: The server routes cockpit v3's per-node threads
+        (``need:``, ``feature:``, ``study:``, ``task:``) and serves the node verbs
+        (preview, apply, undo); older servers leave it out.
     """
 
     github: PreflightGithub
@@ -1493,6 +1511,7 @@ class Preflight(_View):
     max_projects: int = 10
     tier2: Tier2Status | None = None
     cockpit_v2: bool = False
+    node_threads: bool = False
 
 
 # ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──
@@ -1557,19 +1576,66 @@ class BaseMovesMeta(_View):
     moves: list[BaseMoveView]
 
 
+class ClosedAlarmMeta(_View):
+    """
+    An alarm the server closed, carded in its node's thread (cockpit v3).
+
+    :param was: The alarm as it was raised.
+    :param cause: Why the server closed it.
+    :param real_ask: The ask that holds the work instead, if any.
+    """
+
+    kind: Literal["closed_alarm"] = "closed_alarm"
+    was: str
+    cause: str
+    real_ask: str | None = None
+
+
+class OfferMeta(_View):
+    """An offer on the card's node (``start``: "it can start now"); the body explains it."""
+
+    kind: Literal["offer"] = "offer"
+    verb: str
+    title: str | None = None
+
+
+class PreviewAppliedMeta(_View):
+    """
+    A structural verb applied (or undone) from the cockpit, in its node's thread.
+
+    :param undo_token: ``POST …/undo/{token}`` takes it back until ``undo_until``.
+    :param filed: The proposal it was filed as (``C-19``), when it was.
+    """
+
+    kind: Literal["preview_applied"] = "preview_applied"
+    verb: str
+    label: str | None = None
+    by: str | None = None
+    undo_token: str | None = None
+    undo_until: int | None = None
+    filed: str | None = None
+    undone: bool | None = None
+
+
+ChatCardMeta = Annotated[
+    IssueCardMeta | BaseMovesMeta | ClosedAlarmMeta | OfferMeta | PreviewAppliedMeta,
+    Field(discriminator="kind"),
+]
+
+
 class ChatCardView(_View):
     """
     A structured object mirrored into a thread as a live card.
 
-    :param ref: e.g. ``"D-7"``, ``"C-4"``, ``"!9630"`` or ``"INC-13"``.
+    :param ref: e.g. ``"D-7"``, ``"C-4"``, ``"!9630"``, ``"INC-13"`` or a node's ``"T-16"``.
     :param id: Row id of the object, when it has one.
-    :param meta: What an incident's live card or a batched base line holds.
+    :param meta: What an incident's live card, a batched base line or a node card holds.
     """
 
     type: ChatCardType
     ref: str | None = None
     id: str | None = None
-    meta: Annotated[IssueCardMeta | BaseMovesMeta, Field(discriminator="kind")] | None = None
+    meta: ChatCardMeta | None = None
 
 
 class RoutedView(_View):
@@ -1620,8 +1686,10 @@ class ThreadView(_View):
     """
     One Room thread.
 
-    :param key: ``factory``, ``improvements``, ``project:<slug>`` or ``pr:<id>``.
-    :param title: Display name, e.g. ``"#db-version"`` or ``"!9631"``.
+    :param key: ``factory``, ``improvements``, ``project:<slug>``, ``pr:<id>``, or a
+        node thread's ``need:`` / ``feature:`` / ``study:`` / ``task:`` key.
+    :param title: Display name, e.g. ``"#db-version"``, ``"!9631"`` or ``"T-16"``.
+    :param node_ref: The node the thread is about (``product``, a slug, ``PR-9631``, ``T-16``).
     :param responder_session_id: The agent that answers by default.
     :param mention: The newest unread message that @mentions the reader.
     """
@@ -1629,6 +1697,7 @@ class ThreadView(_View):
     key: str
     kind: ThreadKind
     title: str
+    node_ref: str | None = None
     project_slug: str | None = None
     pr_id: str | None = None
     pr_number: int | None = None
