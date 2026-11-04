@@ -40,7 +40,7 @@ import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 import { roomCandidateList } from "./roomCandidates";
 import { RoomComposer, type RoomComposerNodeOptions } from "./RoomComposer";
-import { foldRoomItems, namesRepos, supersededIssueCards } from "./roomFold";
+import { foldRoomItems, namesRepos, supersededCards, supersededIssueCards } from "./roomFold";
 import { BaseMovesLine, IssueRepeats } from "./RoomFolds";
 import { BusRow, RoomMessage } from "./RoomMessage";
 import {
@@ -265,6 +265,11 @@ export function RoomThreadView({
     issues: issues.data ?? null,
     viewerId: snapshot.viewer?.user_id ?? null,
   };
+  // The node chat shows one live card per proposal: earlier copies are their line.
+  const repeated = useMemo(
+    () => (node ? supersededCards(messages, ["proposal"]) : null),
+    [messages, node],
+  );
   const cardData: RoomCardData = useMemo(
     () => ({
       factoryId: fid,
@@ -276,6 +281,7 @@ export function RoomThreadView({
       people: people.data?.data ?? null,
       compact: dock,
       nodeCard,
+      repeated,
     }),
     [
       fid,
@@ -287,6 +293,7 @@ export function RoomThreadView({
       people.data,
       dock,
       nodeCard,
+      repeated,
     ],
   );
   const candidates = useMemo(

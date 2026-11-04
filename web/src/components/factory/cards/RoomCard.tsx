@@ -43,6 +43,8 @@ export function RoomCard({
   if (!card) return attached ? null : line;
   switch (card.type) {
     case "proposal": {
+      // A newer card of this proposal is in the thread: this one is its line.
+      if (data.repeated?.has(message.id)) return attached ? null : line;
       const proposal =
         data.proposals?.find((p) => p.id === card.id) ??
         data.proposals?.find((p) => p.ref === card.ref) ??
