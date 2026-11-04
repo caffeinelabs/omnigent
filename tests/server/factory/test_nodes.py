@@ -365,6 +365,13 @@ def test_agent_assistant(tree: Tree) -> None:
     assert page["thread"]["key"] == "feature:I-1"
 
 
+@pytest.mark.parametrize("ref", ["live-search-fix", "ads-integration", "sales-skill"])
+def test_a_project_with_no_row_yet_shows_its_features_thread(tree: Tree, ref: str) -> None:
+    """A proposed or held project has no Room thread yet: its chat is its feature's."""
+    page = _page(tree, ref)
+    assert page["thread"] == {"key": "feature:I-1", "unread": 0, "responder": "Atlas"}
+
+
 def test_the_panel_waits_on_assistant_core(tree: Tree) -> None:
     page = _page(tree, "assistant-panel-ux")
 

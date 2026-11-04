@@ -898,6 +898,9 @@
           "object": "C-19",
           "object_name": "Fix live search",
           "ref": "live-search-fix",
+          "unblocks": "this feature",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
           "verb": "Apply",
           "weight": 0.0
         },
@@ -1930,6 +1933,9 @@
           "object": "C-19",
           "object_name": "Fix live search",
           "ref": "live-search-fix",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
           "verb": "Apply",
           "weight": 0.0
         },
@@ -5870,6 +5876,9 @@
           "object": "C-19",
           "object_name": "Fix live search",
           "ref": "live-search-fix",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
           "verb": "Apply",
           "weight": 0.0
         }

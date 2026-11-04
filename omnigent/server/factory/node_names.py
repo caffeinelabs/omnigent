@@ -57,6 +57,8 @@ PER_PASS: Final = 12
 BACKOFF_S: Final = 600.0
 """After :data:`FAILURES_MAX` unanswered names in a row, a factory waits this long."""
 FAILURES_MAX: Final = 3
+SHOW_EVERY: Final = 4
+"""Names stored between two refreshes of the factory's projection and cockpits."""
 TIMEOUT_S: Final = 70.0
 NAMING_INSTRUCTIONS: Final = (
     "Name the piece of work the message describes, as it would read on one tile of a "
@@ -547,34 +549,55 @@ def schedule(
 async def _drain(app_state: Any, deps: FactoryDeps, root: Conversation, queue: _Queue) -> None:
     from omnigent.server.factory import live, nodes
 
-    while queue.pending:
-        ref = next(iter(queue.pending))
-        want = queue.pending.pop(ref)
-        queue.tried[ref] = (want.hash, time.monotonic())
+    stored = unshown = 0
+
+    def show() -> None:
+        # One projection rebuild and one cockpit refresh per few names, not per name.
+        nonlocal unshown
+        if not unshown:
+            return
+        unshown = 0
         try:
-            name = clean(await generate(app_state, root, want.text))
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - a name is cosmetic; the first words stay
-            _logger.info("factory %s: naming %s failed", root.id, ref, exc_info=True)
-            name = None
-        if name is None:
-            queue.failures += 1
-            if queue.failures >= FAILURES_MAX:
-                queue.backoff_until = time.monotonic() + BACKOFF_S
-                queue.pending.clear()
-                queue.failures = 0
-                return
-            continue
-        queue.failures = 0
-        try:
-            await asyncio.to_thread(
-                deps.factory_store.set_node_name, root.id, ref, name, source_hash=want.hash
-            )
             nodes.invalidate(root.id)
             live.announce_factory_changed(app_state, root.id, ["names"])
-        except Exception:  # noqa: BLE001 - the next projection asks again
-            _logger.warning("factory %s: could not store the name of %s", root.id, ref)
+        except Exception:  # noqa: BLE001 - the names show on the next projection anyway
+            _logger.warning("factory %s: could not refresh after naming", root.id)
+
+    try:
+        while queue.pending:
+            ref = next(iter(queue.pending))
+            want = queue.pending.pop(ref)
+            queue.tried[ref] = (want.hash, time.monotonic())
+            try:
+                name = clean(await generate(app_state, root, want.text))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a name is cosmetic; the first words stay
+                _logger.info("factory %s: naming %s failed", root.id, ref, exc_info=True)
+                name = None
+            if name is None:
+                queue.failures += 1
+                if queue.failures >= FAILURES_MAX:
+                    queue.backoff_until = time.monotonic() + BACKOFF_S
+                    queue.pending.clear()
+                    queue.failures = 0
+                    return
+                continue
+            queue.failures = 0
+            try:
+                await asyncio.to_thread(
+                    deps.factory_store.set_node_name, root.id, ref, name, source_hash=want.hash
+                )
+            except Exception:  # noqa: BLE001 - the next projection asks again
+                _logger.warning("factory %s: could not store the name of %s", root.id, ref)
+                continue
+            stored += 1
+            unshown += 1
+            # The first name (the highest level) shows at once, then every few.
+            if stored == 1 or unshown >= SHOW_EVERY:
+                show()
+    finally:
+        show()
 
 
 async def generate(app_state: Any, root: Conversation, text: str) -> str | None:

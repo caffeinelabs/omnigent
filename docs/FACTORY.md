@@ -1216,7 +1216,9 @@ counts them (`alarms_closed`).
 `pr:<id>`, the Room has a thread per need, feature, study and task:
 `need:<ref>` (`need:O-3`, `need:ask:<id>`, `need:from-C-12`), `feature:<ref>`,
 `study:R-<n>` and `task:<ref>` (`task:T-16`; `T-16` spells it too). A key
-resolves only to a node of this factory (404 `unknown_node`). Who answers is
+resolves only to a node of this factory (404 `unknown_node`). A node page's
+`thread.key` is a thread that exists: a run shows its task's, and a project
+with no row yet (a later wave's, a proposal's) its feature's. Who answers is
 the definition's `structure.responders` per level: Atlas for features, Scout
 for needs and studies (Atlas while discovery is off), the project's lead for
 a task (the delivery names the task); `null` routes a plain message to

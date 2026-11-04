@@ -194,6 +194,27 @@ def test_the_merges_a_project_waits_on_unblock_that_project() -> None:
     assert next(i for i in home if i["id"] == "merge:main")["unblocks"] == "Build tier drafts 3"
 
 
+def test_applying_a_proposed_project_unblocks_its_feature() -> None:
+    """C-19 holds no task yet (its project is only proposed): it holds the feature."""
+    tree = assert_levels(Tree(factory_1340()))
+
+    def row(ref: str) -> dict[str, Any]:
+        return next(i for i in _page(tree, ref)["your_move"]["items"] if i["id"] == "D-49")
+
+    assert row("product")["unblocks"] == "Agent assistant (sample)"
+    assert row("I-1")["unblocks"] == "this feature"
+    assert (row("live-search-fix")["unblocks"], row("live-search-fix")["unblocks_ref"]) == (
+        "Agent assistant (sample)",
+        "I-1",
+    )
+    # A factory change holds no product work: its object says what it changes.
+    rules = _page(tree, "fx")["your_move"]["items"]
+    assert [(i["id"], i.get("unblocks")) for i in rules if i["verb"] == "Apply rule"] == [
+        ("D-50", None),
+        ("D-51", None),
+    ]
+
+
 def test_an_ask_the_factory_itself_made_is_asked_by_its_lead() -> None:
     facts = factory_1340()
     # The root session (the factory's own id) wrote C-19, a member's session C-14.

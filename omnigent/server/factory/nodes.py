@@ -3090,12 +3090,18 @@ class Tree:
         )
 
     def thread(self, node: _N) -> dict[str, Any]:
-        """The node's thread key and who answers it (a run shows its task's thread)."""
+        """
+        The node's thread key and who answers it. A node with no thread of its own
+        shows its nearest ancestor's: a run its task's; a project the factory only
+        plans (a later wave's, a proposal's: no project row yet) its feature's.
+        """
         target = node
         if node.level == "run":
             target = next(
                 (a for a in reversed(self.ancestors(node.ref)) if a.level == "task"), node
             )
+        while not self._own_thread(target) and target.parent in self.nodes:
+            target = self.nodes[target.parent]
         key = node_refs.thread_key(target.ref)
         if target.level == "change" and target.kind == "pr":
             key = f"pr:{target.row_id}" if target.row_id else None
@@ -3104,6 +3110,13 @@ class Tree:
         if responder := self.responder(target):
             out["responder"] = responder
         return out
+
+    def _own_thread(self, node: _N) -> bool:
+        """Whether *node* has a Room thread (a project has one once its row exists)."""
+        if node.level != "project" or node.tree != PRODUCT_TREE:
+            return True
+        parsed = node_refs.parse(node.ref)
+        return parsed is not None and parsed.kind == "project" and parsed.id in self.slugs
 
     def node_full(self, node: _N) -> dict[str, Any]:
         out = self.summary(node)

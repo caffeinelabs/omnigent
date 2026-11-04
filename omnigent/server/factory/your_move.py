@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import decision_routing, node_names
+from omnigent.server.factory.definition_blocks import PRODUCT_TREE
 from omnigent.server.factory.node_status import decision_proposal
 
 if TYPE_CHECKING:
@@ -209,14 +210,18 @@ def _held(tree: Tree, node: _N, ask: Ask, at: str, obj: str) -> list[str]:
     """
     What a blocking *ask* lets move, by the refs *node*'s page shows, this
     page's own node first. What the row's object names is no news ("Merge #1
-    and #2 · unblocks #1 and #2"): when that is all it holds, it holds the
-    node the ask sits on (a project waiting on its merges: "this project").
+    and #2 · unblocks #1 and #2"): when that is all it holds, or it holds no
+    task yet (a proposed project's apply), it holds the product node the ask
+    sits on (a project waiting on its merges: "this project"), a proposed
+    node's parent. A factory change holds no product work: its object says it.
     """
     shown = unblocks(tree, node, ask)
     refs = [r for r in shown if not _named_in(tree, r, obj)]
-    if shown and not refs:
-        found = tree.nodes.get(at)
-        while found is not None and _named_in(tree, found.ref, obj) and found.parent:
+    found = tree.nodes.get(at)
+    if not refs and (shown or (found is not None and found.tree == PRODUCT_TREE)):
+        while (
+            found is not None and found.parent and (found.ghost or _named_in(tree, found.ref, obj))
+        ):
             found = tree.nodes.get(found.parent)
         if found is not None and found.parent is not None:
             refs = [_shown_as(tree, node, found.ref)]

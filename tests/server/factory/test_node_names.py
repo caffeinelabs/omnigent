@@ -320,6 +320,32 @@ async def test_the_factory_names_each_text_once_and_again_when_it_changes() -> N
     node_names.reset()
 
 
+async def test_names_refresh_the_cockpit_every_few_names_not_each(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node_names.reset()
+    namer = _Namer(answer=_named)
+    state, deps, root, store = _env(namer)
+    refreshes: list[int] = []
+    monkeypatch.setattr(
+        nodes, "invalidate", lambda _fid: refreshes.append(len(store.list_node_names(FID)))
+    )
+    wants = [
+        node_names.Want(f"T-{n}", f"text {n}", f"h{n}", "task")
+        for n in range(1, 2 * node_names.SHOW_EVERY + 3)
+    ]
+    namer.answer = lambda text: f"Task {text.split()[-1]}"
+
+    task = node_names.schedule(state, deps, root, wants)
+    assert task is not None
+    await task
+
+    # The first name shows at once, then every few, and the last ones when it ends.
+    every = node_names.SHOW_EVERY
+    assert refreshes == [1, 1 + every, 1 + 2 * every, len(wants)]
+    node_names.reset()
+
+
 async def test_a_namer_that_cannot_answer_backs_off_and_never_overrides_a_person() -> None:
     node_names.reset()
     namer = _Namer(answer=None)
