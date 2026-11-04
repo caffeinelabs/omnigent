@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from omnigent.server.factory import nodes
-from omnigent.server.factory.node_views import validate_page
+from omnigent.server.factory.node_views import validate_level, validate_page
 from omnigent.server.factory.nodes import NO_GOAL, PAGE_SIZE, LevelError, Tree, assert_levels
 from tests.server.factory.node_fixtures import (
     ASK_MESSAGE,
@@ -33,10 +33,9 @@ from tests.server.factory.node_fixtures import (
     structure,
 )
 
-WEB_FIXTURE = (
-    Path(__file__).resolve().parents[3]
-    / "web/src/components/factory/__fixtures__/nodePages.server.json"
-)
+WEB_FIXTURES = Path(__file__).resolve().parents[3] / "web/src/components/factory/__fixtures__"
+WEB_FIXTURE = WEB_FIXTURES / "nodePages.server.json"
+WEB_LEVEL_FIXTURE = WEB_FIXTURES / "nodeLevels.server.json"
 UPDATE_ENV = "OMNIGENT_UPDATE_NODE_PAGES"
 ASK = f"ask:{ASK_MESSAGE}"
 PICK = f"ask:{SHORTLIST_MESSAGE}"
@@ -55,6 +54,8 @@ WEB_PAGES = (
     "fx:health",
     "base-env",
 )
+WEB_LEVELS = (("product", "feature"), ("product", "project"), ("I-1", "task"))
+"""Level views the web's contract test reads (``<ref>/<level>``): Home lists features."""
 
 
 @pytest.fixture()
@@ -70,6 +71,12 @@ def _page(tree: Tree, ref: str, **kwargs: Any) -> dict[str, Any]:
     page = tree.page(ref, **kwargs)
     assert page is not None, ref
     return validate_page(page)
+
+
+def _level(tree: Tree, ref: str, level: str, **kwargs: Any) -> dict[str, Any]:
+    view = tree.level_view(ref, level, **kwargs)
+    assert view is not None, (ref, level)
+    return validate_level(view)
 
 
 # ── The one-parent rule ────────────────────────────────────────
@@ -597,6 +604,74 @@ def test_every_page_of_a_13_45_360_factory_is_fast() -> None:
     assert build + p95 < 0.3, (build, p95)
 
 
+# ── Level views and asks that hold work ────────────────────────
+
+
+def test_home_lists_every_feature_under_the_need_it_came_from(tree: Tree) -> None:
+    home = _page(tree, "product")
+    view = _level(tree, "product", home["home"])
+
+    groups = {g["parent"]["ref"]: _refs(g["items"]) for g in view["groups"]}
+    assert groups == {
+        ASK: ["I-1"],
+        PICK: ["feature:from-C-13"],
+        "need:from-C-12": ["build-tier-drafts-3"],
+    }
+    # The ask with the most at stake comes first; the folded need keeps its crumb.
+    assert view["groups"][0]["parent"]["ref"] == ASK
+    folded = next(g for g in view["groups"] if g["parent"]["ref"] == "need:from-C-12")
+    assert folded["parent"]["folded"] is True and folded["parent"]["implicit"] is True
+    assert view["via_fold"] == 1 and view["total"] == 3
+    assert next(g for g in view["groups"] if g["parent"]["ref"] == ASK)["parent"]["evidence"]
+
+
+def test_a_level_view_folds_groups_that_are_all_done(tree: Tree) -> None:
+    view = _level(tree, "product", "project")
+
+    done = [g["parent"]["ref"] for g in view["groups"] if g.get("folded_done")]
+    assert done == ["feature:from-C-13"]
+    assert "done_groups" not in view  # one all-done group folds in place
+    wave = next(g for g in view["groups"] if g["parent"]["ref"] == "I-1")
+    assert wave["later"] and wave["items"][0]["state"] != "done"
+    assert tree.level_view("T-16", "project") is None
+    assert tree.level_view("nope", "task") is None
+    with pytest.raises(ValueError):
+        tree.level_view("product", "task", cursor="I-1@7")
+
+
+def test_a_proposals_decision_holds_what_it_proposes(tree: Tree) -> None:
+    """Proposal decisions are stored as blocking nothing; the tree reads what waits on them."""
+    decisions = {d.ref: d for d in tree.facts.decisions}
+
+    assert not any(d.blocking for d in decisions.values() if d.source == "proposal")
+    held = {ref: tree.blocks(d) for ref, d in decisions.items()}
+    assert held == {
+        "D-45": True,  # C-16 changes assistant-core, which is active
+        "D-43": False,  # C-14 and C-15 change finished projects
+        "D-44": False,
+        "D-49": True,  # C-19 adds a project
+        "D-50": True,  # rules
+        "D-51": True,
+        "D-37": False,  # an agent's ask that says it blocks nothing
+    }
+
+
+def test_level_views_of_a_13_45_360_factory_are_fast_and_paged() -> None:
+    tree = assert_levels(Tree(scale_factory()))
+
+    timings: dict[str, float] = {}
+    for level in ("feature", "project", "task"):
+        started = time.perf_counter()
+        view = _level(tree, "product", level)
+        timings[level] = time.perf_counter() - started
+        assert all(len(g["items"]) <= PAGE_SIZE for g in view["groups"]), level
+        assert view["total"] == sum(
+            1 for n in tree.at_level("product", level) if not n.ghost and not n.later
+        )
+
+    assert max(timings.values()) < 0.3, timings
+
+
 # ── The web's contract fixture ─────────────────────────────────
 
 
@@ -605,13 +680,20 @@ def _web_pages() -> dict[str, Any]:
     return {ref: _page(tree, ref) for ref in WEB_PAGES}
 
 
-def test_the_web_fixture_is_what_the_server_returns() -> None:
-    """The web's ``nodeWire.server.test.tsx`` renders these pages through the live source."""
-    pages = _web_pages()
-    text = json.dumps(pages, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+def _web_levels() -> dict[str, Any]:
+    tree = assert_levels(Tree(factory_1340()))
+    return {f"{ref}/{level}": _level(tree, ref, level) for ref, level in WEB_LEVELS}
+
+
+@pytest.mark.parametrize(
+    ("fixture", "build"), [(WEB_FIXTURE, _web_pages), (WEB_LEVEL_FIXTURE, _web_levels)]
+)
+def test_the_web_fixture_is_what_the_server_returns(fixture: Path, build: Any) -> None:
+    """The web's ``nodeWire.server.test.tsx`` renders these through the live source."""
+    text = json.dumps(build(), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
     if os.environ.get(UPDATE_ENV):
-        WEB_FIXTURE.write_text(text, encoding="utf-8")
-    assert WEB_FIXTURE.exists(), f"run with {UPDATE_ENV}=1 to write {WEB_FIXTURE.name}"
-    assert json.loads(WEB_FIXTURE.read_text(encoding="utf-8")) == json.loads(text), (
+        fixture.write_text(text, encoding="utf-8")
+    assert fixture.exists(), f"run with {UPDATE_ENV}=1 to write {fixture.name}"
+    assert json.loads(fixture.read_text(encoding="utf-8")) == json.loads(text), (
         f"the node API changed: rerun with {UPDATE_ENV}=1 and check the web test"
     )

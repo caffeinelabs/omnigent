@@ -698,14 +698,3 @@ COCKPIT_V2_ENV: Final = "OMNIGENT_FACTORY_COCKPIT_V2"
 def cockpit_v2_enabled() -> bool:
     """Whether people may switch to the new cockpit (``=1``); each person opts in."""
     return os.environ.get(COCKPIT_V2_ENV, "").strip() == "1"
-
-
-NODE_API_ENV: Final = "OMNIGENT_FACTORY_NODE_API"
-
-
-def node_api_enabled() -> bool:
-    """
-    Whether cockpit v3 reads this server's node pages (``=1``) instead of its
-    built-in sample: off until the node API serves level views and status paths.
-    """
-    return os.environ.get(NODE_API_ENV, "").strip() == "1"

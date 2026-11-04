@@ -1,17 +1,9 @@
-// Where v3 pages read nodes from: the server's node API once it serves one
-// (`GET /v1/factory/factories/{fid}/n/{ref}`, advertised by preflight
-// `node_api`), else the sample factory, labelled as sample and loaded only
-// then. Stories and tests pass their own source through `NodeSourceProvider`.
+// Where v3 pages read nodes from: the server's node API
+// (`GET /v1/factory/factories/{fid}/n/{ref}` and `…/n/{ref}/level/{level}`).
+// Stories and tests pass their own source (the sample factory) through
+// `NodeSourceProvider`; the sample never ships in the live path.
 
-import {
-  type ReactNode,
-  createContext,
-  createElement,
-  useContext,
-  useEffect,
-  useState,
-} from "react";
-import { usePreflight } from "@/hooks/useFactory";
+import { type ReactNode, createContext, createElement, useContext } from "react";
 import { answerDecision, factoryErrorFromResponse } from "@/lib/factoryApi";
 import { authenticatedFetch } from "@/lib/identity";
 import type { DecisionAction, DecisionRef, LevelView, NodePage } from "./nodeTypes";
@@ -71,7 +63,8 @@ export const liveNodeSource: NodeSource = {
     return view && normalizeLevelView(view);
   },
   answer: async (_fid, decision, action) => {
-    await answerDecision(decision.id, { option_id: action.id });
+    // The answer route takes the decision's row id; `id` is its ref ("D-45").
+    await answerDecision(decision.row_id ?? decision.id, { option_id: action.id });
   },
 };
 
@@ -87,43 +80,13 @@ export function NodeSourceProvider({
   return createElement(NodeSourceContext.Provider, { value: source }, children);
 }
 
-// The sample (its data and engine) is its own chunk, read only when a v3 page
-// has no node API to read; one copy per tab, so answers carry across pages.
-let sample: NodeSource | null = null;
-let sampleLoad: Promise<NodeSource> | null = null;
-
-function loadSample(): Promise<NodeSource> {
-  sampleLoad ??= import("./fixture/sampleNodeSource").then((m) => {
-    sample = m.sampleNodeSource();
-    return sample;
-  });
-  return sampleLoad;
-}
-
 /**
- * The source this page reads: a provider's, else the server's node API when
- * preflight says it serves one, else the sample factory. Null while preflight
- * or the sample loads, and when `enabled` is false (the shell of another
+ * The source this page reads: a provider's (stories and tests), else the
+ * server's node API. Null when `enabled` is false (the shell of another
  * cockpit: nothing is read).
  */
 export function useNodeSource(enabled = true): NodeSource | null {
   const given = useContext(NodeSourceContext);
-  const preflight = usePreflight({ enabled: enabled && given == null });
-  const wantSample = enabled && !given && !preflight.isPending && preflight.data?.node_api !== true;
-  const [loaded, setLoaded] = useState(sample);
-  useEffect(() => {
-    if (!wantSample || loaded) return;
-    let live = true;
-    void loadSample().then((s) => {
-      if (live) setLoaded(s);
-    });
-    return () => {
-      live = false;
-    };
-  }, [wantSample, loaded]);
   if (!enabled) return null;
-  if (given) return given;
-  if (preflight.isPending) return null;
-  if (preflight.data?.node_api === true) return liveNodeSource;
-  return loaded ?? sample;
+  return given ?? liveNodeSource;
 }

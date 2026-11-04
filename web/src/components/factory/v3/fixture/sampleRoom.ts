@@ -2,8 +2,7 @@
 // tests of the node chat: a snapshot whose projects, PRs and decisions match
 // the sample nodes, the Room's threads and messages (a demo card, a closed
 // alarm, the C-16 ask, an offer and a posted why card), and the routes that
-// serve them with the node API (`node_api` on), so the chat runs its real
-// hooks against fixtures.
+// serve them as the node API, so the chat runs its real hooks against fixtures.
 
 import type {
   ChatCardView,
@@ -313,9 +312,9 @@ export function sampleNodeRoutes(factoryId: string, options: SampleOptions = {})
   return routes;
 }
 
-/** Preflight with the node API on (and per-node threads when asked). */
+/** Preflight with the new cockpit offered (and per-node threads when asked). */
 export function sampleRoomPreflight(nodeThreads = false): Preflight {
-  return { ...preflightOk(), cockpit_v2: true, node_api: true, node_threads: nodeThreads };
+  return { ...preflightOk(), cockpit_v2: true, node_threads: nodeThreads };
 }
 
 /** Every route the node chat reads: the Room, the node API and preflight, under the sample snapshot's id. */

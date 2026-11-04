@@ -1482,8 +1482,6 @@ class Preflight(_View):
     :param tier2: Whether agents may open code PRs to omnigent (off by default).
     :param cockpit_v2: Whether people may switch to the new cockpit
         (``OMNIGENT_FACTORY_COCKPIT_V2``; off by default, then a per-person choice).
-    :param node_api: Whether cockpit v3 reads ``GET …/n/{ref}`` here
-        (``OMNIGENT_FACTORY_NODE_API``; off by default: v3 shows its sample).
     """
 
     github: PreflightGithub
@@ -1495,7 +1493,6 @@ class Preflight(_View):
     max_projects: int = 10
     tier2: Tier2Status | None = None
     cockpit_v2: bool = False
-    node_api: bool = False
 
 
 # ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──

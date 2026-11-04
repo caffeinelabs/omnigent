@@ -1,18 +1,21 @@
 /* oxlint-disable no-await-in-loop -- pages render one at a time, in order */
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import serverLevels from "../__fixtures__/nodeLevels.server.json";
 import serverPages from "../__fixtures__/nodePages.server.json";
 import { renderNode } from "./fixture/renderNode";
+import { resultsWords } from "./LevelStrip";
 import { liveNodeSource } from "./nodeSource";
-import type { NodePage } from "./nodeTypes";
+import type { LevelView, NodePage } from "./nodeTypes";
 import { normalizeNodePage } from "./nodeWire";
 import { statusText } from "./statusModel";
 
-// The server's node pages as `GET …/n/{ref}` returns them, written by
+// The server's node pages and level views as `GET …/n/{ref}` and
+// `…/n/{ref}/level/{level}` return them, written by
 // `tests/server/factory/test_nodes.py` from its sample factory at 13:40
 // (OMNIGENT_UPDATE_NODE_PAGES=1). The live source reads them through
 // `nodeWire`, and every page renders: no alert, no line between nodes, no
-// "0" or "none" cell.
+// "0" or "none" cell; Home lists the features under the needs they came from.
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -20,14 +23,18 @@ vi.mock("@/lib/identity", () => ({
 }));
 
 const PAGES = serverPages as unknown as Record<string, NodePage>;
+const LEVELS = serverLevels as unknown as Record<string, LevelView>;
 const EMPTY = new Set(["none", "None", "—", "-"]);
 const ZERO = /^0(\s|$)/;
 
 function serve() {
   authenticatedFetch.mockImplementation(async (url: string) => {
     const path = new URL(url, "http://x").pathname;
+    const level = path.match(/\/n\/([^/]+)\/level\/([^/]+)$/);
     const ref = decodeURIComponent(path.match(/\/n\/([^/]+)$/)?.[1] ?? "");
-    const body = PAGES[ref];
+    const body = level
+      ? LEVELS[`${decodeURIComponent(level[1]!)}/${decodeURIComponent(level[2]!)}`]
+      : PAGES[ref];
     if (!body) return new Response("{}", { status: 404 });
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -124,5 +131,37 @@ describe("cockpit v3 · the server's node pages", () => {
     expect(screen.getByTestId("v3-results")).toHaveTextContent("7 merged · all in base env");
     const strip = screen.getByTestId("v3-results").parentElement!;
     expect(within(strip).queryByText(/^Goals?$/)).toBeNull();
+  });
+
+  it("Home lists every feature under the need it came from, from the level view", async () => {
+    serve();
+    renderNode("product", { source: liveNodeSource });
+    const view = await screen.findByTestId("v3-level-view");
+    const groups = within(view).getAllByTestId("v3-group");
+    expect(groups.map((g) => g.getAttribute("data-ref"))).toEqual(
+      LEVELS["product/feature"]!.groups.map((g) => g.parent.ref),
+    );
+    expect(within(groups[0]!).getByText("Agent assistant (sample)")).toBeInTheDocument();
+    expect(authenticatedFetch).toHaveBeenCalledWith(
+      expect.stringMatching(/\/n\/product\/level\/feature$/),
+      expect.anything(),
+    );
+  });
+
+  it("a factory with no base env says how many merged, not that none is in it", () => {
+    expect(resultsWords({ merged: 3, open: [], readouts: "not measured" })).toBe("3 merged");
+    expect(resultsWords({ ...PAGES.product!.results!, in_base_env: 6 })).toBe(
+      "7 merged · 6 in base env",
+    );
+  });
+
+  it("an answer posts the decision's row id to the answer route", async () => {
+    authenticatedFetch.mockResolvedValue(new Response("{}", { status: 200 }));
+    const decision = PAGES["assistant-core"]!.status.decision!;
+    await liveNodeSource.answer("f", decision, decision.actions[0]!);
+    const [url, init] = authenticatedFetch.mock.calls.at(-1)! as [string, RequestInit];
+    expect(decision.id).toBe("D-45");
+    expect(url).toBe(`/v1/factory/decisions/${decision.row_id}/answer`);
+    expect(JSON.parse(String(init.body))).toEqual({ option_id: "apply" });
   });
 });

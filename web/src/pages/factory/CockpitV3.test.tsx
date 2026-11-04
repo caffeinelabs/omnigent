@@ -9,6 +9,11 @@ import { definitionResponse } from "@/components/factory/insights/__fixtures__/l
 import { notifyMe } from "@/components/factory/notify/__fixtures__/notifyFixtures";
 import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { COCKPIT_STORAGE_KEY, resetCockpitChoiceCache } from "@/components/factory/shell/cockpitV2";
+import serverLevels from "@/components/factory/__fixtures__/nodeLevels.server.json";
+import serverPages from "@/components/factory/__fixtures__/nodePages.server.json";
+import { sampleNodeSource } from "@/components/factory/v3/fixture/sampleNodeSource";
+import { type NodeSource, NodeSourceProvider } from "@/components/factory/v3/nodeSource";
+import type { LevelView, NodePage } from "@/components/factory/v3/nodeTypes";
 import type { CockpitChoice } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
 import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
@@ -16,6 +21,8 @@ import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 // Cockpit v3 ships behind the cockpit choice: `?cockpit=v3` (while the server
 // offers the new cockpit) turns it on in this browser; v1 and v2 stay as they
 // are, and v2 stays what someone who chose the new cockpit sees by default.
+// v3 reads the server's node API; the switch tests pass the sample factory
+// as their source, the live tests serve the server's own pages.
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -34,35 +41,60 @@ function LocationProbe() {
   return null;
 }
 
-function renderAt(path: string) {
+/** Render the factory at *path*; v3 reads *source* (the sample), or the server when null. */
+function renderAt(path: string, source: NodeSource | null = sampleNodeSource()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const routes = (
+    <MemoryRouter initialEntries={[`${BASE}${path}`]}>
+      <Routes>
+        <Route
+          path="/factory/:factoryId/*"
+          element={
+            <>
+              <FactoryPage />
+              <LocationProbe />
+            </>
+          }
+        />
+      </Routes>
+    </MemoryRouter>
+  );
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[`${BASE}${path}`]}>
-        <Routes>
-          <Route
-            path="/factory/:factoryId/*"
-            element={
-              <>
-                <FactoryPage />
-                <LocationProbe />
-              </>
-            }
-          />
-        </Routes>
-      </MemoryRouter>
+      {source ? <NodeSourceProvider source={source}>{routes}</NodeSourceProvider> : routes}
     </QueryClientProvider>,
   );
+}
+
+const PAGES = serverPages as unknown as Record<string, NodePage>;
+const LEVELS = serverLevels as unknown as Record<string, LevelView>;
+
+/** The server's node API: its pages and level views (written by the server's tests). */
+function nodeRoutes(): Record<string, () => Response> {
+  const routes: Record<string, () => Response> = {};
+  for (const [ref, page] of Object.entries(PAGES)) {
+    routes[`GET ${SNAPSHOT}/n/${encodeURIComponent(ref)}`] = () => json(page);
+  }
+  for (const [key, view] of Object.entries(LEVELS)) {
+    const [ref, level] = key.split("/") as [string, string];
+    routes[`GET ${SNAPSHOT}/n/${encodeURIComponent(ref)}/level/${level}`] = () => json(view);
+  }
+  return routes;
 }
 
 let server: FactoryServer;
 let saved: CockpitChoice | null;
 
-function serve({ choice = "v2" as CockpitChoice | null, offered = true } = {}) {
+function serve({
+  choice = "v2" as CockpitChoice | null,
+  offered = true,
+  extra = {} as Record<string, () => Response>,
+} = {}) {
   saved = choice;
   server = serveFactory(authenticatedFetch, {
     snapshot: () => json(round3Snapshot()),
     overrides: {
+      ...extra,
       "GET /v1/factory/preflight": () => json({ ...preflightOk(), cockpit_v2: offered }),
       [`GET ${SNAPSHOT}/notify/me/ui`]: () => json({ cockpit: saved }),
       [`PUT ${SNAPSHOT}/notify/me/ui`]: async () => {
@@ -110,7 +142,7 @@ describe("cockpit v3 · the switch and routes", () => {
     expect(page).toHaveAttribute("data-ref", "product");
     expect(screen.getByTestId("factory-shell")).toHaveAttribute("data-cockpit", "v3");
     expect(screen.getByTestId("cockpit-topbar")).toBeInTheDocument();
-    // This server has no node API: the page says it shows the sample.
+    // The sample source is labelled as sample.
     expect(screen.getByTestId("v3-sample-notice")).toHaveTextContent("Sample data");
     await waitFor(() => expect(location).toBe(BASE));
     expect(localStorage.getItem(COCKPIT_STORAGE_KEY)).toBe("v3");
@@ -227,6 +259,45 @@ describe("cockpit v3 · the switch and routes", () => {
     expect(await screen.findByTestId("factory-header")).toBeInTheDocument();
     expect(screen.queryByTestId("v3-node-page")).toBeNull();
     expect(localStorage.getItem(COCKPIT_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("cockpit v3 · the server's node API", () => {
+  it("reads the server's pages by default: Home lists its features under their needs", async () => {
+    serve({ extra: nodeRoutes() });
+    renderAt("?cockpit=v3", null);
+
+    const page = await screen.findByTestId("v3-node-page");
+    expect(page).toHaveAttribute("data-ref", "product");
+    const view = await screen.findByTestId("v3-level-view");
+    expect(within(view).getAllByTestId("v3-group")).toHaveLength(
+      LEVELS["product/feature"]!.groups.length,
+    );
+    expect(screen.queryByTestId("v3-sample-notice")).toBeNull();
+    const reads = server.calls.map((c) => c.path);
+    expect(reads).toContain(`${SNAPSHOT}/n/product`);
+    expect(reads).toContain(`${SNAPSHOT}/n/product/level/feature`);
+  });
+
+  it("Apply on the status line answers through the answer route and reads the page again", async () => {
+    const decision = PAGES["assistant-core"]!.status.decision!;
+    const answer = `/v1/factory/decisions/${decision.row_id}/answer`;
+    serve({
+      extra: { ...nodeRoutes(), [`POST ${answer}`]: () => json({ decision: { id: "x" } }) },
+    });
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    renderAt("/n/assistant-core", null);
+    const status = await screen.findByTestId("v3-status");
+    const reads = () => server.calls.filter((c) => c.path === `${SNAPSHOT}/n/assistant-core`);
+    const before = reads().length;
+
+    fireEvent.click(within(status).getByRole("button", { name: "Apply" }));
+
+    await waitFor(() =>
+      expect(server.calls.find((c) => c.path === answer)?.body).toEqual({ option_id: "apply" }),
+    );
+    await waitFor(() => expect(reads().length).toBeGreaterThan(before));
+    expect(await screen.findByText("D-45: Apply")).toBeInTheDocument();
   });
 });
 

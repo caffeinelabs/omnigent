@@ -18,12 +18,12 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from omnigent import factory as F
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import events, initiatives, nodes, snapshot
-from omnigent.server.factory.node_views import validate_page
+from omnigent.server.factory.node_views import validate_level, validate_page
+from omnigent.stores.factory_store import norm_id
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
-from tests.server.factory.conftest import FactoryApi, FactoryWorld
+from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.projects_helpers import BASE, REPO, header_cockpit, project, propose
 
 ASK = "Build an in-app helper (sample): a side panel and a core behind it."
@@ -134,6 +134,7 @@ async def test_the_pages_of_a_planned_ask(cockpit: Cockpit) -> None:
     assert seeded["children"]["items"][0]["ref"] == "PR-9002"
     assert product["node"]["level"] == "product" and product["home"] == "feature"
     assert product["results"]["merged"] == 1 and product["results"]["open"] == ["PR-9002"]
+    assert "in_base_env" not in product["results"]  # no base env: no count, not a zero
     assert message
 
 
@@ -231,15 +232,100 @@ async def test_a_recorded_write_drops_the_memo(cockpit: Cockpit) -> None:
     assert after["version"] != before["version"]
 
 
-async def test_preflight_says_whether_v3_reads_the_node_api(
-    authed_api: FactoryApi, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(F.NODE_API_ENV, raising=False)
-    off = await authed_api.client.get("/v1/factory/preflight", headers={"X-Test-User": "alice"})
-    monkeypatch.setenv(F.NODE_API_ENV, "1")
-    on = await authed_api.client.get("/v1/factory/preflight", headers={"X-Test-User": "alice"})
+async def _level(
+    cockpit: Cockpit, ref: str, level: str, user: str = "alice", **params: Any
+) -> httpx.Response:
+    return await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/n/{ref}/level/{level}",
+        params=params,
+        headers={"X-Test-User": user},
+    )
 
-    assert off.json()["node_api"] is False and on.json()["node_api"] is True
+
+async def test_home_lists_the_features_under_the_needs_they_came_from(cockpit: Cockpit) -> None:
+    message = await _plan(cockpit)
+
+    resp = await _level(cockpit, "product", "feature")
+    tasks = await _level(cockpit, "I-1", "task")
+    above = await _level(cockpit, "T-1", "project")
+    bad = await _level(cockpit, "product", "feature", cursor="x")
+    missing = await _level(cockpit, "T-404", "task")
+
+    assert resp.status_code == 200, resp.text
+    view = validate_level(resp.json())
+    groups = {g["parent"]["ref"]: [i["ref"] for i in g["items"]] for g in view["groups"]}
+    # The planned ask holds its feature; the seeded project shows in place of
+    # its implicit feature, under its implicit need (both fold).
+    assert groups == {f"ask:{message}": ["I-1"], "need:by-server": ["api-version"]}
+    assert view["total"] == 2 and view["via_fold"] == 1 and view["tiles"] is True
+    assert view["level_name"] == "Features" and view["parent_level_name"] == "needs"
+    implicit = next(g for g in view["groups"] if g["parent"]["ref"] == "need:by-server")
+    assert implicit["parent"]["implicit"] is True and implicit["parent"]["folded"] is True
+    task_view = validate_level(tasks.json())
+    assert [(g["parent"]["ref"], [i["ref"] for i in g["items"]]) for g in task_view["groups"]] == [
+        ("core", ["T-1"])
+    ]
+    assert task_view["tiles"] is False and task_view["parent_level_name"] == "projects"
+    assert (above.status_code, error_code(above)) == (404, "unknown_level")
+    assert (bad.status_code, error_code(bad)) == (400, "bad_cursor")
+    assert (missing.status_code, error_code(missing)) == (404, "unknown_node")
+
+
+async def test_a_level_group_pages_at_60(cockpit: Cockpit) -> None:
+    for t in range(75):
+        cockpit.store.upsert_task(cockpit.fid, "api-version", f"k{t}", title=f"Task {t}")
+
+    first = validate_level((await _level(cockpit, "product", "task")).json())
+    group = first["groups"][0]
+    rest = validate_level((await _level(cockpit, "product", "task", cursor=group["next"])).json())
+
+    assert len(group["items"]) == 60 and group["next"] == "api-version@60"
+    assert [g["parent"]["ref"] for g in rest["groups"]] == ["api-version"]
+    assert len(rest["groups"][0]["items"]) == 15 and "next" not in rest["groups"][0]
+    assert {i["ref"] for i in group["items"]}.isdisjoint(
+        i["ref"] for i in rest["groups"][0]["items"]
+    )
+
+
+async def test_a_persons_proposal_holds_its_project_and_an_answer_clears_it(
+    cockpit: Cockpit,
+) -> None:
+    """
+    A proposal's decision is stored as blocking nothing; the node pages count
+    it as needing a person while it changes an active project, carry the row
+    id the answer route takes, and read again once it is answered.
+    """
+    filed = await cockpit.post(
+        f"/v1/factory/factories/{cockpit.fid}/proposals",
+        {
+            "changes": [
+                {"op": "update", "slug": "api-version", "patch": {"constraints": "Keep it fast."}}
+            ],
+            "rationale": "a sample change",
+        },
+    )
+    assert filed.status_code in (200, 201), filed.text
+    ref = filed.json()["decision"]
+    row = cockpit.store.get_decision_by_number(cockpit.fid, int(ref.removeprefix("D-")))
+    assert row is not None and row.blocking is False
+
+    before = await _page(cockpit, "api-version")
+    answered = await cockpit.post(
+        f"/v1/factory/decisions/{before['status']['decision']['row_id']}/answer",
+        {"option_id": "apply"},
+    )
+    after = await _page(cockpit, "api-version")
+
+    assert before["node"]["state"] == "needs" and before["node"]["needs"] == {
+        "open": 1,
+        "blocking": 1,
+    }
+    assert before["status"]["ends"] == "person"
+    assert before["status"]["decision"]["id"] == ref
+    assert before["status"]["decision"]["row_id"] == norm_id(row.id)
+    assert answered.status_code == 200, answered.text
+    assert after["node"]["needs"] == {"open": 0, "blocking": 0}
+    assert after["status"].get("decision") is None
 
 
 async def test_every_page_of_a_13_45_360_factory_answers_under_300ms(cockpit: Cockpit) -> None:

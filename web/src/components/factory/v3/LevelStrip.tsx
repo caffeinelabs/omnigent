@@ -56,9 +56,10 @@ export function LevelCountWords({ c, phone }: { c: LevelCount; phone?: boolean }
   );
 }
 
-/** "7 merged · all in base env", or "nothing merged yet". */
+/** "7 merged · all in base env", or "nothing merged yet"; no base env, no base env words. */
 export function resultsWords(r: Results): string {
   if (!r.merged) return "nothing merged yet";
+  if (r.in_base_env == null) return `${r.merged} merged`;
   const inBase =
     r.in_base_env === r.merged
       ? "all in base env"

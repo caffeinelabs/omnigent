@@ -1,9 +1,10 @@
 /**
  * Cockpit v3's node pages: `/n/<ref>` (one node with its children) and
  * `/n/<ref>/<level>` (one level under it, grouped under parents); Home is the
- * product's node page. Someone on the classic or v2 cockpit who opens a v3
- * link lands on the closest page of their cockpit. On sample data an answer
- * changes only the sample, and says so. Every node page carries its chat; a
+ * product's node page, read from the server's node API. Someone on the
+ * classic or v2 cockpit who opens a v3 link lands on the closest page of
+ * their cockpit. A sample source (stories, tests) is labelled, and an answer
+ * there changes only the sample and says so. Every node page carries its chat; a
  * verb named in the address (`?verb=start`, from words in another node's
  * chat) opens once the page is in.
  */
@@ -85,9 +86,7 @@ function SampleNotice({ label, onBack }: { label: string; onBack: () => void }) 
       <span className="rounded-full border border-status-blue/45 bg-status-blue/12 px-2 py-px text-status-blue-fg">
         {label}
       </span>
-      <span>
-        This server does not serve the node API yet, so cockpit v3 shows a sample factory.
-      </span>
+      <span>These nodes are a sample, not this factory&rsquo;s.</span>
       <button type="button" onClick={onBack} className="text-status-blue-fg hover:underline">
         Back to cockpit v2
       </button>

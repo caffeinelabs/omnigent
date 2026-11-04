@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.server.factory import node_refs, waits
 from omnigent.server.factory.charter import SPAWN_SERVER, spawn_owner
+from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
     from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProposal
@@ -135,6 +136,7 @@ class Ask:
     ready PRs a person merges into one base (answered on the code host).
 
     :param id: ``D-45``, or ``merge:<base>`` for a group of merges.
+    :param row_id: The decision's row id, which the answer route takes (none for merges).
     :param verb: What the person does, in words (``Apply C-16``).
     :param blocking: It holds work (asks that block nothing never colour a node).
     :param at: The node it sits on (its dependents count in its weight).
@@ -153,6 +155,7 @@ class Ask:
     subject: str | None = None
     grouped: bool = False
     at: str | None = None
+    row_id: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         """:returns: The ``DecisionRef``."""
@@ -163,7 +166,7 @@ class Ask:
             "asker": self.asker,
             "age": self.age,
         }
-        for key in ("expires", "external_url", "subject", "title", "text"):
+        for key in ("expires", "external_url", "subject", "title", "text", "row_id"):
             value = getattr(self, key)
             if value:
                 out[key] = value
@@ -268,12 +271,13 @@ class Paths:
             actions=actions,
             asker=t.asker_of(decision, proposal),
             age=age(now - decision.created_at),
-            blocking=bool(decision.blocking),
+            blocking=t.blocks(decision),
             title=clip(decision.question, _TEXT_MAX) or None,
             text=clip(context[0], _TEXT_MAX) if context else None,
             expires=expires,
             subject=what,
             at=t.decision_node.get(decision.id),
+            row_id=norm_id(decision.id),
         )
         self._asks[decision.ref] = ask
         return ask
@@ -330,7 +334,7 @@ class Paths:
     def own_ask(self, node: _N) -> Ask | None:
         """The node's own open blocking decision (or one on a proposed child), oldest first."""
         blocking = sorted(
-            (d for d in self.tree.own_decisions(node) if d.blocking),
+            (d for d in self.tree.own_decisions(node) if self.tree.blocks(d)),
             key=lambda d: (d.created_at, d.number),
         )
         return self.decision_ask(blocking[0]) if blocking else None
@@ -380,10 +384,31 @@ class Paths:
         mine = self.own_ask(node)
         if mine is not None:
             return Path((Step("→", ask=mine),), "person", mine)
-        for found in (own, merge, down, self._start_path(node)):
+        for found in (own, merge, down, self._start_path(node), self._idle_path(node)):
             if found is not None:
                 return found
         return Path(end=state, at=node.ref)
+
+    def _idle_path(self, node: _N) -> Path | None:
+        """
+        With nothing blocked under it, step down to the child that has not
+        started, so the line still ends at who starts it ("Not started: T-16 →
+        waits for Juno to start it"), not at a bare "Not started".
+        """
+        t = self.tree
+        best: tuple[int, ...] | None = None
+        found: Path | None = None
+        for index, kid in enumerate(t.shown_children(node.ref)):
+            if kid.ghost or kid.later or kid.level == "run" or t.state(kid.ref) != "notstarted":
+                continue
+            sub = self.path(kid.ref)
+            if not sub.steps or sub.end == "cycle":
+                continue
+            key = (len(t.dependents_of(kid.ref)), -(kid.col or 0), -index)
+            if best is None or key > best:
+                best = key
+                found = Path((Step("›", ref=kid.ref), *sub.steps), sub.end, sub.ask, sub.at)
+        return found
 
     def _own_path(self, node: _N) -> Path | None:
         """The path of the node's first own wait, when it ends or hops somewhere."""
@@ -402,10 +427,22 @@ class Paths:
         """
         A project that has not started and that nothing holds ends at who starts
         it: the snapshot's ``start`` (the server's next pass, Atlas, a starting
-        sandbox), else who its charter says spawns its lead.
+        sandbox), else who its charter says spawns its lead; so does the base
+        env's setup project. A task its project's lead has not started yet
+        ends at that lead; in a project nobody has started, at who starts that.
         """
         t = self.tree
-        if node.level != "project" or node.own != "notstarted":
+        if node.level == "task" and node.own == "notstarted" and not node.history:
+            project = t.nodes.get(node.parent or "")
+            lead = project.owner if project is not None else None
+            starts = self._start_path(project) if project is not None and not lead else None
+            if project is not None and starts is not None:
+                hop = Step("→", label="waits on", ref=project.ref)
+                return Path((hop, *starts.steps), starts.end, at=project.ref)
+            label = f"waits for {lead or 'its lead'} to start it"
+            step = Step("→", label=clip(label, _LABEL_MAX), why=f"Nothing holds it: {label}.")
+            return Path((step,), "other", at=node.ref)
+        if not _started_like_a_project(node) or node.own != "notstarted":
             return None
         view = t.facts.views.get(node.order or "") or {}
         start = view.get("start") if isinstance(view.get("start"), Mapping) else None
@@ -792,7 +829,7 @@ class Paths:
 
     def not_started_for(self, node: _N) -> str | None:
         """How long a project has waited to start (``7 h``), while it has not."""
-        if node.level != "project" or node.own != "notstarted" or not node.since:
+        if not _started_like_a_project(node) or node.own != "notstarted" or not node.since:
             return None
         return duration(self.tree.facts.now - node.since)
 
@@ -821,6 +858,15 @@ class Paths:
             label = "Waiting:"
             if since and not first.ref and not first.hold:
                 label = "Not started:" if compact else f"Not started for {since}:"
+            elif (
+                t.state(node.ref) == "notstarted"
+                and not first.hold
+                and (node.level == "task" or first.sep == "›")
+            ):
+                label = "Not started:"
+                # The label says it already; "· not started" would repeat it.
+                if tail == _STATE_WORDS["notstarted"]:
+                    tail = None
             out = {
                 "kind": "waiting",
                 "label": label,
@@ -934,6 +980,11 @@ def _waits_words(label: str) -> str:
         if text.startswith(word):
             return f"waits {word.split(' ', 1)[1]}{text[len(word) :]}"
     return text
+
+
+def _started_like_a_project(node: _N) -> bool:
+    """A project, or the base env's setup project (an item of the factory tree)."""
+    return node.level == "project" or (node.level == "item" and node.kind == "env")
 
 
 def decision_proposal(
