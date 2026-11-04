@@ -406,14 +406,15 @@ async def test_a_present_assignee_keeps_the_decision(cockpit: Cockpit) -> None:
 
 
 async def test_non_blocking_decisions_and_custom_windows(cockpit: Cockpit) -> None:
-    quiet = _decision(cockpit, await _ask(cockpit, "FYI?", blocking=False))
-    loud = _decision(cockpit, await _ask(cockpit, "Now?"))
+    # The factory's first definition (an ask reads it first: decide first).
     cockpit.store.put_definition(
         cockpit.fid,
         doc={"decisions": {"escalate_after_m": 5, "escalate_owners_after_m": 15}},
         created_by="alice",
         created_via="human",
     )
+    quiet = _decision(cockpit, await _ask(cockpit, "FYI?", blocking=False))
+    loud = _decision(cockpit, await _ask(cockpit, "Now?"))
 
     done = await decision_routing.escalate_decisions(cockpit.app.state, loud.created_at + 5 * 60)
 
