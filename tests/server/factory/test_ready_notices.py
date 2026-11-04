@@ -82,6 +82,9 @@ def test_plan_new_repeat_and_reminder() -> None:
     assert later.event_data(key)["reminder"] is True
     changed = plan_ready(_key(head="c" * 40), announced, now - 600, now=now, reminder=DAY)
     assert changed.kind == NEW and changed.mails_agents
+    # Back at the announced head after another one: news again.
+    back = plan_ready(key, announced, now - 600, now=now, reminder=DAY, head_moved=True)
+    assert (back.kind, back.announced_at) == (NEW, int(now))
 
 
 def test_an_event_from_before_the_key_is_announced_once_more() -> None:
@@ -109,12 +112,19 @@ def test_the_reminder_interval_is_configurable(
 
 
 def test_quiet_flags() -> None:
-    assert ready_notices.quiet_for_agents({"repeat": True})
-    assert ready_notices.quiet_for_agents({"reminder": True})
-    assert not ready_notices.quiet_for_agents({"repeat": "yes"})
-    assert not ready_notices.quiet_for_agents(None)
-    assert ready_notices.is_repeat({"repeat": True}) and not ready_notices.is_repeat({})
-    assert ready_notices.is_reminder({"reminder": True})
+    ready = ready_notices.READY_KIND
+    assert ready_notices.is_old_news(ready, {"repeat": True})
+    assert ready_notices.is_old_news(ready, {"reminder": True})
+    assert not ready_notices.is_old_news(ready, {"repeat": "yes"})
+    assert not ready_notices.is_old_news(ready, None)
+    assert ready_notices.is_repeat(ready, {"repeat": True})
+    assert not ready_notices.is_repeat(ready, {})
+    assert ready_notices.is_reminder(ready, {"reminder": True})
+    # The flags mean nothing on any other event.
+    for kind in ("pr.merged", "decision.opened"):
+        assert not ready_notices.is_old_news(kind, {"repeat": True, "reminder": True})
+        assert not ready_notices.is_repeat(kind, {"repeat": True})
+        assert not ready_notices.is_reminder(kind, {"reminder": True})
 
 
 # ── Readers: the Room and the digest ───────────────────────────

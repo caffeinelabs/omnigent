@@ -1073,6 +1073,40 @@ async def test_idle_spend_tells_the_owners_once_a_day(
     assert fake_slack.dms_to("U0CAROL") == []
 
 
+@pytest.mark.parametrize(
+    ("data", "idle"),
+    [({"repeat": True}, True), ({"reminder": True}, True), ({}, False)],
+)
+async def test_a_pr_ready_again_unchanged_is_not_progress(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack, data: dict[str, Any], idle: bool
+) -> None:
+    link(cockpit, "alice")
+    start = rig.clock.now
+    rig.engine.samples[snapshot.bare_id(cockpit.fid)] = deque(
+        [(start - 6 * H, 100.0), (start - 3 * H, 108.0)]
+    )
+    rig.cost = 116.27
+    for n in range(3):
+        await events.emit(
+            cockpit.app.state,
+            cockpit.fid,
+            "pr.ready",
+            severity="info" if data else "notice",
+            subject=f"pr:sample-org/sample-app#{9945 + n}",
+            summary="ready",
+            # The server merges these, so E5 sends nothing either way.
+            data={"pr_id": f"{n:032x}", "auto_merge": True, **data},
+        )
+
+    await rig.tick()
+    await rig.tick(31)
+    await rig.tick(engine_mod.IDLE_SAMPLE_S)
+    await rig.tick(31)
+
+    texts = fake_slack.texts_to("U0ALICE")
+    assert any("The factory is idling" in t for t in texts) is idle
+
+
 async def test_a_paused_factory_is_not_idling(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:

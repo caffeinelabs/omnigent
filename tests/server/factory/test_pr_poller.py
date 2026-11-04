@@ -1059,7 +1059,8 @@ async def test_mergeable_unknown_twice_in_a_row_holds_the_gate(polling: Polling)
     await p.poll()
     row = p.pr()
     assert row.ready is False and row.gates["mergeable"] == "pending"
-    assert len(p.events("pr.not_ready")) == 1
+    [not_ready] = p.events("pr.not_ready")
+    assert not_ready.severity == "info"
 
     gh_pr.mergeable = "CONFLICTING"
     await p.poll()
@@ -1095,12 +1096,15 @@ async def test_a_pr_that_flips_ready_again_unchanged_mails_nobody(polling: Polli
     assert {e.data["announced_at"] for e in ready} == {ready[0].data["announced_at"]}
     assert len(_room(p, project_thread("api-version"), "ready")) == 1
     assert len(_room(p, pr_thread(p.pr().id), "ready")) == 1
-    # Neither the lead nor the PL is woken by a repeat.
-    for member in ("lead_a", "pl"):
-        conv = p.world.get(member)
-        assert not any(
-            e.data.get("repeat") for e in quiet_beats.relevant_events(conv, p.events())
-        ), member
+    # The lead hears neither the dips nor the repeats; the PL hears both, ready last.
+    lead_seen = quiet_beats.relevant_events(p.world.get("lead_a"), p.events())
+    assert [e.kind for e in lead_seen if e.kind.startswith("pr.")] == ["pr.ready"]
+    assert {e.severity for e in p.events("pr.not_ready")} == {"info"}
+    pl_seen = quiet_beats.relevant_events(p.world.get("pl"), p.events())
+    assert [e.kind for e in pl_seen if e.kind.startswith("pr.")][-2:] == [
+        "pr.not_ready",
+        "pr.ready",
+    ]
 
     # A new head is news again.
     gh_pr.push(sha("second"), p.clock.now + 10, checks=[FakeCheck("ci / test")])
@@ -1149,6 +1153,66 @@ async def test_an_unchanged_ready_pr_is_reminded_in_the_room_after_the_interval(
     await p.poll()
     assert p.events("pr.ready")[-1].data.get("repeat") is True
     assert len(_room(p, project_thread("api-version"), "ready")) == 2
+
+
+def _last_pr_bullet(p: Polling, member: str) -> str:
+    """The newest ``PR #`` bullet of *member*'s next heartbeat delta."""
+    from omnigent.server.factory import quiet_beats
+
+    seen = quiet_beats.relevant_events(p.world.get(member), p.events())
+    delta = quiet_beats.delta_text(seen, 1) or ""
+    return [b.strip() for b in delta.split("•")[1:] if b.strip().startswith("PR #")][-1]
+
+
+@pytest.mark.usefixtures("room")
+@pytest.mark.parametrize("flap", ["check_rerun", "unknown_twice"])
+async def test_after_a_flap_the_lead_and_the_pl_last_read_ready(
+    polling: Polling, flap: str
+) -> None:
+    """A dip the mergeable hold does not absorb never leaves an agent believing "not ready"."""
+    p = polling
+    gh_pr = await _ready_on_main(p)
+
+    if flap == "check_rerun":
+        gh_pr.checks = [FakeCheck("ci / test", status="IN_PROGRESS")]
+        await p.poll()
+        gh_pr.checks = [FakeCheck("ci / test")]
+    else:
+        gh_pr.mergeable = "UNKNOWN"
+        await p.poll()
+        await p.poll()
+        gh_pr.mergeable = "MERGEABLE"
+    assert p.pr().ready is False
+    await p.poll()
+    assert p.pr().ready is True
+
+    assert _last_pr_bullet(p, "lead_a") == "PR #9630 ready for human merge"
+    assert _last_pr_bullet(p, "pl").startswith("PR #9630 ready again")
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 1
+
+
+@pytest.mark.usefixtures("room")
+async def test_a_head_pushed_and_force_pushed_back_is_announced_again(polling: Polling) -> None:
+    from omnigent.server.factory.actor import project_thread
+
+    p = polling
+    gh_pr = await _ready_on_main(p)
+    first = gh_pr.head_sha
+
+    # Head B never turns ready (its checks run); then the branch is force-pushed back.
+    gh_pr.push(sha("b"), p.clock.now + 10, checks=[FakeCheck("ci / test", status="IN_PROGRESS")])
+    await p.poll()
+    assert p.pr().ready is False and p.pr().head_sha == sha("b")
+    gh_pr.push(first, p.clock.now + 10, checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    assert p.pr().ready is True and p.pr().head_sha == first
+
+    ready = p.events("pr.ready")
+    assert [e.severity for e in ready] == ["notice", "notice"]
+    assert not any(e.data.get("repeat") for e in ready)
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
+    assert len(_room(p, project_thread("api-version"), "ready for human merge")) == 2
 
 
 def test_charter_defaults_decide_whether_previews_are_on() -> None:

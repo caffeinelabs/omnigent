@@ -417,7 +417,7 @@ def plan_cards(deps: FactoryDeps, event: Any) -> list[CardRow]:
         card = _card("control", None, event.id)
         return [CardRow(_project_or_factory(event.project_slug), event.summary, card)]
     if kind in PR_KINDS:
-        if ready_notices.is_repeat(event.data):
+        if ready_notices.is_repeat(kind, event.data):
             # A PR ready again at the same head and gates: the Room has its card.
             return []
         return _pr_rows(deps, event)

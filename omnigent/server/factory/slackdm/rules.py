@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 from omnigent.factory import PROPOSAL_OPEN_STATUSES
-from omnigent.server.factory.ready_notices import quiet_for_agents
+from omnigent.server.factory.ready_notices import is_old_news
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.stores.factory_store import norm_id
 
@@ -65,7 +65,7 @@ PROGRESS_KINDS: Final = (
     "demo.published",
     "proposal.applied",
 )
-"""Any of these in the idle window means the factory is not idling."""
+"""Any of these in the idle window means the factory is not idling (see :func:`is_progress`)."""
 
 RANK: Final = {
     "deadline": 0,
@@ -642,7 +642,7 @@ def pr_items(
     nothing: the digest's Waiting on you list keeps reminding people.
     """
     data = event.data or {}
-    if data.get("auto_merge") is True or quiet_for_agents(data):
+    if data.get("auto_merge") is True or is_old_news(event.kind, data):
         return []
     owner = ctx.human_owners.get(pr.project_slug or "")
     if owner and owner in ctx.people:
@@ -831,6 +831,14 @@ def retro_items(
     return out
 
 
+def is_progress(event: FactoryEvent) -> bool:
+    """
+    :returns: Whether a :data:`PROGRESS_KINDS` event shows progress: a PR ready
+        again at the same head and gates, or reminded, does not.
+    """
+    return event.kind in PROGRESS_KINDS and not is_old_news(event.kind, event.data)
+
+
 def idle_items(
     ctx: FactoryCtx, *, spent: float, window_s: float, now: float, rate: float | None
 ) -> list[tuple[str, Item]]:
@@ -956,6 +964,7 @@ __all__ = [
     "incident_items",
     "incident_recipients",
     "is_actor",
+    "is_progress",
     "load_proposals",
     "mention_items",
     "owners_plus",

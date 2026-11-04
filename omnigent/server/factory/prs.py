@@ -753,8 +753,9 @@ async def apply_refresh(
 
     Writes the gates (with evidence), head, draft/state, sizes and the
     merge/close facts; then emits ``gate.changed``, ``pr.ready`` /
-    ``pr.not_ready``, ``pr.merged``, ``pr.closed`` and ``pr.human_review``,
-    sends the PL (and the lead) their notices once per transition, opens a
+    ``pr.not_ready`` (``info``: no lead acts on it), ``pr.merged``,
+    ``pr.closed`` and ``pr.human_review``, sends the PL its notices once per
+    transition (READY once per head and gates), opens a
     ``pr_closed`` decision for a PR closed without merge, and re-derives the
     project's stage. A human change request on the head holds it not ready;
     a GitHub one lifts when its reviewer approves or it is dismissed on GitHub.
@@ -945,12 +946,16 @@ async def _announce_ready(
     auto: bool,
     pl_target: str,
     out: _Outcome,
+    *,
+    head_moved: bool,
 ) -> None:
     """
     ``pr.ready`` for a PR that turned ready, and its lead's READY notice once per head and gates.
 
     A lead that is not the PR's PL is never mailed: the ``pr.ready`` notice
     reaches it in its next heartbeat's delta. See :mod:`.ready_notices`.
+
+    :param head_moved: The head differs from the stored row's (always news).
     """
     key = ready_notices.ready_key(pr.head_sha, pr.gates, auto=auto, human_review=pr.human_review)
     last = await asyncio.to_thread(_last_ready_event, deps, pr)
@@ -960,6 +965,7 @@ async def _announce_ready(
         last.ts / 1000 if last is not None else None,
         now=float(pr.last_polled_at or pr.updated_at),
         reminder=ready_notices.reminder_s(),
+        head_moved=head_moved,
     )
     data = {"auto_merge": auto, "head_sha": pr.head_sha, **plan.event_data(key)}
     if plan.kind == ready_notices.REPEAT:
@@ -1021,19 +1027,22 @@ async def _announce(
         and await asyncio.to_thread(_auto_merge_target, deps, pr, project)
     )
     # Ready again, or still ready at another head or other gate states: maybe news.
+    head_moved = (row.head_sha or "").lower() != (pr.head_sha or "").lower()
     moved = pr.ready and (
         not row.ready
-        or row.head_sha != pr.head_sha
+        or head_moved
         or ready_notices.gate_states(row.gates) != ready_notices.gate_states(pr.gates)
     )
     if moved:
-        await _announce_ready(deps, pr, report, auto, pl_target, out)
+        await _announce_ready(deps, pr, report, auto, pl_target, out, head_moved=head_moved)
     elif row.ready and not pr.ready and pr.state == "open":
         reasons = report.reasons[:3]
         if changes_requested_on_head(pr.human_review, pr.head_sha):
             reasons = [human_hold_reason(pr.human_review or {}), *reasons][:3]
+        # info: its PL reads it (every event of its project); a lead never acts on it,
+        # so a gate that dips and comes back leaves the lead's last word "ready".
         out.events.append(
-            _event("pr.not_ready", f"PR #{pr.number} no longer ready", "notice", reasons=reasons)
+            _event("pr.not_ready", f"PR #{pr.number} no longer ready", "info", reasons=reasons)
         )
     if pr.state == "merged" and row.merged_at is None:
         out.events.append(

@@ -5,8 +5,10 @@ delivered beat, none of its sub-agents has been running without progress for
 half the stuck threshold, and that beat is younger than the backstop. The
 backstop is three intervals, doubled for every backstop beat in a row that
 found nothing (an idle factory), up to a day; any relevant event resets it.
-A delivered beat carries a short delta built from those events. Pure
-functions; the supervisor reads the events and the clock.
+A delivered beat carries a short delta built from those events: the newest
+few, plus every PR's latest ready or merged news, which a lead that is not the
+PR's PL learns only there. Pure functions; the supervisor reads the events and
+the clock.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from omnigent.factory import LABEL_PROJECT, LABEL_ROLE, ROLE_LEAD, ROLE_PROJECT_LEAD
-from omnigent.server.factory.ready_notices import quiet_for_agents
+from omnigent.server.factory.ready_notices import is_reminder
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
@@ -36,6 +38,12 @@ DEFAULT_IDLE_BACKSTOP_MAX_S: Final = 86400.0
 """The longest an idle member goes without a beat (never shorter than three intervals)."""
 
 _LEAD_SEVERITIES: Final = frozenset({"notice", "warning", "critical"})
+PR_STATE_KINDS: Final = frozenset(
+    {"pr.ready", "pr.not_ready", "pr.merged", "pr.auto_merged", "pr.closed"}
+)
+"""Events that change what a PR is waiting on; the newest per PR is its state."""
+PINNED_PR_KINDS: Final = frozenset({"pr.ready", "pr.merged"})
+"""A PR whose newest state event is one of these keeps its bullet in every delta."""
 
 
 def quiet_beats_enabled() -> bool:
@@ -77,9 +85,11 @@ def relevant_events(conv: Conversation, events: Iterable[FactoryEvent]) -> list[
 
     An event touches a member when it is to it, concerns a PL's project, or
     (for a lead) is at least a notice. Heartbeat events, still-queued mail,
-    anything the member itself did (its posts, label changes, questions) and
-    news repeated or kept for people (a PR ready again at the same head, a
-    reminder) never count, so rewriting its own beacon cannot reset its backoff.
+    anything the member itself did (its posts, label changes, questions) and a
+    ``pr.ready`` reminder (for people, see :mod:`.ready_notices`) never count,
+    so rewriting its own beacon cannot reset its backoff. A ``pr.ready``
+    repeat does count for a PL: it follows the ``pr.not_ready`` that already
+    woke it, and its last word on the PR must be "ready".
 
     :param conv: A top-level member.
     :param events: Factory events since its last beat, oldest first.
@@ -91,7 +101,7 @@ def relevant_events(conv: Conversation, events: Iterable[FactoryEvent]) -> list[
     for event in events:
         if event.kind.startswith("heartbeat.") or event.kind == "message.queued":
             continue
-        if event.from_id == conv.id or quiet_for_agents(event.data):
+        if event.from_id == conv.id or is_reminder(event.kind, event.data):
             continue
         if (
             event.to_id == conv.id
@@ -107,6 +117,29 @@ def _bullet(summary: str) -> str:
     return flat if len(flat) <= BULLET_MAX_CHARS else flat[: BULLET_MAX_CHARS - 1] + "…"
 
 
+def _pr_key(event: FactoryEvent) -> str | None:
+    pr_id = (event.data or {}).get("pr_id")
+    return event.subject or (str(pr_id) if pr_id else None)
+
+
+def _kept(events: Sequence[FactoryEvent]) -> list[FactoryEvent]:
+    """
+    The newest :data:`DELTA_MAX_BULLETS` events, plus each PR's newest state
+    event when it says ready or merged, oldest first.
+    """
+    keep = set(range(max(0, len(events) - DELTA_MAX_BULLETS), len(events)))
+    seen: set[str] = set()
+    for i in range(len(events) - 1, -1, -1):
+        event = events[i]
+        key = _pr_key(event) if event.kind in PR_STATE_KINDS else None
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        if event.kind in PINNED_PR_KINDS:
+            keep.add(i)
+    return [events[i] for i in sorted(keep)]
+
+
 def delta_text(events: Sequence[FactoryEvent], since_beat: int) -> str | None:
     """
     Summarise what changed since beat *since_beat*.
@@ -114,13 +147,15 @@ def delta_text(events: Sequence[FactoryEvent], since_beat: int) -> str | None:
     :param events: Relevant events, oldest first.
     :param since_beat: Number of the last delivered beat (``0`` = none).
     :returns: e.g. ``"2 changes since #11: • PR #9630 ready • D-3 answered"``
-        (the newest :data:`DELTA_MAX_BULLETS`), or ``None`` without events or a prior beat.
+        (the newest :data:`DELTA_MAX_BULLETS`, plus every PR whose newest state
+        event is ready or merged, so that news is never dropped), or ``None``
+        without events or a prior beat.
     """
     if not events or since_beat < 1:
         return None
     count = len(events)
     noun = "change" if count == 1 else "changes"
-    bullets = " ".join(f"• {_bullet(e.summary)}" for e in events[-DELTA_MAX_BULLETS:])
+    bullets = " ".join(f"• {_bullet(e.summary)}" for e in _kept(events))
     return f"{count} {noun} since #{since_beat}: {bullets}"
 
 
@@ -180,6 +215,8 @@ __all__ = [
     "DELTA_MAX_BULLETS",
     "EVENT_SCAN_LIMIT",
     "IDLE_BACKSTOP_MAX_ENV",
+    "PINNED_PR_KINDS",
+    "PR_STATE_KINDS",
     "QUIET_BEATS_ENV",
     "SKIP_EVENT_INTERVAL_S",
     "BeatPlan",

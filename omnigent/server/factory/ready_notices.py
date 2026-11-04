@@ -12,18 +12,23 @@ classified against the PR's newest ``pr.ready`` event by its
 :func:`ready_key` (head sha, the state of every gate, the newest human review
 verdict, and whether the server merges it):
 
-- ``new``: no earlier announcement, or the key changed. The ``pr.ready``
-  event is a notice (Room card and project line, Slack, the lead's heartbeat
-  delta) and the PR's lead gets the READY notice.
+- ``new``: no earlier announcement, the key changed, or the head moved since
+  the last poll (a push and a force-push back). The ``pr.ready`` event is a
+  notice (Room card and project line, Slack, the lead's heartbeat delta) and
+  the PR's lead gets the READY notice.
 - ``repeat``: the same key, announced less than :func:`reminder_s` ago. The
-  event is ``info`` and flagged ``repeat``: the Room, Slack DMs, the digest
-  counts and agents' heartbeats ignore it, and nobody is mailed.
+  event is ``info`` and flagged ``repeat``: nobody is mailed and the Room,
+  Slack DMs, the digest counts and the idle-spend check ignore it. It follows
+  an ``info`` ``pr.not_ready``, so a lead (woken by notices only) sees
+  neither, while the PR's PL (every event of its project) reads "no longer
+  ready", then "ready again".
 - ``reminder``: the same key, announced at least :func:`reminder_s` ago
   (``OMNIGENT_FACTORY_READY_REMINDER_S``, 24 h by default). The Room shows it
   again ("still ready"), nobody is mailed and heartbeats ignore it: people are
   reminded by the Slack digest's Waiting on you list, not the agents.
 
-The decision is pure; :mod:`.prs` reads the newest event and emits the next one.
+The flags only mean this on ``pr.ready`` events. The decision is pure;
+:mod:`.prs` reads the newest event and emits the next one.
 """
 
 from __future__ import annotations
@@ -42,6 +47,8 @@ READY_REMINDER_ENV: Final = "OMNIGENT_FACTORY_READY_REMINDER_S"
 DEFAULT_READY_REMINDER_S: Final = 24 * 3600.0
 """An unchanged ready PR is announced again (to people, in the Room) after this long."""
 MIN_READY_REMINDER_S: Final = 3600.0
+
+READY_KIND: Final = "pr.ready"
 
 NEW: Final = "new"
 REPEAT: Final = "repeat"
@@ -148,6 +155,7 @@ def plan_ready(
     *,
     now: float,
     reminder: float,
+    head_moved: bool = False,
 ) -> ReadyPlan:
     """
     Classify one ready turn of a PR (pure).
@@ -159,10 +167,12 @@ def plan_ready(
     :param previous_ts: That event's time in epoch seconds.
     :param now: Epoch seconds.
     :param reminder: :func:`reminder_s`.
+    :param head_moved: The head differs from the last poll's. A head pushed
+        and then force-pushed back to the announced one is news again.
     :returns: The :class:`ReadyPlan`.
     """
     at = int(now)
-    if not isinstance(previous, Mapping) or previous.get(KEY_FIELD) != key:
+    if head_moved or not isinstance(previous, Mapping) or previous.get(KEY_FIELD) != key:
         return ReadyPlan(NEW, at)
     announced = previous.get(ANNOUNCED_AT_FIELD)
     if not isinstance(announced, int | float) or isinstance(announced, bool):
@@ -172,22 +182,26 @@ def plan_ready(
     return ReadyPlan(REPEAT, int(announced))
 
 
-def is_repeat(data: Mapping[str, Any] | None) -> bool:
-    """:returns: Whether an event repeats news its readers already got (nothing to show)."""
-    return isinstance(data, Mapping) and data.get(REPEAT_FLAG) is True
+def _flagged(kind: str, data: Mapping[str, Any] | None, flag: str) -> bool:
+    return kind == READY_KIND and isinstance(data, Mapping) and data.get(flag) is True
 
 
-def is_reminder(data: Mapping[str, Any] | None) -> bool:
-    """:returns: Whether an event is a reminder for people only."""
-    return isinstance(data, Mapping) and data.get(REMINDER_FLAG) is True
+def is_repeat(kind: str, data: Mapping[str, Any] | None) -> bool:
+    """:returns: Whether an event is a ``pr.ready`` repeat (no Room row, no DM, nobody mailed)."""
+    return _flagged(kind, data, REPEAT_FLAG)
 
 
-def quiet_for_agents(data: Mapping[str, Any] | None) -> bool:
+def is_reminder(kind: str, data: Mapping[str, Any] | None) -> bool:
+    """:returns: Whether an event is a ``pr.ready`` reminder, for people only (not heartbeats)."""
+    return _flagged(kind, data, REMINDER_FLAG)
+
+
+def is_old_news(kind: str, data: Mapping[str, Any] | None) -> bool:
     """
-    :returns: Whether an event must not wake or brief an agent: a repeat (it
-        already had the news) or a reminder (for people, via the Slack digest).
+    :returns: Whether an event is a ``pr.ready`` repeat or reminder: no Slack
+        DM, no digest count, no progress for the idle-spend check.
     """
-    return is_repeat(data) or is_reminder(data)
+    return is_repeat(kind, data) or is_reminder(kind, data)
 
 
 __all__ = [
@@ -196,6 +210,7 @@ __all__ = [
     "KEY_FIELD",
     "MIN_READY_REMINDER_S",
     "NEW",
+    "READY_KIND",
     "READY_REMINDER_ENV",
     "REMINDER",
     "REMINDER_FLAG",
@@ -203,10 +218,10 @@ __all__ = [
     "REPEAT_FLAG",
     "ReadyPlan",
     "gate_states",
+    "is_old_news",
     "is_reminder",
     "is_repeat",
     "plan_ready",
-    "quiet_for_agents",
     "ready_key",
     "reminder_s",
 ]
