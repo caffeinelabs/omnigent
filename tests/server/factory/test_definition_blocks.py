@@ -685,6 +685,7 @@ async def test_owners_edit_the_blocks_and_members_get_no_product_text(cockpit: C
         "team.projects",
         "team.templates",
         "structure",
+        "done_review",
     ]
     assert view["not_trialable_why"]["discovery"] == "needs discovery guards"
     assert view["agent_paths"]["sentinel"] == list(blocks.AGENT_PATHS["sentinel"])

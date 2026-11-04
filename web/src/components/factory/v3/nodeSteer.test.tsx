@@ -116,7 +116,7 @@ describe("cockpit v3 · since last look (W10)", () => {
 
 describe("cockpit v3 · the steering routes (api.md §3.8, §4)", () => {
   it("are all on the live source: the server serves every one", () => {
-    const names = ["preview", "apply", "undo", "needsYou", "find", "seen"] as const;
+    const names = ["preview", "apply", "undo", "needsYou", "find", "seen", "review"] as const;
     expect([...SERVED_STEER].sort()).toEqual([...names].sort());
     for (const name of names) expect(liveNodeSource[name]).toBe(steerRoutes[name]);
     expect(liveNodeSource.undoAnswer).toBeTypeOf("function");

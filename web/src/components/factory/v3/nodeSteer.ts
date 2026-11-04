@@ -329,6 +329,36 @@ export function useRefreshNodes(factoryId?: string): () => Promise<void> {
  * Apply a preview. The toast says what happened and offers Undo (12 s, or `u`);
  * the node keeps "Undo (n min left)" for the rest of its window.
  */
+/**
+ * "Is this done?" on a feature, preview-free (it only reads): the server asks
+ * the independent reviewer now, or answers with the review in progress; the
+ * pages read again and a toast says who reviews. `supported` is false on a
+ * source without the route (the verb then opens its plain preview).
+ */
+export function useAskReview(page: NodePage, factoryId?: string) {
+  const fid = useFid(factoryId);
+  const source = useNodeSource();
+  const toast = useFactoryToast();
+  const refresh = useRefreshNodes(fid);
+  const ref = page.node.ref;
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!source?.review) throw new Error("This server cannot review it yet.");
+      return source.review(fid, ref);
+    },
+    onSuccess: (asked) => {
+      void refresh();
+      toast.show({ message: asked.message });
+    },
+    onError: (error) => {
+      toast.show({
+        message: `Could not ask: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    },
+  });
+  return { ...mutation, supported: Boolean(source?.review) };
+}
+
 export function useApplyVerb(page: NodePage, factoryId?: string) {
   const fid = useFid(factoryId);
   const source = useNodeSource();

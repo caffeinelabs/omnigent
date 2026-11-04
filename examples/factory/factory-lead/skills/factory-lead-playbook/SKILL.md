@@ -1,6 +1,6 @@
 ---
 name: factory-lead-playbook
-description: Lead playbook for the Omnigent software factory - first-turn bootstrap from a cockpit brief, projects only through sys_factory_project (the server spawns their PLs), spawning project leads from a kickoff brief (stored charters attach automatically), the Sentinel charter template, Sentinel as the skeptic of bets (the case against), the ledger format, the message dispatch table, the human commands (status, pause, resume, stop factory), questions through sys_factory_ask, the ready-for-human-merge flow and the 5-line digest.
+description: Lead playbook for the Omnigent software factory - first-turn bootstrap from a cockpit brief, projects only through sys_factory_project (the server spawns their PLs), spawning project leads from a kickoff brief (stored charters attach automatically), the Sentinel charter template, Sentinel as the skeptic of bets (the case against) and the done reviewer of features, the ledger format, the message dispatch table, the human commands (status, pause, resume, stop factory), questions through sys_factory_ask, the ready-for-human-merge flow and the 5-line digest.
 ---
 
 # Factory lead playbook
@@ -102,6 +102,7 @@ On every heartbeat:
 2. Independently verify every READY FOR HUMAN MERGE claim Atlas forwards, once per head: `gh pr view <url> --json state,isDraft,headRefOid,baseRefName,labels,files,comments` (`baseRefName` must equal `project_base`, the project's base branch, which `sys_factory_pr(url=<url>)` returns next to the PR's `base_ref`); the PR's factory preview (take the app URL from `preview=` and the API URL from `env=` in the head's `<!-- factory:verify sha=<head> … -->` comment, check that `curl -fsS <preview app>/__factory/preview` serves the head, and run the Verification plan's checks against that API; the stable `/v1/factory/prs/<id>/preview` link and the demo file links need a human Omnigent login, so curl cannot follow them); and the demo (the head's `factory:demo` comment, or the `demo` gate and its evidence from `sys_factory_pr(url=<url>)`: status PASS or PARTIAL, its step table matches the Demo plan). Record it with sys_factory_pr(url=<url>, sentinel_verdict="verified" or "not_verified", head_sha=<40>, note=<one line of evidence>) and post "verified: <url>" or "NOT verified: <url> · <evidence>" to `lead`.
 3. A stuck or failed PL gets one nudge (sys_session_post kind=request). If it is still stuck at the next heartbeat, use sys_session_post(restart=true). If Atlas is down or wedged, restart it; if it stays dead, ask the human with sys_factory_ask.
 4. Audit factory/* PRs that humans merged: markers and demo for the merged head, merged into the project's base branch (`base_ref` equals `project_base` in `sys_factory_pr(url=<url>)`), scope within the charter, no protected paths. Report violations to `lead`.
+5. A `[Factory review · I-<n> review <k> · …] … is it truly done?` brief makes you the feature's independent done reviewer: load_skill("factory-done-review") and answer with sys_factory_review in that turn.
 Never write code, push, merge or spawn PLs. Questions for the human go through sys_factory_ask.
 ```
 
@@ -123,6 +124,14 @@ no person sees it before your case against. For each:
    `sys_factory_propose(op="send_back", kind="projects", id="C-<n>", case_against=["…"])`.
 A bet a person asked for does not wait for you: write the case against anyway.
 The monthly `[Factory discovery · retro · …]` is yours too (`discovery-retro`).
+
+## Sentinel: the done reviewer
+
+A feature reads done only after an independent done review passes. When a
+wave of an initiative is built, its follow-ups finished, or a person asks
+"is this done?", the server sends you one brief: the ask verbatim, the
+rubric and the evidence. You did not plan the work, so you judge it
+(`factory-done-review`). You only propose; the server files what follows.
 
 ## Ledger format (`~/factory/ledger.md`)
 
@@ -172,6 +181,8 @@ factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbea
 | Other `[Factory notice` | Read the last output. Close or re-ask the request. |
 | `[Factory discovery · ready to plan · …]` | Atlas: factory-planning, "From an opportunity". |
 | `[Factory discovery · retro · …]` | Sentinel: load discovery-retro. |
+| `[Factory review · I-<n> review <k> · …] … is it truly done?` | Sentinel: load factory-done-review; answer with `sys_factory_review` in this turn. |
+| Other `[Factory review · I-<n>` (a verdict, or `changed by <person>`) | Atlas: record it; its follow-ups are already filed. Report the feature done only once a review passed or a person said so. |
 | `[Factory readout · C-<n> · …]` | Record it. After a `lost` readout, Atlas asks a person to turn the flag off or proposes a project that removes the change. |
 | `[Factory heartbeat` | Load factory-heartbeat. |
 | `[Factory alert`, `[Factory delivery failure` | Load factory-recovery. |

@@ -32,7 +32,7 @@ import { NodeLink } from "./nodeParts";
 import { useLevel, useMoreChildren, useNode, usePrefetchNode } from "./nodeQueries";
 import { nodeHref } from "./nodeRoutes";
 import { useNodeSource } from "./nodeSource";
-import { useMarkSeen, useVisitSince } from "./nodeSteer";
+import { useAskReview, useMarkSeen, useVisitSince } from "./nodeSteer";
 import { DEFAULT_OVERLAYS, ParentNameContext } from "./NodeTile";
 import { movedAsks, nodeName } from "./calm/calmModel";
 import { YourMove, useYourMove } from "./calm/YourMove";
@@ -249,7 +249,7 @@ export function NodePage(props: NodePageProps) {
 }
 
 /** What a verb's preview starts from, as the address names it (`?verb=add&title=…`). */
-export const VERB_ARGS: (keyof VerbArgs)[] = ["title", "member", "to"];
+export const VERB_ARGS: ("title" | "member" | "to")[] = ["title", "member", "to"];
 
 /**
  * The verb opened on this page: its preview shows under the header. Talk goes
@@ -259,6 +259,7 @@ export const VERB_ARGS: (keyof VerbArgs)[] = ["title", "member", "to"];
 function useOpenVerb(page: Page, talk?: NodeActions["onVerb"]) {
   const source = useNodeSource();
   const toast = useFactoryToast();
+  const { mutate: askReview, supported: canReview } = useAskReview(page);
   const [open, setOpen] = useState<OpenVerb | null>(null);
   const onVerb = useCallback(
     (verb: VerbAvail, args?: VerbArgs) => {
@@ -267,6 +268,11 @@ function useOpenVerb(page: Page, talk?: NodeActions["onVerb"]) {
         return;
       }
       if (!verb.enabled) return;
+      // "Is this done?" only reads: no preview, the review is asked at once.
+      if (verb.verb === "review" && canReview) {
+        askReview();
+        return;
+      }
       // Team and Rename levels are definition versions: they preview through the definition.
       if (verb.verb !== "team" && verb.verb !== "rename" && !source?.preview) {
         toast.show({
@@ -276,7 +282,7 @@ function useOpenVerb(page: Page, talk?: NodeActions["onVerb"]) {
       }
       setOpen((prev) => (prev?.verb.verb === verb.verb && !args ? null : { verb, args }));
     },
-    [source?.preview, talk, toast],
+    [askReview, canReview, source?.preview, talk, toast],
   );
   const [params, setParams] = useSearchParams();
   const pending = params.get("verb");

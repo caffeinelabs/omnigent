@@ -37,7 +37,7 @@ from omnigent.factory import (
     STAGE_DONE,
     STATE_ACTIVE,
 )
-from omnigent.server.factory import control, definition, events, idle, issues
+from omnigent.server.factory import control, definition, done_review, events, idle, issues
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.start import parse_body
@@ -140,6 +140,9 @@ async def file_retro(
     role = caller.membership.role
     if role not in (ROLE_LEAD, ROLE_PROJECT_LEAD) or not caller.membership.is_top_level:
         raise CockpitError(403, "not_allowed", "leads and project leads file retros")
+    if body.target.strip().lower().startswith(done_review.RETRO_TARGET):
+        # A done review's verdict from a host without sys_factory_review.
+        return await done_review.submit(app_state, caller, done_review.from_retro(body))
     for i, cause in enumerate(body.root_causes):
         if cause.category not in ROOT_CAUSES:
             raise CockpitError(

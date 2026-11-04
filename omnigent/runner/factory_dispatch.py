@@ -91,6 +91,7 @@ from omnigent.tools.builtins.factory import (
     SYS_FACTORY_PROJECT,
     SYS_FACTORY_PROPOSE,
     SYS_FACTORY_RETRO,
+    SYS_FACTORY_REVIEW,
     SYS_FACTORY_ROSTER,
     SYS_FACTORY_RULES,
     SYS_FACTORY_SET,
@@ -462,6 +463,8 @@ async def execute_factory_tool(
         return await _post_chat(args, server_client=server_client, caller=conversation_id)
     if tool_name == SYS_FACTORY_NODE:
         return await _read_node(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_REVIEW:
+        return await _review(args, server_client=server_client, caller=conversation_id)
     if tool_name in _LEARNING_TOOLS:
         return await _learning(
             tool_name, args, server_client=server_client, caller=conversation_id
@@ -2239,6 +2242,44 @@ async def _read_node(args: _JsonObject, *, server_client: httpx.AsyncClient, cal
     if resp.status_code >= 400:
         return json.dumps(_error_payload(resp.status_code, body, resp.text, tool))
     return json.dumps(body) if body is not None else json.dumps({"result": resp.text})
+
+
+_REVIEW_PATH: Final = "/v1/factory/agent/reviews"
+_REVIEW_KEYS: Final = ("initiative", "review", "verdict", "summary", "gaps", "accepted")
+
+
+async def _review(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """
+    ``sys_factory_review`` → ``POST /v1/factory/agent/reviews``.
+
+    A server from before done reviews has no such route: its plain 404 becomes
+    ``not_served``, and the reviewer files the verdict with ``sys_factory_retro``.
+    """
+    tool = SYS_FACTORY_REVIEW
+    for key in ("initiative", "verdict", "summary"):
+        value = args.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return _error(f"{tool} requires a non-empty '{key}'")
+    for key in ("gaps", "accepted"):
+        if key in args and not isinstance(args[key], list):
+            return _error(f"{tool} '{key}' must be a list")
+    body: _JsonObject = {k: args[k] for k in _REVIEW_KEYS if k in args}
+    body["from_session_id"] = caller
+    resp = await _request(server_client, "POST", _REVIEW_PATH, tool_name=tool, body=body)
+    if isinstance(resp, str):
+        return resp
+    payload = _response_body(resp)
+    if resp.status_code == 404 and _route_missing(payload):
+        return _error(
+            "not_served",
+            message=(
+                "this server has no done reviews yet: file the verdict with "
+                'sys_factory_retro(kind="finding", target="review:<I-n>", …) as the brief says'
+            ),
+        )
+    if resp.status_code >= 400:
+        return json.dumps(_error_payload(resp.status_code, payload, resp.text, tool))
+    return json.dumps(payload) if payload is not None else json.dumps({"result": resp.text})
 
 
 _LEARNING_TOOLS: Final = frozenset(

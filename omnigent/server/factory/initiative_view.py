@@ -7,16 +7,19 @@ and the state comes from the projects, the PRs, the base env and the runs.
 
 States: ``planned`` (nothing started), ``building``, ``on_base`` (the walking
 skeleton merged and the base env serves it), ``accepting`` (a run is on its
-way), ``failing`` (the last run failed a step), ``done`` (every project is
-closed (status merged or done, or stage done), no planned wave is left and
-the last run passed at least one step and failed none), ``closed`` (a person
-closed it) and ``cancelled``.
+way), ``failing`` (the last run failed a step), ``in_review`` (every project is
+closed (status merged or done, or stage done) and no passing done review
+covers it yet: "built · in review"), ``follow_ups`` (a done review found gaps
+whose follow-ups still run), ``done`` (every project is closed and a done
+review passed, or a person said it is done: :mod:`.done_review_view`),
+``closed`` (a person closed it) and ``cancelled``.
 
 Waves (:func:`wave_state`, :func:`wave_phrase`): an initiative of several
-waves also says where they are, "wave 1 done · wave 2 started", "… · wave 2
+waves also says where they are, "wave 1 built · wave 2 started", "… · wave 2
 planned", "… · wave 2 planned · needs <an input a person owes>" or, only when
 that ask is blocking, "… · wave 2 blocked on <it>" (the newest open ask whose
-subject is the initiative). A wave the server only guessed (``if_any``: "the
+subject is the initiative). A wave is built; only the feature reads done,
+once a done review passes. A wave the server only guessed (``if_any``: "the
 rest of the ask, if any") is spent once the lead was told the wave before it
 is done, so it never holds the initiative open.
 
@@ -35,6 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.factory import FactoryInitiative
 from omnigent.server.factory.charter import change_dependency
+from omnigent.server.factory.done_review_view import ReviewState, review_state
 
 DONE_SHOWN_S: Final = 3 * 86_400
 """A finished or closed initiative stays on Home and in the digest this long."""
@@ -58,7 +62,16 @@ _WAIT_PREFIX_RE: Final = re.compile(r"^.*?\bwaiting (?:on|for) ", re.IGNORECASE)
 """A wait's label without its ``T-16 waiting on`` lead-in (the line says "waiting on")."""
 
 State = Literal[
-    "planned", "building", "on_base", "accepting", "failing", "done", "closed", "cancelled"
+    "planned",
+    "building",
+    "on_base",
+    "accepting",
+    "failing",
+    "in_review",
+    "follow_ups",
+    "done",
+    "closed",
+    "cancelled",
 ]
 
 
@@ -204,9 +217,13 @@ def _state(
     tally: Mapping[str, Any],
     skeleton_on_base: bool,
     *,
-    waves_left: bool = False,
-    drafted: bool = False,
+    review: ReviewState | None = None,
 ) -> State:
+    """
+    The initiative's state. A built feature (every live project closed) is
+    ``done`` only once a done review passed (or a person said so); until then
+    it is ``in_review``, and ``follow_ups`` while a review's follow-ups run.
+    """
     status = row.get("status")
     if status == "cancelled":
         return "cancelled"
@@ -215,16 +232,17 @@ def _state(
     live = [p for p in projects if not p.get("hidden") and p.get("status") != "cancelled"]
     if projects and not live and all(not p.get("hidden") for p in projects):
         return "cancelled"
+    review = review or ReviewState()
+    if review.passed and review.said_by:
+        return "done"
     if tally.get("status") == "FAIL" or (tally.get("status") == "ERROR" and tally.get("failed")):
         return "failing"
     if tally.get("running"):
         return "accepting"
-    finished = bool(live) and all(_closed(p) for p in live) and not waves_left
-    accepted = (
-        tally.get("status") in RUN_PASSED and tally.get("passed") and not tally.get("failed")
-    )
-    if finished and (accepted or not tally.get("total") or (drafted and not tally.get("run"))):
-        return "done"
+    if review.phase == "follow_ups":
+        return "follow_ups"
+    if bool(live) and all(_closed(p) for p in live):
+        return "done" if review.passed else "in_review"
     if skeleton_on_base:
         return "on_base"
     if any(p.get("stage") not in (None, "queued") for p in live):
@@ -397,16 +415,17 @@ def initiative_ask(decisions: Sequence[Mapping[str, Any]], ref: str) -> Initiati
 
 def wave_phrase(state: WaveState, ask: str | None = None, *, blocking: bool = False) -> str | None:
     """
-    The waves in a few words, e.g. ``"wave 1 done · wave 2 started"``, ``"wave 1
-    done · wave 2 planned · needs add the provider credentials (D-60)"`` or, for a
-    *blocking* ask, ``"wave 1 done · wave 2 blocked on …"``; ``None`` for a
-    one-wave initiative and while wave 1 is still being built. Pure.
+    The waves in a few words, e.g. ``"wave 1 built · wave 2 started"``, ``"wave 1
+    built · wave 2 planned · needs add the provider credentials (D-60)"`` or, for a
+    *blocking* ask, ``"wave 1 built · wave 2 blocked on …"``; ``None`` for a
+    one-wave initiative and while wave 1 is still being built. A wave is built:
+    only the feature reads done, once its done review passes. Pure.
     """
     if not state.current or not state.multi:
         return None
     parts: list[str] = []
     if state.done:
-        parts.append(f"wave {state.current} done")
+        parts.append(f"wave {state.current} built")
         nxt = state.next
         if nxt is not None and ask and blocking:
             parts.append(f"wave {nxt['n']} blocked on {ask}")
@@ -420,7 +439,7 @@ def wave_phrase(state: WaveState, ask: str | None = None, *, blocking: bool = Fa
     if state.current < 2:
         return None
     if state.done_upto:
-        parts.append(f"wave {state.done_upto} done")
+        parts.append(f"wave {state.done_upto} built")
     parts.append(f"wave {state.current} started")
     if ask:
         parts.append(f"needs {ask}")
@@ -516,14 +535,8 @@ def initiative_view(
         )
     )
     next_wave = _next_wave(plan)
-    state = _state(
-        data,
-        projects,
-        tally,
-        skeleton_on_base,
-        waves_left=next_wave is not None,
-        drafted=plan.get("acceptance_note") == ACCEPTANCE_DRAFTED,
-    )
+    review = review_state(plan)
+    state = _state(data, projects, tally, skeleton_on_base, review=review)
     waves_now = wave_state(plan, by_slug)
     ref = str(data.get("ref") or f"I-{data['number']}")
     asked = initiative_ask(list(body.get("decisions") or []), ref)
@@ -603,6 +616,7 @@ def initiative_view(
             "ask": asked.words if asked else None,
         },
         "acceptance_note": plan.get("acceptance_note"),
+        "review": review.view(),
         "waves": [
             {
                 "n": int(h.get("wave") or 1),
@@ -664,7 +678,9 @@ def line_text(view: Mapping[str, Any]) -> str:
     The one line Home, the status summary and the digest show, e.g. ``"Sample
     assistant: 2/4 merged, skeleton not on base env yet, waiting on core (a merge of !12)"``;
     an initiative of several waves says where its waves are first (``"Sample
-    assistant: wave 1 done · wave 2 started, 4/6 merged, …"``).
+    assistant: wave 1 built · wave 2 started, 4/6 merged, …"``). A built
+    feature says ``built · in review`` or ``follow-ups running`` with its
+    review's line until a done review passes; only then ``done``.
     """
     state = view["state"]
     phrase = (view.get("wave") or {}).get("phrase")
@@ -675,8 +691,17 @@ def line_text(view: Mapping[str, Any]) -> str:
     if state == "closed":
         return f"{head}, closed"
     parts = [head]
+    review = (view.get("review") or {}).get("line")
     if state == "done":
         parts.append("done, " + _acceptance_phrase(view))
+        return ", ".join(parts)
+    if state == "in_review":
+        parts.append("built · in review")
+        if review and not review.startswith("Review: in progress"):
+            parts.append(review)
+        return ", ".join(parts)
+    if state == "follow_ups":
+        parts.append(f"follow-ups running · {review}" if review else "follow-ups running")
         return ", ".join(parts)
     if view.get("skeleton"):
         parts.append(
@@ -712,8 +737,10 @@ class InitiativeLine(BaseModel):
     :param since: When it was asked (epoch seconds).
     :param try_url: The base env's app once the skeleton is on it (people try it there).
     :param flag: The flag key it ships behind (turn it on to try it).
-    :param waves: Where its waves are, e.g. ``"wave 1 done · wave 2 planned"`` (only an
+    :param waves: Where its waves are, e.g. ``"wave 1 built · wave 2 planned"`` (only an
         initiative of several waves).
+    :param review: Its done review in one line, e.g. ``"Review: not done · 2 follow-ups
+        started"`` (once one was asked for).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -730,6 +757,7 @@ class InitiativeLine(BaseModel):
     waiting_on: list[str] = Field(default_factory=list)
     next_wave: str | None = None
     waves: str | None = None
+    review: str | None = None
     cost_usd: float | None = None
     since: int
     href: str
@@ -760,6 +788,7 @@ def initiative_line(view: Mapping[str, Any]) -> dict[str, Any]:
         waiting_on=list(view.get("waiting_on") or [])[:5],
         next_wave=f"wave {nxt['n']}: {nxt['goal']}" if nxt else None,
         waves=(view.get("wave") or {}).get("phrase"),
+        review=(view.get("review") or {}).get("line"),
         cost_usd=view.get("cost_usd"),
         since=int(view.get("asked_at") or 0),
         href=view["href"],

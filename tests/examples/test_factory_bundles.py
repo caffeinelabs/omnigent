@@ -147,6 +147,7 @@ def test_both_bundles_parse_with_the_expected_shape(lead: AgentSpec, pl: AgentSp
         "factory-room",
         "factory-planning",
         "factory-retro",
+        "factory-done-review",
         "discovery-retro",
     }
     assert {s.name for s in pl.skills} == {

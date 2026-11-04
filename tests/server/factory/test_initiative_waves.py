@@ -7,7 +7,7 @@ once wave 1 merged the lead said "every project is done" and stopped. Now the
 reconcile pass gives that ask an initiative, the sweep tells the lead once
 that wave 1 is done and what remains, the lead's next wave applies at once
 for the person who asked (mock-first, one ask for the credentials at the
-end), and Your move and the digest say "wave 1 done · wave 2 started".
+end), and Your move and the digest say "wave 1 built · wave 2 started".
 Every name here is sample data.
 """
 
@@ -321,19 +321,19 @@ def test_the_wave_words() -> None:
 
     assert wave_phrase(building_one) is None
     assert wave_phrase(single) is None
-    assert wave_phrase(one_done) == "wave 1 done · wave 2 planned"
+    assert wave_phrase(one_done) == "wave 1 built · wave 2 planned"
     assert (
         wave_phrase(one_done, "add the provider credentials (D-3)", blocking=True)
-        == "wave 1 done · wave 2 blocked on add the provider credentials (D-3)"
+        == "wave 1 built · wave 2 blocked on add the provider credentials (D-3)"
     )
     assert (
         wave_phrase(one_done, "pick the tab placement (D-4)")
-        == "wave 1 done · wave 2 planned · needs pick the tab placement (D-4)"
+        == "wave 1 built · wave 2 planned · needs pick the tab placement (D-4)"
     ), "a non-blocking ask does not block the next wave"
-    assert wave_phrase(two_started) == "wave 1 done · wave 2 started"
+    assert wave_phrase(two_started) == "wave 1 built · wave 2 started"
     assert (
         wave_phrase(two_started, "add the provider credentials (D-3)")
-        == "wave 1 done · wave 2 started · needs add the provider credentials (D-3)"
+        == "wave 1 built · wave 2 started · needs add the provider credentials (D-3)"
     )
     assert one_done.done and one_done.next is not None and not building_one.done
     cancelled = wave_state(_plan(later, [(1, ["a"])]), {"a": {"status": "cancelled"}})
@@ -440,8 +440,8 @@ async def test_the_live_regression(cockpit: Cockpit) -> None:
     assert f"> {ASK}" in text
     assert cockpit.events("initiative.wave_done")[0].data["next"] == 2
     lines = (await get(cockpit, f"/v1/factory/factories/{cockpit.fid}/asks"))["initiatives"]
-    assert lines[0]["waves"] == "wave 1 done · wave 2 planned"
-    assert lines[0]["line"].startswith("Sample helper: wave 1 done · wave 2 planned, 4/4 merged")
+    assert lines[0]["waves"] == "wave 1 built · wave 2 planned"
+    assert lines[0]["line"].startswith("Sample helper: wave 1 built · wave 2 planned, 4/4 merged")
 
     # The lead's next wave: mock-first, the rest restated; it applies at once for alice.
     resp = await propose(
@@ -497,7 +497,7 @@ async def test_the_live_regression(cockpit: Cockpit) -> None:
     snapshot.reset_cache()  # the cockpit reads a snapshot up to 2 s old
 
     words = (
-        "wave 1 done · wave 2 started · needs add the ads provider credentials to turn it on "
+        "wave 1 built · wave 2 started · needs add the ads provider credentials to turn it on "
         f"({ref})"
     )
     lines = (await get(cockpit, f"/v1/factory/factories/{cockpit.fid}/asks"))["initiatives"]
@@ -685,7 +685,7 @@ async def test_an_explicit_empty_wave_list_says_nothing_is_left(cockpit: Cockpit
     assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == []
     assert len(notices(cockpit)) == 1
     lines = (await get(cockpit, f"/v1/factory/factories/{cockpit.fid}/asks"))["initiatives"]
-    assert lines[0]["next_wave"] is None and lines[0]["waves"] == "wave 2 done"
+    assert lines[0]["next_wave"] is None and lines[0]["waves"] == "wave 2 built"
 
 
 async def test_a_next_wave_that_leaves_out_waves_keeps_the_rest(cockpit: Cockpit) -> None:

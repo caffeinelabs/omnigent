@@ -552,7 +552,10 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
           const label = chat.verbs.find((v) => v.verb === intent.verb)?.label ?? intent.verb;
           addCard({
             kind: "note",
-            text: `“${body}”: ${label} on ${target} opens a preview first; nothing changes until you confirm it.`,
+            text:
+              intent.verb === "review"
+                ? `“${body}”: an independent done review of ${target} starts now; it only reads.`
+                : `“${body}”: ${label} on ${target} opens a preview first; nothing changes until you confirm it.`,
           });
           runVerb(intent.verb, intent.at, intent.args);
         }

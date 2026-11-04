@@ -296,6 +296,7 @@ _EVENT_KINDS: Final = (
     "loop.budget_raised",
     "preview.sha_mismatch",
     PROMPT_SCAN_KIND,
+    "initiative.done_reopened",
 )
 _SPAN_KINDS: Final = ("task", "stage", "gate", "env", "preview")
 _DISCOVERY_EVENT_KINDS: Final = (
@@ -749,6 +750,14 @@ def _budget_raises(facts: Facts, w: Window) -> list[Sample]:
             project=e.project_slug,
         )
         for e in facts.kind("loop.budget_raised")
+        if w.holds(e.ts / 1000)
+    ]
+
+
+def _done_reopened(facts: Facts, w: Window) -> list[Sample]:
+    return [
+        Sample(ts=e.ts / 1000, value=1.0, key=str((e.data or {}).get("ref") or ""))
+        for e in facts.kind("initiative.done_reopened")
         if w.holds(e.ts / 1000)
     ]
 
@@ -1559,6 +1568,17 @@ CATALOG: Final[dict[str, Metric]] = {
             agg_p50p90,
         ),
         _m(
+            "done_reopened",
+            "flow",
+            'Reopened "done"',
+            "count",
+            "features that read done (a passing done review or a person's word) and were "
+            "reopened: a later review found gaps, or a person reopened them",
+            "events",
+            _done_reopened,
+            agg_count,
+        ),
+        _m(
             "budget_extensions",
             "loops",
             "Budget extensions",
@@ -1793,8 +1813,9 @@ KPIS: Final = (
     "cost_per_merged_pr",
     "incidents",
     "engine_wake_efficiency",
+    "done_reopened",
 )
-"""The Insights header tiles."""
+"""The Insights header tiles (and the KPIs Sentinel's retro reads)."""
 GUARDS: Final[dict[str, tuple[str, float]]] = {
     "merge_acceptance": ("pp_drop", 0.10),
     "cost_per_merged_pr": ("pct_rise", 0.10),

@@ -28,7 +28,14 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
 from omnigent.server.auth import LEVEL_EDIT
-from omnigent.server.factory import acceptance, control, events, initiatives, projects
+from omnigent.server.factory import (
+    acceptance,
+    control,
+    done_review,
+    events,
+    initiatives,
+    projects,
+)
 from omnigent.server.factory.api.agents import FleetContext, fleet_context
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.origin import HUMAN_ORIGIN
@@ -122,6 +129,10 @@ async def patch_initiative(
                     "by": by,
                 },
             )
+            if before.get("status") == "done" and after.get("status") == "open":
+                await done_review.reopened(
+                    request.app.state, ctx.root.id, stored, why=f"{by} reopened it"
+                )
         view = initiatives.initiative_view(stored, _body(ctx), now=time.time())
         view["line"] = initiatives.line_text(view)
         return view

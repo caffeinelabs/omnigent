@@ -1,8 +1,8 @@
 // One preview per structural verb, each a form over the server's dry run:
 // Add child (a held child with a matching title is pulled forward instead of
 // copied), Start now, Autonomy & merge, Pause / Resume, Move (parents one
-// level up only), Name it / file under, and any other verb as a plain
-// preview. Team and Rename levels have their own panels (`TeamPanel`,
+// level up only), Name it / file under, Drop a follow-up (of a feature's done
+// review), and any other verb as a plain preview. Team and Rename levels have their own panels (`TeamPanel`,
 // `RenamePanel`): both are definition versions. Words in the chat open these
 // same previews, with what they named filled in.
 
@@ -429,6 +429,35 @@ function ParentPreview({ page, verb, onClose, naming }: VerbProps & { naming: bo
   );
 }
 
+/** Drop one follow-up of the feature's done review: pick it, see what is taken back. */
+function DropPreview({ page, verb, args, onClose }: VerbProps) {
+  const open = (page.review?.gaps ?? []).filter((g) => g.live);
+  const [gap, setGap] = useState<number | null>(
+    args?.gap ?? (open.length === 1 ? open[0]!.n : null),
+  );
+  const { panel } = useFlow(page, verb, gap == null ? {} : { gap }, onClose, gap != null);
+  return (
+    <PreviewPanel
+      {...panel}
+      label={verb.label}
+      title={`Drop a follow-up of ${page.node.title}`}
+      applyLabel="Drop it"
+      blocked={gap == null ? "Pick the follow-up to drop." : null}
+    >
+      {open.length > 1 && (
+        <PreviewField label="Follow-up">
+          <PreviewOptions
+            label="Follow-up"
+            value={gap}
+            onChange={setGap}
+            options={open.map((g) => ({ value: g.n, label: g.line }))}
+          />
+        </PreviewField>
+      )}
+    </PreviewPanel>
+  );
+}
+
 /** A verb with no fields of its own (Start research …): its preview and Apply. */
 function PlainPreview({ page, verb, onClose }: VerbProps) {
   const { panel } = useFlow(page, verb, {}, onClose);
@@ -471,6 +500,8 @@ export function VerbPreview({
       return <ParentPreview {...props} naming />;
     case "rename":
       return <RenamePanel {...props} />;
+    case "drop":
+      return <DropPreview {...props} />;
     default:
       return <PlainPreview {...props} />;
   }

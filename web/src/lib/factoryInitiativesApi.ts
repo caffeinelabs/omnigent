@@ -15,10 +15,21 @@ import { authenticatedFetch } from "./identity";
  * Computed from the projects and the acceptance runs: `planned` (nothing
  * started), `building`, `on_base` (the walking skeleton merged and the base
  * env serves it), `accepting` (a run is on its way), `failing` (the last run
- * failed a step), `done`, `closed` (a person closed it), `cancelled`.
+ * failed a step), `in_review` (built, no passing done review yet),
+ * `follow_ups` (a done review's follow-ups run), `done` (a done review
+ * passed, or a person said so), `closed` (a person closed it), `cancelled`.
  */
 export type InitiativeState =
-  "planned" | "building" | "on_base" | "accepting" | "failing" | "done" | "closed" | "cancelled";
+  | "planned"
+  | "building"
+  | "on_base"
+  | "accepting"
+  | "failing"
+  | "in_review"
+  | "follow_ups"
+  | "done"
+  | "closed"
+  | "cancelled";
 
 export type InitiativeRole = "skeleton" | "surface" | "part";
 
@@ -50,6 +61,8 @@ export interface InitiativeLine {
   waiting_on: string[];
   /** `wave 2: Call the connectors`. */
   next_wave?: string | null;
+  /** Its done review in one line: `Review: not done · 2 follow-ups started`. */
+  review?: string | null;
   cost_usd?: number | null;
   /** When it was asked. */
   since: number;

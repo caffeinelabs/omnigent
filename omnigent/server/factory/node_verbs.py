@@ -55,11 +55,18 @@ team       a project               a team change (``PUT …/definition``)
 auto       a goal, need, feature   auto-merge into a named base and the
            or project              autonomy level for it and everything under
                                    it (owners; ``PUT …/definition``)
+review     a feature               asks for its independent done review now
+                                   (it only reads; also preview-free)
+done       a feature               "it is done", over its review's verdict
+drop       a feature               drops one follow-up of its review
 =========  ======================  ==========================================
+
+``review``, ``done`` and ``drop`` live in :mod:`.done_review_verbs`.
 
 A verb is served only where its node's level lists it in the definition's
 ``structure.verbs`` (:data:`OFFERED_AS` maps resume, reorder, split, merge and
-close onto the entries that offer them), and who applies it follows the
+close onto the entries that offer them; a feature's done-review verbs are
+served on every stored feature), and who applies it follows the
 ``structure.levels[].authority`` of the level it changes
 (:func:`authority_level`).
 
@@ -138,6 +145,9 @@ VERBS: Final = (
     "name",
     "team",
     "auto",
+    "review",
+    "done",
+    "drop",
 )
 UNDO_WINDOW_S: Final = 600
 KIND_APPLIED: Final = "node.verb_applied"
@@ -1782,6 +1792,10 @@ async def _feature_status(
             "by": env.by,
         },
     )
+    if before.get("status") == "done" and status == "open":
+        from omnigent.server.factory import done_review
+
+        await done_review.reopened(env.app_state, env.fid, stored, why=f"{env.by} reopened it")
 
 
 # ── name it / file under ───────────────────────────────────────
@@ -2651,8 +2665,14 @@ def offered_as(verb: str) -> str:
     return OFFERED_AS.get(verb, verb)
 
 
+REVIEW_VERBS: Final = frozenset({"review", "done", "drop"})
+"""A feature's done-review verbs: served on every stored feature (they change no structure)."""
+
+
 def _check_offered(tree: nodes.Tree, node: Any, verb: str) -> None:
     """422 ``not_here`` unless the node's level lists *verb* (``structure.verbs``)."""
+    if verb in REVIEW_VERBS:
+        return
     key = "study" if node.kind == "study" else node.level
     gate = offered_as(verb)
     if gate not in (tree.level_verbs.get(key) or []):
@@ -2742,6 +2762,15 @@ async def plan_verb(env: Env, tree: nodes.Tree, ref: str, body: VerbIn) -> Plan:
         plan = await _plan_name(env, tree, node, args)
     elif verb == "auto":
         plan = await _plan_auto(env, tree, node, args)
+    elif verb in ("review", "done", "drop"):
+        from omnigent.server.factory import done_review_verbs
+
+        if verb == "review":
+            plan = await done_review_verbs.plan_review(env, tree, node)
+        elif verb == "done":
+            plan = await done_review_verbs.plan_done(env, tree, node)
+        else:
+            plan = await done_review_verbs.plan_drop(env, tree, node, args)
     else:
         plan = await _plan_team(env, tree, node, args)
     _check_authority(tree, node, plan)
@@ -3016,6 +3045,10 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
         )
         ref_cancel = proposal_ref(proposal.number)
         return f"{', '.join(cancel)} cancelled ({ref_cancel}): its lead had started"
+    if kind in ("review_done", "review_drop"):
+        from omnigent.server.factory import done_review_verbs
+
+        return await done_review_verbs.undo(env, record)
     if kind == "control":
         targets = [str(t) for t in record.get("targets") or []]
         await _controls(env, str(record.get("action")), targets)

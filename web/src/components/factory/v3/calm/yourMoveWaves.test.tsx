@@ -7,13 +7,13 @@ import { normalizeYourMove } from "../nodeWire";
 import { moveView } from "./calmModel";
 
 // Your move also says where each initiative of several waves is, one quiet
-// line each ("Agent assistant: wave 1 done · wave 2 started"), so the next
+// line each ("Agent assistant: wave 1 built · wave 2 started"), so the next
 // wave moving, or the one input it waits on, shows without opening it.
 
 const WAVE = {
   ref: "I-1",
   title: "Agent assistant",
-  line: "Agent assistant: wave 1 done · wave 2 started",
+  line: "Agent assistant: wave 1 built · wave 2 started",
 };
 const STATUS: StatusLine = { kind: "idle", label: "Idle", segments: [], ends: "other" };
 

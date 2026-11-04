@@ -199,7 +199,7 @@ export function MoveRowItem({
   );
 }
 
-/** One quiet line per initiative of several waves: "Agent assistant: wave 1 done · wave 2 started". */
+/** One quiet line per initiative of several waves: "Agent assistant: wave 1 built · wave 2 started". */
 function WaveLines({ waves }: { waves?: WaveLine[] }) {
   if (!waves?.length) return null;
   return (

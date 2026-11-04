@@ -66,6 +66,7 @@ SYS_FACTORY_RULES: Final = "sys_factory_rules"
 SYS_FACTORY_INSIGHTS: Final = "sys_factory_insights"
 SYS_FACTORY_RETRO: Final = "sys_factory_retro"
 SYS_FACTORY_NODE: Final = "sys_factory_node"
+SYS_FACTORY_REVIEW: Final = "sys_factory_review"
 NODE_OPS: Final = ("read",)
 NODE_REF_MAX: Final = 200
 SYS_DISCOVERY_READ: Final = "sys_discovery_read"
@@ -94,6 +95,7 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_INSIGHTS,
         SYS_FACTORY_RETRO,
         SYS_FACTORY_NODE,
+        SYS_FACTORY_REVIEW,
         *DISCOVERY_TOOL_NAMES,
     }
 )
@@ -1615,6 +1617,117 @@ class SysFactoryRetroTool(Tool):
                     },
                 },
                 "required": ["target"],
+                "additionalProperties": False,
+            },
+        )
+
+
+REVIEW_GAPS_MAX: Final = 16
+REVIEW_FOLLOW_KINDS: Final = ("task", "project", "choice", "input", "next_wave", "none")
+
+
+class SysFactoryReviewTool(Tool):
+    """Return the done review's verdict on a feature (the independent reviewer)."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_review"``."""
+        return SYS_FACTORY_REVIEW
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Return your verdict as a feature's independent done reviewer, after a "
+            "`[Factory review · I-<n> review <k> · …]` brief: verdict 'done', "
+            "'done_with_follow_ups' or 'not_done', a one-line summary, one gap per line "
+            "(severity, the evidence ids it covers, the rubric key, and its follow_up: task "
+            "in an active project, project of the feature, choice with options and one "
+            "recommended, input a person must give, next_wave, or none), and the evidence "
+            "ids you accept as no gap, with why. The server files the follow-ups (fixes "
+            "start on their own, choices go to a person) and adds every evidence id you "
+            "left out. You only propose. A server from before done reviews answers "
+            "not_served: file it with sys_factory_retro(target='review:I-<n>') as the brief says."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        option = {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "maxLength": 120},
+                "recommended": {"type": "boolean"},
+            },
+            "required": ["label"],
+            "additionalProperties": False,
+        }
+        follow = {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": list(REVIEW_FOLLOW_KINDS)},
+                "project": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "task: the active project's slug; project: a new slug.",
+                },
+                "title": {"type": "string", "maxLength": 120},
+                "goal": {"type": "string", "maxLength": 2000},
+                "question": {"type": "string", "maxLength": 1000},
+                "options": {"type": "array", "items": option, "maxItems": 4},
+                "ask": {"type": "string", "description": "An open D-<n> it answers."},
+                "wave": {"type": "integer", "minimum": 1, "maximum": 8},
+            },
+            "required": ["kind"],
+            "additionalProperties": False,
+        }
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "initiative": {"type": "string", "description": "The feature, e.g. 'I-3'."},
+                    "review": {"type": "integer", "minimum": 1},
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["done", "done_with_follow_ups", "not_done"],
+                    },
+                    "summary": {"type": "string", "maxLength": 300},
+                    "gaps": {
+                        "type": "array",
+                        "maxItems": REVIEW_GAPS_MAX,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "line": {"type": "string", "maxLength": 480},
+                                "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+                                "evidence": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "maxItems": 10,
+                                },
+                                "criterion": {"type": "string", "maxLength": 32},
+                                "follow_up": follow,
+                            },
+                            "required": ["line", "severity", "follow_up"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "accepted": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "evidence": {"type": "string"},
+                                "why": {"type": "string", "maxLength": 300},
+                            },
+                            "required": ["evidence", "why"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["initiative", "verdict", "summary"],
                 "additionalProperties": False,
             },
         )

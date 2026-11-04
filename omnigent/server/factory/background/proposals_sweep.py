@@ -13,6 +13,10 @@
 6. Initiatives' waves: once every project of an initiative's current wave is
    finished and a later wave is planned, the lead is told once
    (:func:`.initiative_waves.sweep`).
+7. Done reviews: right after, a feature whose wave is built gets its
+   independent done review, a review nobody answered in time gets the
+   server's evidence verdict, and finished follow-ups are marked
+   (:func:`.done_review.sweep`).
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from omnigent.factory import LABEL_STATE, STATE_DONE
-from omnigent.server.factory import acceptance, initiative_waves, proposals, spawn
+from omnigent.server.factory import acceptance, done_review, initiative_waves, proposals, spawn
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.snapshot import list_factory_roots
 
@@ -43,6 +47,7 @@ class SweepReport:
     started: list[str] = field(default_factory=list)
     acceptance: list[str] = field(default_factory=list)
     waves: list[str] = field(default_factory=list)
+    reviews: list[str] = field(default_factory=list)
 
 
 async def sweep_once(app_state: Any) -> SweepReport:
@@ -70,6 +75,10 @@ async def sweep_once(app_state: Any) -> SweepReport:
             report.waves += await initiative_waves.sweep(app_state, root.id)
         except Exception:
             _logger.exception("factory: initiative waves sweep failed for %s", root.id)
+        try:
+            report.reviews += await done_review.sweep(app_state, root.id)
+        except Exception:
+            _logger.exception("factory: done review sweep failed for %s", root.id)
     return report
 
 

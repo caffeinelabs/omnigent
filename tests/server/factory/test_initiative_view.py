@@ -186,19 +186,28 @@ def test_a_run_on_its_way_then_a_failing_step() -> None:
     assert line_text(failing).endswith("acceptance failing at step 2")
 
 
-def test_done_when_everything_merged_and_the_last_run_passed() -> None:
+def test_done_when_everything_merged_and_a_done_review_passed() -> None:
+    """Built and accepted is "built · in review" until a done review passes; then done."""
     projects = [proj("panel", "done", status="done"), proj("core", "merged", status="merged")]
     steps = [{"n": 1, "status": "pass"}, {"n": 2, "status": "skipped", "note": "no login"}]
+    runs = [run(1, "FAIL"), run(2, "PARTIAL", steps, reported_at=NOW)]
+    prs = [pr("panel", 12, "merged"), pr("core", 13, "merged")]
+    passed = {
+        "n": 1,
+        "wave": 1,
+        "status": "returned",
+        "verdict": "done",
+        "requested_at": NOW,
+        "gaps": [],
+    }
+    built = initiative_view(row(runs=runs, plan={"waves": []}), body(projects, prs), now=NOW)
     view = initiative_view(
-        row(
-            runs=[run(1, "FAIL"), run(2, "PARTIAL", steps, reported_at=NOW)],
-            plan={"waves": []},
-        ),
-        body(projects, [pr("panel", 12, "merged"), pr("core", 13, "merged")]),
-        now=NOW,
+        row(runs=runs, plan={"waves": [], "reviews": [passed]}), body(projects, prs), now=NOW
     )
 
-    assert view["state"] == "done"
+    assert built["state"] == "in_review"
+    assert line_text(built) == "Sample assistant: 2/2 merged, built · in review"
+    assert view["state"] == "done" and view["review"]["line"] == "Review: done"
     assert view["tally"] == {
         "total": 2,
         "passed": 1,

@@ -182,6 +182,11 @@ export function InitiativeCard({ line, className }: { line: InitiativeLine; clas
             {card.waiting}
           </li>
         )}
+        {card.review && (
+          <li className="min-w-0 truncate pl-5" title={card.review} data-testid="initiative-review">
+            {card.review}
+          </li>
+        )}
       </ul>
     </article>
   );

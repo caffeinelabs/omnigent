@@ -1498,6 +1498,7 @@ HOW_WORK_SHOWS: Final = "how work is shown, not how it is done"
 NEEDS_DISCOVERY_GUARDS: Final = "needs discovery guards"
 TOO_FEW_PRS: Final = "too few merged PRs per team"
 NO_PROJECT_FOLLOWS: Final = "no project follows a template"
+TOO_FEW_REVIEWS: Final = "too few features reviewed per week"
 NOT_TRIALABLE: Final[dict[str, str]] = {
     "product": NOT_TRIALABLE_REASON,
     "environment": ENV_FACTS,
@@ -1507,6 +1508,7 @@ NOT_TRIALABLE: Final[dict[str, str]] = {
     "team.projects": TOO_FEW_PRS,
     "team.templates": NO_PROJECT_FOLLOWS,
     "structure": HOW_WORK_SHOWS,
+    "done_review": TOO_FEW_REVIEWS,
 }
 """
 Paths a trial would judge on the wrong metrics, and why: they apply as a version.

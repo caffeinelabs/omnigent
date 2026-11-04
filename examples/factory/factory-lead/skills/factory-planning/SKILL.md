@@ -154,7 +154,12 @@ A wave the notice calls "the server's guess" is no plan: compare the ask
 with what is built, and if nothing is left post one line,
 `I-<n>: the ask is built, nothing is left`; nothing more is planned.
 
-Never write "every project is done" while a planned wave is left.
+Never write "every project is done" while a planned wave is left. An
+independent done review of each built wave runs too (Sentinel): its verdict
+reaches you as `[Factory review · I-<n> review <k> · …]` with the fixes it
+already started in the feature, the choices it asked the person, and the
+scope it found unbuilt, which is this next wave's input. A feature reads
+done only once a review passes.
 
 **Mock-first.** Work held for a person's input (credentials or an API key,
 ad or other spend, personal data, product copy) starts now anyway:

@@ -820,6 +820,12 @@
         "key": "n",
         "label": "Rename",
         "verb": "name"
+      },
+      {
+        "enabled": true,
+        "key": "d",
+        "label": "Is this done?",
+        "verb": "review"
       }
     ],
     "version": "bf03ded18b13b923",

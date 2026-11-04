@@ -187,6 +187,8 @@ const CODE_IN = /(?:^|\s)(?:[A-Z]{1,3}-\d+|#\d+)(?=$|[\s,.:;])/;
  */
 export function childPhrase(node: NodeSummary, above?: Above): Phrase | null {
   const line = node.status_compact;
+  // A built feature no done review passed: "Built · in review", "Follow-ups running".
+  if (node.review_phrase && node.state !== "needs") return { text: node.review_phrase };
   switch (node.state) {
     case "moving":
     case "done":

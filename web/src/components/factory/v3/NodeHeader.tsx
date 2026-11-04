@@ -18,7 +18,7 @@ import { useNodeActions } from "./NodeContext";
 import { NodeContent } from "./NodeContent";
 import { Avatar, Glyph, NodeLink, Ring, StateDot, hasRing, money, sinceWhen } from "./nodeParts";
 import { useNodeUndo } from "./nodeSteer";
-import type { NodePage, Rollup, RollupCount } from "./nodeTypes";
+import type { NodePage, ReviewGap, Rollup, RollupCount } from "./nodeTypes";
 import { levelName } from "./nodeWire";
 import { RichText } from "./RichText";
 import { StatusBox } from "./StatusLine";
@@ -225,6 +225,39 @@ function UndoLatest({ nodeRef }: { nodeRef: string }) {
   );
 }
 
+const GAP_WORDS: Record<string, string> = {
+  started: "started",
+  asked: "asks a person",
+  waiting: "waits for approval",
+  next_wave: "next wave",
+  to_lead: "with the lead",
+  finished: "finished",
+  noted: "noted",
+  dropped: "dropped",
+};
+
+/** One gap of the done review: its line, and where its follow-up is. */
+function gapWords(gap: ReviewGap): string {
+  const where = GAP_WORDS[gap.status] ?? gap.status;
+  return gap.follow && gap.live ? `${where}: ${gap.follow}` : where;
+}
+
+/** The done review's gaps, one line each (Details: the header shows only its line). */
+function ReviewGaps({ page }: { page: NodePage }) {
+  const gaps = page.review?.gaps ?? [];
+  if (!gaps.length) return null;
+  return (
+    <ol data-testid="v3-review-gaps" aria-label="Done review" className="flex flex-col gap-1">
+      {gaps.map((gap) => (
+        <li key={gap.n} className="flex flex-wrap gap-x-2 text-muted-foreground">
+          <span className="text-foreground">{gap.line}</span>
+          <span className="text-foreground-tertiary">· {gapWords(gap)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /** What the node is, in words: its full title when the name shortens it, its code, level, kind and owner. */
 function MetaLine({ page }: { page: NodePage }) {
   const { node } = page;
@@ -299,6 +332,7 @@ export function NodeDetails({
       {whyOpen && <WhyCard line={status} startNow={start} />}
       <RollupLine page={page} />
       <ChipList chips={page.chips} more={page.more_chips} moreGroups={page.chips_more} />
+      <ReviewGaps page={page} />
       <NodeContent page={page} part="details" />
       {/* A node with nothing below has no lens menu: its lineage opens from here. */}
       {lineage && <LineageFold page={page} />}
@@ -343,7 +377,9 @@ export function NodeHeader({
   const name = nodeName(node);
   // The viewer's own asks are Your move; a phrase says only what holds it otherwise.
   const covered = page.status.ends === "person" && endsAbove(page.status, aboveId);
-  const phrase = page.breadcrumb.length && !covered ? childPhrase(node) : null;
+  // A feature's done review says where it is in one line ("Review: not done · …").
+  const review = page.review?.line ?? null;
+  const phrase = page.breadcrumb.length && !covered && !review ? childPhrase(node) : null;
   return (
     <section data-testid="v3-header" className="mb-4 flex flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -376,6 +412,11 @@ export function NodeHeader({
       {phrase && phrase.tone !== "you" && (
         <p data-testid="v3-phrase-here" className="text-[13px] text-muted-foreground">
           {phrase.text}
+        </p>
+      )}
+      {review && (
+        <p data-testid="v3-review" className="text-[13px] text-muted-foreground">
+          {review}
         </p>
       )}
       {details && <NodeDetails page={page} whyOpen={whyOpen} onWhy={() => setWhy(!whyOpen)} />}
