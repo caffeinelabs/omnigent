@@ -56,6 +56,7 @@ from typing import Annotated, Any, Final, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from omnigent.factory import LABEL_PREFIX
+from omnigent.server.factory.decide_policy import DecideRules
 from omnigent.server.factory.subtrees import SCOPES_MAX, ScopeRef, nearest, unique_refs
 
 LABEL_AUTONOMY: Final = f"{LABEL_PREFIX}autonomy_projects"
@@ -130,7 +131,13 @@ class AutonomyScopeDef(BaseModel):
 
 
 class AutonomyDef(BaseModel):
-    """``autonomy`` in the definition: owners only (class B); agents never propose it."""
+    """
+    ``autonomy`` in the definition: owners only (class B); agents never propose it.
+
+    ``decide`` holds the owners' decide-first settings (:mod:`.decide_policy`):
+    ``[{kind, who, ref?}]``, who decides one class of decision, factory-wide or
+    in one subtree.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -139,6 +146,7 @@ class AutonomyDef(BaseModel):
     scopes: Annotated[
         list[AutonomyScopeDef], AfterValidator(unique_refs), Field(max_length=SCOPES_MAX)
     ] = Field(default_factory=list)
+    decide: Annotated[DecideRules, Field(max_length=SCOPES_MAX)] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)

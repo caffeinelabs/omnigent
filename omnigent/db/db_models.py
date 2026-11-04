@@ -2905,3 +2905,65 @@ class SqlFactoryInitiative(OmnigentBase):
         ),
         Index("ix_factory_initiatives_status", "workspace_id", "factory_id", "status"),
     )
+
+
+class SqlFactoryCheckpoint(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_checkpoints``: one decision, whoever made it,
+    shown as ``K-<number>``.
+
+    The factory's own decisions (an agent's, or the server's on an agent's ask
+    or a proposal) and a person's changes of direction are stored here; a
+    person's answers and applied proposals read as checkpoints through an
+    adapter, so no history is copied.
+
+    :param status: Code of FACTORY_CHECKPOINT_STATUS.
+    :param decided_by_kind: Code of FACTORY_CHECKPOINT_BY.
+    :param options: JSON list of ``{id, label, description?, recommended?}``.
+    :param policy: JSON: the policy's verdict (who, level, reasons, rule, Tier 0).
+    :param effects: JSON list of ``{ref, kind, undo?}``.
+    :param facts: JSON: the facts and definition versions it was made at.
+    :param overrides: The checkpoint a change of direction overrides (``K-3``, ``D-49``).
+    :param changed_by: The ``K-n`` that changed it.
+    """
+
+    __tablename__ = "factory_checkpoints"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    decided_by_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    question: Mapped[str] = mapped_column(String(1000), nullable=False)
+    node_ref: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    project_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    options: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    choice_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    choice_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    direction: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    why: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    decision_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    policy: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    effects: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    facts: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    decision_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    proposal_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    overrides: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    asked_by_session_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN (1, 2, 3, 4)", name="ck_factory_checkpoints_status"),
+        CheckConstraint("decided_by_kind IN (1, 2, 3)", name="ck_factory_checkpoints_by"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "number", name="uq_factory_checkpoints_number"
+        ),
+        Index("ix_factory_checkpoints_created", "workspace_id", "factory_id", "created_at"),
+    )

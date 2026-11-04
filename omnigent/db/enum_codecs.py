@@ -441,6 +441,22 @@ FACTORY_INITIATIVE_STATUS: dict[str, int] = {
 }
 """``factory_initiatives.status``: a person's close or reopen (the state is computed)."""
 
+FACTORY_CHECKPOINT_STATUS: dict[str, int] = {
+    "decided": 1,
+    "asked": 2,
+    "answered": 3,
+    "changed": 4,
+}
+"""``factory_checkpoints.status``: decided by the factory, asked of a person, answered by
+one, or changed by a person later (another checkpoint overrides it)."""
+
+FACTORY_CHECKPOINT_BY: dict[str, int] = {
+    "agent": 1,
+    "server": 2,
+    "person": 3,
+}
+"""``factory_checkpoints.decided_by_kind``: who made the decision."""
+
 FACTORY_READOUT_METHOD: dict[str, int] = {
     "controlled": 1,
     "before_after": 2,
@@ -543,6 +559,8 @@ for _factory_table in (
     FACTORY_READOUT_RECOMMENDATION,
     FACTORY_READOUT_DECISION,
     FACTORY_INITIATIVE_STATUS,
+    FACTORY_CHECKPOINT_STATUS,
+    FACTORY_CHECKPOINT_BY,
 ):
     _CODE_TO_NAME[id(_factory_table)] = _invert(_factory_table)
 
@@ -1063,6 +1081,26 @@ def encode_factory_initiative_status(name: str) -> int:
 def decode_factory_initiative_status(code: int) -> str:
     """Decode a stored ``factory_initiatives.status`` code to its name."""
     return _decode(FACTORY_INITIATIVE_STATUS, code, field="factory_initiatives.status")
+
+
+def encode_factory_checkpoint_status(name: str) -> int:
+    """Encode a ``factory_checkpoints.status`` name to its stable code."""
+    return _encode(FACTORY_CHECKPOINT_STATUS, name, field="factory_checkpoints.status")
+
+
+def decode_factory_checkpoint_status(code: int) -> str:
+    """Decode a stored ``factory_checkpoints.status`` code to its name."""
+    return _decode(FACTORY_CHECKPOINT_STATUS, code, field="factory_checkpoints.status")
+
+
+def encode_factory_checkpoint_by(name: str) -> int:
+    """Encode a ``factory_checkpoints.decided_by_kind`` name to its stable code."""
+    return _encode(FACTORY_CHECKPOINT_BY, name, field="factory_checkpoints.decided_by_kind")
+
+
+def decode_factory_checkpoint_by(code: int) -> str:
+    """Decode a stored ``factory_checkpoints.decided_by_kind`` code to its name."""
+    return _decode(FACTORY_CHECKPOINT_BY, code, field="factory_checkpoints.decided_by_kind")
 
 
 def encode_factory_readout_method(name: str) -> int:

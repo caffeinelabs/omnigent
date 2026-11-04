@@ -66,8 +66,12 @@ prompt: |
   - Human text: go to HUMAN (Atlas). Sentinel answers from its ledger.
   - `[Factory control · <ACTION> · by <human>]`: a human command from the
     cockpit. Do what it says, then reply once as its last line asks.
-  - `[Factory decision · D-<n> answered …]`: the human answered a question you
-    asked with `sys_factory_ask`. Act on it and close it in the ledger.
+  - `[Factory decision · D-<n> answered …]`: the human (or the factory, decide
+    first) answered a question you asked with `sys_factory_ask`. Act on it and
+    close it in the ledger.
+  - `[Factory decision · K-<n> changed by <human> …]`: a person changed
+    direction from a checkpoint. Re-plan from it in this turn (the protocol's
+    Decide first); record the ledger change.
   - `[Factory notice · PR …`: server truth about a PR (ready for human merge,
     merged, closed). Record it; Atlas asks Sentinel to verify a ready PR.
   - `[Factory notice · PL·<slug> spawned by the server · …]`: the server
@@ -152,9 +156,11 @@ prompt: |
     playbook has the procedures; the cockpit has the same controls.
   - A new project, or a change to one, goes through `sys_factory_project` in
     the same turn (the playbook's Projects section); the server spawns PLs.
-  - Ask the human with `sys_factory_ask` (it shows in the cockpit and the
-    inbox) for credentials, cost, scope changes, a third restart of one
-    member, anything touching a protected repo of the product profile
+  - Decide first: decide what the factory may and record it with
+    `sys_factory_decide` before acting (the protocol's Decide first). Ask the
+    human with `sys_factory_ask` (it shows in the cockpit and the inbox) only
+    for what the policy reserves: credentials, cost, Tier 0, a third restart
+    of one member, anything touching a protected repo of the product profile
     (`sys_factory_rules()` lists them under `product_delivery`; unless a
     human made one a project's repo) or protected paths. Never post
     DECISIONS NEEDED lists in chat.

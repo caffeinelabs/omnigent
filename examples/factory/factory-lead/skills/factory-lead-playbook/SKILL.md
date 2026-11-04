@@ -161,6 +161,7 @@ factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbea
 | `[Factory brief · from <human> via cockpit` | First-turn bootstrap from the cockpit. |
 | `[Factory control · <ACTION> · by <human>]` | A human command: do it (below), then reply once as its text asks. |
 | `[Factory decision · D-<n> answered …]` | Act on the answer; close D-<n> in the ledger. A project change it calls for goes through `sys_factory_project(…, reply_to="D-<n>")`: what the answer covers applies at once on the person's behalf, also for an answer one of your PLs got (one proposal per answer). |
+| `[Factory decision · K-<n> changed by <human> · "<option>"]` | A person changed direction from a checkpoint. Re-plan from it in this turn: propose what the new direction needs with `sys_factory_project(…, reply_to="K-<n>")`, tell the PLs it concerns, and record the decisions you take with `sys_factory_decide`. |
 | `[Factory notice · PR … READY FOR HUMAN MERGE …]`, or `PR #<n> ready for human merge` in a heartbeat delta | Add it to "Ready for human merge"; ask Sentinel to verify it once per head (Atlas). |
 | `[Factory notice · PR … merged by …]`, or `PR #<n> merged by …` in a heartbeat delta | Move it to merged; its PL runs the post-merge steps. Mention it in the next digest. |
 | `[Factory notice · PR … closed without merge …]` | Record it; the PL handles the decision the server opened. |

@@ -10,9 +10,11 @@ blocker path, ending at whoever must act (``node_status``); the roll-up
 carries burn, budget, ETA (only from observed durations), what is in the base
 env, at the root the alarms the server closed and, once this person has
 looked at the node (or an ancestor) before, what changed since
-(``rollup.since``, and ``changed`` on each child: :mod:`.last_look`).
-``seen=1`` marks this look after the response is built (a person's request
-only). ``ref`` is any node ref (``product``, ``I-1``, ``<slug>``, ``T-16``,
+(``rollup.since``, and ``changed`` on each child: :mod:`.last_look`), and
+how many decisions the factory made under it since (``decided_since``, left
+out at 0; ``…/decisions`` lists them: :mod:`.checkpoints`). ``seen=1``
+marks this look after the response is built (a person's request only).
+``ref`` is any node ref (``product``, ``I-1``, ``<slug>``, ``T-16``,
 ``PR-9876``, ``fx:health`` …); an implicit parent with one child answers as
 that child. The tree is built from the snapshot cut to the viewer
 (``filter_snapshot``): projects whose lead they cannot read are left out with
@@ -49,6 +51,7 @@ from fastapi.responses import JSONResponse
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import (
     chat_feed,
+    checkpoints,
     last_look,
     node_lenses,
     node_sheets,
@@ -114,6 +117,7 @@ async def get_node(
     if activity:
         page["thread"]["activity"] = activity
     await asyncio.to_thread(_since, ctx, tree, node, page, reader)
+    await asyncio.to_thread(_decided, ctx, tree, node, page, reader)
     if seen and runner_origin_reason(request) is None:
         await asyncio.to_thread(
             ctx.deps.factory_store.mark_node_seen, ctx.root.id, reader, node.ref
@@ -285,6 +289,18 @@ def _last_look(ctx: FleetContext, tree: nodes.Tree, node: Any, reader: str) -> i
         for r in ctx.deps.factory_store.list_node_reads(ctx.root.id, reader, refs)
     }
     return last_look.last_look(tree, node, marks)
+
+
+def _decided(
+    ctx: FleetContext, tree: nodes.Tree, node: Any, page: dict[str, Any], reader: str
+) -> None:
+    """``decided_since``: what the factory decided in the subtree since this person looked."""
+    seen_at = _last_look(ctx, tree, node, reader)
+    since = seen_at if seen_at is not None else int(time.time()) - checkpoints.SINCE_DEFAULT_S
+    book = tree.memo("checkpoints", "book", lambda: checkpoints.load(ctx.deps, ctx.root.id))
+    count = checkpoints.decided_since(tree, book, node.ref, since)
+    if count:
+        page["decided_since"] = count
 
 
 def _since(

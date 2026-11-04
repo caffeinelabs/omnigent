@@ -18,6 +18,7 @@
     "spend_window_m": 30
   },
   "autonomy": {
+    "decide": [],
     "level": "careful",
     "projects": "requested",
     "scopes": []

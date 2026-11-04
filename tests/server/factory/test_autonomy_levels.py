@@ -380,6 +380,7 @@ def test_a_set_level_lives_under_its_own_key() -> None:
         "projects": "confirm",
         "level": "standard",
         "scopes": [],
+        "decide": [],
     }
     assert definition.effective(stored)["autonomy"]["level"] == "standard"
     assert product_profile._block_set({blocks.LEVEL_KEY: "standard"}, product_profile.AUTONOMY)

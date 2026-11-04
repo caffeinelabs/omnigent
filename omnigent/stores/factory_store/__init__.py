@@ -81,6 +81,11 @@ from omnigent.entities.factory import (
     FactoryTask,
     FactoryVersion,
 )
+from omnigent.stores.factory_store.checkpoints import (
+    CheckpointConflict,
+    CheckpointStore,
+    InMemoryCheckpointStore,
+)
 from omnigent.stores.factory_store.discovery import DiscoveryStore, InMemoryDiscoveryStore
 from omnigent.stores.factory_store.initiatives import (
     InitiativeStore,
@@ -684,7 +689,7 @@ def default_pr_url(repo: str, number: int) -> str:
 # ── The store contract ─────────────────────────────────────────
 
 
-class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
+class FactoryStore(DiscoveryStore, InitiativeStore, CheckpointStore, ABC):
     """
     Abstract base for the factory cockpit's persistence.
 
@@ -1812,7 +1817,9 @@ def _normalise_pr_fields(fields: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, FactoryStore):
+class InMemoryFactoryStore(
+    InMemoryDiscoveryStore, InMemoryInitiativeStore, InMemoryCheckpointStore, FactoryStore
+):
     """
     A process-local :class:`FactoryStore` with the same semantics as the SQL store.
 
@@ -3387,6 +3394,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
 
 
 __all__ = [
+    "CheckpointConflict",
     "DecisionNotFound",
     "DecisionNotOpen",
     "DefinitionVersionExists",

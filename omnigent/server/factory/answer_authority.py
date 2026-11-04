@@ -63,8 +63,9 @@ if TYPE_CHECKING:
 ANSWER_WINDOW_S: Final = 24 * 3600
 """An answer older than this no longer approves a proposal on its own."""
 DECISION_REF_RE: Final = re.compile(r"^\s*D-([1-9][0-9]{0,8})\s*$")
-NOT_A_PERSON: Final = frozenset({"server", "eval-auto", ""})
-"""``answered_by`` values that are not a person (the eval harness answers as ``eval-auto``)."""
+NOT_A_PERSON: Final = frozenset({"server", "eval-auto", "factory", ""})
+"""``answered_by`` values that are not a person (the eval harness answers as ``eval-auto``,
+decide-first as ``factory``: :mod:`.decide_first`)."""
 _ROLE_SUFFIX_RE: Final = re.compile(r"\s+\((?:viewer|operator|owner|creator)\)$")
 CARRIED_OPS: Final = frozenset({"create", "update"})
 """Ops an answer can carry: the ones an Undo takes back."""

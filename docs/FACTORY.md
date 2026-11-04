@@ -2287,6 +2287,48 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   dropped, so the factory-wide targets merge the PRs it kept for people, and
   ops under a scope stricter than `autonomy.level` are decided at the looser
   factory level.
+- **Decide first and checkpoints.** Every decision point goes to a server
+  policy (`server/factory/decide_policy.py`) before a person sees it: an
+  agent's `sys_factory_ask`, a decision it takes itself with
+  `sys_factory_decide` (`POST /v1/factory/agent/checkpoints`), and a projects
+  proposal that would wait for an operator. The factory decides when the
+  decision is reversible, within the budgets, touches no Tier-0 class
+  (merging into a base that is not an auto-merge target, credentials, spend,
+  turning a production flag on, infra, policy and access, deleting data,
+  personal data: read from the asker's class and from the words), has a
+  recommended (or justified) option, was not addressed to a person (`for=`),
+  and no class it falls in is reserved: by the owners' `autonomy.decide`
+  `[{kind, who, ref?}]` (class B, per class and per subtree, nearest scope
+  first; `who: factory` is refused for Tier 0 and structural changes), else
+  by the level (`careful`: nothing; `standard`: scope, technical, UX,
+  ordering and other questions; `tryout`: also follow-up projects). The
+  strictest class wins, so an agent cannot dodge a reserved class by naming a
+  looser one. A decided ask is answered at once as `answered_by: factory`
+  (never a person's approval: a proposal that carries it out keeps its own
+  rules, except that a create citing a decided follow-up is itself a
+  follow-up) and the tool result is the answer; open asks from before are
+  decided by the minute sweep and the asker is mailed `[Factory decision ·
+  D-n answered by the factory …]`. Every decision is a checkpoint
+  (`factory_checkpoints`, `K-n`; `server/factory/checkpoints.py`): who
+  decided, question, options, choice, why, confidence, class, the policy's
+  verdict, node, effects, the definition version and level, and status
+  `decided`/`asked`/`answered`/`changed`; a person's answers (`D-n`) and
+  applied proposals (`C-n`) read as checkpoints through an adapter, with no
+  history copied. Node pages carry `decided_since` (left out at 0);
+  `GET …/n/{ref}/decisions` lists the subtree's checkpoints newest first, one
+  line each; `GET …/checkpoints/{K-n|D-n|C-n}` is one checkpoint's details;
+  `POST …/checkpoints/{ref}/preview|apply` changes direction
+  (`server/factory/change_direction.py`): records the person's checkpoint
+  linked to the one it overrides, takes back what it can (a proposal's Undo;
+  past it, cancels the projects it created, puts charters back, and adds a
+  revert task for merged code, never a force-push; rejects pending proposals
+  that followed it), tells the deciding agent (else the project's lead, else
+  the factory's lead) to re-plan with the direction quoted
+  (`[Factory decision · K-n changed by …]`), with Undo through
+  `POST …/undo/{token}`. The Slack digest says "Decided since you looked ·
+  n". A version stores `autonomy.decide` under its own key
+  (`autonomy_decide`): a server from before drops only it, and decides
+  nothing itself.
 - **Merge gate.** `python -m omnigent.factory_merge <pr-url> [--admin-fallback] [--dry-run]`
   is a verdict tool for agents: the guard admits it only with `--dry-run`
   (see Invariants). Run by a human, it
