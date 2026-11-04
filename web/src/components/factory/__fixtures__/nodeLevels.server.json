@@ -1,0 +1,1020 @@
+{
+  "I-1/task": {
+    "done_groups": {
+      "count": 2,
+      "in_base_env": true,
+      "noun": "projects all done",
+      "titles": ["connectors-core", "skill-discovery"]
+    },
+    "groups": [
+      {
+        "items": [
+          {
+            "col": 1,
+            "cost": 1.66,
+            "glyph": "T",
+            "kind": "task",
+            "kind_name": "Task",
+            "level": "task",
+            "level_name": "Task",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "owner": {
+              "name": "Luz · builder",
+              "working": false
+            },
+            "ref": "T-16",
+            "state": "waiting",
+            "status_compact": {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "apply",
+                    "label": "Apply"
+                  },
+                  {
+                    "id": "edit",
+                    "label": "Edit & apply"
+                  },
+                  {
+                    "id": "reject",
+                    "label": "Reject"
+                  }
+                ],
+                "age": "5h 54m",
+                "asker": "Atlas",
+                "expires": "2d 16h",
+                "id": "D-45",
+                "row_id": "00000000000000000000000000000221",
+                "subject": "C-16",
+                "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                "verb": "Apply C-16"
+              },
+              "ends": "person",
+              "kind": "waiting",
+              "label": "Held for C-16:",
+              "segments": [
+                {
+                  "decision": {
+                    "actions": [
+                      {
+                        "id": "apply",
+                        "label": "Apply"
+                      },
+                      {
+                        "id": "edit",
+                        "label": "Edit & apply"
+                      },
+                      {
+                        "id": "reject",
+                        "label": "Reject"
+                      }
+                    ],
+                    "age": "5h 54m",
+                    "asker": "Atlas",
+                    "expires": "2d 16h",
+                    "id": "D-45",
+                    "row_id": "00000000000000000000000000000221",
+                    "subject": "C-16",
+                    "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                    "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                    "verb": "Apply C-16"
+                  },
+                  "person": true,
+                  "sep": "→"
+                }
+              ]
+            },
+            "tag": "T-16",
+            "title": "Debit each turn"
+          },
+          {
+            "col": 0,
+            "glyph": "T",
+            "in_base_env": true,
+            "kind": "task",
+            "kind_name": "Task",
+            "level": "task",
+            "level_name": "Task",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "owner": {
+              "name": "Luz · builder",
+              "working": false
+            },
+            "ref": "T-15",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9876 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "tag": "T-15",
+            "title": "Sessions, tool registry, flagged chat API"
+          }
+        ],
+        "parent": {
+          "ancestors": [
+            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
+            "Agent assistant (sample)"
+          ],
+          "level": "project",
+          "level_name": "Project",
+          "ref": "assistant-core",
+          "state": "needs",
+          "title": "assistant-core"
+        }
+      },
+      {
+        "folded_done": true,
+        "items": [
+          {
+            "glyph": "T",
+            "in_base_env": true,
+            "kind": "task",
+            "kind_name": "Task",
+            "level": "task",
+            "level_name": "Task",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "ref": "T-17",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9882 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "tag": "T-17",
+            "title": "Connector core and first connector"
+          }
+        ],
+        "parent": {
+          "ancestors": [
+            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
+            "Agent assistant (sample)"
+          ],
+          "level": "project",
+          "level_name": "Project",
+          "ref": "connectors-core",
+          "state": "done",
+          "title": "connectors-core"
+        }
+      },
+      {
+        "folded_done": true,
+        "items": [
+          {
+            "glyph": "T",
+            "in_base_env": true,
+            "kind": "task",
+            "kind_name": "Task",
+            "level": "task",
+            "level_name": "Task",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "ref": "T-18",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9881 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "tag": "T-18",
+            "title": "Discovery skill with live search"
+          }
+        ],
+        "parent": {
+          "ancestors": [
+            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
+            "Agent assistant (sample)"
+          ],
+          "level": "project",
+          "level_name": "Project",
+          "ref": "skill-discovery",
+          "state": "done",
+          "title": "skill-discovery"
+        }
+      }
+    ],
+    "level": "task",
+    "level_name": "Tasks",
+    "parent_level_name": "projects",
+    "scope": "I-1",
+    "tiles": false,
+    "total": 4
+  },
+  "product/feature": {
+    "groups": [
+      {
+        "items": [
+          {
+            "burn": 2.5,
+            "cost": 51.13,
+            "grandchildren": {
+              "by_state": {
+                "done": 2,
+                "needs": 1,
+                "waiting": 1
+              },
+              "count": 4,
+              "later": 4,
+              "noun": "projects"
+            },
+            "in_base_env": true,
+            "kind": "feature",
+            "kind_name": "Feature",
+            "level": "feature",
+            "level_name": "Feature",
+            "needs": {
+              "blocking": 2,
+              "open": 4
+            },
+            "owner": {
+              "name": "Atlas",
+              "working": false
+            },
+            "progress": {
+              "growing": true,
+              "label": "2/6",
+              "secondary": 0.6667,
+              "value": 0.3333,
+              "what": "acceptance"
+            },
+            "ref": "I-1",
+            "short": "An assistant inside the app that helps users build",
+            "state": "needs",
+            "status_compact": {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "apply",
+                    "label": "Apply"
+                  },
+                  {
+                    "id": "edit",
+                    "label": "Edit & apply"
+                  },
+                  {
+                    "id": "reject",
+                    "label": "Reject"
+                  }
+                ],
+                "age": "5h 54m",
+                "asker": "Atlas",
+                "expires": "2d 16h",
+                "id": "D-45",
+                "row_id": "00000000000000000000000000000221",
+                "subject": "C-16",
+                "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                "verb": "Apply C-16"
+              },
+              "ends": "person",
+              "kind": "needs",
+              "label": "Needs you:",
+              "segments": [
+                {
+                  "ref": "assistant-core",
+                  "sep": "›",
+                  "title": "assistant-core"
+                },
+                {
+                  "ref": "T-16",
+                  "sep": "›",
+                  "title": "T-16"
+                },
+                {
+                  "decision": {
+                    "actions": [
+                      {
+                        "id": "apply",
+                        "label": "Apply"
+                      },
+                      {
+                        "id": "edit",
+                        "label": "Edit & apply"
+                      },
+                      {
+                        "id": "reject",
+                        "label": "Reject"
+                      }
+                    ],
+                    "age": "5h 54m",
+                    "asker": "Atlas",
+                    "expires": "2d 16h",
+                    "id": "D-45",
+                    "row_id": "00000000000000000000000000000221",
+                    "subject": "C-16",
+                    "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                    "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                    "verb": "Apply C-16"
+                  },
+                  "person": true,
+                  "sep": "→"
+                }
+              ]
+            },
+            "tag": "I-1",
+            "title": "Agent assistant (sample)",
+            "try_ready": true
+          }
+        ],
+        "parent": {
+          "ancestors": [],
+          "evidence": "an ask · no user evidence yet",
+          "level": "need",
+          "level_name": "Need",
+          "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+          "state": "needs",
+          "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        }
+      },
+      {
+        "items": [
+          {
+            "base": "main",
+            "cost": 38.4,
+            "folded_from": ["feature:from-C-12", "need:from-C-12"],
+            "grandchildren": {
+              "by_state": {
+                "waiting": 2
+              },
+              "count": 2,
+              "later": 0,
+              "noun": "changes"
+            },
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "owner": {
+              "name": "Nova",
+              "working": false
+            },
+            "progress": {
+              "label": "0/2",
+              "value": 0.0,
+              "what": "tasks"
+            },
+            "ref": "build-tier-drafts-3",
+            "state": "waiting",
+            "status_compact": {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "merge",
+                    "label": "Review and merge"
+                  }
+                ],
+                "age": "7h 39m",
+                "asker": "Nova",
+                "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                "grouped": true,
+                "id": "merge:main",
+                "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                "title": "Merge #9856 and #9857 into main",
+                "verb": "Merge #9856 and #9857"
+              },
+              "ends": "person",
+              "kind": "needs",
+              "label": "Needs you:",
+              "segments": [
+                {
+                  "decision": {
+                    "actions": [
+                      {
+                        "id": "merge",
+                        "label": "Review and merge"
+                      }
+                    ],
+                    "age": "7h 39m",
+                    "asker": "Nova",
+                    "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                    "grouped": true,
+                    "id": "merge:main",
+                    "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                    "title": "Merge #9856 and #9857 into main",
+                    "verb": "Merge #9856 and #9857"
+                  },
+                  "person": true,
+                  "sep": "→"
+                }
+              ]
+            },
+            "title": "build-tier-drafts-3"
+          }
+        ],
+        "parent": {
+          "ancestors": [],
+          "folded": true,
+          "implicit": true,
+          "level": "need",
+          "level_name": "Need",
+          "ref": "need:from-C-12",
+          "state": "waiting",
+          "title": "From C-12"
+        }
+      },
+      {
+        "folded_done": true,
+        "items": [
+          {
+            "cost": 27.6,
+            "glyph": "C",
+            "grandchildren": {
+              "by_state": {
+                "done": 4
+              },
+              "count": 4,
+              "later": 0,
+              "noun": "projects"
+            },
+            "implicit": true,
+            "in_base_env": true,
+            "kind": "proposal",
+            "kind_name": "From a proposal",
+            "level": "feature",
+            "level_name": "Feature",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "owner": {
+              "name": "Atlas",
+              "working": false
+            },
+            "progress": {
+              "label": "4/4",
+              "value": 1.0,
+              "what": "projects"
+            },
+            "ref": "feature:from-C-13",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9826, #9828, #9829 +1 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "From C-13: Shortlist fixes"
+          }
+        ],
+        "parent": {
+          "ancestors": [],
+          "evidence": "an ask · no user evidence yet",
+          "level": "need",
+          "level_name": "Need",
+          "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
+          "state": "done",
+          "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+        }
+      }
+    ],
+    "level": "feature",
+    "level_name": "Features",
+    "parent_level_name": "needs",
+    "scope": "product",
+    "tiles": true,
+    "total": 3,
+    "via_fold": 1
+  },
+  "product/project": {
+    "groups": [
+      {
+        "items": [
+          {
+            "budget": 150.0,
+            "burn": 2.5,
+            "col": 0,
+            "cost": 25.13,
+            "grandchildren": {
+              "by_state": {
+                "done": 1,
+                "waiting": 1
+              },
+              "count": 2,
+              "later": 0,
+              "noun": "tasks"
+            },
+            "idle": 3,
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 1,
+              "open": 1
+            },
+            "owner": {
+              "name": "Juno",
+              "working": false
+            },
+            "progress": {
+              "label": "1/2",
+              "value": 0.6667,
+              "what": "tasks"
+            },
+            "ref": "assistant-core",
+            "short": "The shared core the panel, connectors and skills build on",
+            "state": "needs",
+            "status_compact": {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "apply",
+                    "label": "Apply"
+                  },
+                  {
+                    "id": "edit",
+                    "label": "Edit & apply"
+                  },
+                  {
+                    "id": "reject",
+                    "label": "Reject"
+                  }
+                ],
+                "age": "5h 54m",
+                "asker": "Atlas",
+                "expires": "2d 16h",
+                "id": "D-45",
+                "row_id": "00000000000000000000000000000221",
+                "subject": "C-16",
+                "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                "verb": "Apply C-16"
+              },
+              "ends": "person",
+              "kind": "needs",
+              "label": "Needs you:",
+              "segments": [
+                {
+                  "ref": "T-16",
+                  "sep": "›",
+                  "title": "T-16"
+                },
+                {
+                  "decision": {
+                    "actions": [
+                      {
+                        "id": "apply",
+                        "label": "Apply"
+                      },
+                      {
+                        "id": "edit",
+                        "label": "Edit & apply"
+                      },
+                      {
+                        "id": "reject",
+                        "label": "Reject"
+                      }
+                    ],
+                    "age": "5h 54m",
+                    "asker": "Atlas",
+                    "expires": "2d 16h",
+                    "id": "D-45",
+                    "row_id": "00000000000000000000000000000221",
+                    "subject": "C-16",
+                    "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                    "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                    "verb": "Apply C-16"
+                  },
+                  "person": true,
+                  "sep": "→"
+                }
+              ]
+            },
+            "title": "assistant-core",
+            "try_ready": true,
+            "working": []
+          },
+          {
+            "budget": 150.0,
+            "col": 1,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "owner": {
+              "name": "Ori",
+              "working": false
+            },
+            "progress": {
+              "growing": true,
+              "label": "–",
+              "value": 0,
+              "what": "not planned"
+            },
+            "ref": "assistant-panel-ux",
+            "short": "The assistant panel inside the app",
+            "state": "waiting",
+            "status_compact": {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "apply",
+                    "label": "Apply"
+                  },
+                  {
+                    "id": "edit",
+                    "label": "Edit & apply"
+                  },
+                  {
+                    "id": "reject",
+                    "label": "Reject"
+                  }
+                ],
+                "age": "5h 54m",
+                "asker": "Atlas",
+                "expires": "2d 16h",
+                "id": "D-45",
+                "row_id": "00000000000000000000000000000221",
+                "subject": "C-16",
+                "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+                "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+                "verb": "Apply C-16"
+              },
+              "ends": "person",
+              "kind": "waiting",
+              "label": "Waits on",
+              "segments": [
+                {
+                  "label": "",
+                  "ref": "assistant-core",
+                  "sep": "→",
+                  "title": "assistant-core"
+                },
+                {
+                  "label": "held for C-16",
+                  "sep": "→"
+                }
+              ]
+            },
+            "title": "assistant-panel-ux"
+          },
+          {
+            "col": 1,
+            "cost": 14.2,
+            "grandchildren": {
+              "by_state": {
+                "done": 1
+              },
+              "count": 1,
+              "later": 0,
+              "noun": "task"
+            },
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 1
+            },
+            "progress": {
+              "label": "1/1",
+              "value": 1.0,
+              "what": "tasks"
+            },
+            "ref": "connectors-core",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9882 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "connectors-core"
+          },
+          {
+            "col": 1,
+            "cost": 11.8,
+            "grandchildren": {
+              "by_state": {
+                "done": 1
+              },
+              "count": 1,
+              "later": 0,
+              "noun": "task"
+            },
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 1
+            },
+            "progress": {
+              "label": "1/1",
+              "value": 1.0,
+              "what": "tasks"
+            },
+            "ref": "skill-discovery",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9881 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "skill-discovery"
+          }
+        ],
+        "later": ["ads-integration", "growth-seo", "sales-skill", "promotion-skill"],
+        "parent": {
+          "ancestors": [
+            "I want an assistant in the app that helps with building, and later with discovery and sales too."
+          ],
+          "level": "feature",
+          "level_name": "Feature",
+          "ref": "I-1",
+          "state": "needs",
+          "title": "Agent assistant (sample)"
+        }
+      },
+      {
+        "items": [
+          {
+            "base": "main",
+            "cost": 38.4,
+            "folded_from": ["feature:from-C-12", "need:from-C-12"],
+            "grandchildren": {
+              "by_state": {
+                "waiting": 2
+              },
+              "count": 2,
+              "later": 0,
+              "noun": "changes"
+            },
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "owner": {
+              "name": "Nova",
+              "working": false
+            },
+            "progress": {
+              "label": "0/2",
+              "value": 0.0,
+              "what": "tasks"
+            },
+            "ref": "build-tier-drafts-3",
+            "state": "waiting",
+            "status_compact": {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "merge",
+                    "label": "Review and merge"
+                  }
+                ],
+                "age": "7h 39m",
+                "asker": "Nova",
+                "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                "grouped": true,
+                "id": "merge:main",
+                "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                "title": "Merge #9856 and #9857 into main",
+                "verb": "Merge #9856 and #9857"
+              },
+              "ends": "person",
+              "kind": "needs",
+              "label": "Needs you:",
+              "segments": [
+                {
+                  "decision": {
+                    "actions": [
+                      {
+                        "id": "merge",
+                        "label": "Review and merge"
+                      }
+                    ],
+                    "age": "7h 39m",
+                    "asker": "Nova",
+                    "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+                    "grouped": true,
+                    "id": "merge:main",
+                    "text": "Ready to merge into main. A person merges main, so the factory does not.",
+                    "title": "Merge #9856 and #9857 into main",
+                    "verb": "Merge #9856 and #9857"
+                  },
+                  "person": true,
+                  "sep": "→"
+                }
+              ]
+            },
+            "title": "build-tier-drafts-3"
+          }
+        ],
+        "parent": {
+          "ancestors": [],
+          "folded": true,
+          "implicit": true,
+          "level": "feature",
+          "level_name": "Feature",
+          "ref": "feature:from-C-12",
+          "state": "waiting",
+          "title": "From C-12: Third round of build-tier drafts"
+        }
+      },
+      {
+        "folded_done": true,
+        "items": [
+          {
+            "col": 0,
+            "cost": 6.4,
+            "grandchildren": {
+              "by_state": {
+                "done": 1
+              },
+              "count": 1,
+              "later": 0,
+              "noun": "change"
+            },
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "progress": {
+              "label": "1/1",
+              "value": 1.0,
+              "what": "tasks"
+            },
+            "ref": "ux-env-badge-copy",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9826 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "ux-env-badge-copy"
+          },
+          {
+            "col": 0,
+            "cost": 5.1,
+            "grandchildren": {
+              "by_state": {
+                "done": 1
+              },
+              "count": 1,
+              "later": 0,
+              "noun": "change"
+            },
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "progress": {
+              "label": "1/1",
+              "value": 1.0,
+              "what": "tasks"
+            },
+            "ref": "ux-slash-focus",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9828 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "ux-slash-focus"
+          },
+          {
+            "col": 0,
+            "cost": 8.9,
+            "grandchildren": {
+              "by_state": {
+                "done": 1
+              },
+              "count": 1,
+              "later": 0,
+              "noun": "change"
+            },
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "progress": {
+              "label": "1/1",
+              "value": 1.0,
+              "what": "tasks"
+            },
+            "ref": "ux-status-page",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9829 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "ux-status-page"
+          },
+          {
+            "col": 0,
+            "cost": 7.2,
+            "grandchildren": {
+              "by_state": {
+                "done": 1
+              },
+              "count": 1,
+              "later": 0,
+              "noun": "change"
+            },
+            "in_base_env": true,
+            "kind": "project",
+            "kind_name": "Project",
+            "level": "project",
+            "level_name": "Project",
+            "needs": {
+              "blocking": 0,
+              "open": 0
+            },
+            "progress": {
+              "label": "1/1",
+              "value": 1.0,
+              "what": "tasks"
+            },
+            "ref": "api-request-id",
+            "state": "done",
+            "status_compact": {
+              "detail": "#9827 merged · in base env",
+              "ends": "other",
+              "kind": "done",
+              "label": "Done",
+              "segments": []
+            },
+            "title": "api-request-id"
+          }
+        ],
+        "parent": {
+          "ancestors": ["Your shortlist pick: env badge copy, / to chat, status page, request id."],
+          "implicit": true,
+          "level": "feature",
+          "level_name": "Feature",
+          "ref": "feature:from-C-13",
+          "state": "done",
+          "title": "From C-13: Shortlist fixes"
+        }
+      }
+    ],
+    "level": "project",
+    "level_name": "Projects",
+    "parent_level_name": "features",
+    "scope": "product",
+    "tiles": true,
+    "total": 9
+  }
+}

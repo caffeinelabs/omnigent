@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from typing import Any
 
 import pytest
@@ -235,10 +236,44 @@ def test_a_hold_on_another_task_hops_there() -> None:
 
     line = _page(tree, "T-16")["status"]
 
-    assert full(line) == "Waiting: held for T-19 · not started"
+    # The hop ends at who starts T-19: its project's lead.
+    assert full(line) == "Waiting: held for T-19 → waits for Juno to start it · not started"
     assert line["why"][1]["html"] == 'It is held for <a data-ref="T-19">T-19</a>.'
     row = _kid(_page(tree, "assistant-core"), "T-16")["status_compact"]
     assert compact(row) == "Held for T-19 · not started"
+
+
+def test_a_task_nothing_holds_ends_at_the_lead_who_starts_it() -> None:
+    facts = factory_1340()
+    facts.decisions = [d for d in facts.decisions if d.ref != "D-45"]
+    facts.proposals = [
+        dataclasses.replace(p, status="applied") if p.ref == "C-16" else p for p in facts.proposals
+    ]
+    facts.tasks = [
+        dataclasses.replace(t, hold=None) if t.ref == "T-16" else t for t in facts.tasks
+    ]
+    tree = build(snapshot_waits(facts))
+
+    line = _page(tree, "T-16")["status"]
+
+    assert full(line) == "Not started: waits for Juno to start it"
+    assert line["ends"] == "other"
+    assert line["why"][-1]["html"] == "Nothing holds it: waits for Juno to start it."
+
+
+def test_the_base_envs_setup_project_says_who_starts_it() -> None:
+    facts = factory_1340()
+    view = {k: v for k, v in facts.views["base-env"].items() if k != "pl"}
+    facts.views = {**facts.views, "base-env": {**view, "stage": "queued"}}
+    facts.projects = [
+        dataclasses.replace(p, stage="queued") if p.slug == "base-env" else p
+        for p in facts.projects
+    ]
+
+    line = _page(build(facts), "base-env")["status"]
+
+    assert re.fullmatch(r"Not started for \d+ \w+: waits for Atlas to start it", full(line))
+    assert line["ends"] == "other"
 
 
 def _after_d45(facts: Any) -> Any:

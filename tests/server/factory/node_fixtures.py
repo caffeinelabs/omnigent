@@ -203,12 +203,15 @@ def _decision(
     number: int,
     subject: str,
     *,
-    blocking: bool = True,
+    blocking: bool | None = None,
     question: str = "",
     source: str = "proposal",
     context: str | None = None,
     created_at: int = AT_0746,
 ) -> FactoryDecision:
+    """A decision as the server stores it: a proposal's is mirrored as blocking nothing."""
+    if blocking is None:
+        blocking = source != "proposal"
     return FactoryDecision(
         id=hex_id(500 + number),
         factory_id=FID,
@@ -525,8 +528,8 @@ def factory_1340() -> NodeFacts:
             question="Atlas proposes C-16: update assistant-core (constraints, DoD)",
             context="Implements the D-42 answer: debit each turn. T-16 waits for it.",
         ),
-        _decision(43, "proposal:C-14", blocking=False),
-        _decision(44, "proposal:C-15", blocking=False),
+        _decision(43, "proposal:C-14"),
+        _decision(44, "proposal:C-15"),
         _decision(
             49,
             "proposal:C-19",

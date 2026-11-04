@@ -57,6 +57,8 @@ export interface DecisionRef {
   blocks_nothing?: boolean;
   /** A group (merges on one base): the id is not shown next to the verb. (client) */
   grouped?: boolean;
+  /** The decision's row id, which the answer route takes; absent on a group of merges. */
+  row_id?: string;
 }
 
 /** A path step: down into the child that blocks most (`›`), a hop or a hold (`→`), or the person. */
@@ -319,7 +321,8 @@ export interface LevelCount {
 
 export interface Results {
   merged: number;
-  in_base_env: number;
+  /** Merged changes the base env runs; absent when the factory has no base env. */
+  in_base_env?: number;
   open: string[];
   readouts: "not measured" | { day7?: string; day28?: string };
 }

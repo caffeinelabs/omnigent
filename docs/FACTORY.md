@@ -999,9 +999,14 @@ under their task's PR; a task with runs and no PR yet has no run page
 viewer (`filter_snapshot`: members, team chips, decisions, cost and burn,
 the base env), memoized for 5 s per factory and set of sessions the viewer
 may read, and dropped on any recorded write; open asks come from one
-batched read of the messages live nodes quote. Cockpit v3 reads these pages
-instead of its sample when `OMNIGENT_FACTORY_NODE_API=1` (preflight
-`node_api`).
+batched read of the messages live nodes quote. Cockpit v3 (`?cockpit=v3`)
+always reads these pages; its sample factory lives only in Storybook and
+the web tests. `GET …/n/{ref}/level/{level}` lists one level under a node
+grouped under each item's parent (Home lists the features under the needs
+they came from), all-done groups folded, 60 a group with a cursor each.
+A proposal's decision is stored as blocking nothing; the projection counts
+it as holding work while the proposal adds a project or a rule, or changes
+a project that is still active, so "needs you" follows what really waits.
 
 **Status lines** (`node_status.py`) say in one line why a node is or isn't
 moving, ending at the person who must act. The blocker path reads the
@@ -1018,7 +1023,9 @@ person; a path that ends at a person always wins over one that ends at the
 server or at moving work. A project that has not started and that nothing
 holds ends at who starts it (the snapshot's `start`: "the server starts it
 within a minute", "waits for Atlas to start it", "starting: pulling the
-image", or the capacity wait with how full the machines are). It stops at a
+image", or the capacity wait with how full the machines are); so does the
+base env's setup project in the factory tree, and a task nothing holds ends
+at its project's lead ("Not started: waits for Juno to start it"). It stops at a
 cycle, a person or the server; a line shows at most 6 segments, keeping the
 first steps, an elision (`…`) and the end, so the person and their ask stay.
 Ready PRs a person merges into one base are one ask (`merge:<base>`,

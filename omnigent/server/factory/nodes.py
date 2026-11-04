@@ -1530,10 +1530,34 @@ class Tree:
         if state != "done" and node.waits:
             state = _worst([state, "waiting"])
         if state not in ("done", "later", "ghost") and any(
-            d.blocking for d in self.own_decisions(node)
+            self.blocks(d) for d in self.own_decisions(node)
         ):
             state = "needs"
         return state
+
+    def blocks(self, decision: FactoryDecision) -> bool:
+        """
+        Whether an open decision holds work. An ask says so itself; a proposal's
+        decision (stored as blocking nothing) holds what it proposes: a rule or
+        a new project, or a change to a project that is still active.
+        """
+        if decision.blocking:
+            return True
+        if decision.source != "proposal":
+            return False
+        return bool(self._cached("blocks", decision.id, lambda: self._holds_work(decision)))
+
+    def _holds_work(self, decision: FactoryDecision) -> bool:
+        proposal = node_status.decision_proposal(decision, self._proposals)
+        if proposal is None:
+            return False
+        if proposal.kind != "projects" or _planned(proposal):
+            return True
+        rows = self.wfacts.projects
+        return any(
+            (row := rows.get(slug)) is not None and row.status == "active"
+            for slug in waits.proposal_slugs(proposal)
+        )
 
     def own_decisions(self, node: _N) -> list[FactoryDecision]:
         """Open decisions about *node*, and about the children it was proposed to get."""
@@ -1551,7 +1575,7 @@ class Tree:
             for node in [self.nodes[ref], *self.subtree(ref)]:
                 for d in self.decisions_at.get(node.ref, []):
                     found[d.id] = d
-            return len(found), sum(1 for d in found.values() if d.blocking)
+            return len(found), sum(1 for d in found.values() if self.blocks(d))
 
         return self._cached("needs", ref, make)
 
@@ -1764,7 +1788,7 @@ class Tree:
         if state == "later" and node.held_for:
             out["detail"] = f"held for {node.held_for}"
         elif state == "ghost":
-            ask = next((d for d in self.decisions_at.get(node.ref, []) if d.blocking), None)
+            ask = next((d for d in self.decisions_at.get(node.ref, []) if self.blocks(d)), None)
             if ask is not None:
                 out["decision"] = self.paths.decision_ask(ask).to_json()
             if node.short:
@@ -1987,12 +2011,15 @@ class Tree:
         def make() -> dict[str, Any]:
             changes = [n for n in [node, *self.subtree(node.ref)] if n.level == "change"]
             merged = [c for c in changes if c.own == "done"]
-            return {
+            out: dict[str, Any] = {
                 "merged": len(merged),
-                "in_base_env": sum(1 for c in merged if self._change_in_base(c)),
                 "open": [c.ref for c in changes if c.own != "done"][:PAGE_SIZE],
                 "readouts": "not measured",
             }
+            # Without a base env there is nothing to be in: no count, not a zero.
+            if self._deployed() is not None:
+                out["in_base_env"] = sum(1 for c in merged if self._change_in_base(c))
+            return out
 
         return dict(self._cached("results", node.ref, make))
 
@@ -2690,6 +2717,128 @@ class Tree:
         if node.parent is None:
             out["home"] = self.home.get(node.tree) or (self.ladder[node.tree][1:2] or [""])[0]
         return out
+
+    def level_view(
+        self, ref: str, level: str, *, cursor: str | None = None
+    ) -> dict[str, Any] | None:
+        """
+        ``GET …/n/{ref}/level/{level}``: the nodes on *level* under *ref*,
+        grouped under each one's parent (sections, never nodes joined by lines).
+
+        Groups whose work is all done fold; each group shows 60 items and hands
+        out a cursor for its next 60 (with one, only that group comes back).
+
+        :returns: The ``LevelView``, or ``None`` when *ref* names no node or
+            *level* is not below it in its tree.
+        :raises ValueError: On a cursor this tree never handed out.
+        """
+        found = self.lookup(ref)
+        if found is None:
+            return None
+        scope = self.fold(found)
+        ladder = self.ladder[scope.tree]
+        if level not in ladder or ladder.index(level) <= self.level_index(scope):
+            return None
+        want, offset = _group_cursor(cursor)
+        grouped: dict[str, list[_N]] = {}
+        for raw in self._raw_at_level(scope.ref, level):
+            parent = raw.parent or scope.ref
+            grouped.setdefault(parent, []).append(self.fold(raw))
+        if want is not None and want not in grouped:
+            raise ValueError(f"no group {want!r} under {scope.ref} at {level}")
+        order = sorted(
+            grouped,
+            key=lambda p: (
+                -STATE_RANK.get(self.state(p), 0),
+                -len(self.dependents_of(p)),
+            ),
+        )
+        groups: list[dict[str, Any]] = []
+        done_groups: list[_N] = []
+        shown_total = 0
+        via = 0
+        for parent_ref in order:
+            members = grouped[parent_ref]
+            active = [k for k in members if not k.ghost and not k.later]
+            later = [k for k in members if k.later and not k.ghost]
+            shown_total += len(active)
+            via += sum(1 for k in members if k.level != level)
+            done = bool(active) and all(self.state(k.ref) == "done" for k in active)
+            parent = self.nodes[parent_ref]
+            if done:
+                done_groups.append(parent)
+            if want is not None and parent_ref != want:
+                continue
+            active.sort(key=lambda k: (-STATE_RANK.get(self.state(k.ref), 0), k.col or 0))
+            start = offset if want is not None else 0
+            group: dict[str, Any] = {
+                "parent": self._group_parent(parent),
+                "items": [self.summary(k) for k in active[start : start + PAGE_SIZE]],
+            }
+            if done:
+                group["folded_done"] = True
+            if later and start == 0:
+                group["later"] = [k.title for k in later]
+            if start + PAGE_SIZE < len(active):
+                group["next"] = f"{parent_ref}@{start + PAGE_SIZE}"
+            groups.append(group)
+        index = ladder.index(level)
+        out: dict[str, Any] = {
+            "scope": scope.ref,
+            "level": level,
+            "level_name": self._level_name(level, plural=True),
+            "total": shown_total,
+            "groups": groups,
+            "tiles": level not in ROW_LEVELS,
+        }
+        if index - 1 > 0:
+            out["parent_level_name"] = self._level_name(ladder[index - 1], plural=True).lower()
+        if len(done_groups) > 1 and want is None:
+            noun = out.get("parent_level_name") or "groups"
+            out["done_groups"] = {
+                "count": len(done_groups),
+                "titles": [p.title for p in done_groups],
+                "in_base_env": all(self.in_base_env(p) for p in done_groups),
+                "noun": f"{noun} all done",
+            }
+        if via:
+            out["via_fold"] = via
+        return out
+
+    def _raw_at_level(self, ref: str, level: str) -> list[_N]:
+        """The stored or implicit nodes on *level* under *ref*, before folding."""
+        out: list[_N] = []
+        stack = list(reversed(self.kids.get(ref, [])))
+        while stack:
+            node = self.nodes[stack.pop()]
+            if node.level == level:
+                out.append(node)
+            else:
+                stack.extend(reversed(self.kids.get(node.ref, [])))
+        return out
+
+    def _group_parent(self, node: _N) -> dict[str, Any]:
+        """A group's title: the parent's crumb, its visible ancestors, a need's evidence."""
+        out = self.crumb(node)
+        out["ancestors"] = [
+            a.title
+            for a in self.ancestors(node.ref)
+            if a.parent is not None and not self.folded(a)
+        ]
+        summary = (node.evidence or {}).get("summary") if isinstance(node.evidence, dict) else None
+        if summary:
+            out["evidence"] = str(summary)
+        return out
+
+
+def _group_cursor(cursor: str | None) -> tuple[str | None, int]:
+    """``(group parent, offset)`` of a level view's cursor (``<parent ref>@<offset>``)."""
+    if not cursor:
+        return None, 0
+    parent, sep, offset = cursor.rpartition("@")
+    if not sep or not parent or not offset.isdigit() or int(offset) % PAGE_SIZE:
+        raise ValueError(f"bad cursor {cursor!r}")
+    return parent, int(offset)
 
 
 def _wait(item: Mapping[str, Any]) -> waits.Wait | None:

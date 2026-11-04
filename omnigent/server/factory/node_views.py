@@ -61,6 +61,7 @@ class DecisionRefView(_View):
     text: str | None = None
     blocks_nothing: bool | None = None
     grouped: bool | None = None
+    row_id: str | None = None
 
 
 class SegmentView(_View):
@@ -347,7 +348,7 @@ class ReadoutsView(_View):
 
 class ResultsView(_View):
     merged: int
-    in_base_env: int
+    in_base_env: int | None = None
     open: list[str]
     readouts: Literal["not measured"] | ReadoutsView
 
@@ -392,6 +393,40 @@ class NodePageView(_View):
     home: str | None = None
 
 
+class GroupParentView(CrumbView):
+    ancestors: list[str]
+    evidence: str | None = None
+
+
+class LevelGroupView(_View):
+    parent: GroupParentView
+    items: list[NodeSummaryView] = Field(max_length=60)
+    folded_done: bool | None = None
+    later: list[str] | None = None
+    next: str | None = None
+
+
+class DoneGroupsView(_View):
+    count: int
+    titles: list[str]
+    in_base_env: bool
+    noun: str | None = None
+
+
+class LevelViewView(_View):
+    """``GET …/n/{ref}/level/{level}``: one level under a node, grouped under parents."""
+
+    scope: str
+    level: str
+    level_name: str | None = None
+    parent_level_name: str | None = None
+    total: int
+    groups: list[LevelGroupView]
+    done_groups: DoneGroupsView | None = None
+    tiles: bool | None = None
+    via_fold: int | None = None
+
+
 ChipView.model_rebuild()
 
 
@@ -405,11 +440,23 @@ def validate_page(page: dict[str, Any]) -> dict[str, Any]:
     return page
 
 
+def validate_level(view: dict[str, Any]) -> dict[str, Any]:
+    """
+    Check *view* against :class:`LevelViewView` and return it as built.
+
+    :raises pydantic.ValidationError: When the projection drifted from the contract.
+    """
+    LevelViewView.model_validate(view)
+    return view
+
+
 __all__ = [
     "ChildPageView",
+    "LevelViewView",
     "NodePageView",
     "NodeState",
     "NodeSummaryView",
     "StatusLineView",
+    "validate_level",
     "validate_page",
 ]

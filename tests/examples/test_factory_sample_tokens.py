@@ -16,6 +16,8 @@ SCANNED: tuple[str, ...] = (
     # Server fixtures, goldens, fakes and the tests built on them.
     "tests/server/factory",
     "tests/policies/factory_samples.py",
+    # Cockpit v3 against a real server: its seeded factory.
+    "tests/e2e_ui/factory_v3",
     # Cockpit components, stories and their __fixtures__.
     "web/src/components/factory",
     "web/src/pages/factory",
