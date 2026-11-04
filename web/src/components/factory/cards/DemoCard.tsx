@@ -12,7 +12,8 @@ import { cn } from "@/lib/utils";
 import { DemoStatusTag, DemoThumb } from "../board/DemoThumb";
 import { prPageHref } from "../factoryRoutes";
 
-function stepsLine(demo: DemoView): string | null {
+/** "6 steps · 5 pass · 1 fail", or null when the demo recorded no steps. */
+export function stepsLine(demo: DemoView): string | null {
   if (demo.steps.length === 0) return null;
   const pass = demo.steps.filter((s) => s.status === "pass").length;
   const fail = demo.steps.filter((s) => s.status === "fail").length;

@@ -6,6 +6,7 @@
 
 import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { ClapperboardIcon, PlayIcon, XIcon } from "lucide-react";
+import type { DemoView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { DemoStatusTag } from "../../board/DemoThumb";
 import { DemoMedia } from "../../review/DemoPanel";
@@ -13,6 +14,7 @@ import { useNodeActions } from "../NodeContext";
 import { NodeLink } from "../nodeParts";
 import type { DemoRef, NodePage } from "../nodeTypes";
 import { asDemoView, moreDemos, moreWords, notPassed, playLabel } from "./proofModel";
+import { revealPlayer } from "./revealPlayer";
 
 /** The tone of a verdict's one-line note: amber when partial, red when it failed. */
 export const NOTE_TONE: Record<DemoRef["verdict"], string> = {
@@ -74,11 +76,23 @@ export function ProofThumb({
   );
 }
 
-/** The recording, playing as soon as it opens (a click asked for it), else its still. */
-export function ProofPlayer({ demo }: { demo: DemoRef }) {
+/**
+ * A demo's recording (else its still), playing as soon as it opens (a click
+ * asked for it) and scrolled into view clear of the pinned chat box.
+ */
+export function DemoPlayer({
+  view,
+  testId = "v3-proof-player",
+}: {
+  view: DemoView;
+  testId?: string;
+}) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const video = box.current?.querySelector("video");
+    const el = box.current;
+    if (!el) return;
+    revealPlayer(el);
+    const video = el.querySelector("video");
     try {
       const started = video?.play?.();
       if (started && typeof started.catch === "function") started.catch(() => undefined);
@@ -87,10 +101,15 @@ export function ProofPlayer({ demo }: { demo: DemoRef }) {
     }
   }, []);
   return (
-    <div ref={box} data-testid="v3-proof-player" className="max-w-[640px]">
-      <DemoMedia demo={asDemoView(demo)} />
+    <div ref={box} data-testid={testId} className="max-w-[640px]">
+      <DemoMedia demo={view} />
     </div>
   );
+}
+
+/** A proof row's or a Demos line's demo, playing in place. */
+export function ProofPlayer({ demo }: { demo: DemoRef }) {
+  return <DemoPlayer view={asDemoView(demo)} />;
 }
 
 /**

@@ -26,7 +26,13 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useFactoryEvents, useFactoryPeople } from "@/hooks/useFactory";
 import type { ActiveRoomToken } from "@/lib/composerMentions";
-import type { ChatMessageView, FactorySnapshot, TaskView } from "@/lib/factoryApi";
+import type {
+  ChatMessageView,
+  DemoView,
+  FactorySnapshot,
+  PrView,
+  TaskView,
+} from "@/lib/factoryApi";
 import { type ChatFeed, fetchFactoryTasks, postRoomMessage } from "@/lib/factoryRoomApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -175,6 +181,8 @@ export interface RoomThreadNodeOptions {
   activity?: (items: FoldedItem[], render: (item: FoldedItem) => ReactNode) => ReactNode;
   /** A card under a person's or agent's message to leave out (its ask shows elsewhere on the page). */
   hideCard?: (message: ChatMessageView) => boolean;
+  /** How a PR's demo card draws (v3 plays it in place). */
+  demoCard?: (pr: PrView, demo: DemoView) => ReactNode;
   /** Read the thread with each row's lane (a server without feeds ignores it). */
   feed?: ChatFeed;
 }
@@ -310,6 +318,7 @@ export function RoomThreadView({
       nodeCard,
       repeated,
       hidden: node?.hideCard ?? null,
+      demoCard: node?.demoCard ?? null,
     }),
     [
       fid,
@@ -323,6 +332,7 @@ export function RoomThreadView({
       nodeCard,
       repeated,
       node?.hideCard,
+      node?.demoCard,
     ],
   );
   const candidates = useMemo(

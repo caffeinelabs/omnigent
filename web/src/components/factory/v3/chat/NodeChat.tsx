@@ -17,7 +17,7 @@ import {
 } from "react";
 import { usePreflight } from "@/hooks/useFactory";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
-import type { ChatMessageView } from "@/lib/factoryApi";
+import type { ChatMessageView, DemoView, PrView } from "@/lib/factoryApi";
 import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "../../board/boardHooks";
@@ -52,6 +52,7 @@ import { nodeHref } from "../nodeRoutes";
 import { AMBER, STATE_WORDS } from "../nodeTokens";
 import type { DecisionRef, NodePage, StatusLine, VerbArgs } from "../nodeTypes";
 import { levelName } from "../nodeWire";
+import { ChatDemoCard } from "../proof/ChatDemoCard";
 import { statusText } from "../statusModel";
 import { WhyCard } from "../WhyCard";
 import { ActivityLine } from "./ActivityLine";
@@ -71,6 +72,9 @@ import {
 
 /** The node chat reads its thread with each row's lane (the server's conversation / activity split). */
 const NODE_FEED = "all" as const;
+
+/** A demo card plays in place under itself (calm rule 10), so the chat never leaves the cockpit. */
+const chatDemoCard = (pr: PrView, demo: DemoView) => <ChatDemoCard pr={pr} demo={demo} />;
 
 /** The Room's cards that answer an ask: a key never answers them (Enter, or 1-5 for an option). */
 const ANSWER_CARDS =
@@ -729,6 +733,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
           lane,
           activity,
           hideCard,
+          demoCard: chatDemoCard,
           feed: NODE_FEED,
           empty: (
             <p

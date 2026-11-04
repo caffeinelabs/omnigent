@@ -89,6 +89,7 @@ export function RoomCard({
       const pr = card.ref ? findPr(snapshot.prs, card.ref.replace(/^!/, "")) : null;
       const demo = pr?.demo && (!card.id || pr.demo.id === card.id) ? pr.demo : null;
       if (!pr || !demo) return attached ? null : line;
+      if (data.demoCard) return data.demoCard(pr, demo);
       return <DemoCard factoryId={factoryId} pr={pr} demo={demo} />;
     }
     case "issue": {

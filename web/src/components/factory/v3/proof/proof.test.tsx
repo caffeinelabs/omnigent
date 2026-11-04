@@ -5,12 +5,14 @@ import { renderNode } from "../fixture/renderNode";
 import { sampleNodeSource } from "../fixture/sampleNodeSource";
 import { liveNodeSource } from "../nodeSource";
 import { asDemoView, moreDemos, moreWords } from "./proofModel";
+import { coveredBelow, revealPlayer } from "./revealPlayer";
 
 // Calm rule 10 over the sample: the change, its task, the project and the
 // feature each open with one "Latest demo" row that plays in place; Home links
 // each feature's newest demo from its row; "n more demos" lists the subtree.
 
 let played: ReturnType<typeof vi.fn>;
+let scrolled: ReturnType<typeof vi.fn>;
 let fetched: string[] = [];
 
 vi.mock("@/lib/identity", async (original) => ({
@@ -26,6 +28,11 @@ beforeEach(() => {
   Object.defineProperty(HTMLMediaElement.prototype, "play", {
     configurable: true,
     value: played,
+  });
+  scrolled = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrolled,
   });
   fetched = [];
 });
@@ -76,6 +83,9 @@ describe("cockpit v3 · proof is never hidden", () => {
     expect(video?.getAttribute("src")).toBe("/v1/factory/demos/demo-9876/files/recording");
     expect(video?.getAttribute("poster")).toMatch(/^data:image\/svg\+xml/);
     expect(played).toHaveBeenCalled();
+    // It scrolls into view as it opens (a row low on the page plays below the fold).
+    expect(scrolled).toHaveBeenCalledWith(expect.objectContaining({ block: "nearest" }));
+    expect(scrolled.mock.instances[0]).toBe(player);
     await user.click(within(row).getByTestId("v3-proof-play"));
     expect(within(row).queryByTestId("v3-proof-player")).toBeNull();
   });
@@ -141,12 +151,19 @@ describe("cockpit v3 · proof is never hidden", () => {
     const chips = screen.getAllByTestId("v3-demo-chip");
     const assistant = chips.find((c) => c.closest("[data-ref='I-1']"))!;
     expect(words(assistant)).toBe("PARTIAL 0:42");
+    // In a narrow row it reads "▶ 0:42" in the verdict's colour, so the name beside it stays whole.
+    expect(within(assistant).getByTestId("v3-demo-chip-verdict").className).toContain(
+      "@max-md:sr-only",
+    );
+    expect(assistant.className).toContain("@max-md:text-status-yellow-fg");
+    expect(assistant.closest("[data-ref='I-1']")!.className).toContain("@container");
     expect(assistant).toHaveAccessibleName(
       "Play the PARTIAL demo (0:42) of Agent assistant (sample)",
     );
     const drafts = chips.find((c) => c.closest("[data-ref='build-tier-drafts-3']"))!;
     expect(drafts.dataset.verdict).toBe("PASS");
     expect(words(drafts)).toBe("0:11");
+    expect(drafts.className).not.toContain("@max-md:text-");
     for (const chip of chips) expect(chip.closest("[data-ref]")).not.toBeNull();
 
     await user.click(assistant);
@@ -176,6 +193,56 @@ describe("cockpit v3 · proof is never hidden", () => {
     const rows = screen.getAllByTestId(/^v3-(row|tile)$/);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((r) => within(r).queryByTestId("v3-demo-chip"))).toBe(false);
+  });
+});
+
+describe("cockpit v3 · a player that opens is in view", () => {
+  function fixedBar(top: number, height: number): HTMLElement {
+    const bar = document.createElement("div");
+    bar.dataset.testid = "v3-chat-pinned";
+    bar.getBoundingClientRect = () => ({ top, height }) as DOMRect;
+    document.body.append(bar);
+    return bar;
+  }
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps clear of the pinned chat box (and the tab bar under it)", () => {
+    vi.stubGlobal("innerHeight", 844);
+    fixedBar(700, 88);
+    const player = document.body.appendChild(document.createElement("div"));
+
+    expect(coveredBelow()).toBe(144);
+    revealPlayer(player);
+
+    expect(player.style.scrollMarginBottom).toBe("156px");
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+  });
+
+  it("in a sheet only its own edge counts; reduced motion jumps", () => {
+    vi.stubGlobal("innerHeight", 844);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({ matches: query.includes("reduce"), media: query })),
+    );
+    fixedBar(700, 88);
+    const sheet = document.body.appendChild(document.createElement("div"));
+    sheet.setAttribute("role", "dialog");
+    const player = sheet.appendChild(document.createElement("div"));
+
+    revealPlayer(player);
+
+    expect(player.style.scrollMarginBottom).toBe("12px");
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", behavior: "auto" });
+  });
+
+  it("a bar that is not shown (the tab bar on a wide screen) covers nothing", () => {
+    vi.stubGlobal("innerHeight", 720);
+    fixedBar(0, 0);
+    expect(coveredBelow()).toBe(0);
   });
 });
 

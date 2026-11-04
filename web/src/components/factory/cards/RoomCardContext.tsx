@@ -8,10 +8,12 @@
 import { type ReactNode, createContext, useContext } from "react";
 import type {
   ChatMessageView,
+  DemoView,
   FactorySnapshot,
   IssueView,
   LoopView,
   PersonView,
+  PrView,
   ProposalView,
 } from "@/lib/factoryApi";
 
@@ -37,6 +39,8 @@ export interface RoomCardData {
   repeated?: ReadonlySet<string> | null;
   /** A card under a message whose ask the page shows elsewhere: left out (v3). */
   hidden?: ((message: ChatMessageView) => boolean) | null;
+  /** A PR's demo drawn by the cockpit (v3 plays it in place); the Room's DemoCard when absent. */
+  demoCard?: ((pr: PrView, demo: DemoView) => ReactNode) | null;
 }
 
 export const RoomCardContext = createContext<RoomCardData | null>(null);

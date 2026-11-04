@@ -138,7 +138,19 @@ export function DemosSheet({
   );
 }
 
-/** A feature row's "▶" (Home links each feature's newest demo): opens the Demos sheet playing it. */
+/** In a narrow row (a phone, or a column beside the chat) the chip says its verdict by colour alone. */
+const NARROW_TONE: Record<DemoChip["verdict"], string> = {
+  PASS: "",
+  PARTIAL: "@max-md:border-status-yellow/60 @max-md:text-status-yellow-fg",
+  FAIL: "@max-md:border-status-red/60 @max-md:text-status-red-fg",
+  ERROR: "@max-md:border-status-red/60 @max-md:text-status-red-fg",
+};
+
+/**
+ * A feature row's "▶" (Home links each feature's newest demo): opens the Demos
+ * sheet playing it. "▶ PARTIAL 0:42"; in a narrow row "▶ 0:42" in the
+ * verdict's colour, so the feature's name beside it stays whole.
+ */
 export function DemoChipButton({ node, name }: { node: NodeSummary; name: string }) {
   const { onSheet } = useNodeActions();
   const chip: DemoChip | undefined = node.demo;
@@ -152,11 +164,19 @@ export function DemoChipButton({ node, name }: { node: NodeSummary; name: string
       aria-label={chipLabel(chip, name)}
       title={chipLabel(chip, name)}
       onClick={() => onSheet("demos", node.ref, chip.id)}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-card-solid px-1.5 py-px text-[11.5px] text-muted-foreground outline-none hover:border-status-blue hover:text-foreground focus-visible:ring-2 focus-visible:ring-status-blue"
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-card-solid px-1.5 py-px text-[11.5px] text-muted-foreground outline-none hover:border-status-blue hover:text-foreground focus-visible:ring-2 focus-visible:ring-status-blue",
+        NARROW_TONE[chip.verdict],
+      )}
     >
       <PlayIcon aria-hidden className="size-2.5 fill-current" />
       {failed && (
-        <span className={cn("font-semibold", NOTE_TONE[chip.verdict])}>{chip.verdict} </span>
+        <span
+          data-testid="v3-demo-chip-verdict"
+          className={cn("font-semibold @max-md:sr-only", NOTE_TONE[chip.verdict])}
+        >
+          {chip.verdict}{" "}
+        </span>
       )}
       {chip.duration && <span className="font-mono tabular-nums">{chip.duration}</span>}
     </button>

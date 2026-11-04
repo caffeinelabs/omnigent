@@ -108,6 +108,41 @@ describe("cockpit v3 · the node chat column", () => {
     expect(within(column).queryByTestId("room-bus-toggle")).toBeNull();
   });
 
+  it("plays a demo card in place: the poster opens the recording under it, on this page", async () => {
+    setWindow("desktop");
+    const played = vi.fn(() => Promise.resolve());
+    Object.defineProperty(HTMLMediaElement.prototype, "play", {
+      configurable: true,
+      value: played,
+    });
+    const view = renderChat("assistant-core", { install });
+    await threadOf("project:assistant-core");
+    const column = screen.getByTestId("v3-chat");
+    const card = await within(column).findByTestId("demo-card-9876", {}, { timeout: 4000 });
+    // Its head says "#9876" (v3's PR tag) and the verdict; the commit waits in the tooltip.
+    const sha = view.snapshot.prs.find((p) => p.number === 9876)!.demo!.head_sha.slice(0, 7);
+    const head = within(card).getByTitle(`Recorded at commit ${sha}`);
+    const parts = [...head.children].map((el) => el.textContent?.trim()).filter(Boolean);
+    expect(parts).toEqual(["Demo", "#9876", "PASS"]);
+    expect(card).not.toHaveTextContent("!9876");
+    expect(card).not.toHaveTextContent(sha);
+    expect(within(card).getByTestId("demo-card-watch-9876")).toHaveAttribute(
+      "href",
+      expect.stringContaining("/prs/pr-9876"),
+    );
+    const path = view.path();
+    const user = userEvent.setup();
+
+    await user.click(within(card).getByTestId("demo-thumb-9876"));
+
+    const player = within(card).getByTestId("demo-card-player-9876");
+    expect(player.querySelector("video, img")).not.toBeNull();
+    if (player.querySelector("video")) expect(played).toHaveBeenCalled();
+    expect(view.path()).toBe(path);
+    await user.click(within(card).getByTestId("demo-thumb-9876"));
+    expect(within(card).queryByTestId("demo-card-player-9876")).toBeNull();
+  });
+
   it("puts the caret in the box on a mouse click, on the text and on the box around it", async () => {
     setWindow("desktop");
     renderChat("assistant-core", { install });

@@ -1,7 +1,8 @@
 // A child, calm (rule 3): its short name, its ring or state dot, and at most
 // one status phrase, shown only when it is not moving or needs someone; a
-// feature also carries its latest demo's "▶" (rule 10). As a row (one line)
-// or a tile (the Map lens; its own children as dots). Titles are real links:
+// feature also carries its latest demo's "▶" (rule 10). As a row (one line;
+// a "▶" that does not fit beside the name moves under it) or a tile (the Map
+// lens; its own children as dots). Titles are real links:
 // Enter or `l` steps in, middle-click opens a tab. No answer buttons here:
 // the viewer's asks are the page's Your move.
 
@@ -150,7 +151,7 @@ export function NodeTile({
       data-state={node.state}
       className={cn(
         // bg-card-solid: dark mode's glass rule would replace this ring (state edge, focus) on bg-card.
-        "relative flex min-w-0 flex-col gap-1.5 rounded-xl bg-card-solid ring-1 ring-border transition-shadow focus-within:ring-2 focus-within:ring-status-blue hover:ring-border-strong",
+        "@container relative flex min-w-0 flex-col gap-1.5 rounded-xl bg-card-solid ring-1 ring-border transition-shadow focus-within:ring-2 focus-within:ring-status-blue hover:ring-border-strong",
         compact ? "rounded-[10px] px-3 py-2" : "px-3.5 py-3",
         node.state === "needs" && "ring-status-yellow/55",
         ghost && "bg-transparent ring-0 outline-[1.5px] outline-dashed outline-border-strong",
@@ -197,22 +198,25 @@ export function NodeRow({
       data-testid="v3-row"
       data-ref={node.ref}
       data-state={node.state}
-      className="flex min-w-0 items-center gap-3 border-t border-border px-3.5 py-2 first:border-t-0 focus-within:bg-status-blue/10 hover:bg-muted/40"
+      className="@container flex min-w-0 items-center gap-3 border-t border-border px-3.5 py-2 first:border-t-0 focus-within:bg-status-blue/10 hover:bg-muted/40"
     >
       <Mark node={node} size={20} />
-      <NodeLink
-        nodeRef={node.ref}
-        roving
-        title={fullTitle(node) ?? undefined}
-        className={cn(
-          LINK,
-          "min-w-0 flex-1 truncate font-medium",
-          node.state === "ghost" && "italic",
-        )}
-      >
-        {name}
-      </NodeLink>
-      <DemoChipButton node={node} name={name} />
+      {/* A name too long for the row and its "▶" moves the "▶" under it: the name stays whole. */}
+      <span className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-1">
+        <NodeLink
+          nodeRef={node.ref}
+          roving
+          title={fullTitle(node) ?? undefined}
+          className={cn(
+            LINK,
+            "max-w-full min-w-0 grow truncate font-medium",
+            node.state === "ghost" && "italic",
+          )}
+        >
+          {name}
+        </NodeLink>
+        <DemoChipButton node={node} name={name} />
+      </span>
       {phrase && <PhraseText phrase={phrase} className="max-w-[55%] shrink-0 truncate" />}
     </li>
   );

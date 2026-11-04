@@ -1111,7 +1111,9 @@ row (and a project shown in place of its folded implicit feature) carries
 A viewer reads what they may of the PRs: demos of a project whose lead they
 cannot read are left out, and so are demos whose files belong to a session
 they cannot read. In the node chat a demo card is conversation, never
-Activity.
+Activity, and its poster plays the recording in place under it, like the
+page's row ("Watch on the PR page" is the second way). A player that opens
+scrolls into view clear of the pinned chat box and the phone's tab bar.
 
 **Needs you and Find** (`node_sheets.py`). `GET …/factories/{fid}/needs-you
 ?tree=product|factory` lists every ask a person owes in one tree, ranked by
