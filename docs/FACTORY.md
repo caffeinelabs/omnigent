@@ -788,12 +788,12 @@ Docs-only PRs are labelled `factory:no-env` and skip the preview and the demo.
 | `[Factory decision · D-<n> answered by <human> · "<option>"]` | the asker | The answer to `sys_factory_ask`. |
 | `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (cockpit\|GitHub)]` / `[Factory review · APPROVED PR #<n> …]` | the PL | A human's review from the cockpit or GitHub. A change request holds that head out of ready until a new head passes, the human approves, or (GitHub) it is dismissed. |
 | `[Factory notice · PR <repo>#<n> change request by <human> @<sha7> dismissed on GitHub]` | the PL | The head is no longer held. |
-| `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 7/7 gates · head <sha7>]` | the PL and the lead | Gates turned green (8/8 with the demo gate). |
+| `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 7/7 gates · head <sha7>]` | the PL (a lead that is not the PL reads `PR #<n> ready for human merge` in its next heartbeat delta) | Gates turned green (8/8 with the demo gate). Sent once per head and gate states: a PR that turns ready again unchanged is recorded as an `info` `pr.ready` repeat that mails nobody and adds nothing to the Room; after `OMNIGENT_FACTORY_READY_REMINDER_S` (24 h) the Room shows it again as "still ready" and people are reminded by the Slack digest, never the agents. A `mergeable=UNKNOWN` read at the same head (GitHub recomputing after a base move) keeps the last `MERGEABLE` for one poll. |
 | `[Factory notice · PR #<n> targets <branch>, project base is <base> · gh pr edit <url> --base <base>]` | the PL | The base gate failed: retarget the PR. |
 | `[Factory notice · base <base> moved to <sha7> · sync open branches: git merge origin/<base>]` | work PLs with an open PR on the base | Sync open branches. |
 | `[Factory notice · base <base> moved <old7> → <new7>]` | the integration PL | Redeploy the live env at the new head. |
 | `[Factory notice · PR <repo>#<n> checks failed: <names> (head <sha7>)]` | the PL | Dispatch a fix. |
-| `[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url> · tear down preview p<n>]` | the PL (and the lead, info) | Post-merge steps: env_keeper `MERGED pr=<n> base=<base>`; sibling ICs merge origin/<base> (the PR's base). |
+| `[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url> · tear down preview p<n>]` | the PL (a lead that is not the PL reads the merge in its next heartbeat delta) | Post-merge steps: env_keeper `MERGED pr=<n> base=<base>`; sibling ICs merge origin/<base> (the PR's base). |
 | `[Factory notice · PR <repo>#<n> closed without merge by @<login>]` | the PL | env_keeper `CLOSED pr=<n>`; a decision asks whether to abandon or rework. |
 | `[Factory notice · preview p<n> unreachable · redeploy]` / `[Factory notice · preview p<n> idle 72h · park it]` | the PL | Redeploy or park the preview. |
 
@@ -807,6 +807,7 @@ transcript folds.
 | Variable | Default | Effect |
 |---|---|---|
 | `OMNIGENT_FACTORY_PR_POLL_S` | `60` | GitHub poll interval for tracked PRs; `0` turns the poller off. |
+| `OMNIGENT_FACTORY_READY_REMINDER_S` | `86400` | A PR that turns ready again at the same head and gates is announced again (Room only; at least 3600) after this long; sooner it mails nobody. |
 | `OMNIGENT_FACTORY_AUTO_MERGE_S` | `60` | How often the server's auto-merger looks at ready PRs into the owners' auto-merge targets (`product.delivery.auto_merge`); `0` turns it off. A PR into a target that turns ready wakes it at once. |
 | `OMNIGENT_FACTORY_ENV_PROBE_S` / `OMNIGENT_FACTORY_PREVIEW_PROBE_S` | `60` / `300` | Dev env and preview probe intervals. |
 | `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | unset | The deployment's env domain: the only domain env and preview URLs may use (SSRF guard) for a factory whose product profile sets no `product.delivery.preview_domain`. `OMNIGENT_ENV_DOMAIN` (the sandboxes' env domain) is read when it is unset. With neither, no env URL is accepted. |

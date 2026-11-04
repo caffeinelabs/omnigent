@@ -14,7 +14,8 @@ Event                                           Thread                         C
                                                 (projects) / ``improvements``
 ``control.*``                                   its project, else ``factory``  control
 ``pr.discovered/ready/auto_merged/merged/       ``pr:<id>`` plus a one-liner   pr
-closed/human_review``                           in its project
+closed/human_review`` (not a repeated           in its project
+``pr.ready``, see :mod:`.ready_notices`)
 ``demo.published``                              ``pr:<id>``                    demo
 ``loop.exhausted/stalled/thrashing/escalated``  its project, else ``factory``  loop
 ``issue.opened/escalated`` (warning or worse;   its project, else ``factory``  issue
@@ -79,7 +80,7 @@ from omnigent.factory import (
     THREAD_PR_PREFIX,
     thread_kind,
 )
-from omnigent.server.factory import alarms, events, live, node_refs
+from omnigent.server.factory import alarms, events, live, node_refs, ready_notices
 from omnigent.server.factory.actor import (
     decision_ref,
     pr_ref,
@@ -416,6 +417,9 @@ def plan_cards(deps: FactoryDeps, event: Any) -> list[CardRow]:
         card = _card("control", None, event.id)
         return [CardRow(_project_or_factory(event.project_slug), event.summary, card)]
     if kind in PR_KINDS:
+        if ready_notices.is_repeat(event.data):
+            # A PR ready again at the same head and gates: the Room has its card.
+            return []
         return _pr_rows(deps, event)
     if kind == "demo.published":
         return _pr_rows(deps, event, "demo")

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 from omnigent.factory import PROPOSAL_OPEN_STATUSES
+from omnigent.server.factory.ready_notices import quiet_for_agents
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.stores.factory_store import norm_id
 
@@ -634,8 +635,14 @@ def incident_items(
 def pr_items(
     ctx: FactoryCtx, event: FactoryEvent, pr: FactoryPr, base_url: str | None
 ) -> list[tuple[str, Item]]:
-    """E5: a PR became ready for human merge (none for one the server merges itself)."""
-    if (event.data or {}).get("auto_merge") is True:
+    """
+    E5: a PR became ready for human merge (none for one the server merges itself).
+
+    A repeat (ready again at the same head and gates) or a reminder sends
+    nothing: the digest's Waiting on you list keeps reminding people.
+    """
+    data = event.data or {}
+    if data.get("auto_merge") is True or quiet_for_agents(data):
         return []
     owner = ctx.human_owners.get(pr.project_slug or "")
     if owner and owner in ctx.people:

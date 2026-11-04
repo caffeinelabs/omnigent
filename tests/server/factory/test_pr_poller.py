@@ -250,9 +250,10 @@ async def test_pr_lifecycle_events_and_notices_fire_once(polling: Polling) -> No
         f"[Factory notice · PR {REPO}#9630 READY FOR HUMAN MERGE · 7/7 gates · head {head7}]"
     )
     assert [t.split("]")[0] + "]" for t in p.notices(p.pl)] == [ready_header]
-    assert len(p.notices(lead, "READY FOR HUMAN MERGE")) == 1
-    assert "Info only" in p.notices(lead, "READY FOR HUMAN MERGE")[0]
-    assert len(p.events("pr.ready")) == 1
+    # The lead is not the PL: no turn of its own, its next heartbeat's delta carries it.
+    assert p.notices(lead, "READY FOR HUMAN MERGE") == []
+    [ready] = p.events("pr.ready")
+    assert ready.severity == "notice" and ready.summary == "PR #9630 ready for human merge"
 
     # Nothing changed: nothing is announced again.
     events_before = len(p.events())
@@ -295,7 +296,7 @@ async def test_pr_lifecycle_events_and_notices_fire_once(polling: Polling) -> No
         f"[Factory notice · PR {REPO}#9630 merged by @lena as {sha('merge')[:7]} · "
         f"https://github.com/{REPO}/pull/9630 · tear down preview p9630] Run your post-merge steps"
     )
-    assert len(p.notices(lead, "merged by @lena")) == 1
+    assert p.notices(lead, "merged by @lena") == []
     assert len(p.events("pr.merged")) == 1
 
     # Every gate transition was announced exactly once.
@@ -977,6 +978,177 @@ async def test_more_than_100_files_hold_the_gate_when_the_listing_fails(polling:
     gates = p.pr().gates
     assert gates["protected_paths"] == "fail"
     assert gates["evidence"]["protected"] == [".github/workflows/x.yml"]
+
+
+# ── READY once per head and gates ──────────────────────────────
+
+
+def _room(p: Polling, thread: str, needle: str) -> list[str]:
+    """System rows of a Room thread whose line contains *needle*."""
+    rows = p.store.list_chat(p.fid, thread, limit=200)
+    return [r.body for r in rows if r.author_kind == "system" and needle in r.body]
+
+
+@pytest.fixture()
+def room() -> Any:
+    """The Room's cards, mirrored from events as the server does."""
+    from omnigent.server.factory import chat_cards
+
+    unmirror = chat_cards.register()
+    yield
+    if unmirror is not None:
+        unmirror()
+
+
+async def _ready_on_main(p: Polling) -> FakePr:
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    assert p.pr().ready is True and p.pr().base_ref == "main"
+    return gh_pr
+
+
+@pytest.mark.usefixtures("room")
+async def test_a_ready_pr_on_a_busy_human_merged_base_is_announced_once(
+    polling: Polling,
+) -> None:
+    """The live case: every merge into main makes GitHub answer mergeable=UNKNOWN for a poll."""
+    from omnigent.server.factory import quiet_beats
+    from omnigent.server.factory.actor import pr_thread, project_thread
+
+    p = polling
+    gh_pr = await _ready_on_main(p)
+    ready_at = p.pr().ready_at
+
+    for n in range(20):
+        # A merge into main lands between every other poll.
+        gh_pr.mergeable = "UNKNOWN" if n % 2 == 0 else "MERGEABLE"
+        await p.poll()
+        assert p.pr().ready is True, f"poll {n}"
+
+    assert p.pr().ready_at == ready_at
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 1
+    assert p.notices(p.fid) == []
+    assert p.events("pr.not_ready") == []
+    assert [e.severity for e in p.events("pr.ready")] == ["notice"]
+    assert {(e.data["gate"], e.data["to"]) for e in p.events("gate.changed")} <= {
+        ("review", "pass"),
+        ("verify", "pass"),
+    }
+    assert len(_room(p, project_thread("api-version"), "ready for human merge")) == 1
+    assert len(_room(p, pr_thread(p.pr().id), "ready for human merge")) == 1
+    # The lead learns it once, in its heartbeat's delta, without a turn of its own.
+    lead = p.world.get("lead_a")
+    seen = quiet_beats.relevant_events(lead, p.events())
+    assert [e.summary for e in seen if e.kind == "pr.ready"] == ["PR #9630 ready for human merge"]
+
+
+@pytest.mark.usefixtures("room")
+async def test_mergeable_unknown_twice_in_a_row_holds_the_gate(polling: Polling) -> None:
+    p = polling
+    gh_pr = await _ready_on_main(p)
+
+    gh_pr.mergeable = "UNKNOWN"
+    await p.poll()
+    row = p.pr()
+    assert row.ready is True and row.gates["mergeable"] == "pass"
+    assert row.gates["evidence"]["mergeable"] == "UNKNOWN"
+    assert any("recomputing" in note for note in row.gates["notes"])
+    GatesView.model_validate(row.gates)
+
+    await p.poll()
+    row = p.pr()
+    assert row.ready is False and row.gates["mergeable"] == "pending"
+    assert len(p.events("pr.not_ready")) == 1
+
+    gh_pr.mergeable = "CONFLICTING"
+    await p.poll()
+    assert p.pr().gates["mergeable"] == "fail"
+    gh_pr.mergeable = "UNKNOWN"
+    await p.poll()
+    # Only a MERGEABLE read is carried over.
+    assert p.pr().gates["mergeable"] == "pending" and p.pr().ready is False
+
+
+@pytest.mark.usefixtures("room")
+async def test_a_pr_that_flips_ready_again_unchanged_mails_nobody(polling: Polling) -> None:
+    from omnigent.server.factory import quiet_beats
+    from omnigent.server.factory.actor import pr_thread, project_thread
+
+    p = polling
+    gh_pr = await _ready_on_main(p)
+
+    for _ in range(5):
+        # A check re-run: pending for a poll, then green again at the same head.
+        gh_pr.checks = [FakeCheck("ci / test", status="IN_PROGRESS")]
+        await p.poll()
+        assert p.pr().ready is False
+        gh_pr.checks = [FakeCheck("ci / test")]
+        await p.poll()
+        assert p.pr().ready is True
+
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 1
+    assert p.notices(p.fid) == []
+    ready = p.events("pr.ready")
+    assert [e.severity for e in ready] == ["notice"] + ["info"] * 5
+    assert all(e.data["repeat"] is True for e in ready[1:])
+    assert {e.data["announced_at"] for e in ready} == {ready[0].data["announced_at"]}
+    assert len(_room(p, project_thread("api-version"), "ready")) == 1
+    assert len(_room(p, pr_thread(p.pr().id), "ready")) == 1
+    # Neither the lead nor the PL is woken by a repeat.
+    for member in ("lead_a", "pl"):
+        conv = p.world.get(member)
+        assert not any(
+            e.data.get("repeat") for e in quiet_beats.relevant_events(conv, p.events())
+        ), member
+
+    # A new head is news again.
+    gh_pr.push(sha("second"), p.clock.now + 10, checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    assert p.pr().ready is True
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
+    assert p.events("pr.ready")[-1].severity == "notice"
+    assert len(_room(p, project_thread("api-version"), "ready for human merge")) == 2
+
+
+@pytest.mark.usefixtures("room")
+async def test_an_unchanged_ready_pr_is_reminded_in_the_room_after_the_interval(
+    polling: Polling, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory import quiet_beats
+    from omnigent.server.factory.actor import project_thread
+    from omnigent.server.factory.ready_notices import READY_REMINDER_ENV
+
+    monkeypatch.setenv(READY_REMINDER_ENV, "3600")
+    p = polling
+    gh_pr = await _ready_on_main(p)
+
+    gh_pr.checks = [FakeCheck("ci / test", status="IN_PROGRESS")]
+    await p.poll(advance=3601)
+    gh_pr.checks = [FakeCheck("ci / test")]
+    await p.poll()
+
+    reminder = p.events("pr.ready")[-1]
+    assert reminder.data["reminder"] is True and reminder.severity == "info"
+    assert reminder.summary == "PR #9630 still ready for human merge"
+    assert _room(p, project_thread("api-version"), "still ready for human merge") == [
+        "PR #9630 still ready for human merge"
+    ]
+    # People get it (Room, Slack digest); the agents do not.
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 1
+    assert p.notices(p.fid) == []
+    assert reminder.id not in {
+        e.id for e in quiet_beats.relevant_events(p.world.get("pl"), p.events())
+    }
+
+    # The reminder restarts the interval: the next flip is a quiet repeat.
+    gh_pr.checks = [FakeCheck("ci / test", status="IN_PROGRESS")]
+    await p.poll()
+    gh_pr.checks = [FakeCheck("ci / test")]
+    await p.poll()
+    assert p.events("pr.ready")[-1].data.get("repeat") is True
+    assert len(_room(p, project_thread("api-version"), "ready")) == 2
 
 
 def test_charter_defaults_decide_whether_previews_are_on() -> None:

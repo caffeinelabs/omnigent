@@ -858,6 +858,40 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
     assert f"<https://{DOMAIN}/v1/factory/prs/{pr.id}/preview|preview>" in text
 
 
+async def test_a_repeated_or_reminder_ready_pr_sends_no_dm(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    link(cockpit, "carol")
+    cockpit.store.upsert_project(
+        cockpit.fid, "api-version", title="API version", charter={"human_owner": "carol"}
+    )
+    for number, flag in ((9783, "repeat"), (9784, "reminder")):
+        row, _ = cockpit.store.upsert_pr(
+            cockpit.fid,
+            "sample-org/sample-app",
+            number,
+            project_slug="api-version",
+            ready=True,
+            ready_at=int(time.time()),
+            head_sha=f"{number}".ljust(40, "c"),
+        )
+        await events.emit(
+            cockpit.app.state,
+            cockpit.fid,
+            "pr.ready",
+            project="api-version",
+            subject=f"pr:sample-org/sample-app#{number}",
+            summary="ready",
+            data={"pr_id": row.id, flag: True},
+        )
+
+    await rig.tick()
+    await rig.tick(31)
+
+    # People are reminded by the digest's Waiting on you list instead.
+    assert fake_slack.dms_to("U0CAROL") == []
+
+
 async def test_pauses_budgets_and_warnings_reach_owners_but_not_the_actor(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:

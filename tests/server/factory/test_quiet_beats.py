@@ -239,6 +239,8 @@ def test_relevance_rules(supervision: Supervision) -> None:
         _ev("decision.opened", from_id=lead.id, severity="warning", summary="its own question"),
         _ev("message.queued", to_id=pl.id, summary="still queued"),
         _ev(severity="warning", summary="a warning elsewhere"),
+        _ev(to_id=pl.id, project_slug="api-version", data={"repeat": True}, summary="again"),
+        _ev(severity="notice", project_slug="api-version", data={"reminder": True}, summary="r"),
     ]
 
     assert [e.summary for e in quiet_beats.relevant_events(pl, events)] == [

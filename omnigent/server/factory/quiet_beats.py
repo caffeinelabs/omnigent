@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from omnigent.factory import LABEL_PROJECT, LABEL_ROLE, ROLE_LEAD, ROLE_PROJECT_LEAD
+from omnigent.server.factory.ready_notices import quiet_for_agents
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
@@ -75,9 +76,10 @@ def relevant_events(conv: Conversation, events: Iterable[FactoryEvent]) -> list[
     The events a member's heartbeat should react to.
 
     An event touches a member when it is to it, concerns a PL's project, or
-    (for a lead) is at least a notice. Heartbeat events, still-queued mail and
-    anything the member itself did (its posts, label changes, questions) never
-    count, so rewriting its own beacon cannot reset its backoff.
+    (for a lead) is at least a notice. Heartbeat events, still-queued mail,
+    anything the member itself did (its posts, label changes, questions) and
+    news repeated or kept for people (a PR ready again at the same head, a
+    reminder) never count, so rewriting its own beacon cannot reset its backoff.
 
     :param conv: A top-level member.
     :param events: Factory events since its last beat, oldest first.
@@ -89,7 +91,7 @@ def relevant_events(conv: Conversation, events: Iterable[FactoryEvent]) -> list[
     for event in events:
         if event.kind.startswith("heartbeat.") or event.kind == "message.queued":
             continue
-        if event.from_id == conv.id:
+        if event.from_id == conv.id or quiet_for_agents(event.data):
             continue
         if (
             event.to_id == conv.id
