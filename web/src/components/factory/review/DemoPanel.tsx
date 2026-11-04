@@ -65,7 +65,8 @@ function formatMs(ms: number | null): string | null {
 
 // ── Media ──────────────────────────────────────────────────────
 
-function DemoMedia({ demo }: { demo: DemoView }) {
+/** A demo's recording inline (or its still when it has none); the v3 proof rows play it too. */
+export function DemoMedia({ demo }: { demo: DemoView }) {
   const video = demoVideo(demo);
   const poster = demoPoster(demo);
   if (video) {

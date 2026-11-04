@@ -1,13 +1,15 @@
 // A child, calm (rule 3): its short name, its ring or state dot, and at most
-// one status phrase, shown only when it is not moving or needs someone. As a
-// row (one line) or a tile (the Map lens; its own children as dots). Titles
-// are real links: Enter or `l` steps in, middle-click opens a tab. No answer
-// buttons here: the viewer's asks are the page's Your move.
+// one status phrase, shown only when it is not moving or needs someone; a
+// feature also carries its latest demo's "▶" (rule 10). As a row (one line)
+// or a tile (the Map lens; its own children as dots). Titles are real links:
+// Enter or `l` steps in, middle-click opens a tab. No answer buttons here:
+// the viewer's asks are the page's Your move.
 
 import { createContext, useContext } from "react";
 import { cn } from "@/lib/utils";
 import { type Phrase, childPhrase, fullTitle, nameUnder } from "./calm/calmModel";
 import { useNodeActions } from "./NodeContext";
+import { DemoChipButton } from "./proof/DemosSheet";
 import { Glyph, NodeLink, Ring, StateBar, StateDot, hasRing } from "./nodeParts";
 import { AMBER, STATE_ORDER } from "./nodeTokens";
 import type { NodeState, NodeSummary } from "./nodeTypes";
@@ -168,6 +170,7 @@ export function NodeTile({
         >
           {name}
         </NodeLink>
+        <DemoChipButton node={node} name={name} />
       </div>
       {(phrase || node.grandchildren) && (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -209,6 +212,7 @@ export function NodeRow({
       >
         {name}
       </NodeLink>
+      <DemoChipButton node={node} name={name} />
       {phrase && <PhraseText phrase={phrase} className="max-w-[55%] shrink-0 truncate" />}
     </li>
   );

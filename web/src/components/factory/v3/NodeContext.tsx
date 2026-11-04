@@ -6,8 +6,8 @@ import { type ReactNode, createContext, useContext, useMemo } from "react";
 import type { DecisionAction, DecisionRef, VerbArgs, VerbAvail } from "./nodeTypes";
 import type { Above } from "./statusModel";
 
-/** A sheet a page part can open (`?peek=`): Needs you, the base env, Try it, the keys, a lineage. */
-export type SheetKind = "needs" | "env" | "try" | "keys" | "lineage";
+/** A sheet a page part can open (`?peek=`): Needs you, the base env, Try it, the keys, a lineage, demos. */
+export type SheetKind = "needs" | "env" | "try" | "keys" | "lineage" | "demos";
 
 export interface NodeActions {
   factoryId: string;
@@ -21,8 +21,8 @@ export interface NodeActions {
   onOpenDecision?: (decision: DecisionRef) => void;
   /** A verb button, a quick verb or words in the chat (with what they named). */
   onVerb?: (verb: VerbAvail, args?: VerbArgs) => void;
-  /** Open a sheet; `at` names the node (Try it). */
-  onSheet?: (sheet: SheetKind, at?: string) => void;
+  /** Open a sheet; `at` names the node (Try it, Demos); `play` a demo the Demos sheet plays. */
+  onSheet?: (sheet: SheetKind, at?: string, play?: string) => void;
   /** The verb whose preview is open on this page (its button reads as pressed). */
   openVerb?: string | null;
 }

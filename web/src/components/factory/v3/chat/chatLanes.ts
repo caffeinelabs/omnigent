@@ -1,9 +1,10 @@
 // The node chat is a conversation (calm rule 5): people's and agents'
-// messages, plus live cards that need this viewer. System events (base moved,
-// a member spawned, incidents, resolved or closed items, proposal diffs) fold
-// into one "Activity" line. An ask the page's Your move already shows is not
-// repeated here at all. The server marks each message's lane when it can
-// (`lane`); older servers' messages are sorted here.
+// messages, live cards that need this viewer and recorded demos (rule 10:
+// proof is never hidden). System events (base moved, a member spawned,
+// incidents, resolved or closed items, proposal diffs) fold into one
+// "Activity" line. An ask the page's Your move already shows is not repeated
+// here at all. The server marks each message's lane when it can (`lane`);
+// older servers' messages are sorted here.
 
 import type {
   ChatMessageView,
@@ -73,6 +74,8 @@ function liveCard(message: ChatMessageView, ctx: LaneContext): boolean {
   switch (card.type) {
     case "why":
     case "offer":
+    case "demo":
+      // A recorded demo is proof: always conversation, never Activity.
       return true;
     case "preview_applied": {
       const meta = card.meta as PreviewAppliedMeta | null | undefined;

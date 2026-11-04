@@ -1,6 +1,6 @@
 // Where v3 pages read nodes from: the server's node API
-// (`GET /v1/factory/factories/{fid}/n/{ref}`, `…/n/{ref}/level/{level}` and
-// the lenses `…/n/{ref}/lineage|timeline|money`).
+// (`GET /v1/factory/factories/{fid}/n/{ref}`, `…/n/{ref}/level/{level}`, the
+// lenses `…/n/{ref}/lineage|timeline|money` and the demos `…/n/{ref}/demos`).
 // Stories and tests pass their own source (the sample factory) through
 // `NodeSourceProvider`; the sample never ships in the live path.
 //
@@ -24,6 +24,7 @@ import type {
   LineageView,
   MoneyView,
   NeedsYouList,
+  NodeDemos,
   NodePage,
   TeamSheet,
   TimelineView,
@@ -103,6 +104,13 @@ export interface NodeSource {
   timeline?: (factoryId: string, ref: string, signal?: AbortSignal) => Promise<TimelineView | null>;
   /** The children's cost against their budgets (`GET …/n/{ref}/money`). */
   money?: (factoryId: string, ref: string, signal?: AbortSignal) => Promise<MoneyView | null>;
+  /** The subtree's recorded demos, newest first (`GET …/n/{ref}/demos`; `cursor`: a page's `next`). */
+  demos?: (
+    factoryId: string,
+    ref: string,
+    signal?: AbortSignal,
+    cursor?: string,
+  ) => Promise<NodeDemos | null>;
   /** Both trees' levels as the definition names them (`GET …/levels`). */
   levels?: (factoryId: string, signal?: AbortSignal) => Promise<LevelsInfo>;
   /**
@@ -235,6 +243,10 @@ export const liveNodeSource: NodeSource = {
       await authenticatedFetch(`${nodePath(fid, ref)}/money`, { signal }),
     );
     return view && normalizeMoney(view);
+  },
+  demos: async (fid, ref, signal, cursor) => {
+    const url = `${nodePath(fid, ref)}/demos${query("cursor", cursor)}`;
+    return readOrNull<NodeDemos>(await authenticatedFetch(url, { signal }));
   },
   levels: async (fid, signal) => {
     const res = await authenticatedFetch(`${factoryPath(fid)}/levels`, { signal });

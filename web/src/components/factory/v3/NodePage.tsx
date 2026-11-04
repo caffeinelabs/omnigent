@@ -1,6 +1,7 @@
 // One node's page in cockpit v3, calm: the level strip (or the phone's level
-// row), the short title with Details and the ⋯ verbs, Your move, then its
-// children one line each (or one level under it, grouped under parents).
+// row), the short title with Details and the ⋯ verbs, Your move, its latest
+// demo (proof is never hidden), then its children one line each (or one level
+// under it, grouped under parents).
 // Nothing is drawn between nodes. The node's chat is the page's right column.
 
 import {
@@ -36,6 +37,7 @@ import { useMarkSeen, useVisitSince } from "./nodeSteer";
 import { DEFAULT_OVERLAYS, ParentNameContext } from "./NodeTile";
 import { movedAsks, nodeName } from "./calm/calmModel";
 import { YourMove, useYourMove } from "./calm/YourMove";
+import { ProofRow } from "./proof/ProofRow";
 import { LensMenu } from "./calm/NodeMenu";
 import type { ChildPage, NodePage as Page, TimelineView, VerbArgs, VerbAvail } from "./nodeTypes";
 import { timelineSub } from "./lenses/TimelineLens";
@@ -400,6 +402,7 @@ function LoadedNodePage({
                 </div>
               )}
               <YourMove view={move} />
+              {!level && <ProofRow key={page.node.ref} page={page} />}
               {!level && <NodeContent page={page} part="body" />}
               <Below page={page} level={shown} explicit={Boolean(level)} lensKey={lensKey} />
             </div>
