@@ -66,6 +66,7 @@ export function sampleNodeSource(
     lineage: async (_fid, ref) => engine.lineage(ref),
     timeline: async (_fid, ref) => engine.timeline(ref),
     money: async (_fid, ref) => engine.money(ref),
+    demos: async (_fid, ref, _signal, cursor) => engine.demos(ref, cursor),
     levels: async () => engine.levelsInfo(),
     team: async (_fid, ref) => engine.teamSheet(ref),
   };

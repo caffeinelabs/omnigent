@@ -19,6 +19,10 @@ relative to now:
 - the server closed three alarms today (D-46, D-47, D-48);
 - the base env (the integration project ``base-env``) runs the base's head,
   which holds every merge, and answers its smoke checks;
+- the demo agent recorded #9876 (PASS, 0:14, after a FAIL at an earlier
+  commit; its card is in the PR's thread), #9881, #9882, the drafts' two PRs
+  and one shortlist fix, and I-1's acceptance run 1 (PARTIAL, step 6), each
+  with a poster and, where ``ffmpeg`` is installed, a recording;
 - Agent assistant's later waves hold "Google Ads integration" and a sales skill.
 
 Rows are written with the server's own stores (the same SQL tables the server
@@ -36,7 +40,9 @@ from __future__ import annotations
 
 import argparse
 import time
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final
 
 import httpx
@@ -45,12 +51,14 @@ from sqlalchemy import create_engine, update
 from omnigent import factory as F
 from omnigent.db.db_models import (
     SqlFactoryDecision,
+    SqlFactoryDemo,
     SqlFactoryIssue,
     SqlFactoryProject,
     SqlFactoryProposal,
 )
 from omnigent.entities.factory import EventDraft
 from omnigent.server.auth import LEVEL_OWNER, RESERVED_USER_LOCAL
+from omnigent.server.factory.actor import pr_thread
 from omnigent.server.factory.base import (
     BaseHead,
     DeployedHead,
@@ -59,10 +67,13 @@ from omnigent.server.factory.base import (
     head_label,
     head_value,
 )
+from omnigent.server.factory.demo_storage import demo_object_key
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
+from omnigent.stores.artifact_store import create_artifact_store
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.factory_store.sqlalchemy_store import SqlAlchemyFactoryStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+from tests.e2e_ui.factory_v3 import demo_media
 
 REPO: Final = "sample-org/sample-app"
 BASE: Final = "sample-main"
@@ -287,6 +298,164 @@ def _thread_activity(
         "assistant-core holds its next task until the change it waits on is applied.",
         created_at=int(clock - 25 * 60),
     )
+
+
+def _head(number: int) -> str:
+    """The head a seeded PR was at (its demos ran there)."""
+    return f"{number:07x}" + "0" * 33
+
+
+@dataclass(frozen=True)
+class _DemoSpec:
+    """One demo the seed records: its PR (0: an acceptance run), verdict, length and steps."""
+
+    pr: int
+    slug: str
+    ago_s: float
+    title: str
+    seconds: int
+    accent: str
+    status: str = "PASS"
+    steps: tuple[tuple[int, str, str, str | None], ...] = ()
+    head: str | None = None
+    run: int | None = None
+
+
+def _demo_specs() -> list[_DemoSpec]:
+    passed = tuple((n, f"Step {n}", "pass", None) for n in range(1, 6))
+    return [
+        _DemoSpec(
+            0,
+            "base-env",
+            18 * 60,
+            "Acceptance I-1 run 1 PARTIAL",
+            42,
+            "#c58a1a",
+            status="PARTIAL",
+            steps=(
+                (2, "Ask how the app is doing", "pass", None),
+                (3, "A flag-off user gets no assistant", "pass", None),
+                (
+                    6,
+                    "The discovery skill runs a live web search",
+                    "fail",
+                    "live search fails on the base env",
+                ),
+            ),
+            head=DEPLOYED_SHA,
+            run=1,
+        ),
+        _DemoSpec(9882, "connectors-core", 20 * 60, "Connector core", 18, "#3b82f6"),
+        _DemoSpec(9826, SHORTLIST[0], 25 * 60, "Env badge copy", 9, "#8b5cf6"),
+        _DemoSpec(9881, "skill-discovery", 40 * 60, "Discovery skill", 21, "#0ea5a4"),
+        _DemoSpec(9857, "build-tier-drafts-3", 2 * H + 5 * 60, "Part 2", 11, "#ef6c3a"),
+        _DemoSpec(9856, "build-tier-drafts-3", 2 * H + 6 * 60, "Part 1", 9, "#ef6c3a"),
+        _DemoSpec(
+            9876,
+            "assistant-core",
+            6 * H + 55 * 60,
+            "Sessions, tool registry, flagged chat API",
+            14,
+            "#16a34a",
+            steps=passed,
+        ),
+        _DemoSpec(
+            9876,
+            "assistant-core",
+            7 * H + 28 * 60,
+            "Sessions and tool registry",
+            12,
+            "#dc2626",
+            status="FAIL",
+            steps=(*passed[:3], (4, "Flagged chat API", "fail", "404 on /chat")),
+            head="01d9876" + "0" * 33,
+        ),
+    ]
+
+
+def _demo_files(
+    store: Any, fid: str, demo_id: str, spec: _DemoSpec, variant: int, work: Path
+) -> list[dict[str, Any]]:
+    """Write a demo's poster (and recording) into *store*; the demo row's file entries."""
+    media = [("poster.png", "poster", "image/png", demo_media.frame(spec.accent, variant))]
+    video = demo_media.recording(spec.accent, spec.seconds, work, variant)
+    if video is not None:
+        media.append(("demo.webm", "video", "video/webm", video))
+    entries: list[dict[str, Any]] = []
+    for filename, kind, content_type, content in media:
+        file_id = uuid.uuid4().hex
+        key = demo_object_key(fid, demo_id, file_id, filename)
+        store.put(key, content)
+        entries.append(
+            {
+                "file_id": file_id,
+                "name": filename,
+                "kind": kind,
+                "caption": None,
+                "content_type": content_type,
+                "bytes": len(content),
+                "filename": filename,
+                "store": store.storage_location,
+                "key": key,
+            }
+        )
+    return entries
+
+
+def _demos(
+    db_uri: str,
+    fs: SqlAlchemyFactoryStore,
+    fid: str,
+    clock: float,
+    prs: dict[int, Any],
+    owners: dict[str, str],
+) -> str | None:
+    """
+    Record the story's demos with their files in a store next to the database
+    (a server opens a recorded store by its location). :returns: #9876's
+    current demo id (its card goes to the PR's thread), else ``None`` when
+    the database is not a file.
+    """
+    if not db_uri.startswith("sqlite:///"):
+        return None
+    root = Path(db_uri.removeprefix("sqlite:///")).parent
+    store = create_artifact_store(str(root / "demo-files"))
+    work = root / "demo-media"
+    times: dict[str, dict[str, float]] = {}
+    core: str | None = None
+    for variant, spec in enumerate(_demo_specs()):
+        demo_id = uuid.uuid4().hex
+        pr = prs.get(spec.pr)
+        manifest: dict[str, Any] = {
+            "duration_s": float(spec.seconds),
+            "steps": [
+                {"n": n, "title": title, "kind": "ui", "status": status, "note": note}
+                for n, title, status, note in spec.steps
+            ],
+        }
+        if spec.run is not None:
+            manifest["acceptance"] = {"initiative": "I-1", "run": spec.run}
+        row = fs.create_demo(
+            factory_id=fid,
+            project_slug=spec.slug,
+            repo=REPO,
+            pr_number=spec.pr,
+            head_sha=spec.head or _head(spec.pr),
+            session_id=owners.get(spec.slug, fid),
+            created_by_session=fid,
+            status=spec.status,
+            title=spec.title,
+            summary=f"{spec.title} (sample)",
+            files=_demo_files(store, fid, demo_id, spec, variant % 4, work),
+            manifest=manifest,
+            pr_id=pr.id if pr is not None else None,
+            demo_id=demo_id,
+        )
+        times[row.id] = {"created_at": clock - spec.ago_s}
+        if spec.pr == 9876 and spec.status == "PASS":
+            core = row.id
+    _set_times(db_uri, SqlFactoryDemo, times)
+    return core
 
 
 def seed_factory_1340(
@@ -615,6 +784,7 @@ def seed_factory_1340(
             for n, slug in zip((9826, 9828, 9829, 9827), SHORTLIST, strict=True)
         },
     }
+    prs: dict[int, Any] = {}
     for number, (slug, task_id, title, at) in merged.items():
         pr, _ = fs.upsert_pr(
             fid,
@@ -626,12 +796,14 @@ def seed_factory_1340(
             state="merged",
             merged_at=int(at),
             merged_sha=f"{number:07x}" + "0" * 33,
+            head_sha=_head(number),
             task_id=task_id,
         )
+        prs[number] = pr
         if task_id:
             fs.update_task(task_id, pr_id=pr.id)
     for number, part in ((9856, 1), (9857, 2)):
-        fs.upsert_pr(
+        prs[number], _ = fs.upsert_pr(
             fid,
             REPO,
             number,
@@ -641,6 +813,7 @@ def seed_factory_1340(
             state="open",
             ready=True,
             ready_at=int(clock - 2 * H),
+            head_sha=_head(number),
         )
 
     # ── Decisions D-1…D-44 (D-1…D-42 filler; D-37 an ask that blocks nothing) ──
@@ -815,6 +988,19 @@ def seed_factory_1340(
             ),
         },
     )
+
+    # ── The demos (posters and recordings) and #9876's card in its PR's thread ──
+    core_demo = _demos(db_uri, fs, fid, clock, prs, leads)
+    if core_demo is not None:
+        fs.append_chat(
+            fid,
+            thread=pr_thread(prs[9876].id),
+            author_kind="system",
+            author="server",
+            body="demo PASS on #9876: sessions, tool registry, flagged chat API",
+            card={"type": "demo", "ref": "!9876", "id": core_demo},
+            created_at=int(clock - 6 * H - 55 * 60),
+        )
 
     # ── An hour of work on assistant-core (its burn) ──
     fs.insert_span(

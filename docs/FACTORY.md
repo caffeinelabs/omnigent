@@ -1094,6 +1094,26 @@ count, and lanes never join. `GET …/n/{ref}/money` lists the children's cost a
 their budgets (the roll-ups' numbers), most first, the total, and `rest`:
 what the node spent that no child holds (its leads and agents).
 
+**Proof** (`node_proof.py`; calm rule 10, "proof is never hidden"). Every
+recorded demo the viewer may play belongs to one node: a PR's demo to its
+change, an acceptance run's recording to its feature, a demo of a PR the tree
+has no change for to its project. A node page carries `proof: {latest?,
+count}`: `count` is its subtree's demos, and `latest` (the one row the page
+shows by default, "Latest demo · PASS · 0:14 ▶") is, for a change and the task
+that owns it, the demo at the PR's current head (else its newest, `stale`);
+for a project its newest across its PRs, current heads first; for a feature
+its newest acceptance-run recording, else its newest project demo. Each is
+`{id, verdict, title (a few words), duration, poster_url, video_url (the demo
+file routes), pr_number, at, partial_note}`; `partial_note` says in one line
+what did not pass ("Step 6: live search fails on the base env"). A feature's
+row (and a project shown in place of its folded implicit feature) carries
+`demo: {id, verdict, duration}`, Home's "▶". `GET …/n/{ref}/demos?cursor=
+&limit=` lists the subtree's demos newest first (what "n more demos" opens).
+A viewer reads what they may of the PRs: demos of a project whose lead they
+cannot read are left out, and so are demos whose files belong to a session
+they cannot read. In the node chat a demo card is conversation, never
+Activity.
+
 **Needs you and Find** (`node_sheets.py`). `GET …/factories/{fid}/needs-you
 ?tree=product|factory` lists every ask a person owes in one tree, ranked by
 the work it holds (the blocker paths' weight: the estimates of the tasks it

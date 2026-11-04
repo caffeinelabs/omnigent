@@ -8,7 +8,8 @@ What every cockpit v3 screen must hold, checked in the browser. Not a test modul
   only "none", "0" or "—", and no sideways scroll of the page. In the chat
   column the Room's answer cards and the chat's icons stay as they are.
 - :data:`CALM_CHECKS` holds a page to the calm rules: about 120 words outside
-  the chat, titles of six words or fewer and never a slug, Your move naming
+  the chat besides one short proof row (its latest demo), titles of six
+  words or fewer and never a slug, Your move naming
   what it unblocks by name (no slug, no bare id), each ask once (one answer
   button), and a chat with no system event inline and no resolved incident.
 - :func:`node` is a node page by ref; :func:`api` reads the factory's API as
@@ -74,12 +75,17 @@ BODY_CHECKS = """(node) => {
 
 PAGE_WORDS_MAX: Final = 120
 """Words a default page may show outside its chat (the level strip and the main column)."""
+PROOF_WORDS_MAX: Final = 24
+"""Words the one proof row may hold (rule 10: verdict, length, title, what did not pass)."""
 TITLE_WORDS_MAX: Final = 6
 
 CALM_CHECKS = """(node) => {
   const isWord = (w) => /[\\p{L}\\p{N}]/u.test(w);
   const count = (t) => t.split(/\\s+/).filter(isWord).length;
   const chatSel = '[data-testid="v3-chat"], [data-testid="v3-chat-pinned"]';
+  // The proof row (rule 10: one per page that has demos) is held to its own few words.
+  const proofs = [...node.querySelectorAll('[data-testid="v3-proof"]')];
+  const proofText = proofs.map((el) => el.innerText).join(' ');
   const outside = [
     node.querySelector('[data-testid="v3-level-strip"], [data-testid="v3-phone-levels"]'),
     node.querySelector('[data-testid="v3-main"]'),
@@ -111,15 +117,19 @@ CALM_CHECKS = """(node) => {
   }
   const chat = document.querySelector('[data-testid="v3-chat"], [data-testid="v3-chat-full"]');
   const list = chat ? chat.querySelector('[data-testid="room-message-list"]') : null;
+  // Live cards for this viewer, and recorded demos (proof is conversation, never Activity).
   const live = '[data-testid^="decision-embed-"], [data-testid^="proposal-card-"], '
-    + '[data-testid="v3-why"], [data-testid="v3-offer"], [data-testid="v3-applied"]';
+    + '[data-testid="v3-why"], [data-testid="v3-offer"], [data-testid="v3-applied"], '
+    + '[data-testid^="demo-card-"]';
   const system = list
     ? [...list.querySelectorAll(':scope > li[data-kind="system"]')]
         .filter((li) => !li.querySelector(live))
         .map((li) => li.innerText.slice(0, 80))
     : [];
   return {
-    words: count(outside),
+    words: count(outside) - count(proofText),
+    proofRows: proofs.length,
+    proofWords: Math.max(0, ...proofs.map((el) => count(el.innerText))),
     longTitles: titles.filter((t) => count(t) > TITLE_WORDS_MAX),
     slugTitles: titles.filter((t) => slug.test(t)),
     machineMoves: unblocks.filter((t) => machine.test(t)),
@@ -135,6 +145,8 @@ CALM_CHECKS = """(node) => {
 def assert_calm(found: dict[str, Any], *where: object) -> None:
     """A :data:`CALM_CHECKS` result that holds every calm rule."""
     assert found["words"] <= PAGE_WORDS_MAX, (*where, "words", found["words"])
+    assert found["proofRows"] <= 1, (*where, "proof rows", found["proofRows"])
+    assert found["proofWords"] <= PROOF_WORDS_MAX, (*where, "proof words", found["proofWords"])
     assert found["longTitles"] == [], (*where, "long titles", found["longTitles"])
     assert found["slugTitles"] == [], (*where, "slugs as titles", found["slugTitles"])
     assert found["machineMoves"] == [], (*where, "ids in Your move", found["machineMoves"])
@@ -195,6 +207,7 @@ __all__ = [
     "BODY_CHECKS",
     "CALM_CHECKS",
     "PAGE_WORDS_MAX",
+    "PROOF_WORDS_MAX",
     "api",
     "assert_calm",
     "assert_clean",

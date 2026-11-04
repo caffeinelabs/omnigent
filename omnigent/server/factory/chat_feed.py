@@ -3,13 +3,13 @@ A node's chat as a conversation, with the system's activity apart.
 
 Cockpit v3's node chat shows what people and agents say, plus the live cards
 that need the person reading it (an open ask they answer, a merge they make,
-an offer, the "why" they asked for, a verb they can still undo). Everything
-else the Room mirrors from events is activity: base moves, members spawned,
-incidents, loops, controls, PR and demo news, closed alarms, and every
-decision or proposal that is answered, applied, closed or someone else's.
-Activity never shows inline; it folds into one "Activity · n since you
-looked" line that opens it as a list. Resolved incidents and closed or
-applied proposals are never conversation.
+an offer, the "why" they asked for, a verb they can still undo), and the
+recorded demos (proof is never hidden). Everything else the Room mirrors from
+events is activity: base moves, members spawned, incidents, loops, controls,
+PR news, closed alarms, and every decision or proposal that is answered,
+applied, closed or someone else's. Activity never shows inline; it folds into
+one "Activity · n since you looked" line that opens it as a list. Resolved
+incidents and closed or applied proposals are never conversation.
 
 :func:`classify` sorts one row by the live state of what its card shows (the
 open decisions, proposals and PRs read once per request: :class:`Live`). :func:`feed_page` is
@@ -53,6 +53,8 @@ SINCE_CAP: Final = 99
 """Counts since the read mark stop here (the cockpit shows "99+")."""
 _ASKING_CARDS: Final = frozenset({"why", "offer"})
 """Cards that answer or ask the reader directly: conversation while they stand."""
+_PROOF_CARDS: Final = frozenset({"demo"})
+"""Cards that show what was built (a recorded demo): always conversation."""
 _CLOSED_ISSUES: Final = frozenset({"resolved", "wontfix"})
 
 
@@ -208,6 +210,8 @@ def classify(row: FactoryChatMessage, live: Live, *, closed: bool = True) -> Sor
         return Sorted(ACTIVITY, kind, closed=issue is None or issue.status in _CLOSED_ISSUES)
     if kind in _ASKING_CARDS:
         return Sorted(CONVERSATION, kind, needs_you=kind == "offer")
+    if kind in _PROOF_CARDS:
+        return Sorted(CONVERSATION, kind)
     if kind == "preview_applied":
         meta = _meta(card)
         until = meta.get("undo_until")

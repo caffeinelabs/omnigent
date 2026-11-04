@@ -20,6 +20,9 @@ day, with neutral names (the web's v3 sample tells the same story):
   purpose for C-16; the real ask is D-45), D-46 and D-47 (skill-discovery's
   stall and claim alarms, closed when #9881 merged);
 - assistant-core's builder spent $2.50 in the last hour;
+- the demo agent recorded #9876 (PASS, 0:14, after a FAIL at an earlier
+  commit), #9881, #9882, #9856 and #9857, and I-1's acceptance run 1
+  (PARTIAL: step 6 fails, live search on the base env);
 - the factory has no goals, so the Goal level is hidden.
 
 :func:`scale_factory` is a synthetic factory of a given size (13 features,
@@ -34,6 +37,7 @@ from typing import Any, Final
 
 from omnigent.entities.factory import (
     FactoryDecision,
+    FactoryDemo,
     FactoryInitiative,
     FactoryPr,
     FactoryProject,
@@ -67,6 +71,8 @@ ASK_MESSAGE: Final = "a" * 31 + "1"
 SHORTLIST_MESSAGE: Final = "a" * 31 + "2"
 DEPLOYED_SHA: Final = "817480d" + "0" * 33
 SHORTLIST: Final = ("ux-env-badge-copy", "ux-slash-focus", "ux-status-page", "api-request-id")
+CORE_HEAD: Final = "c0de9876" + "0" * 32
+"""#9876's head when it merged (its PASS demo ran there)."""
 WAVE_1: Final = ("assistant-core", "connectors-core", "skill-discovery", "assistant-panel-ux")
 
 
@@ -145,6 +151,7 @@ def _pr(
     ready_at: int | None = None,
     base: str = BASE,
     title: str | None = None,
+    head_sha: str = "",
 ) -> FactoryPr:
     return FactoryPr(
         id=hex_id(number),
@@ -161,6 +168,7 @@ def _pr(
         merged_at=merged_at if state == "merged" else None,
         merged_sha=f"{number:07x}" + "0" * 33 if state == "merged" else None,
         task_id=task_id,
+        head_sha=head_sha,
         created_at=AT_0601,
         updated_at=merged_at or AT_0601,
     )
@@ -387,7 +395,12 @@ def factory_1340() -> NodeFacts:
     ]
     prs = [
         _pr(
-            9876, "assistant-core", merged_at=AT_0655, task_id=hex_id(215), title="Assistant core"
+            9876,
+            "assistant-core",
+            merged_at=AT_0655,
+            task_id=hex_id(215),
+            title="Assistant core",
+            head_sha=CORE_HEAD,
         ),
         _pr(9882, "connectors-core", task_id=hex_id(217)),
         _pr(9881, "skill-discovery", merged_at=AT_1303, task_id=hex_id(218)),
@@ -644,8 +657,107 @@ def factory_1340() -> NodeFacts:
                 )
             ],
             closed_alarms=closed_alarms(),
+            demos=demos_1340(),
         )
     )
+
+
+def _demo(
+    n: int,
+    slug: str,
+    pr: int,
+    at: int,
+    *,
+    title: str,
+    status: str = "PASS",
+    duration: float = 14.0,
+    head: str = "",
+    steps: list[dict[str, Any]] | None = None,
+    acceptance: dict[str, Any] | None = None,
+    video: bool = True,
+) -> FactoryDemo:
+    files = [
+        {"file_id": f"poster{n}", "name": "poster.png", "kind": "poster", "bytes": 9},
+        *(
+            [{"file_id": f"video{n}", "name": "demo.webm", "kind": "video", "bytes": 99}]
+            if video
+            else []
+        ),
+    ]
+    manifest: dict[str, Any] = {"duration_s": duration, "steps": steps or []}
+    if acceptance:
+        manifest["acceptance"] = acceptance
+    return FactoryDemo(
+        id=hex_id(900 + n),
+        factory_id=FID,
+        project_slug=slug,
+        repo=REPO,
+        pr_number=pr,
+        head_sha=head or f"{pr:07x}" + "0" * 33,
+        session_id=FID,
+        created_by_session=hex_id(705),
+        status=status,
+        title=title,
+        files=files,
+        manifest=manifest,
+        pr_id=hex_id(pr) if pr else None,
+        created_at=at,
+    )
+
+
+def demos_1340() -> list[FactoryDemo]:
+    """:returns: The demos recorded by 13:40, newest first."""
+    passed = [{"n": i, "title": f"Step {i}", "status": "pass"} for i in range(1, 6)]
+    return [
+        _demo(
+            1,
+            "base-env",
+            0,
+            AT_1322,
+            title="Acceptance I-1 run 1 PARTIAL",
+            status="PARTIAL",
+            duration=42.0,
+            head=DEPLOYED_SHA,
+            steps=[
+                {"n": 2, "title": "Ask how the app is doing", "status": "pass"},
+                {"n": 3, "title": "A flag-off user gets no assistant", "status": "pass"},
+                {
+                    "n": 6,
+                    "title": "The discovery skill runs a live web search",
+                    "status": "fail",
+                    "note": "live search fails on the base env",
+                },
+            ],
+            acceptance={"initiative": "I-1", "run": 1},
+        ),
+        _demo(2, "connectors-core", 9882, AT_1322 - 60, title="Connector core", duration=18.0),
+        _demo(3, "skill-discovery", 9881, AT_1303 - 120, title="Discovery skill", duration=21.0),
+        _demo(4, "build-tier-drafts-3", 9857, AT_1200 - 300, title="Part 2", duration=11.0),
+        _demo(5, "build-tier-drafts-3", 9856, AT_1200 - 360, title="Part 1", duration=9.0),
+        _demo(
+            6,
+            "assistant-core",
+            9876,
+            AT_0655 - 600,
+            title="Sessions, tool registry, flagged chat API",
+            head=CORE_HEAD,
+            steps=passed,
+        ),
+        _demo(
+            7,
+            "assistant-core",
+            9876,
+            AT_0612,
+            title="Sessions and tool registry",
+            status="FAIL",
+            duration=12.0,
+            head="01d9876" + "0" * 33,
+            steps=[
+                *passed[:3],
+                {"n": 4, "title": "Flagged chat API", "status": "fail", "note": "404 on /chat"},
+            ],
+        ),
+    ]
 
 
 LIVE_ASK: Final = (
@@ -995,6 +1107,7 @@ __all__ = [
     "AT_1303",
     "AT_1325",
     "BASE",
+    "CORE_HEAD",
     "DEPLOYED_SHA",
     "FID",
     "HEAD_AT",
@@ -1004,6 +1117,7 @@ __all__ = [
     "SHORTLIST_MESSAGE",
     "WAVE_1",
     "closed_alarms",
+    "demos_1340",
     "factory_1340",
     "hex_id",
     "scale_factory",

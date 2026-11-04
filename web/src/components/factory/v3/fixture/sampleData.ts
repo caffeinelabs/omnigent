@@ -3,6 +3,8 @@
 // Atlas proposal waiting on a human merge, and the factory tree beside it.
 // Names are neutral; ids are node refs as the API addresses them.
 
+import { type RawDemo, sampleDemos } from "./sampleDemos";
+
 export type RawTree = "product" | "factory";
 
 export interface RawWait {
@@ -155,6 +157,8 @@ export interface RawFactory {
   nodes: RawNode[];
   decisions: RawDecision[];
   unread: Record<string, number>;
+  /** The demos recorded so far, newest first (calm rule 10). */
+  demos?: RawDemo[];
   laterNote: Record<string, string>;
   alarmsClosed: number;
   /** Who approves each verb, in words (a level's own words under `add`). */
@@ -282,6 +286,7 @@ export function sampleFactory(): RawFactory {
     },
     nodes: sampleNodes(),
     decisions: sampleDecisions(),
+    demos: sampleDemos(),
     unread: {
       "I-1": 2,
       "assistant-core": 1,

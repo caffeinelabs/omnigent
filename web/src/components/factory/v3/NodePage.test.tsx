@@ -61,6 +61,7 @@ describe("cockpit v3 · Your move, Details and answers", () => {
     expect(within(status).queryByTestId("v3-answer")).toBeNull();
   });
 
+  // A sweep over every page of the sample (as the calm gate's): over 5 s on a busy runner.
   it("never places one decision's answer in two places, on any node page", async () => {
     for (const ref of sampleEngine().refs()) {
       const view = renderNode(ref);
@@ -79,7 +80,7 @@ describe("cockpit v3 · Your move, Details and answers", () => {
         expect({ ref, id, places: where.size }).toEqual({ ref, id, places: 1 });
       view.unmount();
     }
-  });
+  }, 60_000);
 
   it("answers on a click, never on Enter", async () => {
     const onAnswer = vi.fn();

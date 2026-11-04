@@ -47,7 +47,8 @@ one-parent rule on a built tree. Each node's status line is its blocker path
 (:mod:`.node_status`); roll-ups add burn (``turn`` spans), budgets, an ETA
 only from observed durations, Try it from passing acceptance steps and what
 is in the base env (:func:`.base.contains`); the factory tree's Health lists
-the alarms the server closed (:mod:`.alarms`).
+the alarms the server closed (:mod:`.alarms`); a page's recorded demos (its
+latest and how many) come from :mod:`.node_proof`.
 
 Nothing here names a product: titles come from the factory's records and
 level names from its definition.
@@ -83,6 +84,7 @@ from omnigent.server.factory import (
     features,
     levels,
     node_names,
+    node_proof,
     node_refs,
     node_status,
     subtrees,
@@ -110,6 +112,7 @@ if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import (
         FactoryDecision,
+        FactoryDemo,
         FactoryInitiative,
         FactoryLoop,
         FactoryNodeName,
@@ -293,6 +296,7 @@ class NodeFacts:
     :param turns: Recent ``turn`` spans (the cost of the last hour: burn).
     :param closed_alarms: Alarms the server closed today, with their causes.
     :param names: Node ref -> its stored short name (:mod:`.node_names`).
+    :param demos: The recorded demos the viewer may play, newest first (:mod:`.node_proof`).
     """
 
     factory_id: str
@@ -328,6 +332,7 @@ class NodeFacts:
     turns: Sequence[FactorySpan] = ()
     closed_alarms: Sequence[alarms.ClosedAlarm] = ()
     names: Mapping[str, FactoryNodeName] = field(default_factory=dict)
+    demos: Sequence[FactoryDemo] = ()
 
     def version(self) -> str:
         """:returns: A digest of the rows read (``NodePage.version``; a write's ``based_on``)."""
@@ -481,6 +486,9 @@ def load_facts(
         turns=turns,
         closed_alarms=alarms.load(store, fid, clock),
         names={r.node_ref: r for r in store.list_node_names(fid)},
+        demos=node_proof.readable_demos(
+            store.list_demos(fid, limit=node_proof.READ_MAX), readable, fid
+        ),
     )
 
 
@@ -2223,6 +2231,8 @@ class Tree:
             change = next((k for k in self.children(node.ref) if k.level == "change"), None)
             if change is not None and change.tag:
                 out["change"] = {"ref": change.ref, "label": change.tag}
+        if (demo := node_proof.chip(self, node)) is not None:
+            out["demo"] = demo
         return out
 
     def _responder_seat(self, node: _N) -> str | None:
@@ -3295,6 +3305,8 @@ class Tree:
             out["results"] = self.results(node)
         if node.parent is None:
             out["home"] = self.home.get(node.tree) or (self.ladder[node.tree][1:2] or [""])[0]
+        if (proof := node_proof.proof(self, node)) is not None:
+            out["proof"] = proof
         return your_move.mark_repeats(out, (i["id"] for i in moves["items"]))
 
     def level_view(
