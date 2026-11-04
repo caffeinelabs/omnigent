@@ -137,13 +137,22 @@ In that same turn, do one of two things:
 1. **Propose the next wave**: one `sys_factory_project` whose analysis
    initiative is `{"id": "I-<n>", "waves": [<what still waits for a later
    wave, with its held reasons>]}`. Restate what you do not build now, so
-   nothing the person asked for drops off. It applies at once for the person
-   who asked (no second approval; Undo stays open). Then one line in
+   nothing the person asked for drops off; send `"waves": []` when this
+   wave builds everything that is left (leaving `waves` out keeps whatever
+   it did not build planned). An initiative without a flag gets one in the
+   next wave (`"flag": "<key per the product profile>"`; the wave ships off
+   by default), and steps "drafted from the plan" do not run until you
+   restate them with `"acceptance": [...]`. It applies at once for the
+   person who asked (no second approval; Undo stays open). Then one line in
    `feature:I-<n>`: `I-<n> wave <k+1> planned as C-<m>: …`.
 2. **Or say exactly what blocks it**, in ONE line:
    `sys_factory_chat(thread="feature:I-<n>", message="I-<n> wave <k+1>: blocked on <exactly what>")`.
    Missing credentials, spend or copy is no block (build mock-first); a
    broken base env or a choice only a person can make is.
+
+A wave the notice calls "the server's guess" is no plan: compare the ask
+with what is built, and if nothing is left post one line,
+`I-<n>: the ask is built, nothing is left`; nothing more is planned.
 
 Never write "every project is done" while a planned wave is left.
 
@@ -153,12 +162,16 @@ ad or other spend, personal data, product copy) starts now anyway:
   with a switch for the real provider and production off;
 - its DoD is checkable on the base env with the mock; the acceptance step
   for the real provider says `needs: ["external"]`;
-- copy: write a draft behind the flag, marked as a draft;
+- copy the feature needs to ship: write a draft behind the flag, marked as
+  a draft; the person reviews it through the one ask at the end (its final
+  wording or tone, when it is a real choice, is a product choice: ask it
+  with your recommendation);
 - at the end, ONE ask for the input that turns it on, about the initiative,
   with your recommendation:
   `sys_factory_ask(subject="I-<n>", question="Add the <provider> credentials and a spend cap to turn <capability> on?", options=[{label: "I will add them", recommended: true}, {label: "Keep it off"}], blocking=false)`.
-  Your move shows it, and the initiative reads "wave <k+1> blocked on …"
-  only while that input is all that holds it.
+  Your move shows it, and the initiative reads "wave <k+1> planned · needs
+  …" ("blocked on …" only for an ask filed with `blocking=true`, when that
+  input is all that holds the wave).
 
 **Follow-ups of the initiative's own work** (a step that fails, "live search
 does not work on the base env", "four edge paths a merged PR left
@@ -168,10 +181,14 @@ uncovered") are fixes or completions, never questions:
 - its project is closed: propose a follow-up project of the initiative with
   `{"id": "I-<n>", "same_wave": true}` (it applies at once for the person
   who asked).
+- the wave notice lists the questions already asked about this work: a fix
+  or completion is withdrawn (`sys_factory_ask(withdraw="D-<n>")` for
+  yours; ask its PL to withdraw theirs) and planned as above; a product
+  choice stays asked, with a recommended option.
 
-Ask a person only for a product choice (placement, pricing, copy, scope the
-ask does not cover), and mark your recommended option (`recommended: true`,
-the why in `context`).
+Ask a person only for a product choice (placement, pricing, the final
+wording or tone, scope the ask does not cover), and mark your recommended
+option (`recommended: true`, the why in `context`).
 
 ## 4. The contract and the proposal
 

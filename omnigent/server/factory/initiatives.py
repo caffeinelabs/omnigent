@@ -675,10 +675,12 @@ def carried_forward(
     waves: Sequence[Any], slugs: Sequence[str], built: int, taken: Sequence[str] = ()
 ) -> list[Any]:
     """
-    The planned waves once wave *built* starts with *slugs*: what a wave up to
-    *built* planned and this one did not build (nor any earlier one, *taken*)
-    stays planned, in wave ``built + 1``, so nothing a person asked for drops
-    off. A wave that planned no slug (its goal alone) is spent by building it.
+    The planned waves once wave *built* starts with *slugs*, when its plan does
+    not restate ``waves`` (an explicit ``"waves": []`` clears them instead):
+    what a wave up to *built* planned and this one did not build (nor any
+    earlier one, *taken*) stays planned, in wave ``built + 1``, so nothing a
+    person asked for drops off. A wave that planned no slug (its goal alone) is
+    spent by building it, and nothing is carried past :data:`WAVES_MAX`.
     """
     done = set(slugs) | set(taken)
     out: list[Any] = []
@@ -699,7 +701,7 @@ def carried_forward(
             kept = {k: v for k, v in (wave.get(key) or {}).items() if k in rest}
             if kept:
                 left[key] = {**left.get(key, {}), **kept}
-    if not left["projects"]:
+    if not left["projects"] or built + 1 > WAVES_MAX:
         return out
     same = next((w for w in out if int(w.get("n") or 0) == built + 1), None)
     if same is None:
@@ -776,9 +778,10 @@ def _apply_sync(
             built = max((int(h.get("wave") or 1) for h in plan["history"]), default=0)
             wave = max(built, 1) if body.same_wave else built + 1
             holder["wave"] = wave
+            restated = "waves" in body.model_fields_set
             if body.same_wave:
                 plan["waves"] = _pulled_forward(plan["waves"], slugs, wave)
-            elif not body.waves:
+            elif not restated:
                 plan["waves"] = carried_forward(plan["waves"], slugs, wave, plan["projects"])
             entry: dict[str, Any] = {"wave": wave, "proposal": row.ref, "added": slugs, "at": now}
             if body.acceptance:
@@ -793,7 +796,7 @@ def _apply_sync(
             plan["why_wait"] = {**plan["why_wait"], **body.why_wait}
             if body.skeleton:
                 plan["skeleton"] = body.skeleton
-            if body.waves:
+            if restated:  # an explicit [] says nothing is left
                 plan["waves"] = [_wave_dump(w) for w in body.waves]
             if body.flag is not None:
                 plan["flag"] = _flag(body.flag)

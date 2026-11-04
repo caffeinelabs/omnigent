@@ -45,7 +45,7 @@ from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.control import CockpitError
-from omnigent.server.factory.initiative_view import wave_phrase, wave_state
+from omnigent.server.factory.initiative_view import planned_waves, wave_phrase, wave_state
 from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.factory.start import parse_body
 from omnigent.server.routes._auth_helpers import get_user_id
@@ -174,7 +174,7 @@ def _initiative_rows(
                     {"wave": h.get("wave"), "proposal": h.get("proposal"), "added": h.get("added")}
                     for h in plan["history"]
                 ],
-                "planned_waves": plan["waves"],
+                "planned_waves": planned_waves(plan),
                 "wave_now": {
                     "current": state.current,
                     "done": state.done,

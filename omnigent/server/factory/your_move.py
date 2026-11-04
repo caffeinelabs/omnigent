@@ -169,6 +169,7 @@ def _wave_lines(tree: Tree) -> dict[str, dict[str, str]]:
             "question": d.question,
             "ref": d.ref,
             "created_at": d.created_at,
+            "blocking": d.blocking,
         }
         for d in tree.facts.decisions
     ]
@@ -178,7 +179,10 @@ def _wave_lines(tree: Tree) -> dict[str, dict[str, str]]:
         if row.status != "open" or node is None:
             continue
         state = wave_state(plan_of(row), projects)
-        phrase = wave_phrase(state, initiative_ask(decisions, row.ref))
+        asked = initiative_ask(decisions, row.ref)
+        phrase = wave_phrase(
+            state, asked.words if asked else None, blocking=bool(asked and asked.blocking)
+        )
         if phrase:
             out[row.ref] = {"ref": row.ref, "title": node.title, "line": f"{node.title}: {phrase}"}
     return out

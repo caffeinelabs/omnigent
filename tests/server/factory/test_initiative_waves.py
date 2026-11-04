@@ -14,6 +14,7 @@ Every name here is sample data.
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -23,7 +24,12 @@ import pytest_asyncio
 from omnigent.entities.factory import FactoryProject
 from omnigent.server.factory import initiative_waves, initiatives, snapshot
 from omnigent.server.factory.background import reconcile
-from omnigent.server.factory.initiative_view import WaveState, wave_phrase, wave_state
+from omnigent.server.factory.initiative_view import (
+    WaveState,
+    planned_waves,
+    wave_phrase,
+    wave_state,
+)
 from omnigent.server.factory.initiatives import carried_forward, plan_of
 from omnigent.server.factory.slackdm.digest import initiative_lines
 from tests.server.factory.cockpit_helpers import Cockpit
@@ -56,8 +62,10 @@ DODS: dict[str, list[str]] = {
 @pytest.fixture(autouse=True)
 def _fresh_settled() -> Iterator[None]:
     initiative_waves._settled.clear()
+    initiative_waves._logged.clear()
     yield
     initiative_waves._settled.clear()
+    initiative_waves._logged.clear()
 
 
 @pytest_asyncio.fixture()
@@ -207,9 +215,36 @@ def test_a_parked_sentence_names_its_items_and_why(
     assert parked.why == why
 
 
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Wave 1 of the sample helper: a core and a panel.",
+        "T-16 is done locally at a097437.",
+        "T-16 is done locally but held for C-16.",
+        "D-49 is parked until someone decides.",
+        "The panel is held until the core merges.",
+        "Product copy is out of scope.",
+        "Billing is not part of this wave.",
+        "Sales is held back for now.",
+        "T-16 and D-49 are held for later waves.",
+    ],
+)
+def test_a_sentence_that_parks_nothing_for_a_later_wave_is_no_scope(sentence: str) -> None:
+    """Sequencing ("held for C-16", "until the core merges"), refs and declined scope."""
+    parked = initiative_waves.parked_in(sentence)
+
+    assert parked is None or parked.items == {}, parked
+
+
 def test_text_that_parks_nothing_is_no_scope() -> None:
     assert initiative_waves.parked_in("Wave 1 of the sample helper: a core and a panel.") is None
     assert initiative_waves.parked_in("T-16 is done locally at a097437.") is None
+    status = (
+        "Applied C-1. T-16 is done locally but held for C-16. D-49 is parked until someone "
+        "decides."
+    )
+    assert initiative_waves.parked_scope(None, [status]) == []
+    assert initiative_waves.parked_scope({"out_of_scope": ["Product copy"]}, []) == []
     found = initiative_waves.parked_scope(
         {"later": [{"title": "Sales skill", "why": "copy"}]},
         ["Sales and Promotion are deferred to the next wave."],
@@ -259,6 +294,19 @@ def _plan(waves: list[dict[str, Any]], history: list[tuple[int, list[str]]]) -> 
     }
 
 
+def test_every_string_of_the_analysis_is_read() -> None:
+    """A plan that parked scope in a nested summary, not the notes, still parks it."""
+    analysis = {
+        "changes": [],
+        "analysis": {"summary": {"scope": ["Ads provider and Sales wait for later waves."]}},
+    }
+
+    [found] = initiative_waves.parked_scope(analysis, [])
+
+    assert found.items == {"ads-provider": "Ads provider", "sales": "Sales"}
+    assert initiative_waves.parked_scope({"waves": [{"n": 1, "goal": "the core"}]}, []) == []
+
+
 def test_the_wave_words() -> None:
     later = [{"n": 2, "goal": "the ads provider", "projects": ["ads-provider"]}]
     merged = {"stage": "merged", "status": "active"}
@@ -275,9 +323,13 @@ def test_the_wave_words() -> None:
     assert wave_phrase(single) is None
     assert wave_phrase(one_done) == "wave 1 done · wave 2 planned"
     assert (
-        wave_phrase(one_done, "add the provider credentials (D-3)")
+        wave_phrase(one_done, "add the provider credentials (D-3)", blocking=True)
         == "wave 1 done · wave 2 blocked on add the provider credentials (D-3)"
     )
+    assert (
+        wave_phrase(one_done, "pick the tab placement (D-4)")
+        == "wave 1 done · wave 2 planned · needs pick the tab placement (D-4)"
+    ), "a non-blocking ask does not block the next wave"
     assert wave_phrase(two_started) == "wave 1 done · wave 2 started"
     assert (
         wave_phrase(two_started, "add the provider credentials (D-3)")
@@ -312,6 +364,25 @@ def test_what_a_wave_did_not_build_stays_planned() -> None:
         }
     ]
     assert carried_forward([{"n": 2, "goal": "the rest", "projects": []}], ["x"], 2) == []
+    full = initiatives.WAVES_MAX
+    assert carried_forward([{"n": full, "goal": "g", "projects": ["a"]}], ["b"], full) == [], (
+        "nothing is carried past the last wave"
+    )
+
+
+def test_a_guessed_wave_is_spent_once_the_lead_was_told() -> None:
+    guess = [{"n": 2, "goal": initiative_waves.REST_GOAL, "projects": [], "if_any": True}]
+    merged = {"stage": "merged", "status": "active"}
+    plan = _plan(guess, [(1, ["a"])])
+
+    before = wave_state(plan, {"a": merged})
+    after = wave_state({**plan, initiative_waves.TOLD_KEY: [1]}, {"a": merged})
+
+    assert before.next is not None and before.next["if_any"] is True
+    assert after.next is None and wave_phrase(after) is None
+    assert planned_waves({**plan, initiative_waves.TOLD_KEY: [1]}) == []
+    held = [{**guess[0], "projects": ["ads-provider"]}]  # a person held a project in it
+    assert planned_waves({**_plan(held, [(1, ["a"])]), initiative_waves.TOLD_KEY: [1]}) == held
 
 
 # ── The live regression ────────────────────────────────────────
@@ -358,7 +429,14 @@ async def test_the_live_regression(cockpit: Cockpit) -> None:
         "product copy"
     ) in text
     assert '"id": "I-1", "waves": [' in text and "mock-first" in text
+    assert '"waves": [] when wave 2 builds everything that is left' in text
     assert 'sys_factory_ask(subject="I-1"' in text and 'thread="feature:I-1"' in text
+    assert (
+        '- I-1 has no flag yet: add "flag": "<key per the product profile>" to this '
+        "initiative block; wave 2 ships off by default."
+    ) in text
+    assert "5 steps drafted from the plan; none runs until you restate them" in text
+    assert "server's guess" not in text
     assert f"> {ASK}" in text
     assert cockpit.events("initiative.wave_done")[0].data["next"] == 2
     lines = (await get(cockpit, f"/v1/factory/factories/{cockpit.fid}/asks"))["initiatives"]
@@ -533,14 +611,28 @@ async def test_a_finished_ask_with_nothing_parked_gets_none(cockpit: Cockpit) ->
     assert cockpit.store.list_initiatives(cockpit.fid) == []
 
 
-async def test_an_ask_still_building_gets_one_without_parked_scope(cockpit: Cockpit) -> None:
+async def test_an_ask_still_building_is_asked_once_what_is_left(cockpit: Cockpit) -> None:
+    """Nothing parked: a guessed wave 2 prompts the lead once when wave 1 ends, then is spent."""
     history(cockpit, rationale="A core and a panel.", answer=None, merged=False)
 
     await backfill(cockpit)
 
     row = only(cockpit)
-    assert plan_of(row)["waves"] == []
+    [wave] = plan_of(row)["waves"]
+    assert wave == {"n": 2, "goal": initiative_waves.REST_GOAL, "projects": [], "if_any": True}
     assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == []
+
+    for slug in WAVE_1:
+        stored = cockpit.store.get_project(cockpit.fid, slug)
+        assert stored is not None
+        cockpit.store.update_project(stored.id, stage="merged", status="done")
+
+    assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == ["I-1 wave 1 done"]
+    [text] = notices(cockpit)
+    assert "(the server's guess, not a plan)" in text
+    assert 'message="I-1: the ask is built, nothing is left"' in text
+    lines = (await get(cockpit, f"/v1/factory/factories/{cockpit.fid}/asks"))["initiatives"]
+    assert lines[0]["waves"] is None and lines[0]["next_wave"] is None, "spent once told"
 
 
 async def test_a_plan_that_opted_out_is_left_alone(cockpit: Cockpit) -> None:
@@ -559,3 +651,227 @@ async def test_a_plan_that_calls_itself_wave_one_keeps_the_rest_planned(cockpit:
     [wave] = plan_of(only(cockpit))["waves"]
     assert wave["projects"] == [] and "beyond wave 1" in wave["goal"]
     assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == ["I-1 wave 1 done"]
+
+
+# ── Review regressions ─────────────────────────────────────────
+
+
+def _finish(cockpit: Cockpit, *slugs: str) -> None:
+    for slug in slugs:
+        stored = cockpit.store.get_project(cockpit.fid, slug)
+        assert stored is not None, slug
+        cockpit.store.update_project(stored.id, stage="merged", status="done")
+
+
+async def test_an_explicit_empty_wave_list_says_nothing_is_left(cockpit: Cockpit) -> None:
+    """Wave 2 builds the rest under its own slugs with "waves": []: no wave-2 notice, ever."""
+    history(cockpit)
+    await backfill(cockpit)
+    assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == ["I-1 wave 1 done"]
+
+    built = ("ads-mock", "seo-agent", "sales-agent", "promo-agent")
+    resp = await propose(
+        cockpit,
+        *({"op": "create", "project": project(slug)} for slug in built),
+        analysis={"initiative": {"id": "I-1", "waves": []}},
+        rationale="I-1 wave 2: the rest of the ask, mock-first",
+    )
+
+    assert resp.json()["status"] == "applied", resp.text
+    plan = plan_of(only(cockpit))
+    assert plan["waves"] == []
+    assert [h["wave"] for h in plan["history"]] == [1, 2]
+    _finish(cockpit, *built)
+    assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == []
+    assert len(notices(cockpit)) == 1
+    lines = (await get(cockpit, f"/v1/factory/factories/{cockpit.fid}/asks"))["initiatives"]
+    assert lines[0]["next_wave"] is None and lines[0]["waves"] == "wave 2 done"
+
+
+async def test_a_next_wave_that_leaves_out_waves_keeps_the_rest(cockpit: Cockpit) -> None:
+    history(cockpit)
+    await backfill(cockpit)
+
+    await propose(
+        cockpit,
+        {"op": "create", "project": project("ads-provider")},
+        analysis={"initiative": {"id": "I-1"}},
+        rationale="I-1 wave 2: the ads provider",
+    )
+
+    [wave] = plan_of(only(cockpit))["waves"]
+    assert (wave["n"], wave["projects"]) == (3, ["growth-seo", "sales", "promotion"])
+
+
+async def test_status_lines_in_the_answer_park_nothing(cockpit: Cockpit) -> None:
+    history(
+        cockpit,
+        answer=(
+            "Applied C-1. T-16 is done locally but held for C-16. D-49 is parked until "
+            "someone decides. The panel is held until the core merges."
+        ),
+    )
+
+    await backfill(cockpit)
+
+    [wave] = plan_of(only(cockpit))["waves"]
+    assert wave["projects"] == ["ads-provider", "growth-seo", "sales", "promotion"]
+
+
+async def test_out_of_scope_is_declined_not_deferred(cockpit: Cockpit) -> None:
+    """A finished shortlist whose plan left product copy out: no initiative, nothing to build."""
+    history(
+        cockpit,
+        slugs=("badge-copy", "slash-focus"),
+        rationale="Two small features from the shortlist. Product copy is out of scope.",
+        answer="Applied C-1.",
+        ask="Build the shortlist features.",
+        analysis={"analysis": {"out_of_scope": ["Product copy"]}},
+    )
+
+    report = await backfill(cockpit)
+
+    assert report.initiatives_backfilled == []
+    assert cockpit.store.list_initiatives(cockpit.fid) == []
+
+
+async def test_questions_about_the_work_reach_the_wave_notice(cockpit: Cockpit) -> None:
+    """D-n filed about a wave-1 project, PR or by its PL are named, with what to do."""
+    history(cockpit)
+    pr = cockpit.store.get_pr_by_number(cockpit.fid, REPO, 100)
+    assert pr is not None and pr.project_slug == "helper-core"
+    asks = [
+        ("Start a follow-up to fix live search?", "project:skill-discovery", None, cockpit.fid),
+        ("Cover the four billing edge cases?", f"pr:{pr.id}", None, cockpit.fid),
+        ("Where does the helper tab go?", None, "helper-panel", uuid.uuid4().hex),
+        ("Unrelated: rename the factory?", None, None, cockpit.fid),
+        ("Is connectors-core's retry policy final?", None, None, cockpit.fid),
+        ("Is the connectors-core-v2 idea worth a look?", None, None, cockpit.fid),
+    ]
+    for question, subject, slug, asker in asks:
+        cockpit.store.create_decision(
+            cockpit.fid,
+            dedupe_key=question[:32],
+            question=question,
+            source="agent",
+            blocking=False,
+            subject=subject,
+            project_slug=slug,
+            asked_by_session_id=asker,
+        )
+    await backfill(cockpit)
+
+    assert await initiative_waves.sweep(cockpit.app.state, cockpit.fid) == ["I-1 wave 1 done"]
+
+    [text] = notices(cockpit)
+    assert "Open questions about this work, still waiting for a person:" in text
+    assert "- D-1 (you asked): Start a follow-up to fix live search?" in text
+    assert "- D-2 (you asked): Cover the four billing edge cases?" in text
+    assert "- D-3 (asked by helper-panel): Where does the helper tab go?" in text
+    assert "- D-5 (you asked): Is connectors-core's retry policy final?" in text
+    assert "rename the factory" not in text and "connectors-core-v2" not in text
+    assert 'sys_factory_ask(withdraw="D-<n>")' in text and '"same_wave": true' in text
+    assert cockpit.events("initiative.wave_done")[0].data["questions"] == [
+        "D-1",
+        "D-2",
+        "D-3",
+        "D-5",
+    ]
+
+
+async def test_the_backfill_logs_each_candidate_once(
+    cockpit: Cockpit, caplog: pytest.LogCaptureFixture
+) -> None:
+    history(cockpit)
+    history(
+        cockpit,
+        slugs=("badge-copy", "slash-focus"),
+        rationale="Two small features from the shortlist.",
+        answer="Applied C-2.",
+        ask="Build the shortlist features.",
+        merged=False,
+    )
+    _finish(cockpit, "badge-copy", "slash-focus")
+    caplog.set_level("INFO", logger=initiative_waves.__name__)
+
+    await backfill(cockpit)
+    initiative_waves._settled.clear()
+    await backfill(cockpit)
+
+    logged = [r.getMessage() for r in caplog.records if r.name == initiative_waves.__name__]
+    assert logged == [
+        "factory: backfilled C-1 → I-1 Sample helper (projects: helper-core, helper-panel, "
+        "connectors-core, skill-discovery; held: ads-provider, growth-seo, sales, promotion)",
+        "factory: initiative backfill skipped C-2: finished, nothing parked",
+    ]
+
+
+async def test_a_settled_pass_reads_one_proposal(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    history(cockpit)
+    await backfill(cockpit)
+    limits: list[int] = []
+    real = cockpit.store.list_proposals
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        limits.append(int(kwargs.get("limit", 100)))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cockpit.store, "list_proposals", counted)
+
+    assert initiative_waves.backfill(cockpit.deps, cockpit.fid) == []
+
+    assert limits == [1]
+
+
+async def test_drafted_steps_wait_for_the_lead_to_restate_them(cockpit: Cockpit) -> None:
+    """A merge makes no run due for steps drafted from DoDs; the restated ones run."""
+    from omnigent.server.factory import acceptance
+    from omnigent.server.factory.base import BaseMove
+
+    history(cockpit, merged=False)
+    await backfill(cockpit)
+    old, new = "a" * 40, "b" * 40
+    cockpit.store.upsert_pr(
+        cockpit.fid,
+        REPO,
+        12,
+        project_slug="helper-core",
+        state="merged",
+        base_ref=BASE,
+        merged_sha=new,
+        merged_at=int(time.time()),
+    )
+    move = BaseMove(cockpit.fid, REPO, BASE, old, new, int(time.time()), 12, None)
+
+    await acceptance.on_base_moved(cockpit.app.state, move)
+
+    assert only(cockpit).runs == []
+
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("helper-docs")},
+        analysis={
+            "initiative": {
+                "id": "I-1",
+                "same_wave": True,
+                "acceptance": [
+                    {
+                        "step": "Ask the helper a question",
+                        "expect": "an answer appears",
+                        "owner": "helper-core",
+                        "needs": ["login"],
+                    }
+                ],
+            }
+        },
+        rationale="I-1: the acceptance, restated",
+    )
+    assert resp.json()["status"] == "applied", resp.text
+    assert "acceptance_note" not in plan_of(only(cockpit))
+
+    await acceptance.on_base_moved(cockpit.app.state, move)
+
+    [run] = only(cockpit).runs  # due, then blocked: this sample has no base env
+    assert (run["n"], run["sha"]) == (1, new)

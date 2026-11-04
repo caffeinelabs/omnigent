@@ -673,23 +673,38 @@ acceptance runs; its state is computed from the projects and runs.
   is built mock-first behind the flag, with one `sys_factory_ask(subject=
   "I-<n>")` at the end for what turns it on; a fix or completion of the
   initiative's own work is a task or a `same_wave` project of it, never a
-  question. A next wave that does not restate `waves` keeps what it did not
-  build planned in the wave after it. Lines read "wave 1 done · wave 2
-  planned | started | blocked on <that ask>" (the asks' and status
-  summary's `initiatives[].waves`, the digest, and `your_move.waves` on the
-  node pages at or above the feature).
+  question. The notice also lists the open questions agents asked about
+  that work (a decision whose subject is one of its projects, or a PR or
+  task of one, else whose asker's project is one): a fix or completion is
+  withdrawn and planned, a product choice stays asked with a recommended
+  option. It asks for a flag when the initiative has none. A next wave
+  that leaves `waves` out keeps what it did not build planned in the wave
+  after it (never past wave 8); an explicit `"waves": []` says nothing is
+  left. Lines read "wave 1 done · wave 2 planned | started", "… · needs
+  <that ask>" or, for a blocking ask only, "… · wave 2 blocked on <it>"
+  (the asks' and status summary's `initiatives[].waves`, the digest, and
+  `your_move.waves` on the node pages at or above the feature).
 - **Backfill.** Each reconcile pass gives an unfinished ask that predates
   initiatives its own: an applied projects plan that created two or more
   projects for one person's Room message with no `initiative` block becomes
   an initiative owning those projects (charters stamped, `feature` set),
-  with the scope its rationale, analysis or the lead's answer to the ask
-  parked for later ("… are held for later waves (credentials, …)") as a
-  planned wave 2 with `held` reasons, and acceptance steps drafted from the
-  projects' DoDs (`acceptance_note: "drafted from the plan"`, dropped once a
-  person or a wave rewrites them). An ask whose projects all finished with
-  nothing parked gets none. It never creates a second initiative for an ask
-  or proposal one already records (any status) and never re-parents a
-  project another initiative owns.
+  with the scope its rationale, any string of its analysis or the lead's
+  answer to the ask parked for a later wave ("… are held for later waves
+  (credentials, …)") as a planned wave 2 with `held` reasons. Only later
+  wave, round or phase wording parks scope: "held for C-16" or "parked
+  until someone decides" is sequencing, a factory ref is never a project,
+  and "out of scope" is declined. An ask still being built whose plan
+  parked nothing (or that called itself wave 1) gets a goal-only wave the
+  server guessed (`if_any`): the lead hears once when wave 1 ends, and the
+  guess is spent after that. Acceptance steps are drafted from the
+  projects' DoDs (`acceptance_note: "drafted from the plan"`): a merge
+  makes no run due for them until a wave or a person restates them, and
+  the initiative can be done without one. An ask whose projects all
+  finished with nothing parked gets none. It never creates a second
+  initiative for an ask or proposal one already records (any status) and
+  never re-parents a project another initiative owns. Each candidate's
+  outcome is logged once at info ("backfilled C-n → I-n …", "skipped C-n:
+  …"), and a settled pass reads only the newest applied projects proposal.
 
 ### Factory previews
 
