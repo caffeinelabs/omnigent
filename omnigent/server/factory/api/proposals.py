@@ -45,6 +45,7 @@ from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.initiative_view import planned_waves, wave_phrase, wave_state
 from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.factory.start import parse_body
 from omnigent.server.routes._auth_helpers import get_user_id
@@ -132,8 +133,18 @@ def _initiative_rows(
 ) -> list[dict[str, Any]]:
     """The open initiatives a lead extends with ``analysis.initiative.id`` (a PL: its own)."""
     out: list[dict[str, Any]] = []
-    for row in deps.factory_store.list_initiatives(factory_id, status="open", limit=20):
+    rows = deps.factory_store.list_initiatives(factory_id, status="open", limit=20)
+    by_slug = (
+        {
+            p.slug: {"stage": p.stage, "status": p.status}
+            for p in deps.factory_store.list_projects(factory_id)
+        }
+        if rows
+        else {}
+    )
+    for row in rows:
         plan = initiatives.plan_of(row)
+        state = wave_state(plan, by_slug)
         if role == ROLE_PROJECT_LEAD and project not in plan["projects"]:
             continue
         runs = [r for r in row.runs if r.get("status")]
@@ -163,7 +174,12 @@ def _initiative_rows(
                     {"wave": h.get("wave"), "proposal": h.get("proposal"), "added": h.get("added")}
                     for h in plan["history"]
                 ],
-                "planned_waves": plan["waves"],
+                "planned_waves": planned_waves(plan),
+                "wave_now": {
+                    "current": state.current,
+                    "done": state.done,
+                    "words": wave_phrase(state),
+                },
             }
         )
     return out

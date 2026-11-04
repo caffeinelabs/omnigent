@@ -13,6 +13,11 @@ The page shows each ask once: every other place the page carries one of these
 asks (the status line, a child's line, a segment) is marked ``in_your_move``
 (:func:`mark_repeats`), so the cockpit draws no second button, banner or card.
 
+Above the feature level, Your move also says where each initiative of several
+waves under the node is (``waves``: "Agent assistant: wave 1 done · wave 2
+started", :func:`wave_lines`), so the person sees the next wave move, or the
+one input it is blocked on, without opening the feature.
+
 Pure: it reads a built :class:`~omnigent.server.factory.nodes.Tree`.
 """
 
@@ -25,6 +30,12 @@ from typing import TYPE_CHECKING, Any, Final
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import decision_routing, node_names
 from omnigent.server.factory.definition_blocks import PRODUCT_TREE
+from omnigent.server.factory.initiative_view import (
+    initiative_ask,
+    plan_of,
+    wave_phrase,
+    wave_state,
+)
 from omnigent.server.factory.node_status import decision_proposal
 
 if TYPE_CHECKING:
@@ -37,6 +48,8 @@ ITEMS_MAX: Final = 3
 NAMED_MAX: Final = 2
 """Nodes an "unblocks" names before ``+n``."""
 _CODE_START: Final = ("C-", "D-", "#", "PR-", "T-", "I-", "O-", "R-", "G-")
+WAVE_LEVELS: Final = frozenset({"product", "goal", "need", "feature"})
+"""Levels whose Your move says where their initiatives' waves are."""
 
 
 @dataclass(frozen=True)
@@ -128,14 +141,67 @@ def ranked(tree: Tree, node: _N, viewer: Viewer | None = None) -> list[tuple[Ask
 
 def your_move(tree: Tree, node: _N, viewer: Viewer | None = None) -> dict[str, Any]:
     """
-    ``NodePage.your_move``: ``{items, more}``; ``items`` empty means nothing needs
-    this viewer here ("Nothing needs you").
+    ``NodePage.your_move``: ``{items, more, waves?}``; ``items`` empty means nothing
+    needs this viewer here ("Nothing needs you"); ``waves`` (:func:`wave_lines`)
+    is left out when no initiative of several waves sits under the node.
     """
     found = ranked(tree, node, viewer)
-    return {
+    out: dict[str, Any] = {
         "items": [item(tree, node, ask, at) for ask, at in found[:ITEMS_MAX]],
         "more": max(0, len(found) - ITEMS_MAX),
     }
+    if waves := wave_lines(tree, node):
+        out["waves"] = waves
+    return out
+
+
+def _wave_lines(tree: Tree) -> dict[str, dict[str, str]]:
+    """Initiative ref -> its wave line, for every open initiative of several waves."""
+    projects = {
+        p.slug: {"stage": p.stage, "status": p.status}
+        for p in tree.facts.projects
+        if p.slug not in tree.hidden
+    }
+    decisions = [
+        {
+            "status": d.status,
+            "subject": d.subject,
+            "question": d.question,
+            "ref": d.ref,
+            "created_at": d.created_at,
+            "blocking": d.blocking,
+        }
+        for d in tree.facts.decisions
+    ]
+    out: dict[str, dict[str, str]] = {}
+    for row in tree.facts.initiatives:
+        node = tree.nodes.get(row.ref)
+        if row.status != "open" or node is None:
+            continue
+        state = wave_state(plan_of(row), projects)
+        asked = initiative_ask(decisions, row.ref)
+        phrase = wave_phrase(
+            state, asked.words if asked else None, blocking=bool(asked and asked.blocking)
+        )
+        if phrase:
+            out[row.ref] = {"ref": row.ref, "title": node.title, "line": f"{node.title}: {phrase}"}
+    return out
+
+
+def wave_lines(tree: Tree, node: _N) -> list[dict[str, str]]:
+    """
+    Where each initiative of several waves at or under *node* is, as one line
+    (``{ref, title, line}``: "Agent assistant: wave 1 done · wave 2 started"),
+    for a product, goal, need or feature page.
+    """
+    if node.tree != PRODUCT_TREE or node.level not in WAVE_LEVELS:
+        return []
+    lines = tree.memo("your_move", "waves", lambda: _wave_lines(tree))
+    return [
+        line
+        for ref, line in lines.items()
+        if ref == node.ref or node.ref in {a.ref for a in tree.ancestors(ref)}
+    ]
 
 
 def split_verb(verb: str) -> tuple[str, str]:
@@ -310,6 +376,7 @@ def mark_repeats(page: dict[str, Any], ids: Iterable[str]) -> dict[str, Any]:
 
 __all__ = [
     "ITEMS_MAX",
+    "WAVE_LEVELS",
     "Viewer",
     "candidates",
     "item",
@@ -317,5 +384,6 @@ __all__ = [
     "ranked",
     "split_verb",
     "unblocks",
+    "wave_lines",
     "your_move",
 ]

@@ -214,7 +214,9 @@ These need the human: credentials and secrets, cost, scope changes, a third
 restart of the same member, anything touching a protected repo (unless it is
 your project's repo) or protected paths, and merge-gate admin fallback when
 the charter does not allow it. Ask with `sys_factory_ask`; the human answers in
-the cockpit.
+the cockpit. A credential, spend, personal data or copy that planned work
+needs does not park it: build it mock-first behind its flag (production off)
+and ask once, at the end, for what turns it on.
 
 ## Gates (enforced by policy and computed by the server)
 

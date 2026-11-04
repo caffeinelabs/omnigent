@@ -30,6 +30,10 @@ moves. This module adds the user-visible check on top:
    plan a follow-up project, and so does a step that still fails after
    :data:`ESCALATE_AFTER` fix tasks. No person is asked to decide anything.
 
+Steps the server drafted from definitions of done for an initiative it
+backfilled (``plan.acceptance_note``) get no due run: a merge waits until the
+lead's next wave or a person restates them (a person may still run them now).
+
 Steps that need something an env lacks (a synthetic sign-in the base env has
 no secret for, the build or AI tier, an outside provider) are skipped by the
 demo agent with the reason, and the cockpit shows them as "cannot run in envs".
@@ -48,6 +52,7 @@ from omnigent.server.factory import events
 from omnigent.server.factory.charter import project_base_branch, project_kind
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import quote_spoofed_lines
+from omnigent.server.factory.initiative_view import ACCEPTANCE_DRAFTED
 from omnigent.server.factory.initiatives import (
     RUN_DONE,
     RUNS_KEPT,
@@ -380,6 +385,8 @@ async def on_base_moved(app_state: Any, move: BaseMove) -> None:
             pr = next((p for p in merged if p.project_slug in plan["projects"]), None)
             if pr is None or not plan["acceptance"]:
                 continue
+            if plan.get("acceptance_note") == ACCEPTANCE_DRAFTED:
+                continue  # steps drafted from DoDs run once a wave or a person restates them
             stored = mutate(deps, row.id, _due_change(move, pr))
             if stored is not None:
                 out.append((stored, pr.number))

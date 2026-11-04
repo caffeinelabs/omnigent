@@ -131,11 +131,24 @@ class StepIn(_In):
 
 
 class WaveIn(_In):
-    """A planned wave: what it widens and which projects (planned slugs) it adds."""
+    """
+    A planned wave: what it widens and which projects (planned slugs) it adds.
+
+    :param held: Planned slug -> the person's input it is held for (credentials,
+        spend, personal data, copy); it is built mock-first and that input turns it on.
+    :param titles: Planned slug -> how people name it (``"Ads provider"``).
+    """
 
     n: int = Field(ge=1, le=WAVES_MAX)
     goal: str = Field(min_length=1, max_length=REASON_MAX)
     projects: list[str] = Field(default_factory=list, max_length=12)
+    held: dict[str, str] = Field(default_factory=dict, max_length=12)
+    titles: dict[str, str] = Field(default_factory=dict, max_length=12)
+
+    @field_validator("held", "titles")
+    @classmethod
+    def _short(cls, value: dict[str, str]) -> dict[str, str]:
+        return {str(k)[:64]: " ".join(str(v).split())[:REASON_MAX] for k, v in value.items()}
 
 
 class InitiativeIn(_In):
@@ -649,6 +662,57 @@ def _stamp(
     return stored or project
 
 
+def _wave_dump(wave: WaveIn) -> dict[str, Any]:
+    """A planned wave as the plan stores it (no empty ``held`` or ``titles``)."""
+    out = wave.model_dump()
+    for key in ("held", "titles"):
+        if not out.get(key):
+            out.pop(key, None)
+    return out
+
+
+def carried_forward(
+    waves: Sequence[Any], slugs: Sequence[str], built: int, taken: Sequence[str] = ()
+) -> list[Any]:
+    """
+    The planned waves once wave *built* starts with *slugs*, when its plan does
+    not restate ``waves`` (an explicit ``"waves": []`` clears them instead):
+    what a wave up to *built* planned and this one did not build (nor any
+    earlier one, *taken*) stays planned, in wave ``built + 1``, so nothing a
+    person asked for drops off. A wave that planned no slug (its goal alone) is
+    spent by building it, and nothing is carried past :data:`WAVES_MAX`.
+    """
+    done = set(slugs) | set(taken)
+    out: list[Any] = []
+    left: dict[str, Any] = {"n": built + 1, "goal": "", "projects": []}
+    for wave in waves:
+        if not isinstance(wave, Mapping):
+            continue
+        n = int(wave.get("n") or 0)
+        if n > built:
+            out.append(dict(wave))
+            continue
+        rest = [p for p in wave.get("projects") or [] if p not in done]
+        if not rest:
+            continue
+        left["projects"] = list(dict.fromkeys([*left["projects"], *rest]))
+        left["goal"] = left["goal"] or str(wave.get("goal") or "")
+        for key in ("held", "titles"):
+            kept = {k: v for k, v in (wave.get(key) or {}).items() if k in rest}
+            if kept:
+                left[key] = {**left.get(key, {}), **kept}
+    if not left["projects"] or built + 1 > WAVES_MAX:
+        return out
+    same = next((w for w in out if int(w.get("n") or 0) == built + 1), None)
+    if same is None:
+        return sorted([left, *out], key=lambda w: int(w.get("n") or 0))
+    same["projects"] = list(dict.fromkeys([*left["projects"], *(same.get("projects") or [])]))
+    for key in ("held", "titles"):
+        if left.get(key):
+            same[key] = {**left[key], **(same.get(key) or {})}
+    return out
+
+
 def _pulled_forward(waves: Sequence[Any], slugs: Sequence[str], built: int) -> list[Any]:
     """
     *waves* without *slugs* (added now, so no later wave holds them any more); a
@@ -686,7 +750,7 @@ def _apply_sync(
             "skeleton": body.skeleton or (slugs[0] if len(slugs) == 1 else None),
             "user_facing": list(body.user_facing),
             "why_wait": dict(body.why_wait),
-            "waves": [w.model_dump() for w in body.waves],
+            "waves": [_wave_dump(w) for w in body.waves],
             "history": [{"wave": 1, "proposal": row.ref, "added": slugs, "at": now}],
             "projects": slugs,
             "asked_at": asked_at,
@@ -714,11 +778,16 @@ def _apply_sync(
             built = max((int(h.get("wave") or 1) for h in plan["history"]), default=0)
             wave = max(built, 1) if body.same_wave else built + 1
             holder["wave"] = wave
+            restated = "waves" in body.model_fields_set
             if body.same_wave:
                 plan["waves"] = _pulled_forward(plan["waves"], slugs, wave)
+            elif not restated:
+                plan["waves"] = carried_forward(plan["waves"], slugs, wave, plan["projects"])
             entry: dict[str, Any] = {"wave": wave, "proposal": row.ref, "added": slugs, "at": now}
             if body.acceptance:
                 entry["acceptance_before"] = plan["acceptance"]
+                if plan.get("acceptance_note"):
+                    entry["acceptance_note_before"] = plan.pop("acceptance_note")
                 plan["acceptance"] = _steps(body.acceptance)
             plan["history"] = [*plan["history"], entry]
             plan["projects"] = list(dict.fromkeys([*plan["projects"], *slugs]))
@@ -727,8 +796,8 @@ def _apply_sync(
             plan["why_wait"] = {**plan["why_wait"], **body.why_wait}
             if body.skeleton:
                 plan["skeleton"] = body.skeleton
-            if body.waves:
-                plan["waves"] = [w.model_dump() for w in body.waves]
+            if restated:  # an explicit [] says nothing is left
+                plan["waves"] = [_wave_dump(w) for w in body.waves]
             if body.flag is not None:
                 plan["flag"] = _flag(body.flag)
             fields: dict[str, Any] = {"plan": plan}
@@ -809,6 +878,8 @@ def _undo_change(ref: str, now: int) -> Callable[[FactoryInitiative], dict[str, 
         for entry in mine:
             if "acceptance_before" in entry:
                 plan["acceptance"] = entry["acceptance_before"]
+            if entry.get("acceptance_note_before"):
+                plan["acceptance_note"] = entry["acceptance_note_before"]
         plan["history"] = [h for h in plan["history"] if h.get("proposal") != ref]
         plan["projects"] = [s for s in plan["projects"] if s not in dropped]
         fields: dict[str, Any] = {"plan": plan}
@@ -916,6 +987,7 @@ def apply_patch(
             if steps != plan["acceptance"]:
                 changes["acceptance"] = (plan["acceptance"], steps)
                 plan["acceptance"] = steps
+                plan.pop("acceptance_note", None)  # a person's steps are no draft
                 fields["plan"] = plan
         if patch.status is not None and patch.status != current.status:
             changes["status"] = (current.status, patch.status)

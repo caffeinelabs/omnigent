@@ -1922,6 +1922,48 @@ def test_the_planner_is_a_read_only_sonnet_sub_agent(lead: AgentSpec) -> None:
         assert _guard(ROLE_PLANNER, command)["result"] == "DENY", command
 
 
+def test_a_done_wave_reaches_the_next_wave_in_the_same_turn(lead: AgentSpec) -> None:
+    """The server's wave-done notice has a DISPATCH row; the skill plans the next wave."""
+    from omnigent.entities.factory import FactoryInitiative
+    from omnigent.server.factory.initiative_view import WaveState
+    from omnigent.server.factory.initiative_waves import notice_text
+
+    row = FactoryInitiative(
+        id="1",
+        factory_id="f",
+        number=3,
+        title="Sample helper",
+        ask="Build a sample helper.",
+        requested_by={"kind": "human", "id": "ana", "name": "ana (sample)"},
+        plan={"waves": [{"n": 2, "goal": "the ads provider", "projects": ["ads-provider"]}]},
+    )
+    state = WaveState(1, True, 1, ("helper-core",), (), {"n": 2, "goal": "the ads provider"})
+    text = notice_text(row, state)
+    prompt = " ".join((lead.instructions or "").split())
+    rows = re.findall(r"`(\[Factory initiative · [^`]*\])`", prompt)
+    assert rows and any(_row_pattern(r).match(text.split("\n", 1)[0]) for r in rows), rows
+    row_text = prompt[prompt.index(rows[0]) :]
+    assert 'load_skill("factory-planning")' in row_text[:600] and "3c" in row_text[:600]
+    assert "mock-first" in prompt and "recommended option" in prompt
+    skill = " ".join(
+        (_LEAD_DIR / "skills/factory-planning/SKILL.md").read_text(encoding="utf-8").split()
+    )
+    for token in (
+        "## 3c. The next wave, mock-first, and follow-ups",
+        '{"id": "I-<n>", "waves": [',
+        'sys_factory_chat(thread="feature:I-<n>"',
+        "**Mock-first.**",
+        'sys_factory_ask(subject="I-<n>"',
+        "recommended: true",
+        '{"id": "I-<n>", "same_wave": true}',
+        "Ask a person only for a product choice",
+    ):
+        assert token in skill, token
+    for bundle in (_LEAD_DIR, _PL_DIR):
+        protocol = (bundle / "skills/factory-protocol/SKILL.md").read_text(encoding="utf-8")
+        assert "build it mock-first behind its flag" in " ".join(protocol.split())
+
+
 def test_the_planning_skill_carries_the_contract() -> None:
     skill = _LEAD_DIR / "skills" / "factory-planning"
     text = " ".join((skill / "SKILL.md").read_text(encoding="utf-8").split())

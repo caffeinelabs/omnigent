@@ -24,6 +24,7 @@ import type {
   StatusLine,
   TimelineView,
   VerbPreview,
+  WaveLine,
   WhyItem,
   YourMove,
   YourMoveItem,
@@ -171,14 +172,26 @@ function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
   };
 }
 
-/** `your_move` as a list, `{items, more}` or absent (older servers). */
+/** Each `{ref, title, line}` wave line; one without its line or ref is left out. */
+function waveLines(raw: unknown): WaveLine[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((w) => {
+    const v = w as Wire | null;
+    const ref = str(v?.ref);
+    const line = str(v?.line);
+    return ref && line ? [{ ref, title: str(v?.title) ?? ref, line }] : [];
+  });
+}
+
+/** `your_move` as a list, `{items, more, waves?}` or absent (older servers). */
 export function normalizeYourMove(raw: unknown, status: StatusLine): YourMove | undefined {
   if (raw == null) return undefined;
   const list = Array.isArray(raw) ? raw : ((raw as Wire).items ?? (raw as Wire).rows);
   if (!Array.isArray(list)) return undefined;
   const items = list.flatMap((r) => moveItem(r as Wire, status) ?? []);
   const more = Array.isArray(raw) ? 0 : Number((raw as Wire).more ?? 0) || 0;
-  return { items, more };
+  const waves = Array.isArray(raw) ? [] : waveLines((raw as Wire).waves);
+  return waves.length ? { items, more, waves } : { items, more };
 }
 
 /** A node page from the server, in the shapes the page renders. */
