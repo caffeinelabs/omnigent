@@ -21,7 +21,8 @@ before it does it, then applies exactly that, and can be taken back for
     Takes the write back (the person who applied it, or an owner), once.
 
 Errors: 422 ``wrong_level`` (a parent not exactly one level up, or another
-tree), 422 ``not_here`` (the verb does not apply to this node), 403
+tree), 422 ``not_here`` (the verb does not apply to this node, its level does
+not offer it, or its authority names nobody), 403
 ``authority`` with ``who`` (who may apply it), 409 ``stale``, 409
 ``nothing_to_do``, and the errors of the cores it runs (``cycle``,
 ``slug_exists`` …).
@@ -53,9 +54,16 @@ name       an implicit node        makes it a stored feature or need, or files
 team       a project               a team change (``PUT …/definition``)
 =========  ======================  ==========================================
 
+A verb is served only where its node's level lists it in the definition's
+``structure.verbs`` (:data:`OFFERED_AS` maps resume, reorder, split, merge and
+close onto the entries that offer them), and who applies it follows the
+``structure.levels[].authority`` of the level it changes
+(:func:`authority_level`).
+
 Agents never call these routes (human origin): they act through proposals.
 Undo uses each core's own way back: a proposal's Undo, the inverse control,
-the stored value put back, the definition version before.
+the stored value put back, the definition version before (only while the
+version the verb made is still in force).
 """
 
 from __future__ import annotations
@@ -68,7 +76,7 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -170,6 +178,9 @@ class Plan:
     :param level: The viewer level that may apply it (EDIT or MANAGE).
     :param undo: Whether it can be undone.
     :param filed: What it files, in words (``"a projects proposal"``), if anything.
+    :param authority: ``(level key, "create" | "move")``: the definition's
+        ``structure.levels[key].authority`` that says who changes the nodes it
+        changes (``None``: the core it runs checks its own, e.g. controls).
     """
 
     verb: str
@@ -180,11 +191,12 @@ class Plan:
     effects: list[str]
     run: Runner
     level: int = LEVEL_EDIT
-    rollup_delta: dict[str, Any] = field(default_factory=dict)
+    rollup_delta: dict[str, Any] | None = None
     columns_after: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
     undo: bool = True
     filed: str | None = None
+    authority: tuple[str, str] | None = None
 
 
 @dataclass
@@ -413,8 +425,10 @@ def _delta(ref: str, title: str, *items: tuple[str, str, Any, Any]) -> dict[str,
     }
 
 
-def _rollup(*nodes_: dict[str, Any], text: str) -> dict[str, Any]:
-    return {"nodes": [n for n in nodes_ if n["items"]], "text": text}
+def _rollup(*nodes_: dict[str, Any], text: str) -> dict[str, Any] | None:
+    """The roll-up before and after, or ``None`` when nothing in it changes (nothing empty)."""
+    changed = [n for n in nodes_ if n["items"]]
+    return {"nodes": changed, "text": text} if changed or text else None
 
 
 def _children_count(tree: nodes.Tree, node: Any, *, later: bool = False) -> int:
@@ -624,19 +638,28 @@ async def _plan_add_project(env: Env, tree: nodes.Tree, node: Any, args: dict[st
         ("later", tree.later_title, later_now, later_now - 1 if held is not None else later_now),
     )
 
+    held_wave = _wave_holding(planned["waves"], slug) if held is not None else None
+
     async def run() -> Applied:
+        # In the feature's current wave: its planned later waves stay ahead of it,
+        # and a held item pulled forward leaves the wave that held it.
         proposal = await _file_and_apply(
             env,
             changes,
             rationale,
             thread=_thread_for_proposal(tree, node),
-            analysis={"initiative": {"id": node.ref}},
+            analysis={"initiative": {"id": node.ref, "same_wave": True}},
         )
         await _post_plan_now(env, tree, node, title)
         ref = proposal_ref(proposal.number)
         what = "pulled forward" if held is not None else "added"
         return Applied(
-            {"kind": "proposal", "ref": ref, "cancel": [slug]},
+            {
+                "kind": "proposal",
+                "ref": ref,
+                "cancel": [slug],
+                "unlink": {"initiative": row.id, "slug": slug, "wave": held_wave},
+            },
             f"{env.by} {what} {title} under {node.title} ({ref}).",
             filed=ref,
         )
@@ -669,12 +692,27 @@ async def _plan_add_project(env: Env, tree: nodes.Tree, node: Any, args: dict[st
         ),
         warnings=warnings,
         filed="a projects proposal",
+        authority=("project", "create"),
     )
 
 
 def _wave_n(wave: Mapping[str, Any]) -> int:
     value = wave.get("n")
     return value if isinstance(value, int) and not isinstance(value, bool) else 1
+
+
+def _current_wave(plan: Mapping[str, Any]) -> int:
+    """The wave a feature builds now: its newest history entry's (1 before any)."""
+    history = [h for h in plan.get("history") or [] if isinstance(h, Mapping)]
+    return max((int(h.get("wave") or 1) for h in history), default=1)
+
+
+def _wave_holding(waves: Sequence[Any], slug: str) -> dict[str, Any] | None:
+    """``{n, goal}`` of the later wave that holds *slug*, or ``None``."""
+    for wave in waves:
+        if isinstance(wave, Mapping) and slug in (wave.get("projects") or []):
+            return {"n": _wave_n(wave), "goal": str(wave.get("goal") or "")}
+    return None
 
 
 def _plan_hold(
@@ -699,12 +737,15 @@ def _plan_hold(
             waves: list[dict[str, Any]] = [
                 dict(w) for w in plan["waves"] if isinstance(w, Mapping)
             ]
-            later = [w for w in waves if _wave_n(w) >= 2]
-            if later:
-                wave = later[-1]
+            # A wave after the one it builds now, so it stays ahead (held, not started).
+            now = _current_wave(plan)
+            same = [w for w in waves if _wave_n(w) > now and w.get("goal") == held_for]
+            if same:
+                wave = same[0]
                 wave["projects"] = [*list(wave.get("projects") or []), slug]
             else:
-                wave = {"n": 2, "goal": held_for, "projects": [slug]}
+                n = max([now, *(_wave_n(w) for w in waves)]) + 1
+                wave = {"n": n, "goal": held_for, "projects": [slug]}
                 waves.append(wave)
             holder["n"] = _wave_n(wave)
             plan["waves"] = waves
@@ -733,6 +774,7 @@ def _plan_hold(
         columns_after=columns_after(
             tree, node, add=[_ghost(tree, "project", _project_ref(slug), title, "later")]
         ),
+        authority=("project", "create"),
     )
 
 
@@ -792,6 +834,7 @@ async def _plan_add_task(env: Env, tree: nodes.Tree, node: Any, args: dict[str, 
         columns_after=columns_after(
             tree, node, add=[_ghost(tree, "task", f"task:{key}", title, 0)]
         ),
+        authority=("task", "create"),
     )
 
 
@@ -866,6 +909,7 @@ async def _plan_add_feature(env: Env, tree: nodes.Tree, node: Any, args: dict[st
         columns_after=columns_after(
             tree, node, add=[_ghost(tree, "feature", "feature:new", title, 0)]
         ),
+        authority=("feature", "create"),
     )
 
 
@@ -1021,6 +1065,7 @@ async def _plan_start(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any
         warnings=warnings,
         undo=patch is not None,
         filed="a projects proposal" if patch is not None else None,
+        authority=("project", "create"),
     )
 
 
@@ -1046,6 +1091,22 @@ def _pause_targets(tree: nodes.Tree, node: Any) -> dict[str, bool]:
         row = tree.project_rows.get(item.order or "") if item.level == "project" else None
         if row is not None and row.status == "active" and row.pl_session_id and not item.later:
             out[f"project:{row.slug}"] = bool(item.paused)
+    return out
+
+
+def _unpaused_starts(tree: nodes.Tree, node: Any) -> list[str]:
+    """
+    The projects under *node* a pause cannot stop: open ones whose lead has not
+    started yet (they start once what they wait on is met), and held ones.
+    """
+    found = [node, *tree.subtree(node.ref)] if node.level != "project" else [node]
+    out: list[str] = []
+    for item in found:
+        if item.level != "project" or item.ghost:
+            continue
+        row = tree.project_rows.get(item.order or "")
+        if item.later or (row is not None and row.status == "active" and not row.pl_session_id):
+            out.append(item.order or item.ref)
     return out
 
 
@@ -1077,17 +1138,26 @@ async def _plan_pause(env: Env, tree: nodes.Tree, node: Any, verb: str) -> Plan:
     names = ", ".join(t.removeprefix("project:") for t in targets[:4]) + (
         " …" if len(targets) > 4 else ""
     )
+    whole = node.ref == node_refs.PRODUCT
     effects = (
         [
-            f"Nothing new starts under {node.title}: the leads of {names} pause after "
-            "their current step.",
-            f"Burn here drops to $0/h (was {_money(burn)}/h)."
-            if burn
-            else "Burn here stays at $0/h.",
+            f"Nothing new starts under {node.title}: every lead pauses after its current step."
+            if whole
+            else f"The leads of {names} pause after their current step.",
+            f"Burn of those leads drops to $0/h (was {_money(burn)}/h)." if burn else "",
         ]
         if verb == "pause"
         else [f"Work under {node.title} can start again: the leads of {names} resume."]
     )
+    warnings: list[str] = []
+    later = _unpaused_starts(tree, node) if verb == "pause" and not whole else []
+    if later:
+        shown = ", ".join(later[:4]) + (" …" if len(later) > 4 else "")
+        warnings.append(
+            f"Pause stops leads that run: {shown} {'has' if len(later) == 1 else 'have'} no "
+            "lead yet and still start once what they wait on is met (pause them then, "
+            "or hold them in a later wave)."
+        )
     touched = [*targets, f"paused:{paused}"]
     inverse = "resume" if verb == "pause" else "pause"
 
@@ -1114,6 +1184,7 @@ async def _plan_pause(env: Env, tree: nodes.Tree, node: Any, verb: str) -> Plan:
             ),
             text=f"Burn {_money(burn)}/h → $0/h." if verb == "pause" and burn else "",
         ),
+        warnings=warnings,
     )
 
 
@@ -1271,6 +1342,7 @@ async def _plan_move_project(env: Env, tree: nodes.Tree, node: Any, target: Any)
         level=LEVEL_MANAGE if plan.owner_reasons() else LEVEL_EDIT,
         warnings=list(plan.warnings),
         filed="a projects proposal",
+        authority=("project", "move"),
     )
 
 
@@ -1287,15 +1359,9 @@ async def _plan_move_feature(env: Env, tree: nodes.Tree, node: Any, target: Any)
         raise _not_here("move", node, tree, "it is not a stored feature")
     old = _parent(tree, node)
     before = plan_of(row).get("opportunity")
-    deps = env.deps
 
     async def run() -> Applied:
-        def change(current: Any) -> dict[str, Any]:
-            plan = plan_of(current)
-            plan["opportunity"] = target.ref
-            return {"plan": plan}
-
-        await asyncio.to_thread(initiatives.mutate, deps, row.id, change)
+        await _feature_need(env, row.id, target.ref)
         return Applied(
             {"kind": "opportunity", "initiative": row.id, "opportunity": before},
             f"{env.by} filed {node.title} under {target.title}.",
@@ -1319,13 +1385,51 @@ async def _plan_move_feature(env: Env, tree: nodes.Tree, node: Any, target: Any)
                 target.title,
                 (
                     "features",
-                    "Features",
+                    tree.level_name("feature", plural=True),
                     _children_count(tree, target),
                     _children_count(tree, target) + 1,
                 ),
             ),
             text=f"{target.title} gains {node.title}.",
         ),
+        columns_after=columns_after(tree, target, add=[{**tree.summary(node), "col": 0}]),
+        authority=("feature", "move"),
+    )
+
+
+async def _feature_need(env: Env, initiative_id: str, need: str | None) -> None:
+    """File a feature under the opportunity *need* (``None``: its own ask), with its event."""
+    holder: dict[str, Any] = {}
+
+    def change(current: Any) -> dict[str, Any] | None:
+        plan = plan_of(current)
+        holder["before"] = plan.get("opportunity")
+        if holder["before"] == need:
+            return None
+        if need:
+            plan["opportunity"] = need
+        else:
+            plan.pop("opportunity", None)
+        return {"plan": plan}
+
+    stored = await asyncio.to_thread(initiatives.mutate, env.deps, initiative_id, change)
+    if stored is None or holder.get("before") == need:
+        return
+    await events.emit(
+        env.app_state,
+        env.fid,
+        "initiative.edited",
+        severity="notice",
+        subject=f"initiative:{stored.ref}",
+        summary=f"{env.by} filed {stored.ref} under {need or 'its own ask'} from the cockpit",
+        data={
+            **env.actor.event_data(),
+            "initiative_id": stored.id,
+            "ref": stored.ref,
+            "before": {"opportunity": holder.get("before")},
+            "after": {"opportunity": need},
+            "by": env.by,
+        },
     )
 
 
@@ -1333,7 +1437,12 @@ async def _plan_reorder(env: Env, tree: nodes.Tree, node: Any, args: dict[str, A
     if node.level != "project" or node.later or node.ghost or node.implicit:
         raise _not_here("reorder", node, tree, "only a planned project moves between columns")
     col = args.get("col")
-    if not isinstance(col, int) or isinstance(col, bool) or col < 0:
+    after = _text(args, "after", 48)
+    if col is None and not after:
+        raise _err(
+            400, "invalid_args", "args.col is the column to move to (0 = First)", field="args.col"
+        )
+    if col is not None and (not isinstance(col, int) or isinstance(col, bool) or col < 0):
         raise _err(
             400, "invalid_args", "args.col is the column to move to (0 = First)", field="args.col"
         )
@@ -1342,7 +1451,7 @@ async def _plan_reorder(env: Env, tree: nodes.Tree, node: Any, args: dict[str, A
         {
             k.order: k
             for k in tree.real_children(parent.ref)
-            if k.level == "project" and not k.later and k.ref != node.ref
+            if k.level == "project" and not k.later and k.ref != node.ref and k.order
         }
         if parent
         else {}
@@ -1352,28 +1461,45 @@ async def _plan_reorder(env: Env, tree: nodes.Tree, node: Any, args: dict[str, A
     current = list(charter.get("depends_on") or [])
     why = dict(charter.get("depends_why") or {})
     outside = [d for d in current if d not in siblings]
-    after = _text(args, "after", 48)
     reason = _text(args, "reason", REASON_MAX)
-    if col == 0:
-        new = outside
-    else:
-        candidates = [s for s, k in siblings.items() if (k.col or 0) == col - 1]
-        if not after and len(candidates) == 1:
-            after = candidates[0] or ""
+    warnings: list[str] = []
+    # Its column is where waiting on *after* puts it: right after that sibling's.
+    if after:
         if after not in siblings:
             raise _err(
                 400,
                 "invalid_args",
-                "args.after names the sibling it waits for, one of "
-                f"{sorted(c for c in candidates if c)}",
+                f"args.after names the sibling it waits for, one of {sorted(siblings)}",
                 field="args.after",
             )
+        landed = (siblings[after].col or 0) + 1
+        if col is not None and col != landed:
+            warnings.append(
+                f"It lands in {_col_title(tree, landed)}, the column after {after}'s "
+                f"(not {_col_title(tree, col)})."
+            )
+    else:
+        landed = col if isinstance(col, int) else 0
+        if landed > 0:
+            candidates = sorted(s for s, k in siblings.items() if (k.col or 0) == landed - 1)
+            if len(candidates) != 1:
+                raise _err(
+                    400,
+                    "invalid_args",
+                    "args.after names the sibling it waits for, one of "
+                    f"{candidates or sorted(siblings)}",
+                    field="args.after",
+                )
+            after = candidates[0]
+    if after:
         new = [*outside, after]
         why[after] = reason or why.get(after) or f"ordered after {after} in the cockpit"
+    else:
+        new = outside
     if new == current:
-        raise _err(409, "nothing_to_do", f"{node.title} is already in {_col_title(tree, col)}")
+        raise _err(409, "nothing_to_do", f"{node.title} is already in {_col_title(tree, landed)}")
     patch = {"depends_on": new, "depends_why": {d: why[d] for d in new if d in why}}
-    rationale = f"{env.by} moved {row.slug} to {_col_title(tree, col)} from the cockpit."
+    rationale = f"{env.by} moved {row.slug} to {_col_title(tree, landed)} from the cockpit."
     plan = await _validate(env, [{"op": "update", "slug": row.slug, "patch": patch}], rationale)
 
     async def run() -> Applied:
@@ -1386,7 +1512,7 @@ async def _plan_reorder(env: Env, tree: nodes.Tree, node: Any, args: dict[str, A
         ref = proposal_ref(proposal.number)
         return Applied(
             {"kind": "proposal", "ref": ref},
-            f"{env.by} moved {node.title} to {_col_title(tree, col)} ({ref}).",
+            f"{env.by} moved {node.title} to {_col_title(tree, landed)} ({ref}).",
             filed=ref,
         )
 
@@ -1394,21 +1520,22 @@ async def _plan_reorder(env: Env, tree: nodes.Tree, node: Any, args: dict[str, A
         "reorder",
         node.ref,
         f"Order {node.title}",
-        {"col": col, "after": after, "reason": reason},
+        {"col": landed, "after": after, "reason": reason},
         [
             f"project:{row.slug}:{proposals.fingerprint(row)}",
-            *sorted(f"{s}:{k.col}" for s, k in siblings.items() if s),
+            *sorted(f"{s}:{k.col}" for s, k in siblings.items()),
         ],
         [
-            f"Order: {_col_title(tree, node.col or 0)} → {_col_title(tree, col)} in "
+            f"Order: {_col_title(tree, node.col or 0)} → {_col_title(tree, landed)} in "
             f"{parent.title if parent else '-'}.",
-            f"It waits on {after} first." if col else "It waits on no sibling.",
+            f"It waits on {after} first." if after else "It waits on no sibling.",
         ],
         run,
         level=LEVEL_MANAGE if plan.owner_reasons() else LEVEL_EDIT,
-        columns_after=columns_after(tree, parent, moved={node.ref: col}) if parent else None,
-        warnings=list(plan.warnings),
+        columns_after=columns_after(tree, parent, moved={node.ref: landed}) if parent else None,
+        warnings=[*plan.warnings, *warnings],
         filed="a projects proposal",
+        authority=("project", "create"),
     )
 
 
@@ -1478,6 +1605,7 @@ async def _plan_structural(
         warnings=list(plan.warnings),
         undo=False,
         filed="a projects proposal",
+        authority=("project", "create"),
     )
 
 
@@ -1485,7 +1613,6 @@ async def _plan_close_feature(env: Env, tree: nodes.Tree, node: Any) -> Plan:
     row = next((r for r in tree.facts.initiatives if r.ref == node.ref), None)
     if row is None:
         raise _not_here("close", node, tree, "it is not a stored feature")
-    deps = env.deps
     open_projects = [
         k
         for k in tree.real_children(node.ref)
@@ -1493,14 +1620,7 @@ async def _plan_close_feature(env: Env, tree: nodes.Tree, node: Any) -> Plan:
     ]
 
     async def run() -> Applied:
-        def change(_current: Any) -> dict[str, Any]:
-            return {
-                "status": "cancelled",
-                "closed_at": now_s(),
-                "closed_by": env.user_id or "human",
-            }
-
-        await asyncio.to_thread(initiatives.mutate, deps, row.id, change)
+        await _feature_status(env, row.id, "cancelled")
         return Applied(
             {"kind": "initiative_reopen", "id": row.id},
             f"{env.by} closed {node.title}.",
@@ -1524,6 +1644,42 @@ async def _plan_close_feature(env: Env, tree: nodes.Tree, node: Any) -> Plan:
         ],
         run,
         level=LEVEL_MANAGE,
+        authority=("feature", "create"),
+    )
+
+
+async def _feature_status(
+    env: Env, initiative_id: str, status: Literal["open", "cancelled"]
+) -> None:
+    """
+    Close (``cancelled``) or reopen (``open``) a feature through the people's edit
+    core (``PATCH …/initiatives/{ref}``), with the event it emits there.
+    """
+    deps = env.deps
+    row = await asyncio.to_thread(deps.factory_store.get_initiative, initiative_id)
+    if row is None:
+        raise _err(409, "undo_closed", "the feature is gone")
+    patch = initiatives.InitiativePatch(status=status)
+    stored, before, after = await asyncio.to_thread(
+        lambda: initiatives.apply_patch(deps, row, patch, by=env.by, now=now_s())
+    )
+    if not after:
+        return
+    await events.emit(
+        env.app_state,
+        env.fid,
+        "initiative.reopened" if status == "open" else "initiative.closed",
+        severity="notice",
+        subject=f"initiative:{stored.ref}",
+        summary=f"{env.by} changed {stored.ref} (status) from the cockpit",
+        data={
+            **env.actor.event_data(),
+            "initiative_id": stored.id,
+            "ref": stored.ref,
+            "before": before,
+            "after": after,
+            "by": env.by,
+        },
     )
 
 
@@ -1596,6 +1752,7 @@ async def _plan_name_feature(env: Env, tree: nodes.Tree, node: Any, title: str, 
             level=LEVEL_MANAGE if checked.owner_reasons() else LEVEL_EDIT,
             warnings=list(checked.warnings),
             filed="a projects proposal",
+            authority=("project", "move"),
         )
     origin = node.ref.removeprefix("feature:").removeprefix("from-")
     from_proposal = node_refs.parse(origin)
@@ -1658,6 +1815,7 @@ async def _plan_name_feature(env: Env, tree: nodes.Tree, node: Any, title: str, 
             "Its projects keep their ids, history, cost and chat.",
         ],
         run,
+        authority=("feature", "create"),
     )
 
 
@@ -1684,9 +1842,7 @@ async def _plan_name_need(env: Env, tree: nodes.Tree, node: Any, title: str, to:
             )
 
         async def run_to() -> Applied:
-            await asyncio.to_thread(
-                deps.factory_store.update_proposal, proposal.id, opportunity=target.ref
-            )
+            await _proposal_need(env, proposal, target.ref)
             return Applied(
                 {"kind": "proposal_need", "proposal": proposal.id, "opportunity": before},
                 f"{env.by} filed {node.title} under {target.title}.",
@@ -1701,22 +1857,32 @@ async def _plan_name_need(env: Env, tree: nodes.Tree, node: Any, title: str, to:
             touched,
             [f"Files what {proposal.ref} planned under {target.title}."],
             run_to,
+            authority=("feature", "move"),
         )
 
     async def run() -> Applied:
+        from omnigent.server.factory.discovery import opportunities
+
+        # The discovery ledger's own create (a person's: a statement is enough).
         row = await asyncio.to_thread(
-            lambda: deps.factory_store.create_opportunity(
+            lambda: opportunities.create(
+                deps,
                 fid,
-                title=title,
-                statement=title,
-                created_by=env.user_id or "human",
-                created_kind="human",
+                {"title": title, "statement": title},
+                actor=env.actor,
                 origin={"named": node.ref},
             )
         )
-        await asyncio.to_thread(
-            deps.factory_store.update_proposal, proposal.id, opportunity=row.ref
+        await events.emit(
+            env.app_state,
+            fid,
+            "opportunity.created",
+            severity="notice",
+            subject=f"opportunity:{row.ref}",
+            summary=f"{env.by} opened {row.ref}: {row.title} (named {node.ref} from the cockpit)",
+            data={**env.actor.event_data(), "opportunity": row.ref, "title": row.title},
         )
+        await _proposal_need(env, proposal, row.ref)
         return Applied(
             {
                 "kind": "named_need",
@@ -1739,6 +1905,29 @@ async def _plan_name_need(env: Env, tree: nodes.Tree, node: Any, title: str, to:
             "planned under it."
         ],
         run,
+        authority=("need", "create"),
+    )
+
+
+async def _proposal_need(env: Env, proposal: Any, need: str | None) -> None:
+    """File what *proposal* planned under the opportunity *need*, with its event."""
+    await asyncio.to_thread(env.deps.factory_store.update_proposal, proposal.id, opportunity=need)
+    subject = f"opportunity:{need or proposal.opportunity}"
+    await events.emit(
+        env.app_state,
+        env.fid,
+        "opportunity.updated",
+        severity="notice",
+        subject=subject,
+        summary=f"{env.by} filed what {proposal.ref} planned under {need or 'no need'} "
+        "from the cockpit",
+        data={
+            **env.actor.event_data(),
+            "opportunity": need or proposal.opportunity,
+            "proposal": proposal.ref,
+            "before": proposal.opportunity,
+            "after": need,
+        },
     )
 
 
@@ -1842,7 +2031,7 @@ async def _plan_team(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
             },
         )
         return Applied(
-            {"kind": "definition", "version": version},
+            {"kind": "definition", "version": version, "made": made.get("def_version")},
             f"{env.by} changed {node.title}'s team "
             f"({made.get('proposal')}, v{made.get('def_version')}).",
             filed=made.get("proposal"),
@@ -1865,9 +2054,84 @@ async def _plan_team(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
 # ── Planning, preview, apply, undo ─────────────────────────────
 
 
+OFFERED_AS: Final[Mapping[str, str]] = {
+    "resume": "pause",
+    "reorder": "move",
+    "split": "move",
+    "merge": "move",
+    "close": "move",
+}
+"""Verbs served here that a level offers under another of ``structure.verbs``: resume
+with pause; ordering, splitting, merging and closing with move (each changes where a
+node sits among its siblings, or whether it stays there)."""
+
+
+def offered_as(verb: str) -> str:
+    """:returns: The ``structure.verbs`` entry that offers *verb* (``reorder`` -> ``move``)."""
+    return OFFERED_AS.get(verb, verb)
+
+
+def _check_offered(tree: nodes.Tree, node: Any, verb: str) -> None:
+    """422 ``not_here`` unless the node's level lists *verb* (``structure.verbs``)."""
+    key = "study" if node.kind == "study" else node.level
+    gate = offered_as(verb)
+    if gate not in (tree.level_verbs.get(key) or []):
+        level = tree.level_name(node.level).lower()
+        raise _err(
+            422,
+            "not_here",
+            f"{verb} is not offered on a {level}: the definition's structure.verbs.{key} "
+            f"does not list {gate}",
+            verb=verb,
+        )
+
+
+def authority_level(tree: nodes.Tree, key: str, which: str) -> int | None:
+    """
+    The viewer level that may make a *which* change (``create`` or ``move``) to the
+    nodes of level *key*, from ``structure.levels[key].authority``; ``None`` when its
+    seats are empty (nobody makes it).
+
+    Owners hold the ``owner`` seat and editors the ``operator`` seat. A level only
+    agents change (``lead``, ``atlas``) takes a person's change through them, so an
+    editor may make it; an ``owner`` approval leaves it to owners.
+    """
+    auth = (tree.level_defs.get(key) or {}).get("authority") or {}
+    seats = [str(s) for s in auth.get(which) or []]
+    if not seats:
+        return None
+    if auth.get("approval", "owner") == "owner":
+        return LEVEL_MANAGE
+    if "operator" in seats or "owner" not in seats:
+        return LEVEL_EDIT
+    return LEVEL_MANAGE
+
+
+def _check_authority(tree: nodes.Tree, node: Any, plan: Plan) -> None:
+    """Raise *plan*'s level to what its level's authority asks (422 when nobody may)."""
+    if plan.authority is None:
+        return
+    key, which = plan.authority
+    needed = authority_level(tree, key, which)
+    if needed is None:
+        what = "moves" if which == "move" else "adds, orders or closes"
+        raise _not_here(
+            plan.verb,
+            node,
+            tree,
+            f"nobody {what} {tree.level_name(key, plural=True).lower()} "
+            f"(structure.levels.{key}.authority.{which} is empty)",
+        )
+    plan.level = max(plan.level, needed)
+
+
 async def plan_verb(env: Env, tree: nodes.Tree, ref: str, body: VerbIn) -> Plan:
     """
     Plan *body*'s verb at the node *ref* over *tree* (nothing is written).
+
+    The node's level must offer the verb (``structure.verbs``, :data:`OFFERED_AS`),
+    and who may apply it follows the authority of the level it changes
+    (``structure.levels[].authority``) on top of the core's own rules.
 
     :raises CockpitError: 400 ``unknown_verb`` / ``invalid_args``, 404 ``unknown_node``,
         422 ``wrong_level`` / ``not_here``, 409 ``nothing_to_do``, and the cores' errors.
@@ -1881,21 +2145,25 @@ async def plan_verb(env: Env, tree: nodes.Tree, ref: str, body: VerbIn) -> Plan:
     node = found
     args = dict(body.args)
     verb = body.verb
+    _check_offered(tree, node, verb)
     if verb == "add":
-        return await _plan_add(env, tree, node, args)
-    if verb == "start":
-        return await _plan_start(env, tree, node, args)
-    if verb in ("pause", "resume"):
-        return await _plan_pause(env, tree, node, verb)
-    if verb == "move":
-        return await _plan_move(env, tree, node, args)
-    if verb == "reorder":
-        return await _plan_reorder(env, tree, node, args)
-    if verb in ("split", "merge", "close"):
-        return await _plan_structural(env, tree, node, args, verb)
-    if verb == "name":
-        return await _plan_name(env, tree, node, args)
-    return await _plan_team(env, tree, node, args)
+        plan = await _plan_add(env, tree, node, args)
+    elif verb == "start":
+        plan = await _plan_start(env, tree, node, args)
+    elif verb in ("pause", "resume"):
+        plan = await _plan_pause(env, tree, node, verb)
+    elif verb == "move":
+        plan = await _plan_move(env, tree, node, args)
+    elif verb == "reorder":
+        plan = await _plan_reorder(env, tree, node, args)
+    elif verb in ("split", "merge", "close"):
+        plan = await _plan_structural(env, tree, node, args, verb)
+    elif verb == "name":
+        plan = await _plan_name(env, tree, node, args)
+    else:
+        plan = await _plan_team(env, tree, node, args)
+    _check_authority(tree, node, plan)
+    return plan
 
 
 def _approver(env: Env, plan: Plan) -> str:
@@ -2102,7 +2370,7 @@ async def undo(env: Env, token: str) -> dict[str, Any]:
 
 async def _undo(env: Env, record: Mapping[str, Any]) -> str:
     """Run one undo record (:attr:`Applied.undo`). :returns: What it did, in one line."""
-    from omnigent.server.factory import tasks, tuning
+    from omnigent.server.factory import definition, tasks, tuning
 
     kind = record.get("kind")
     deps, fid, store = env.deps, env.fid, env.deps.factory_store
@@ -2110,11 +2378,15 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
         ref = str(record.get("ref"))
         try:
             await proposals.undo(env.app_state, fid, ref, user_id=env.user_id)
-            return f"{ref} undone"
         except CockpitError as exc:
             cancel = [str(s) for s in record.get("cancel") or []]
             if exc.code != "already_spawned" or not cancel:
                 raise
+        else:
+            unlink = record.get("unlink")
+            if isinstance(unlink, Mapping) and isinstance(unlink.get("wave"), Mapping):
+                await asyncio.to_thread(_hold_again, deps, unlink)
+            return f"{ref} undone"
         changes = [{"op": "cancel", "slug": s} for s in cancel]
         proposal = await _file_and_apply(
             env, changes, f"Undo of {ref}: its lead had started, so it is cancelled."
@@ -2149,52 +2421,35 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
 
         def change(current: Any) -> dict[str, Any] | None:
             plan = plan_of(current)
+            now = _current_wave(plan)
             waves = [dict(w) for w in plan["waves"] if isinstance(w, Mapping)]
             for wave in waves:
                 wave["projects"] = [s for s in wave.get("projects") or [] if s != slug]
-            plan["waves"] = [w for w in waves if w.get("projects") or _wave_n(w) < 2]
+            plan["waves"] = [w for w in waves if w.get("projects") or _wave_n(w) <= now]
             return {"plan": plan}
 
         await asyncio.to_thread(initiatives.mutate, deps, str(record.get("initiative")), change)
         return f"{slug} no longer held"
     if kind == "initiative":
-        row_id = str(record.get("id"))
-
-        def close(_current: Any) -> dict[str, Any]:
-            return {"status": "cancelled", "closed_at": now_s(), "closed_by": "undo"}
-
-        await asyncio.to_thread(initiatives.mutate, deps, row_id, close)
+        await _feature_status(env, str(record.get("id")), "cancelled")
         for slug, old in (record.get("restore") or {}).items():
             project = store.get_project(fid, str(slug))
             if project is not None:
                 await asyncio.to_thread(store.update_project, project.id, feature=old)
         return "the feature is closed again"
     if kind == "initiative_reopen":
-
-        def reopen(_current: Any) -> dict[str, Any]:
-            return {"status": "open", "closed_at": None, "closed_by": None}
-
-        await asyncio.to_thread(initiatives.mutate, deps, str(record.get("id")), reopen)
+        await _feature_status(env, str(record.get("id")), "open")
         return "the feature is open again"
     if kind == "opportunity":
         before = record.get("opportunity")
-
-        def back(current: Any) -> dict[str, Any]:
-            plan = plan_of(current)
-            if before:
-                plan["opportunity"] = before
-            else:
-                plan.pop("opportunity", None)
-            return {"plan": plan}
-
-        await asyncio.to_thread(initiatives.mutate, deps, str(record.get("initiative")), back)
+        await _feature_need(env, str(record.get("initiative")), str(before) if before else None)
         return "the feature is back under its need"
     if kind in ("proposal_need", "named_need"):
-        await asyncio.to_thread(
-            store.update_proposal,
-            str(record.get("proposal")),
-            opportunity=record.get("opportunity"),
-        )
+        proposal = await asyncio.to_thread(store.get_proposal, str(record.get("proposal")))
+        if proposal is None:
+            raise _err(409, "undo_closed", "the proposal is gone")
+        before = record.get("opportunity")
+        await _proposal_need(env, proposal, str(before) if before else None)
         if kind == "named_need" and record.get("number"):
             kill = {
                 "reason": "undone",
@@ -2202,15 +2457,60 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
                 "at": now_s(),
                 "level": "hunch",
             }
-            await asyncio.to_thread(
+            row = await asyncio.to_thread(
                 store.update_opportunity, fid, int(record["number"]), kill=kill
             )
+            if row is not None:
+                await events.emit(
+                    env.app_state,
+                    fid,
+                    "opportunity.killed",
+                    severity="notice",
+                    subject=f"opportunity:{row.ref}",
+                    summary=f"{env.by} killed {row.ref}: its naming was undone",
+                    data={**env.actor.event_data(), "opportunity": row.ref, "reason": "undone"},
+                )
         return "the need is implicit again"
     if kind == "definition":
         version = int(record.get("version") or 0)
+        made = record.get("made")
+        resolved = await asyncio.to_thread(definition.definition_for, deps, fid, fresh=True)
+        now_version = resolved.version if resolved is not None else None
+        # Only while the version this verb made is in force: an older pin would
+        # throw away every change made to the definition since.
+        if made is None or now_version != int(made):
+            raise _err(
+                409,
+                "undo_closed",
+                f"the definition changed since (v{now_version} is in force, not v{made}); "
+                "change the team back in the team editor",
+            )
         await tuning.pin_version(env.app_state, fid, env.user_id, version)
         return f"definition v{version} back in force"
     raise _err(409, "undo_closed", "this change cannot be undone")
+
+
+def _hold_again(deps: FactoryDeps, unlink: Mapping[str, Any]) -> None:
+    """Put a held item an undone add had pulled forward back in its later wave (sync)."""
+    slug = str(unlink.get("slug"))
+    held = unlink.get("wave") or {}
+    n = int(held.get("n") or 2)
+
+    def change(current: Any) -> dict[str, Any] | None:
+        plan = plan_of(current)
+        waves = [dict(w) for w in plan["waves"] if isinstance(w, Mapping)]
+        if any(slug in (w.get("projects") or []) for w in waves):
+            return None
+        wave = next((w for w in waves if _wave_n(w) == n), None)
+        if wave is None:
+            waves.append({"n": n, "goal": str(held.get("goal") or ""), "projects": [slug]})
+            waves.sort(key=_wave_n)
+        else:
+            wave["projects"] = [*list(wave.get("projects") or []), slug]
+        plan["waves"] = waves
+        return {"plan": plan}
+
+    initiatives.mutate(deps, str(unlink.get("initiative")), change)
 
 
 __all__ = [

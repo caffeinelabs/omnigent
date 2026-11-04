@@ -425,6 +425,7 @@ class _Context:
     max_pods: int
     protected: frozenset[str] = frozenset()
     store: Any = None
+    agent: bool = False
     _features: dict[str, Any] | None = None
 
     def features(self) -> dict[str, Any]:
@@ -723,8 +724,19 @@ def _reorder_change(
     if new == current:
         raise CockpitError(409, "no_change", f"{env.slug} is already there", field=where)
     why = dict(charter.get("depends_why") or {})
-    if env.after:
-        why[env.after] = env.reason or why.get(env.after) or f"ordered after {env.after}"
+    if env.after and not (env.reason or why.get(env.after)):
+        if ctx.agent:
+            # The update this stands for needs a reason for a new dependency; so does this.
+            raise CockpitError(
+                400,
+                "dependency_reason_required",
+                f"say in one line why {env.slug} must wait for {env.after} (the code or API "
+                "it needs): reason='…'",
+                field=f"{where}.reason",
+            )
+        why[env.after] = f"ordered after {env.after}"
+    elif env.after:
+        why[env.after] = env.reason or why[env.after]
     patch = parse_body(
         CharterPatchIn,
         {"depends_on": new, "depends_why": {d: why[d] for d in new if d in why}},
@@ -932,6 +944,7 @@ def validate(
     if len(raw_changes) > MAX_CHANGES:
         raise CockpitError(400, "invalid_body", f"at most {MAX_CHANGES} changes", field="changes")
     ctx = _load_context(deps, root, exclude)
+    ctx.agent = agent
     taken: dict[str, str] = {}
     touched: set[str] = set()
     changes = [

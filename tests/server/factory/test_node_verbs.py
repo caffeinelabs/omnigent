@@ -18,8 +18,10 @@ import pytest
 import pytest_asyncio
 
 from omnigent.server.auth import LEVEL_READ
-from omnigent.server.factory import initiatives, node_verbs, nodes, snapshot
+from omnigent.server.factory import chat, definition, initiatives, node_verbs, nodes, snapshot
 from omnigent.server.factory.charter import normalize_charter
+from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.initiative_view import _next_wave
 from omnigent.server.factory.node_views import ChildPageView, validate_page
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
@@ -531,3 +533,379 @@ async def test_agents_file_moves_and_reorders_as_projects_proposals(cockpit: Coc
     assert again is not None and again.ops[0]["op"] == "update"
     assert again.ops[0]["patch"]["depends_on"] == []
     assert (stray.status_code, error_code(stray)) == (400, "invalid_body")
+
+
+# ── Each verb's preview is its apply, and Undo puts the rows back ──
+
+
+def _rows(cockpit: Cockpit) -> dict[str, Any]:
+    """The stored structure a verb changes (closed rows left out: an Undo may close)."""
+    store, fid = cockpit.store, cockpit.fid
+    live = {p.slug: p for p in store.list_projects(fid) if p.status == "active"}
+    resolved = definition.definition_for(cockpit.deps, fid, fresh=True)
+    return {
+        "projects": {
+            s: (p.feature, tuple(_charter(cockpit, s).get("depends_on") or []))
+            for s, p in live.items()
+        },
+        "tasks": {t.ref: bool(t.hold) for t in store.list_tasks(fid) if t.state != "cancelled"},
+        "features": {
+            r.ref: (
+                initiatives.plan_of(r).get("opportunity"),
+                sorted(s for s in initiatives.plan_of(r)["projects"] if s in live),
+                [
+                    (int(w.get("n") or 0), list(w.get("projects") or []))
+                    for w in initiatives.plan_of(r)["waves"]
+                ],
+            )
+            for r in store.list_initiatives(fid, limit=100)
+            if r.status == "open"
+        },
+        "needs": sorted(o.ref for o in store.list_opportunities(fid) if not o.kill),
+        "filed": {
+            p.ref: p.opportunity for p in store.list_proposals(fid, limit=200) if p.opportunity
+        },
+        "team": ((resolved.doc if resolved else {}) or {}).get("team"),
+    }
+
+
+async def _maybe_page(cockpit: Cockpit, ref: str) -> dict[str, Any] | None:
+    """The node page of *ref*, or ``None`` once the verb made it go (named, closed)."""
+    nodes.reset_cache()
+    snapshot.reset_cache()
+    resp = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/n/{ref}", headers={"X-Test-User": "alice"}
+    )
+    return validate_page(resp.json()) if resp.status_code == 200 else None
+
+
+def _counts(page: dict[str, Any]) -> dict[str, int]:
+    items = page["children"]["items"]
+    return {
+        "projects": sum(1 for i in items if i.get("level") == "project"),
+        "features": sum(1 for i in items if i.get("level") == "feature"),
+        "later": len(page["children"]["later"]),
+    }
+
+
+async def _lone_proposal(cockpit: Cockpit) -> str:
+    """A project filed with no initiative: its feature and need are implicit, from C-n."""
+    resp = await propose(
+        cockpit,
+        {
+            "op": "create",
+            "project": project(
+                "lone", depends_on=["core"], depends_why={"core": "reads the core's API"}
+            ),
+        },
+        analysis={"initiative": {"none": "a separate outcome (sample)"}},
+    )
+    ref = str(resp.json()["proposal"])
+    applied = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/{ref}/apply")
+    assert applied.status_code == 200, applied.text
+    return ref
+
+
+async def _opportunity(cockpit: Cockpit) -> str:
+    row = cockpit.store.create_opportunity(
+        cockpit.fid,
+        title="Answers in the app (sample)",
+        statement="When I am stuck, I want an answer where I work.",
+        created_by="alice",
+        created_kind="human",
+    )
+    return str(row.ref)
+
+
+async def _need_of(cockpit: Cockpit, ref: str) -> str:
+    page = await _page(cockpit, ref)
+    return next(c["ref"] for c in page["breadcrumb"] if c["level"] == "need")
+
+
+async def _ref(cockpit: Cockpit, setup: str) -> tuple[str, dict[str, Any]]:
+    """Where a case runs and with what args, after its setup."""
+    if setup == "need":
+        return await _need_of(cockpit, "I-1"), {"title": "Second outcome (sample)"}
+    if setup == "move-feature":
+        return "I-1", {"to": await _opportunity(cockpit)}
+    if setup == "name-need":
+        proposal = await _lone_proposal(cockpit)
+        return f"need:from-{proposal}", {"title": "Lone work (sample)"}
+    if setup == "file-need":
+        proposal = await _lone_proposal(cockpit)
+        return f"need:from-{proposal}", {"to": await _opportunity(cockpit)}
+    if setup == "move-project":
+        other = cockpit.store.create_initiative(
+            cockpit.fid, title="Second (sample)", ask="Another outcome", plan={"projects": []}
+        )
+        return "panel", {"to": other.ref}
+    if setup == "task":
+        task = cockpit.store.get_task_by_key(cockpit.fid, "core", "cache")
+        assert task is not None
+        return task.ref, {}
+    raise AssertionError(setup)
+
+
+_TEAM = {"changes": [{"op": "replace", "path": "team.projects.core.builders_at_once", "value": 2}]}
+
+
+@pytest.mark.parametrize(
+    ("ref", "verb", "args"),
+    [
+        pytest.param("I-1", "add", {"title": "Usage report", "depends_on": ["panel"]}, id="add"),
+        pytest.param(
+            "I-1", "add", {"title": "ads sync", "depends_on": ["panel"]}, id="pull-forward"
+        ),
+        pytest.param("I-1", "add", {"title": "Exports", "col": "later"}, id="hold"),
+        pytest.param("core", "add", {"title": "Rate limit"}, id="add-task"),
+        pytest.param("@need", "add", {}, id="add-feature"),
+        pytest.param("panel", "start", {}, id="start"),
+        pytest.param("panel", "reorder", {"col": 0}, id="reorder"),
+        pytest.param("@move-project", "move", {}, id="move-project"),
+        pytest.param("@move-feature", "move", {}, id="move-feature"),
+        pytest.param("I-1", "close", {}, id="close-feature"),
+        pytest.param("feature:by-server", "name", {"title": "Versioning"}, id="name-feature"),
+        pytest.param("feature:by-server", "name", {"to": "I-1"}, id="file-feature"),
+        pytest.param("@name-need", "name", {}, id="name-need"),
+        pytest.param("@file-need", "name", {}, id="file-need"),
+        pytest.param("@task", "pause", {}, id="pause-task"),
+        pytest.param("core", "team", _TEAM, id="team"),
+    ],
+)
+async def test_each_verbs_preview_is_its_apply_and_undo_restores_the_rows(
+    cockpit: Cockpit, ref: str, verb: str, args: dict[str, Any]
+) -> None:
+    if ref.startswith("@"):
+        ref, more = await _ref(cockpit, ref[1:])
+        args = {**args, **more}
+    before = _rows(cockpit)
+
+    preview = await _preview(cockpit, ref, verb, **args)
+    applied = await _apply(cockpit, ref, preview)
+    changed = _rows(cockpit)
+
+    assert preview["effects"] and all(preview["effects"])
+    assert changed != before, "the apply wrote nothing"
+    delta = preview["rollup_delta"]
+    assert delta is None or delta["nodes"] or delta["text"]
+    for node in (delta or {}).get("nodes") or []:
+        shown = await _maybe_page(cockpit, node["ref"])
+        counts = _counts(shown) if shown else {}
+        for item in node["items"]:
+            if item["key"] in counts:
+                assert counts[item["key"]] == item["after"], (node["ref"], item)
+    # Each ghost sits where the apply put it: in its parent's columns, or held.
+    parents = [
+        ref,
+        str(args.get("to") or ""),
+        *(c["ref"] for c in applied["result"]["breadcrumb"]),
+    ]
+    pages = [p for r in dict.fromkeys(parents) if r and (p := await _maybe_page(cockpit, r))]
+    for ghost in (preview["columns_after"] or {}).get("ghosts") or []:
+        if ghost["state"] != "ghost" and ghost["ref"] != ref:
+            continue  # an existing ghost of the parent, not this verb's
+        for page in pages:
+            placed = {i["ref"]: i.get("col") or 0 for i in page["children"]["items"]}
+            held = {i["ref"] for i in page["children"]["later"]}
+            if ghost["col"] == "later" and ghost["ref"] in held:
+                break
+            if ghost["ref"] in placed:
+                assert placed[ghost["ref"]] == ghost["col"], (page["node"]["ref"], ghost)
+                break
+    assert applied["undo"], "every verb here can be undone"
+
+    undone = await _undo(cockpit, applied["undo"]["token"])
+
+    assert undone.status_code == 200, undone.text
+    assert _rows(cockpit) == before
+
+
+# ── Regressions: what a preview says is what applies ───────────
+
+
+async def test_a_reorder_after_a_named_sibling_previews_the_column_it_lands_in(
+    cockpit: Cockpit,
+) -> None:
+    await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="Extra"))
+
+    preview = await _preview(cockpit, "extra", "reorder", col=2, after="core")
+    ghost = preview["columns_after"]["ghosts"][-1]
+    await _apply(cockpit, "extra", preview)
+    page = await _page(cockpit, "I-1")
+
+    assert (ghost["ref"], ghost["col"], preview["args"]["col"]) == ("extra", 1, 1)
+    assert any("lands in Then" in w for w in preview["warnings"])
+    assert next(i for i in page["children"]["items"] if i["ref"] == "extra")["col"] == 1
+
+
+async def test_a_reorder_to_a_column_with_two_siblings_names_one(cockpit: Cockpit) -> None:
+    await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="Extra"))
+    await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="Other"))
+
+    resp = await cockpit.post(
+        _url(cockpit, "panel", "preview"), {"verb": "reorder", "args": {"col": 1}}
+    )
+
+    assert (resp.status_code, error_code(resp)) == (400, "invalid_args")
+    assert resp.json()["field"] == "args.after"
+
+
+async def test_adds_keep_the_features_later_waves_ahead(cockpit: Cockpit) -> None:
+    """v2's next wave and v3's Later agree after an add, a pull-forward and a hold."""
+
+    async def both() -> tuple[Any, list[str]]:
+        row = cockpit.store.get_initiative_by_number(cockpit.fid, 1)
+        wave = _next_wave(initiatives.plan_of(row))
+        later = [i["ref"] for i in (await _page(cockpit, "I-1"))["children"]["later"]]
+        return (wave["n"], wave["projects"]) if wave else None, later
+
+    assert await both() == ((2, ["ads-sync"]), ["ads-sync"])
+
+    await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="Usage report"))
+    assert await both() == ((2, ["ads-sync"]), ["ads-sync"])
+
+    await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="ads sync"))
+    assert await both() == (None, [])
+
+    held = await _preview(cockpit, "I-1", "add", title="Exports", col="later", held_for="later")
+    await _apply(cockpit, "I-1", held)
+    assert await both() == ((2, ["exports"]), ["exports"])
+
+
+async def test_undo_of_the_team_verb_never_drops_a_later_definition_change(
+    cockpit: Cockpit,
+) -> None:
+    applied = await _apply(cockpit, "core", await _preview(cockpit, "core", "team", **_TEAM))
+    version = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True).version
+    later = await cockpit.client.put(
+        f"/v1/factory/factories/{cockpit.fid}/definition",
+        json={
+            "changes": [
+                {"op": "replace", "path": "team.projects.panel.builders_at_once", "value": 3}
+            ],
+            "base_version": version,
+        },
+        headers={"X-Test-User": "alice"},
+    )
+    assert later.status_code == 200, later.text
+
+    undone = await _undo(cockpit, applied["undo"]["token"])
+
+    team = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True).doc["team"]
+    assert (undone.status_code, error_code(undone)) == (409, "undo_closed")
+    assert team["projects"]["panel"]["builders_at_once"] == 3
+
+
+async def test_every_verb_a_page_offers_is_served_there(cockpit: Cockpit) -> None:
+    task = cockpit.store.get_task_by_key(cockpit.fid, "core", "cache")
+    assert task is not None
+    refs = ["product", await _need_of(cockpit, "I-1"), "I-1", "core", "panel", task.ref]
+    args = {"add": {"title": "Sample"}, "move": {"to": "I-1"}, "name": {"title": "Sample"}}
+    for ref in refs:
+        page = await _page(cockpit, ref)
+        for verb in [v["verb"] for v in page["verbs"]]:
+            if verb in ("talk", "auto", "research"):
+                continue  # the chat; S13 and S14 serve the others
+            resp = await cockpit.post(
+                _url(cockpit, ref, "preview"), {"verb": verb, "args": args.get(verb, {})}
+            )
+            # Served: a plan, or the verb's own answer for this node right now.
+            assert resp.status_code == 200 or error_code(resp) in (
+                "nothing_to_do",
+                "invalid_args",
+                "wrong_level",
+            ), (ref, verb, resp.text)
+    product = [v["verb"] for v in (await _page(cockpit, "product"))["verbs"]]
+    tasks = [v["verb"] for v in (await _page(cockpit, task.ref))["verbs"]]
+    assert "add" not in product and "move" not in tasks
+
+
+async def _structure(cockpit: Cockpit, path: str, value: Any) -> None:
+    resp = await cockpit.client.put(
+        f"/v1/factory/factories/{cockpit.fid}/definition",
+        json={"changes": [{"op": "replace", "path": f"structure.{path}", "value": value}]},
+        headers={"X-Test-User": "alice"},
+    )
+    assert resp.status_code == 200, resp.text
+    nodes.reset_cache()
+    snapshot.reset_cache()
+
+
+async def test_a_verb_its_level_does_not_list_is_not_served(cockpit: Cockpit) -> None:
+    await _structure(cockpit, "verbs.project", ["talk", "add", "start", "team", "pause"])
+
+    move = await cockpit.post(
+        _url(cockpit, "panel", "preview"), {"verb": "move", "args": {"to": "I-1"}}
+    )
+    order = await cockpit.post(
+        _url(cockpit, "panel", "preview"), {"verb": "reorder", "args": {"col": 0}}
+    )
+    page = await _page(cockpit, "panel")
+
+    assert (move.status_code, error_code(move)) == (422, "not_here")
+    assert (order.status_code, error_code(order)) == (422, "not_here")
+    assert "structure.verbs.project" in move.json()["error"]["message"]
+    assert "move" not in [v["verb"] for v in page["verbs"]]
+
+
+async def test_who_applies_follows_the_levels_authority(cockpit: Cockpit) -> None:
+    editor = await _preview(cockpit, "I-1", "add", user="carol", title="Usage report")
+    await _structure(cockpit, "levels.project.authority.approval", "owner")
+    owners = await _preview(cockpit, "I-1", "add", user="carol", title="Usage report")
+    other = cockpit.store.create_initiative(
+        cockpit.fid, title="Second (sample)", ask="Another outcome", plan={"projects": []}
+    )
+    await _structure(cockpit, "levels.project.authority.move", [])
+    never = await cockpit.post(
+        _url(cockpit, "panel", "preview"), {"verb": "move", "args": {"to": other.ref}}
+    )
+
+    assert (editor["approver"], editor["can_apply"]) == ("you", True)
+    assert (owners["approver"], owners["can_apply"]) == ("an owner", False)
+    assert (never.status_code, error_code(never)) == (422, "not_here")
+    assert "authority.move" in never.json()["error"]["message"]
+
+
+async def test_pausing_a_feature_names_what_it_cannot_stop(cockpit: Cockpit) -> None:
+    cockpit.store.update_project(
+        cockpit.store.get_project(cockpit.fid, "core").id, pl_session_id=cockpit.world.id("pl")
+    )
+    nodes.reset_cache()
+    snapshot.reset_cache()
+
+    preview = await _preview(cockpit, "I-1", "pause")
+
+    assert any("leads of core pause" in e for e in preview["effects"])
+    assert any("panel" in w and "no lead yet" in w for w in preview["warnings"])
+    assert any("ads-sync" in w for w in preview["warnings"])
+
+
+async def test_a_preview_with_no_roll_up_change_has_no_roll_up(cockpit: Cockpit) -> None:
+    preview = await _preview(cockpit, "api-version", "pause")
+
+    assert preview["rollup_delta"] is None
+
+
+async def test_an_implicit_parents_thread_needs_its_node(cockpit: Cockpit) -> None:
+    deps, fid = cockpit.deps, cockpit.fid
+
+    found = chat.resolve_thread(deps, fid, "need:by-server")
+    feature = chat.resolve_thread(deps, fid, "feature:by-server")
+    with pytest.raises(CockpitError) as nobody:
+        chat.resolve_thread(deps, fid, "need:by-nobody-at-all")
+
+    assert (found.node, feature.node) == ("need:by-server", "feature:by-server")
+    assert nobody.value.code == "unknown_node"
+
+
+async def test_an_agents_reorder_after_a_sibling_says_why(cockpit: Cockpit) -> None:
+    await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="Extra"))
+
+    bare = await propose(cockpit, {"op": "reorder", "slug": "extra", "after": "core"})
+    said = await propose(
+        cockpit,
+        {"op": "reorder", "slug": "extra", "after": "core", "reason": "uses the core's API"},
+    )
+
+    assert (bare.status_code, error_code(bare)) == (400, "dependency_reason_required")
+    assert said.status_code in (200, 201), said.text

@@ -20,7 +20,8 @@ Delivery to an agent:
   responder's last reply, the refs' live state and the reply call. A thread
   about a node also carries the node's header as the cockpit shows it
   (breadcrumb, why, status, roll-up, open asks: :mod:`.node_context`), and
-  the whole text stays within :data:`ENVELOPE_MAX_CHARS` (:func:`fit_envelope`).
+  what the server adds gives way past :data:`ENVELOPE_MAX_CHARS`
+  (:func:`fit_envelope`); the delivered messages are never cut.
 - A delivery records ``chat.pending[target] = [(thread, chat_id, requested_at)]``,
   ``requested_at`` being when the delivering attempt began. When the turn it
   started ends without a ``sys_factory_chat`` to the thread, the turn's output
@@ -118,8 +119,8 @@ KIND_UNROUTABLE: Final = "chat.unroutable"
 SCOPE: Final = "chat"
 
 ENVELOPE_MAX_CHARS: Final = MESSAGE_MAX_CHARS
-"""The longest delivery the Room sends an agent: the factory's message cap, which every
-server text to a member is held to. The node header counts against it."""
+"""What the Room adds around delivered messages stays within this (the factory's message
+cap): the node header and the thread context give way first; the messages never do."""
 NODE_HEADER_MAX: Final = 1500
 """Chars a node's header may take in one delivery (before the guard trims anything else)."""
 
@@ -340,16 +341,36 @@ def _resolve_node_thread(deps: FactoryDeps, factory_id: str, key: str, raw: str)
         found = store.get_initiative_by_number(factory_id, int(parsed.id)) is not None
     elif parsed.kind in ("need", "feature"):
         origin = parsed.id.removeprefix("from-")
-        numbered = node_refs.parse(origin)
+        numbered = node_refs.parse(origin) if parsed.id.startswith("from-") else None
         if numbered is not None and numbered.kind == "proposal":
             found = store.get_proposal_by_number(factory_id, int(numbered.id)) is not None
-        else:
-            # Origin words (``by-<who>``): the projection makes it; nothing to look up.
-            found = parsed.id.startswith("by-")
+        elif numbered is not None and numbered.kind == "initiative":
+            found = store.get_initiative_by_number(factory_id, int(numbered.id)) is not None
+        elif parsed.id.startswith("by-"):
+            found = _started_by(deps, factory_id, parsed.kind, parsed.id.removeprefix("by-"))
     if not found:
         raise CockpitError(404, "unknown_node", f"no node {ref!r} in this factory", field="thread")
     assert ref is not None
     return Thread(canonical, thread_kind(canonical) or "", ref, project=project, node=ref)
+
+
+def _started_by(deps: FactoryDeps, factory_id: str, kind: str, who: str) -> bool:
+    """
+    Whether the implicit ``by-<who>`` parent exists: a project *who* started without a
+    proposal, or (a need) a feature named under it.
+    """
+    from omnigent.server.factory.initiative_view import plan_of
+    from omnigent.server.factory.nodes import creator_words
+
+    store = deps.factory_store
+    if any(creator_words(p.created_by) == who for p in store.list_projects(factory_id)):
+        return True
+    if kind != "need":
+        return False
+    ref = f"need:by-{who}"
+    return any(
+        plan_of(r).get("need") == ref for r in store.list_initiatives(factory_id, limit=5000)
+    )
 
 
 def _get_or_none(getter: Callable[[str], Any], row_id: str) -> Any:
@@ -625,10 +646,11 @@ def fit_envelope(
     limit: int = ENVELOPE_MAX_CHARS,
 ) -> str:
     """
-    One delivery's text within *limit* chars (the prompt size guard), giving up
-    what matters least first: the node header's detail (it keeps its first line
-    and its status), the oldest thread context, then the end of the longest
-    message. The header line and the reply call always stay.
+    One delivery's text within *limit* chars (the prompt size guard). The
+    delivered messages are never cut: the guard gives up only what the server
+    adds around them, least needed first: the node header's detail (it keeps its
+    first line and its status), the oldest thread context, then the whole header.
+    Messages that alone pass *limit* go out whole, with nothing added.
 
     :param top: The header line (and a PR thread's PR line).
     :param node: The node header's lines (:mod:`.node_context`).
@@ -639,7 +661,7 @@ def fit_envelope(
     """
     node = list(node)
     context = list(context)
-    bodies = list(bodies)
+    limit = max(limit, len("\n".join([*top, *bodies, *tail])))
 
     def text() -> str:
         return "\n".join([*top, *node, *bodies, *_context_block(context, earlier), *tail])
@@ -652,21 +674,9 @@ def fit_envelope(
     while len(text()) > limit and context:
         context.pop(0)
         earlier += 1
-    while len(text()) > limit and bodies:
-        longest = max(range(len(bodies)), key=lambda i: len(bodies[i]))
-        over = len(text()) - limit
-        line = bodies[longest]
-        if len(line) <= 2 or len(line) - over < 2:
-            bodies.pop(longest)
-            continue
-        bodies[longest] = line[: len(line) - over - 1].rstrip() + "…"
     if len(text()) > limit:
         node = []
-    out = text()
-    if len(out) <= limit:
-        return out
-    end = "\n".join(tail)
-    return out[: max(0, limit - len(end) - 2)] + "…\n" + end
+    return text()
 
 
 def gate_summary(pr: FactoryPr) -> str:

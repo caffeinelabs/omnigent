@@ -90,13 +90,27 @@ export type ChatCardType =
   | "issue"
   | "system"
   // Cockpit v3's node threads (S11): "why it is not moving", an alarm the
-  // server closed with its cause, and an offer ("it can start now"). Other
-  // cockpits show these as the message's own line.
+  // server closed with its cause, an offer ("it can start now") and a verb
+  // applied from the cockpit (with its Undo). Other cockpits show these as the
+  // message's own line.
   | "why"
   | "closed_alarm"
-  | "offer";
-/** `discovery` is Scout's thread; the server lists it only while discovery runs. */
-export type ThreadKind = "factory" | "improvements" | "discovery" | "project" | "pr";
+  | "offer"
+  | "preview_applied";
+/**
+ * `discovery` is Scout's thread; the server lists it only while discovery runs.
+ * `need`, `feature`, `study` and `task` are cockpit v3's per-node threads.
+ */
+export type ThreadKind =
+  | "factory"
+  | "improvements"
+  | "discovery"
+  | "project"
+  | "pr"
+  | "need"
+  | "feature"
+  | "study"
+  | "task";
 export type ProposalKind = "projects" | "tuning" | "rules" | "code";
 export type ProposalStatus =
   | "pending"
@@ -1238,6 +1252,20 @@ export interface OfferMeta {
   title?: string | null;
 }
 
+/** What a `preview_applied` card holds: the verb applied (or undone) and its Undo. */
+export interface PreviewAppliedMeta {
+  kind: "preview_applied";
+  verb: string;
+  label?: string | null;
+  by?: string | null;
+  /** `POST …/undo/{token}` takes it back until `undo_until` (epoch seconds). */
+  undo_token?: string | null;
+  undo_until?: number | null;
+  /** The proposal it was filed as (`C-19`), when it was. */
+  filed?: string | null;
+  undone?: boolean | null;
+}
+
 /** A structured object mirrored into a thread as a live card. */
 export interface ChatCardView {
   type: ChatCardType;
@@ -1245,7 +1273,7 @@ export interface ChatCardView {
   ref: string | null;
   id: string | null;
   /** What an incident's live card or a batched base line holds (older servers: absent). */
-  meta?: IssueCardMeta | BaseMovesMeta | ClosedAlarmMeta | OfferMeta | null;
+  meta?: IssueCardMeta | BaseMovesMeta | ClosedAlarmMeta | OfferMeta | PreviewAppliedMeta | null;
 }
 
 /** Delivery of one message to one agent. */
@@ -1279,12 +1307,14 @@ export interface ChatMessageView {
   created_at: number;
 }
 
-/** One Room thread: `factory`, `improvements`, `project:<slug>` or `pr:<id>`. */
+/** One Room thread: `factory`, `improvements`, `project:<slug>`, `pr:<id>` or a node's. */
 export interface ThreadView {
   key: string;
   kind: ThreadKind;
-  /** e.g. `#db-version` or `!9631`. */
+  /** e.g. `#db-version`, `!9631` or `T-16`. */
   title: string;
+  /** The node the thread is about (`product`, a slug, `PR-9631`, `T-16`; older servers: absent). */
+  node_ref?: string | null;
   project_slug: string | null;
   pr_id: string | null;
   pr_number: number | null;

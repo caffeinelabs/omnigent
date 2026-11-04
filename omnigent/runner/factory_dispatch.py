@@ -2192,6 +2192,21 @@ _NODE_REF_MAX: Final = 200
 _NODE_PATH: Final = "/v1/factory/agent/node"
 
 
+def _route_missing(body: object) -> bool:
+    """
+    Whether a 404 says the route is missing (an older server), not that the node is:
+    FastAPI's bare ``{"detail": "Not Found"}``, or a server with the web UI mounted
+    answering ``{"error": {"code": "not_found"}}`` (a node that is missing is
+    ``unknown_node``).
+    """
+    if not isinstance(body, dict):
+        return False
+    if body.get("detail") == "Not Found":
+        return True
+    error = body.get("error")
+    return isinstance(error, dict) and error.get("code") == "not_found"
+
+
 async def _read_node(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
     """
     ``sys_factory_node(op="read", ref)`` → ``GET /v1/factory/agent/node``.
@@ -2216,7 +2231,7 @@ async def _read_node(args: _JsonObject, *, server_client: httpx.AsyncClient, cal
     if isinstance(resp, str):
         return resp
     body = _response_body(resp)
-    if resp.status_code == 404 and isinstance(body, dict) and body.get("detail") == "Not Found":
+    if resp.status_code == 404 and _route_missing(body):
         return _error(
             "not_served",
             message="this server has no node pages yet; use the header in your Room messages",

@@ -11,10 +11,12 @@ path ending at whoever must act), its roll-up and the open asks under it
 node page as data (:func:`agent_page`); the header names it, as an option, since
 an older host may not have the tool.
 
-The header is on unless a factory's root carries ``omnigent.factory.node_header
-= off`` (:func:`header_on`): the switch for a factory whose agents should keep
-the old envelopes. Building it never fails a delivery: any error leaves the
-header out (:func:`delivery_header`).
+Which deliveries carry it is the definition's ``structure.node_header``
+(:func:`header_wanted`): by default only cockpit v3's per-node threads
+(``need:``, ``feature:``, ``study:``, ``task:``), so the threads v2 shares keep
+their envelopes; ``all`` adds ``#factory``, a project's and a PR's thread;
+``off`` leaves it out everywhere. Building it never fails a delivery: any error
+leaves the header out (:func:`delivery_header`).
 
 The tree is the factory as its own agents see it (every member readable,
 :func:`full_tree`), memoized like the cockpit's (:func:`.nodes.tree_for`).
@@ -22,13 +24,14 @@ The tree is the factory as its own agents see it (every member readable,
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from omnigent.factory import LABEL_PREFIX, THREAD_PR_PREFIX
+from omnigent.factory import THREAD_PR_PREFIX, thread_kind
 from omnigent.server.factory import node_refs, nodes
 from omnigent.server.factory.context import factory_deps
 from omnigent.stores.factory_store import norm_id
@@ -39,9 +42,10 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-LABEL_NODE_HEADER: Final = f"{LABEL_PREFIX}node_header"
-"""Root label: ``off`` leaves the node header out of this factory's Room deliveries."""
-OFF_VALUES: Final = frozenset({"off", "0", "false", "no"})
+HEADER_MODES: Final = ("node_threads", "all", "off")
+"""``structure.node_header``: which Room deliveries carry the node header."""
+NODE_THREAD_KINDS: Final = frozenset({"need", "feature", "study", "task"})
+"""The per-node threads only cockpit v3 posts in."""
 ASKS_MAX: Final = 3
 """Open asks the header names (the most blocking first)."""
 WHY_MAX: Final = 300
@@ -50,10 +54,19 @@ TOOL: Final = "sys_factory_node"
 _TAG_RE: Final = re.compile(r"<[^>]+>")
 
 
-def header_on(root: Conversation) -> bool:
-    """:returns: Whether this factory's Room deliveries carry the node header."""
-    value = (root.labels or {}).get(LABEL_NODE_HEADER) or ""
-    return value.strip().lower() not in OFF_VALUES
+def header_mode(deps: Any, factory_id: str) -> str:
+    """:returns: The factory's ``structure.node_header`` (``node_threads`` when unset)."""
+    from omnigent.server.factory import definition
+
+    value = definition.value(deps, factory_id, "structure.node_header", HEADER_MODES[0])
+    return value if value in HEADER_MODES else HEADER_MODES[0]
+
+
+def header_wanted(mode: str, thread: str) -> bool:
+    """:returns: Whether a delivery in *thread* carries the node header under *mode*."""
+    if mode == "off":
+        return False
+    return mode == "all" or thread_kind(thread) in NODE_THREAD_KINDS
 
 
 def plain(html_text: Any, limit: int = WHY_MAX) -> str:
@@ -221,15 +234,19 @@ async def delivery_header(app_state: Any, factory_id: str, thread: str, limit: i
     """
     The node header a Room delivery in *thread* carries, within *limit* chars.
 
-    :returns: ``None`` when the factory switched it off, the thread is about no
-        one node, or anything failed (a delivery never waits on the header).
+    :returns: ``None`` when the factory's ``structure.node_header`` leaves it out of
+        *thread*, the thread is about no one node, or anything failed (a delivery
+        never waits on the header).
     """
     try:
         deps = factory_deps(app_state)
         from omnigent.server.factory.control import get_conv
 
+        mode = await asyncio.to_thread(header_mode, deps, factory_id)
+        if not header_wanted(mode, thread):
+            return None
         root = await get_conv(deps, factory_id)
-        if root is None or not header_on(root):
+        if root is None:
             return None
         tree = await full_tree(app_state, root)
         ref = thread_node(thread, tree.pr_refs_by_id())
@@ -268,13 +285,15 @@ async def agent_page(
 
 
 __all__ = [
-    "LABEL_NODE_HEADER",
+    "HEADER_MODES",
+    "NODE_THREAD_KINDS",
     "agent_page",
     "delivery_header",
     "full_tree",
     "header_lines",
-    "header_on",
+    "header_mode",
     "header_text",
+    "header_wanted",
     "plain",
     "rollup_words",
     "status_words",

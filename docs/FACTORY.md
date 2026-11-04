@@ -946,7 +946,8 @@ home shows), `responders` and `verbs` per level (and for the study kind),
 `kinds` (what the kinds not named after their level are called: a feature,
 project or task reads its level's name), `kind_authority` (a study: Scout,
 within the need's research budget), `order` {`cols`, `later`} (the sibling
-column titles), `tiles_max` and `fold_single_child`. Owners rename a level,
+column titles), `tiles_max`, `fold_single_child` and `node_header` (which
+Room deliveries carry a node's header; see Threads per node). Owners rename a level,
 and the kind named after it, with one change
 (`structure.levels.feature.name`); the block is owner-only, never a trial,
 and no agent proposes it (403 `path_not_allowed`).
@@ -1149,14 +1150,19 @@ for needs and studies (Atlas while discovery is off), the project's lead for
 a task (the delivery names the task); `null` routes a plain message to
 nobody, with a note. A lead posts anywhere, a PL also in its tasks' threads,
 Scout in need and study threads; agents' messages still route only by
-@mention, so node threads never loop. Every Room delivery about a node
-carries its header as the cockpit shows it (`node_context.py`: the path, why,
+@mention, so node threads never loop. A delivery in a node thread carries
+the node's header as the cockpit shows it (`node_context.py`: the path, why,
 status line, roll-up and open asks, and how to read the page with
-`sys_factory_node`); the whole delivery stays within the factory's message
-cap (8000 chars), giving up the header's detail, then the oldest context,
-then the end of the longest message, never the header's status or the reply
-call. A factory's root label `omnigent.factory.node_header=off` leaves the
-header out. Cards follow their node: a decision about a task, need, feature
+`sys_factory_node`). The definition's `structure.node_header` says where:
+`node_threads` (the default: only these per-node threads, which only cockpit
+v3 posts in, so `#factory`, a project's and a PR's thread keep the envelope
+v2 knows), `all` (those threads too, about the product, the project or the
+change), or `off`. An owner sets it like any definition field (`PUT
+…/definition` with `{op: "replace", path: "structure.node_header", value:
+"all"}`). What the server adds around the delivered messages stays within
+the factory's message cap (8000 chars): the header's detail gives way first,
+then the oldest thread context, then the whole header. The messages
+themselves are never cut. Cards follow their node: a decision about a task, need, feature
 or study is also carded in that node's thread (the thread above keeps its
 card), an alarm the server closed is a `closed_alarm` card in its task's
 thread, and the cockpit's own cards (`why` for a bare "why" in a node thread,
@@ -1182,13 +1188,26 @@ matches a held item pulls that item forward; `col: "later"` holds it in a
 later wave), under a project adds a task, under a need starts a feature
 (owners); `start` relaxes a project's unmet project dependencies to their
 newest merged change (`PR-9876`) and starts its lead; `pause`/`resume` run
-the controls of every lead under the node (a task: a hold); `move` files a
-project under another stored feature or a feature under an opportunity, one
-level up only (422 `wrong_level`); `reorder` edits `depends_on` among
-siblings; `split`/`merge`/`close` are the proposal ops (no Undo); `name`
-makes an implicit feature or need a stored one, or files its children under
-one; `team` is a `PUT …/definition` team change (Undo pins the version
-before). Owner changes need an owner (403 `authority` with `who`).
+the controls of every lead under the node (a task: a hold; a project whose
+lead has not started yet still starts once what it waits on is met, and the
+preview names it); `move` files a project under another stored feature or a
+feature under an opportunity, one level up only (422 `wrong_level`);
+`reorder` edits `depends_on` among siblings (with `after`, the node lands in
+the column after that sibling's, whatever `col` says, and the preview shows
+that column); `split`/`merge`/`close` are the proposal ops (no Undo); `name`
+makes an implicit feature or need a stored one (a need through the discovery
+ledger's own create), or files its children under one; `team` is a `PUT
+…/definition` team change (Undo pins the version before, only while the
+version it made is still in force: 409 `undo_closed` otherwise). An add under
+a feature joins the wave it builds now, so its planned later waves stay
+ahead; a held item pulled forward leaves the wave that held it. A verb is
+served only where its node's level lists it in `structure.verbs` (resume
+with pause; reorder, split, merge and close with move; 422 `not_here`
+otherwise), and the node page offers exactly the verbs served there. Who
+applies it follows `structure.levels[<level it changes>].authority`: empty
+seats mean nobody (422 `not_here`); an `owner` approval, or seats with
+`owner` but not `operator`, leave it to owners; otherwise editors apply it
+(403 `authority` with `who` when the viewer may not).
 
 **Steering at the node (cockpit v3).** Every structural verb on a node page
 (Add child, Start now, Team, Autonomy & merge, Pause / Resume, Move, Name it /

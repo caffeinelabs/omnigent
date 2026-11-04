@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
-from omnigent.server.factory import chat, chat_cards, events, nodes, snapshot
+from omnigent.server.factory import chat, chat_cards, events, nodes, schemas, snapshot
 from omnigent.server.factory.chat import Line, render_envelope
 from omnigent.server.factory.chat_routing import (
     STATE_PAUSED,
@@ -26,7 +26,6 @@ from omnigent.server.factory.chat_routing import (
     routes,
 )
 from omnigent.server.factory.control import CockpitError
-from omnigent.server.factory.node_context import LABEL_NODE_HEADER
 from omnigent.server.factory.node_views import validate_page
 from tests.server.factory.chat_helpers import RoomEnv, room_env
 from tests.server.factory.conftest import FactoryWorld
@@ -220,14 +219,41 @@ async def test_a_task_message_reaches_its_lead_with_the_task_and_its_header(
     assert len(text) <= chat.ENVELOPE_MAX_CHARS
 
 
+async def _node_header(env: RoomEnv, mode: str) -> None:
+    resp = await env.cockpit.client.put(
+        f"/v1/factory/factories/{env.cockpit.fid}/definition",
+        json={"changes": [{"op": "replace", "path": "structure.node_header", "value": mode}]},
+        headers={"X-Test-User": "alice"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
 async def test_the_header_is_off_where_the_factory_switched_it_off(env: RoomEnv) -> None:
-    env.world.store.set_labels(env.cockpit.fid, {LABEL_NODE_HEADER: "off"})
+    await _node_header(env, "off")
 
     await _post(env, "task:T-1", "Plain envelope, please (sample)")
     await env.settle()
 
     text = env.deliveries.to(env.id("pl"))[0]
     assert "This thread is about" not in text and "Status:" not in text
+
+
+async def test_the_threads_v2_shares_keep_their_envelope_by_default(env: RoomEnv) -> None:
+    await _post(env, "project:api-version", "Plain, as v2 sends it (sample)")
+    await env.settle()
+
+    [text] = env.deliveries.to(env.id("pl"))
+    assert "This thread is about" not in text and "\nStatus: " not in text
+
+
+async def test_a_factory_may_ask_for_the_header_in_every_thread(env: RoomEnv) -> None:
+    await _node_header(env, "all")
+
+    await _post(env, "project:api-version", "With the header (sample)")
+    await env.settle()
+
+    [text] = env.deliveries.to(env.id("pl"))
+    assert "This thread is about Project " in text and "\nStatus: " in text
 
 
 def test_the_prompt_stays_under_the_guard_with_the_header() -> None:
@@ -258,12 +284,45 @@ def test_the_prompt_stays_under_the_guard_with_the_header() -> None:
         node=header,
     )
 
-    assert len(text) <= chat.ENVELOPE_MAX_CHARS
+    # What the server adds gives way; the two messages arrive whole.
+    assert text.count("x" * F.CHAT_MESSAGE_MAX_CHARS) == 2
+    assert "carol (operator)" not in text and "Why: " not in text
     assert text.startswith("[Factory chat · T-1 · 2 new from alice, bob · ids=")
-    assert "--- This thread is about Task T-1" in text and "\nStatus: Not moving" in text
     assert text.endswith('reply_to="chat_' + "b" * 32 + '", message=…)')
     # With room to spare, nothing is trimmed: the whole header rides along.
     assert header in plain
+    assert len(plain) <= chat.ENVELOPE_MAX_CHARS
+
+
+def test_the_guard_gives_up_the_header_and_the_context_before_any_message() -> None:
+    header = "\n".join(
+        [
+            "--- This thread is about Task T-1 · Route (T-1), as the cockpit shows it ---",
+            "Why: " + "w" * 300,
+            "Status: Not moving: T-1 → needs a person: Apply C-16 (D-45)",
+        ]
+    )
+    body = "y" * 3000
+    text = render_envelope(
+        thread="task:T-1",
+        title="T-1",
+        messages=[Line("a" * 32, 0, "alice (owner)", body + "END-A")],
+        context=[Line(f"{i:032x}", 0, "carol (operator)", "c" * 190) for i in range(30)],
+        node=header,
+    )
+    whole = render_envelope(
+        thread="project:core",
+        title="#core",
+        messages=[
+            Line("a" * 32, 0, "alice (owner)", "a" * 3998 + "END-A"),
+            Line("b" * 32, 60, "bob (owner)", "b" * 3998 + "END-B"),
+        ],
+    )
+
+    assert len(text) <= chat.ENVELOPE_MAX_CHARS
+    assert "END-A" in text and "\nStatus: Not moving" in text and "Why: " not in text
+    assert "… " in text  # the oldest context gave way, counted as earlier
+    assert "END-A" in whole and "END-B" in whole
 
 
 async def test_a_lead_posts_in_its_own_tasks_threads_only(env: RoomEnv) -> None:
@@ -390,6 +449,39 @@ async def test_node_cards_post_only_in_their_nodes_thread(env: RoomEnv) -> None:
     assert view["meta"] == {"kind": "offer", "verb": "start", "title": "Start"}
     with pytest.raises(ValueError):
         await chat_cards.post_node_card(state, fid, "T-1", "decision", "not a node card")
+
+
+async def test_each_node_card_is_a_valid_chat_message(env: RoomEnv) -> None:
+    state, fid = env.cockpit.app.state, env.cockpit.fid
+    cards = [
+        ("why", "Why T-1: waiting", None),
+        ("offer", "It can start now.", {"verb": "start", "title": "Start"}),
+        (
+            "closed_alarm",
+            "T-1 is held on purpose.",
+            {"kind": "closed_alarm", "was": "T-1 stalled", "cause": "held for C-1"},
+        ),
+        (
+            "preview_applied",
+            "alice added T-2.",
+            {"verb": "add", "label": "Add a task", "by": "alice", "undo_token": "0" * 24},
+        ),
+    ]
+    for kind, line, meta in cards:
+        await chat_cards.post_node_card(state, fid, "T-1", kind, line, meta=meta)
+
+    resp = await env.cockpit.client.get(
+        f"/v1/factory/factories/{fid}/chat",
+        params={"thread": "task:T-1"},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    views = [schemas.ChatMessageView.model_validate(m) for m in resp.json()["data"]]
+    shown = {v.card.type: v.card.meta for v in views if v.card is not None}
+    assert set(shown) == {"why", "offer", "closed_alarm", "preview_applied"}
+    assert shown["closed_alarm"] is not None and shown["closed_alarm"].cause == "held for C-1"
+    assert shown["preview_applied"] is not None and shown["preview_applied"].verb == "add"
 
 
 async def test_the_thread_list_names_each_threads_node(env: RoomEnv) -> None:

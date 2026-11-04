@@ -63,7 +63,20 @@ DependsMode = Literal["merged", "ready"]
 EngineMode = Literal["observe", "assist", "enforce"]
 ActorKind = Literal["human", "agent", "server"]
 ChatAuthorKind = Literal["human", "agent", "system"]
-ChatCardType = Literal["decision", "proposal", "control", "pr", "demo", "loop", "issue", "system"]
+ChatCardType = Literal[
+    "decision",
+    "proposal",
+    "control",
+    "pr",
+    "demo",
+    "loop",
+    "issue",
+    "system",
+    "why",
+    "closed_alarm",
+    "offer",
+    "preview_applied",
+]
 ThreadKind = Literal[
     "factory", "improvements", "discovery", "project", "pr", "need", "feature", "study", "task"
 ]
@@ -1563,19 +1576,66 @@ class BaseMovesMeta(_View):
     moves: list[BaseMoveView]
 
 
+class ClosedAlarmMeta(_View):
+    """
+    An alarm the server closed, carded in its node's thread (cockpit v3).
+
+    :param was: The alarm as it was raised.
+    :param cause: Why the server closed it.
+    :param real_ask: The ask that holds the work instead, if any.
+    """
+
+    kind: Literal["closed_alarm"] = "closed_alarm"
+    was: str
+    cause: str
+    real_ask: str | None = None
+
+
+class OfferMeta(_View):
+    """An offer on the card's node (``start``: "it can start now"); the body explains it."""
+
+    kind: Literal["offer"] = "offer"
+    verb: str
+    title: str | None = None
+
+
+class PreviewAppliedMeta(_View):
+    """
+    A structural verb applied (or undone) from the cockpit, in its node's thread.
+
+    :param undo_token: ``POST …/undo/{token}`` takes it back until ``undo_until``.
+    :param filed: The proposal it was filed as (``C-19``), when it was.
+    """
+
+    kind: Literal["preview_applied"] = "preview_applied"
+    verb: str
+    label: str | None = None
+    by: str | None = None
+    undo_token: str | None = None
+    undo_until: int | None = None
+    filed: str | None = None
+    undone: bool | None = None
+
+
+ChatCardMeta = Annotated[
+    IssueCardMeta | BaseMovesMeta | ClosedAlarmMeta | OfferMeta | PreviewAppliedMeta,
+    Field(discriminator="kind"),
+]
+
+
 class ChatCardView(_View):
     """
     A structured object mirrored into a thread as a live card.
 
-    :param ref: e.g. ``"D-7"``, ``"C-4"``, ``"!9630"`` or ``"INC-13"``.
+    :param ref: e.g. ``"D-7"``, ``"C-4"``, ``"!9630"``, ``"INC-13"`` or a node's ``"T-16"``.
     :param id: Row id of the object, when it has one.
-    :param meta: What an incident's live card or a batched base line holds.
+    :param meta: What an incident's live card, a batched base line or a node card holds.
     """
 
     type: ChatCardType
     ref: str | None = None
     id: str | None = None
-    meta: Annotated[IssueCardMeta | BaseMovesMeta, Field(discriminator="kind")] | None = None
+    meta: ChatCardMeta | None = None
 
 
 class RoutedView(_View):

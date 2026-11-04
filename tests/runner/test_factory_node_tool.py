@@ -57,6 +57,17 @@ async def test_an_older_server_answers_not_served() -> None:
     assert "header" in out["message"]
 
 
+async def test_an_older_server_with_the_web_ui_answers_not_served() -> None:
+    # A server that mounts the web UI answers an unmatched /v1 path itself.
+    server = FakeServer().on(
+        "GET", PATH, status=404, body={"error": {"code": "not_found", "message": "Not found"}}
+    )
+
+    out = await _call(server, {"ref": "product"})
+
+    assert out["error"] == "not_served"
+
+
 async def test_an_unknown_node_keeps_its_code() -> None:
     server = FakeServer().on(
         "GET",
