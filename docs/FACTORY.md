@@ -1003,7 +1003,61 @@ batched read of the messages live nodes quote. Cockpit v3 (`?cockpit=v3`)
 always reads these pages; its sample factory lives only in Storybook and
 the web tests. `GET …/n/{ref}/level/{level}` lists one level under a node
 grouped under each item's parent (Home lists the features under the needs
-they came from), all-done groups folded, 60 a group with a cursor each.
+they came from), all-done groups folded, 60 a group with a cursor each;
+`state` and `q` keep only the nodes in one state or whose title or code
+holds the words (`state=later` or `ghost` lists the held or proposed nodes
+as the items); a group with nothing to show is left out.
+
+**Lenses** (`node_lenses.py`) are the other ways to read one node.
+`GET …/n/{ref}/lineage` reads top to bottom: each ancestor with its one
+line (a need with its evidence, a feature with the proposal that approved
+it), the node, the levels below it with their counts and, in the product
+tree, its results. `GET …/n/{ref}/timeline?from=&to=` (epoch seconds or ISO
+from 2000 to a week from now, at most 7 days apart; by default the last day
+from the hour work began) draws one lane per child from the recorded spans:
+`stage` spans for projects, `task` spans for tasks, as work bars; queued and
+ready stages, PRs waiting for a merge, open asks and agents parked on a
+person as waits, amber (`you`) when a person is the cause and grey when the
+lane waits on another node or on the server (a past queue names the project
+it waited on). An answered ask is amber only when it held work by the same
+rule as an open one (a proposal on a project since done held nothing). The
+wait a lane is in now is its status line, from when it began: never before
+the lane's first bar nor before its last recorded work ended, so work that
+ran after an ask was made stays visible; a merge is a person's from when its
+PRs became ready. Gaps between bars are waits; a lane over several projects
+works while any of them does (one bar); the alarms the server closed never
+count, and lanes never join. `GET …/n/{ref}/money` lists the children's cost against
+their budgets (the roll-ups' numbers), most first, the total, and `rest`:
+what the node spent that no child holds (its leads and agents).
+
+**Needs you and Find** (`node_sheets.py`). `GET …/factories/{fid}/needs-you
+?tree=product|factory` lists every ask a person owes in one tree, ranked by
+the work it holds (the blocker paths' weight: the estimates of the tasks it
+holds plus the projects that wait on where it sits), each with its
+breadcrumb and what it holds by name; ready PRs a person merges into one
+base are one item; asks that block nothing come apart (`blocks_nothing`,
+oldest first); the product tree also lists the alarms the server closed
+with their causes, and `other_tree` counts the asks in the other tree.
+`GET …/factories/{fid}/find?q=` finds nodes by ref (`T-16`, `#9876`,
+`PR-9876`, a slug, a closed alarm's `D-n`), by what a decision or proposal
+is about (`D-45`, `C-16`) and by title, each with its breadcrumb; an empty
+query lists the work that holds an ask. Done work stays in the tree, so it
+is found however long ago it closed.
+
+**Since your last look** (`last_look.py`, `factory_node_reads`): a person's
+last look at a node is a mark (`PUT …/n/{ref}/seen`, or `GET …/n/{ref}
+?seen=1` from a person, never a runner), one per person per node, only
+moving forward. A node they never opened reads its nearest ancestor's mark.
+The node page then carries `rollup.since` (the three most significant
+changes in its subtree since that mark, and how many more) and `changed` on
+each child; events are placed on the node they are about (a merge on its
+change, a task, a new ask on its node, a project, an applied proposal on
+the highest node it touched), so work the viewer cannot read says nothing.
+Most significant first: a new ask that holds work, a merge or a failure,
+work added, a change applied, an answer, a task done, a stage moved; three
+merges or more read as one ("4 merged"); a server-closed alarm, an ask that
+blocks nothing and a builder going idle on an unfinished task are not
+changes.
 A proposal's decision is stored as blocking nothing; the projection counts
 it as holding work while the proposal adds a project or a rule, or changes
 a project that is still active, so "needs you" follows what really waits.

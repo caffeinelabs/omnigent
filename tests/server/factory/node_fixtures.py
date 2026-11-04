@@ -10,9 +10,9 @@ day, with neutral names (the web's v3 sample tells the same story):
   done locally; assistant-panel-ux waits on assistant-core;
 - a shortlist proposal (C-13) the person picked created four small projects
   that all merged at 13:25 (one implicit feature under the person's ask);
-- an Atlas proposal (C-12) created build-tier-drafts-3, whose two PRs wait
-  for a person to merge them into ``main`` (its implicit need and feature
-  each hold one child, so both fold);
+- an Atlas proposal (C-12) created build-tier-drafts-3, whose two PRs have
+  waited since 12:00 for a person to merge them into ``main`` (its implicit
+  need and feature each hold one child, so both fold);
 - the base env's setup project (``base-env``, an integration project) and
   two rule proposals belong to the factory tree; the base env runs the head
   the watcher saw at 13:25:30 (every merge so far is in it);
@@ -52,9 +52,11 @@ NOW: Final = 1793713200
 """13:40 UTC on the sample day."""
 AT_0555: Final = 1793685300
 AT_0601: Final = 1793685660
+AT_0612: Final = 1793686320
 AT_0655: Final = 1793688900
 AT_0746: Final = 1793691960
 AT_0847: Final = 1793695620
+AT_1200: Final = 1793707200
 AT_1303: Final = 1793710980
 AT_1322: Final = 1793712120
 AT_1325: Final = 1793712300
@@ -139,6 +141,7 @@ def _pr(
     merged_at: int | None = AT_1325,
     task_id: str | None = None,
     ready: bool = False,
+    ready_at: int | None = None,
     base: str = BASE,
     title: str | None = None,
 ) -> FactoryPr:
@@ -153,6 +156,7 @@ def _pr(
         state=state,
         project_slug=slug,
         ready=ready,
+        ready_at=ready_at,
         merged_at=merged_at if state == "merged" else None,
         merged_sha=f"{number:07x}" + "0" * 33 if state == "merged" else None,
         task_id=task_id,
@@ -391,6 +395,7 @@ def factory_1340() -> NodeFacts:
             "build-tier-drafts-3",
             state="open",
             ready=True,
+            ready_at=AT_1200,
             base="main",
             title="build-tier-drafts-3, part 1",
         ),
@@ -399,6 +404,7 @@ def factory_1340() -> NodeFacts:
             "build-tier-drafts-3",
             state="open",
             ready=True,
+            ready_at=AT_1200,
             base="main",
             title="build-tier-drafts-3, part 2",
         ),
@@ -699,6 +705,84 @@ def closed_alarms() -> list[ClosedAlarm]:
     ]
 
 
+def _span(
+    n: int,
+    kind: str,
+    name: str,
+    start: int,
+    end: int | None = None,
+    *,
+    slug: str | None = None,
+    session: str | None = None,
+    pr: int | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> FactorySpan:
+    return FactorySpan(
+        id=hex_id(70_000 + n),
+        factory_id=FID,
+        trace_key=f"sample:{n}",
+        kind=kind,
+        name=name,
+        started_at=start * 1000,
+        ended_at=end * 1000 if end is not None else None,
+        outcome="ok" if end is not None else "open",
+        project_slug=slug,
+        session_id=session,
+        pr_id=hex_id(pr) if pr is not None else None,
+        attrs=attrs,
+    )
+
+
+def spans_1340() -> list[FactorySpan]:
+    """
+    :returns: The spans the sample factory recorded by 13:40: each project's
+        stages, the builders' task sessions (T-15, then T-16 until its hold),
+        the asks (D-45 since 07:46, D-49 since 13:05; D-48 was an alarm the
+        server closed) and the two PRs ready for a person to merge since 12:00.
+    """
+    core = "assistant-core"
+    proposal = {"source": "proposal", "blocking": False}
+    return [
+        _span(1, "stage", "planning", AT_0601, AT_0612, slug=core),
+        _span(2, "stage", "building", AT_0612, slug=core),
+        _span(
+            3, "task", "Sessions, tool registry", AT_0612, AT_0655, slug=core, session=hex_id(701)
+        ),
+        _span(4, "task", "Debit each turn", AT_0655, slug=core, session=hex_id(702)),
+        _span(5, "stage", "queued", AT_0601, AT_0655, slug="connectors-core"),
+        _span(6, "stage", "building", AT_0655, AT_1325, slug="connectors-core"),
+        _span(7, "stage", "merged", AT_1325, slug="connectors-core"),
+        _span(8, "stage", "queued", AT_0601, AT_0655, slug="skill-discovery"),
+        _span(9, "stage", "building", AT_0655, AT_1303, slug="skill-discovery"),
+        _span(10, "stage", "merged", AT_1303, slug="skill-discovery"),
+        _span(11, "stage", "queued", AT_0601, slug="assistant-panel-ux"),
+        _span(
+            12,
+            "decision",
+            "D-45",
+            AT_0746,
+            slug=core,
+            attrs={**proposal, "subject": "proposal:C-16"},
+        ),
+        _span(
+            13,
+            "decision",
+            "D-48",
+            AT_0847,
+            AT_0847 + 60,
+            slug=core,
+            attrs={"source": "loop", "blocking": True, "subject": "task:T-16"},
+        ),
+        _span(
+            14, "decision", "D-49", AT_1303 + 120, attrs={**proposal, "subject": "proposal:C-19"}
+        ),
+        _span(15, "stage", "building", AT_0601, AT_1200, slug="build-tier-drafts-3"),
+        _span(16, "stage", "ready", AT_1200, slug="build-tier-drafts-3"),
+        _span(17, "ready_wait", "ready", AT_1200, slug="build-tier-drafts-3", pr=9856),
+        _span(18, "ready_wait", "ready", AT_1200, slug="build-tier-drafts-3", pr=9857),
+    ]
+
+
 def scale_factory(features: int = 13, projects: int = 45, tasks: int = 360) -> NodeFacts:
     """
     :returns: A synthetic factory: *features* initiatives under three asks,
@@ -810,6 +894,12 @@ def scale_factory(features: int = 13, projects: int = 45, tasks: int = 360) -> N
 
 __all__ = [
     "ASK_MESSAGE",
+    "AT_0601",
+    "AT_0612",
+    "AT_0655",
+    "AT_0746",
+    "AT_1200",
+    "AT_1303",
     "AT_1325",
     "BASE",
     "DEPLOYED_SHA",
@@ -825,5 +915,6 @@ __all__ = [
     "hex_id",
     "scale_factory",
     "snapshot_waits",
+    "spans_1340",
     "structure",
 ]

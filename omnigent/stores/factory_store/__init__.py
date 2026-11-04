@@ -71,6 +71,7 @@ from omnigent.entities.factory import (
     FactoryFeedback,
     FactoryIssue,
     FactoryLoop,
+    FactoryNodeRead,
     FactoryPerson,
     FactoryPr,
     FactoryProject,
@@ -1166,6 +1167,30 @@ class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
     def list_chat_reads(self, factory_id: str, user_id: str) -> builtins.list[FactoryChatRead]:
         """:returns: The user's read marks in the factory. Consumer: R3-08 unread badges."""
 
+    # ── Last looks at nodes (cockpit v3) ────────────────────────
+
+    @abstractmethod
+    def mark_node_seen(
+        self, factory_id: str, user_id: str, node_ref: str, seen_at: int | None = None
+    ) -> FactoryNodeRead:
+        """
+        Move a person's last look at one node forward (never backwards).
+
+        Consumer: ``PUT …/n/{ref}/seen`` (the cockpit's "since your last look").
+
+        :param seen_at: Epoch seconds; defaults to now.
+        :returns: The stored mark.
+        """
+
+    @abstractmethod
+    def list_node_reads(
+        self, factory_id: str, user_id: str, node_refs: Sequence[str] | None = None
+    ) -> builtins.list[FactoryNodeRead]:
+        """
+        :param node_refs: Only these nodes (``None``: every node the person looked at).
+        :returns: The person's last looks in the factory, by node ref.
+        """
+
     # ── Proposals (R3-07, R3-12) ────────────────────────────────
 
     @abstractmethod
@@ -1765,6 +1790,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
         self._people: dict[tuple[int, str, str], FactoryPerson] = {}
         self._chat: dict[tuple[int, str], FactoryChatMessage] = {}
         self._chat_reads: dict[tuple[int, str, str, str], FactoryChatRead] = {}
+        self._node_reads: dict[tuple[int, str, str, str], FactoryNodeRead] = {}
         self._proposals: dict[tuple[int, str], FactoryProposal] = {}
         self._tasks: dict[tuple[int, str], FactoryTask] = {}
         self._loops: dict[tuple[int, str], FactoryLoop] = {}
@@ -2461,6 +2487,42 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
                 if r.factory_id == fid and r.user_id == user_id
             ]
         return sorted(rows, key=lambda r: r.thread)
+
+    # ── Last looks at nodes ─────────────────────────────────────
+
+    def mark_node_seen(
+        self, factory_id: str, user_id: str, node_ref: str, seen_at: int | None = None
+    ) -> FactoryNodeRead:
+        key = (self._ws(), norm_id(factory_id), user_id, node_ref)
+        at = now_s() if seen_at is None else int(seen_at)
+        with self._lock:
+            current = self._node_reads.get(key)
+            if current is not None and current.seen_at >= at:
+                return current
+            row = FactoryNodeRead(
+                factory_id=key[1],
+                user_id=user_id,
+                node_ref=node_ref,
+                seen_at=at,
+                workspace_id=key[0],
+            )
+            self._node_reads[key] = row
+            return row
+
+    def list_node_reads(
+        self, factory_id: str, user_id: str, node_refs: Sequence[str] | None = None
+    ) -> builtins.list[FactoryNodeRead]:
+        fid = norm_id(factory_id)
+        wanted = None if node_refs is None else set(node_refs)
+        with self._lock:
+            rows = [
+                r
+                for r in self._rows(self._node_reads)
+                if r.factory_id == fid
+                and r.user_id == user_id
+                and (wanted is None or r.node_ref in wanted)
+            ]
+        return sorted(rows, key=lambda r: r.node_ref)
 
     # ── Proposals ───────────────────────────────────────────────
 

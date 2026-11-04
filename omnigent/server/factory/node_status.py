@@ -140,6 +140,7 @@ class Ask:
     :param verb: What the person does, in words (``Apply C-16``).
     :param blocking: It holds work (asks that block nothing never colour a node).
     :param at: The node it sits on (its dependents count in its weight).
+    :param since: When it was asked (epoch seconds; the oldest ready PR of a group).
     """
 
     id: str
@@ -156,6 +157,7 @@ class Ask:
     grouped: bool = False
     at: str | None = None
     row_id: str | None = None
+    since: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         """:returns: The ``DecisionRef``."""
@@ -232,6 +234,7 @@ class Paths:
     _memo: dict[str, Path] = field(default_factory=dict)
     _busy: set[str] = field(default_factory=set)
     _weights: dict[str, float] | None = None
+    _held: dict[str, tuple[str, ...]] = field(default_factory=dict)
     _asks: dict[str, Ask] = field(default_factory=dict)
     _groups: dict[tuple[str, str], list[FactoryPr]] | None = None
 
@@ -278,6 +281,7 @@ class Paths:
             subject=what,
             at=t.decision_node.get(decision.id),
             row_id=norm_id(decision.id),
+            since=int(decision.created_at),
         )
         self._asks[decision.ref] = ask
         return ask
@@ -296,6 +300,10 @@ class Paths:
                 rows.sort(key=lambda p: p.number)
             self._groups = groups
         return self._groups
+
+    def merge_asks(self) -> list[tuple[Ask, list[FactoryPr]]]:
+        """:returns: Each group of ready PRs a person merges into one base, with its one ask."""
+        return [(self.merge_ask(rows[0]), list(rows)) for rows in self._merge_groups().values()]
 
     def merge_ask(self, pr: FactoryPr) -> Ask:
         """:returns: The one ask for every ready PR a person merges into *pr*'s base."""
@@ -327,6 +335,7 @@ class Paths:
             external_url=rows[0].url or None,
             grouped=True,
             at=t.project_ref(project.slug) if project is not None else None,
+            since=int(asked),
         )
         self._asks[ask_id] = ask
         return ask
@@ -564,9 +573,20 @@ class Paths:
             self._weights = self._held_weights()
         return self._weights.get(ask.id, 0.0)
 
+    def holds(self, ask: Ask) -> list[str]:
+        """
+        :returns: What *ask* holds, by name: the tasks whose own wait ends at
+            it (by code; a PR no task owns by its number, ``#9856``), then the
+            projects that wait on where it sits.
+        """
+        if self._weights is None:
+            self._weights = self._held_weights()
+        return list(self._held.get(ask.id, ()))
+
     def _held_weights(self) -> dict[str, float]:
         t = self.tree
         out: dict[str, float] = {}
+        names: dict[str, dict[str, None]] = {}
         holders: dict[str, set[str]] = {}
         for node in t.nodes.values():
             if node.level != "task" or node.history or node.ghost or t.state(node.ref) == "done":
@@ -575,6 +595,7 @@ class Paths:
             if ask is None:
                 continue
             out[ask.id] = out.get(ask.id, 0.0) + t.task_weight(node)
+            names.setdefault(ask.id, {})[self.name(node.ref)] = None
             project = t.nodes.get(node.parent or "")
             if project is not None:
                 holders.setdefault(ask.id, set()).add(project.ref)
@@ -582,10 +603,13 @@ class Paths:
             for decision in decisions:
                 holders.setdefault(decision.ref, set()).add(ref)
         for ask_id, refs in holders.items():
-            dependents = {d.ref: d for ref in refs for d in t.dependents_of(ref)}
+            dependents = {d.ref: d for ref in sorted(refs) for d in t.dependents_of(ref)}
             out[ask_id] = out.get(ask_id, 0.0) + sum(
                 t.project_weight(d) for d in dependents.values()
             )
+            for dependent in dependents.values():
+                names.setdefault(ask_id, {})[self.name(dependent.ref)] = None
+        self._held = {ask_id: tuple(found) for ask_id, found in names.items()}
         return out
 
     def _first_ask(self, task: _N) -> Ask | None:
@@ -991,7 +1015,14 @@ def decision_proposal(
     decision: FactoryDecision, proposals: Mapping[str, FactoryProposal]
 ) -> FactoryProposal | None:
     """:returns: The proposal a decision's subject names (``proposal:C-16``), if listed."""
-    parsed = node_refs.parse(node_refs.normalize((decision.subject or "").strip()) or "")
+    return subject_proposal(decision.subject, proposals)
+
+
+def subject_proposal(
+    subject: str | None, proposals: Mapping[str, FactoryProposal]
+) -> FactoryProposal | None:
+    """:returns: The proposal a decision subject (``proposal:C-16``) names, if listed."""
+    parsed = node_refs.parse(node_refs.normalize((subject or "").strip()) or "")
     return proposals.get(parsed.text) if parsed is not None else None
 
 
@@ -1015,4 +1046,5 @@ __all__ = [
     "ask_verb",
     "decision_proposal",
     "duration",
+    "subject_proposal",
 ]

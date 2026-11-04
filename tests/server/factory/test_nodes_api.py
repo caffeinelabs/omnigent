@@ -10,6 +10,7 @@ factory answers under 300 ms at p95. Every name is sample data.
 
 from __future__ import annotations
 
+import calendar
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -20,7 +21,17 @@ import pytest_asyncio
 
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import events, initiatives, nodes, snapshot
-from omnigent.server.factory.node_views import validate_level, validate_page
+from omnigent.server.factory.node_views import (
+    FindView,
+    LineageView,
+    MoneyView,
+    NeedsYouView,
+    SeenView,
+    TimelineView,
+    validate,
+    validate_level,
+    validate_page,
+)
 from omnigent.stores.factory_store import norm_id
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
@@ -432,3 +443,159 @@ async def test_a_cold_build_with_history_answers_under_300ms(cockpit: Cockpit) -
     print(f"cold node page with history: {cold:.4f} s")
     assert page["results"]["merged"] == 300
     assert cold < 0.3, cold
+
+
+# ── Lenses, sheets and last looks ──────────────────────────────
+
+
+async def _read(cockpit: Cockpit, path: str, user: str = "alice", **params: Any) -> httpx.Response:
+    return await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/{path}",
+        params=params,
+        headers={"X-Test-User": user},
+    )
+
+
+async def test_the_lenses_of_a_planned_ask(cockpit: Cockpit) -> None:
+    message = await _plan(cockpit)
+
+    lineage = await _read(cockpit, "n/T-1/lineage")
+    money = await _read(cockpit, "n/I-1/money")
+    timeline = await _read(cockpit, "n/I-1/timeline", **{"from": "2026-01-01T00:00:00Z"})
+    window = await _read(cockpit, "n/I-1/timeline")
+    missing = await _read(cockpit, "n/T-404/lineage")
+    stranger = await _read(cockpit, "n/I-1/money", user="bob")
+
+    assert lineage.status_code == 200, lineage.text
+    view = validate(LineageView, lineage.json())
+    assert [a["ref"] for a in view["ancestors"]] == ["product", f"ask:{message}", "I-1", "core"]
+    assert view["here"]["ref"] == "T-1" and view["results"]["merged"] == 1
+    assert [r["ref"] for r in validate(MoneyView, money.json())["rows"]] == []
+    assert (timeline.status_code, error_code(timeline)) == (400, "bad_window")
+    assert window.status_code == 200, window.text
+    axis = validate(TimelineView, window.json())["axis"]
+    # Without `from` the timeline reads the last day.
+    assert _epoch(axis[1]) - _epoch(axis[0]) <= 24 * 3600
+    assert (missing.status_code, error_code(missing)) == (404, "unknown_node")
+    assert stranger.status_code == 404
+
+
+def _epoch(iso: str) -> int:
+    return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"to": "100000000000000000"},  # past int64 milliseconds
+        {"to": "9999-01-01T00:00:00Z"},
+        {"from": "1", "to": "3600"},  # 1970
+        {"from": "1999-12-31T00:00:00Z", "to": "1999-12-31T12:00:00Z"},
+        {"from": "yesterday"},
+    ],
+)
+async def test_a_timeline_window_outside_2000_to_next_week_is_refused(
+    cockpit: Cockpit, window: dict[str, str]
+) -> None:
+    await _plan(cockpit)
+
+    resp = await _read(cockpit, "n/I-1/timeline", **window)
+
+    assert (resp.status_code, error_code(resp)) == (400, "bad_window"), resp.text
+
+
+async def test_needs_you_and_find_over_a_real_store(cockpit: Cockpit) -> None:
+    await _plan(cockpit)
+    filed = await cockpit.post(
+        f"/v1/factory/factories/{cockpit.fid}/proposals",
+        {
+            "changes": [
+                {"op": "update", "slug": "api-version", "patch": {"constraints": "Keep it fast."}}
+            ],
+            "rationale": "a sample change",
+        },
+    )
+    assert filed.status_code in (200, 201), filed.text
+
+    needs = await _read(cockpit, "needs-you")
+    factory = await _read(cockpit, "needs-you", tree="factory")
+    bad = await _read(cockpit, "needs-you", tree="nope")
+    task = await _read(cockpit, "find", q="T-1")
+    pr = await _read(cockpit, "find", q="#9001")
+    proposal = await _read(cockpit, "find", q=filed.json()["proposal"]["ref"])
+
+    assert needs.status_code == 200, needs.text
+    view = validate(NeedsYouView, needs.json())
+    assert [i["decision"]["id"] for i in view["items"]] == [filed.json()["decision"]]
+    assert view["items"][0]["breadcrumb"][-1]["ref"] == "api-version"
+    assert validate(NeedsYouView, factory.json())["other_tree"] == 1
+    assert (bad.status_code, error_code(bad)) == (400, "bad_tree")
+    assert [i["ref"] for i in validate(FindView, task.json())["items"]][:1] == ["T-1"]
+    assert [i["ref"] for i in validate(FindView, pr.json())["items"]] == ["PR-9001"]
+    assert [i["ref"] for i in validate(FindView, proposal.json())["items"]] == ["api-version"]
+
+
+async def test_a_level_view_filters_by_state(cockpit: Cockpit) -> None:
+    await _plan(cockpit)
+
+    done = await _level(cockpit, "product", "task", state="done")
+    words = await _level(cockpit, "product", "task", q="core api")
+    bad = await _level(cockpit, "product", "task", state="sideways")
+
+    assert [g["parent"]["ref"] for g in validate_level(done.json())["groups"]] == ["core"]
+    assert validate_level(words.json())["total"] == 1
+    assert (bad.status_code, error_code(bad)) == (400, "bad_state")
+
+
+async def test_last_looks_are_per_person_and_name_what_changed(cockpit: Cockpit) -> None:
+    await _plan(cockpit)
+    store, fid = cockpit.store, cockpit.fid
+    now = int(time.time())
+    store.mark_node_seen(fid, "alice", "product", now - 3600)
+    pr = store.get_pr_by_number(fid, REPO, 9001)
+    assert pr is not None
+    await events.emit(
+        cockpit.app.state,
+        fid,
+        "pr.merged",
+        project="core",
+        subject=f"pr:{REPO}#9001",
+        summary="PR #9001 merged (sample)",
+        data={"pr_id": pr.id},
+        ts=(now - 60) * 1000,
+    )
+
+    alice = await _page(cockpit, "product")
+    feature = await _page(cockpit, "I-1")
+    carol = await _page(cockpit, "product", user="carol", seen=1)
+    marked = await cockpit.client.put(
+        f"/v1/factory/factories/{fid}/n/I-1/seen", headers={"X-Test-User": "alice"}
+    )
+    missing = await cockpit.client.put(
+        f"/v1/factory/factories/{fid}/n/T-404/seen", headers={"X-Test-User": "alice"}
+    )
+    again = await _page(cockpit, "I-1")
+
+    # Alice looked at the product an hour ago: the merge since then is named, there and below.
+    merged = f"#9001 merged {time.strftime('%H:%M', time.gmtime(now - 60))}"
+    since = alice["rollup"]["since"]
+    assert since["items"][0] == merged
+    assert {*since["items"][1:], "panel added", "Sample helper added", "core added"} == {
+        "panel added",
+        "Sample helper added",
+        "core added",
+    }
+    # Planning the ask added the feature and two projects and applied C-1: five changes.
+    assert len(since["items"]) + since["more"] == 5
+    assert feature["rollup"]["since"] == since
+    changed = {k["ref"]: k["changed"] for k in feature["children"]["items"] if k.get("changed")}
+    # C-1 started the feature: it is the feature's change, not one of its projects'.
+    assert changed == {"core": [merged, "core added"], "panel": ["panel added"]}
+    # Carol never looked: nothing is "since"; seen=1 marks her look for next time.
+    assert "since" not in carol["rollup"]
+    assert [r.node_ref for r in store.list_node_reads(fid, "carol")] == ["product"]
+    assert marked.status_code == 200, marked.text
+    assert validate(SeenView, marked.json())["ref"] == "I-1"
+    assert (missing.status_code, error_code(missing)) == (404, "unknown_node")
+    assert "since" not in again["rollup"]
+    assert {r.node_ref for r in store.list_node_reads(fid, "alice")} == {"product", "I-1"}

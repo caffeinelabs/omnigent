@@ -427,6 +427,134 @@ class LevelViewView(_View):
     via_fold: int | None = None
 
 
+class LinkView(_View):
+    """A lineage link outside the breadcrumb: the proposal that approved a feature."""
+
+    kind: str
+    ref: str | None = None
+    title: str
+    state: str | None = None
+
+
+class LineageRowView(CrumbView):
+    """One row of the lineage: a node with its one line (and its evidence or links)."""
+
+    line: StatusLineView
+    why_html: str | None = None
+    progress: ProgressView | None = None
+    evidence: str | None = None
+    links: list[LinkView] | None = None
+
+
+class LineageView(_View):
+    """``GET …/n/{ref}/lineage``: ancestors top to bottom, the node, the levels below, results."""
+
+    scope: str
+    ancestors: list[LineageRowView]
+    here: LineageRowView
+    below: list[LevelCountView]
+    results: ResultsView | None = None
+    version: str
+
+
+class BarView(_View):
+    """One bar of a timeline lane (``from``/``to`` are ISO instants)."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    start: str = Field(alias="from")
+    end: str = Field(alias="to")
+    kind: Literal["work", "done", "wait", "you"]
+    label: str
+
+
+class LaneView(_View):
+    ref: str
+    title: str
+    state: NodeState
+    bars: list[BarView] = Field(min_length=1)
+
+
+class TimelineView(_View):
+    """``GET …/n/{ref}/timeline``: one lane per child, bars over the window."""
+
+    scope: str
+    axis: list[str] = Field(min_length=2, max_length=2)
+    now: str
+    last_look: str | None = None
+    lanes: list[LaneView]
+    version: str
+
+
+class MoneyRowView(_View):
+    ref: str
+    title: str
+    tag: str | None = None
+    state: NodeState
+    cost: float
+    budget: float | None = None
+    burn: float | None = None
+
+
+class MoneyView(_View):
+    """``GET …/n/{ref}/money``: the children's cost against their budgets, most first."""
+
+    scope: str
+    rows: list[MoneyRowView]
+    total: float
+    budget: float | None = None
+    rest: float | None = None
+    version: str
+
+
+class NeedsItemView(_View):
+    """One ask a person owes: its decision, where it sits, what it holds and its weight."""
+
+    decision: DecisionRefView
+    breadcrumb: list[CrumbView] = Field(min_length=1)
+    holds: list[str]
+    weight: float
+
+
+class NeedsYouView(_View):
+    """``GET /factories/{fid}/needs-you``: one tree's asks, ranked by what they hold."""
+
+    tree: Literal["product", "factory"]
+    items: list[NeedsItemView]
+    blocks_nothing: list[NeedsItemView]
+    closed_alarms: list[ClosedAlarmView] | None = None
+    other_tree: int
+    version: str
+
+
+class FindItemView(_View):
+    ref: str
+    level: str
+    level_name: str | None = None
+    title: str
+    tag: str | None = None
+    state: NodeState
+    implicit: bool | None = None
+    breadcrumb: list[CrumbView]
+    match: Literal["ref", "ask", "proposal", "title", "needs"]
+    via: str | None = None
+
+
+class FindView(_View):
+    """``GET /factories/{fid}/find?q=``: nodes by ref or title, with breadcrumbs."""
+
+    q: str
+    items: list[FindItemView]
+    version: str
+
+
+class SeenView(_View):
+    """``PUT …/n/{ref}/seen``: this person's last look at the node, now."""
+
+    ref: str
+    seen_at: str
+
+
 ChipView.model_rebuild()
 
 
@@ -450,13 +578,30 @@ def validate_level(view: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
+def validate(model: type[BaseModel], body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Check *body* against *model* and return it as built.
+
+    :raises pydantic.ValidationError: When the projection drifted from the contract.
+    """
+    model.model_validate(body)
+    return body
+
+
 __all__ = [
     "ChildPageView",
+    "FindView",
     "LevelViewView",
+    "LineageView",
+    "MoneyView",
+    "NeedsYouView",
     "NodePageView",
     "NodeState",
     "NodeSummaryView",
+    "SeenView",
     "StatusLineView",
+    "TimelineView",
+    "validate",
     "validate_level",
     "validate_page",
 ]

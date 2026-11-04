@@ -2088,6 +2088,23 @@ class SqlFactoryChatRead(OmnigentBase):
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class SqlFactoryNodeRead(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_node_reads``: a person's last look at one node.
+
+    :param node_ref: The node's ref in the cockpit's level tree (``I-1``, ``T-16`` …).
+    :param seen_at: Epoch seconds; only moves forward.
+    """
+
+    __tablename__ = "factory_node_reads"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_ref: Mapped[str] = mapped_column(String(96), primary_key=True)
+    seen_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SqlFactoryProposal(OmnigentBase):
     """
     SQLAlchemy model for ``factory_proposals``: a proposed change, shown as ``C-<number>``.
