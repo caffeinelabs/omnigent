@@ -1,7 +1,7 @@
-// One node's page in cockpit v3: the level strip (or the phone's level row),
-// the header, then its children in one lens, or one level under it grouped
-// under parents. One parent per node and one level per view: nothing here is
-// drawn between nodes. The node's chat is the page's right column (`chat`).
+// One node's page in cockpit v3, calm: the level strip (or the phone's level
+// row), the short title with Details and the ⋯ verbs, Your move, then its
+// children one line each (or one level under it, grouped under parents).
+// Nothing is drawn between nodes. The node's chat is the page's right column.
 
 import {
   type MutableRefObject,
@@ -28,165 +28,51 @@ import {
 } from "./NodeContext";
 import { NodeContent } from "./NodeContent";
 import { NodeHeader } from "./NodeHeader";
-import { Kbd, NodeLink, sinceWhen } from "./nodeParts";
+import { NodeLink } from "./nodeParts";
 import { useLevel, useMoreChildren, useNode, usePrefetchNode } from "./nodeQueries";
 import { nodeHref } from "./nodeRoutes";
 import { useNodeSource } from "./nodeSource";
 import { useMarkSeen, useVisitSince } from "./nodeSteer";
-import { DEFAULT_OVERLAYS, type Overlays } from "./NodeTile";
-import type {
-  ChildPage,
-  LevelView as View,
-  NodePage as Page,
-  NodeSummary,
-  TimelineView,
-  VerbArgs,
-  VerbAvail,
-} from "./nodeTypes";
+import { DEFAULT_OVERLAYS } from "./NodeTile";
+import { movedAsks } from "./calm/calmModel";
+import { YourMove, useYourMove } from "./calm/YourMove";
+import { LensMenu } from "./calm/NodeMenu";
+import type { ChildPage, NodePage as Page, TimelineView, VerbArgs, VerbAvail } from "./nodeTypes";
+import { timelineSub } from "./lenses/TimelineLens";
 import { drawsTiles, levelName } from "./nodeWire";
 import { useSheetActions } from "./sheets/V3Sheets";
 import { hasWhy } from "./statusModel";
 import { useNodeKeys, useRovingStops } from "./useNodeKeys";
 import { useFactoryToast } from "../ui/Toast";
 import { LineageBody, LineageFold, MoneyBody, TimelineBody } from "./lenses/LensBodies";
-import { LENS_NAMES, type Lens, useLensChoice } from "./lenses/lensModel";
-import { timelineSub } from "./lenses/TimelineLens";
+import { type Lens, useLensChoice } from "./lenses/lensModel";
 import { type OpenVerb, VerbPreview } from "./verbs/VerbPreviews";
 
-const OVERLAY_NAMES: [keyof Overlays, string][] = [
-  ["needs", "Needs you"],
-  ["changed", "Since"],
-  ["env", "Try it"],
-  ["cost", "Cost"],
-  ["people", "People"],
-];
-
-/** Overlays that would show something for these items (an overlay with nothing to add is not offered). */
-function usefulOverlays(items: NodeSummary[]): (keyof Overlays)[] {
-  const has: Record<keyof Overlays, boolean> = {
-    needs: items.some((k) => k.needs.open > 0),
-    changed: items.some((k) => k.changed?.length),
-    env: items.some((k) => k.try_ready),
-    cost: items.some((k) => k.cost),
-    people: items.some((k) => k.working?.length || k.idle),
-  };
-  return OVERLAY_NAMES.map(([k]) => k).filter((k) => has[k]);
-}
-
-function Seg({
-  options,
-  value,
-  onChange,
-  label,
-}: {
-  options: [Lens, string][];
-  value: Lens | null;
-  onChange: (v: Lens) => void;
-  label: string;
-}) {
-  return (
-    <span
-      role="tablist"
-      aria-label={label}
-      data-testid="v3-lens-bar"
-      className="inline-flex max-w-full shrink-0 overflow-x-auto rounded-lg border border-border bg-muted/40 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-    >
-      {options.map(([v, name]) => (
-        <button
-          key={v}
-          role="tab"
-          type="button"
-          aria-selected={v === value}
-          data-lens={v}
-          onClick={() => onChange(v)}
-          className={cn(
-            "rounded-md px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground",
-            v === value && "bg-card-solid text-foreground shadow-sm ring-1 ring-border",
-          )}
-        >
-          {name}
-        </button>
-      ))}
-    </span>
-  );
-}
-
+/** A section's heading: the children's level name, and the lens menu ("List ▾"). */
 function SectionHead({
   title,
   sub,
   lenses,
   lens,
   onLens,
-  overlays,
-  offered,
-  onOverlay,
-  since,
 }: {
   title: string;
-  sub: string;
+  /** What a lens the viewer picked shows (never on the default view). */
+  sub?: string;
   lenses: Lens[];
   lens: Lens | null;
   onLens: (l: Lens) => void;
-  overlays: Overlays;
-  offered: (keyof Overlays)[];
-  onOverlay: (k: keyof Overlays) => void;
-  since?: string;
 }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-center gap-2.5">
-      <h2 className="text-[13px] font-semibold tracking-[0.01em]">{title}</h2>
-      {sub && <span className="text-[12.5px] text-foreground-tertiary max-md:hidden">{sub}</span>}
-      <span className="flex-1 max-md:hidden" />
-      {lenses.length > 1 && (
-        <Seg
-          label="Lens"
-          value={lens}
-          onChange={onLens}
-          options={lenses.map((l) => [l, LENS_NAMES[l]])}
-        />
-      )}
-      {offered.length > 0 && (lens === "map" || lens === "list") && (
-        <span
-          aria-label="Overlays"
-          className="flex max-w-full items-center gap-1 overflow-x-auto [scrollbar-width:none] md:basis-full md:flex-wrap [&::-webkit-scrollbar]:hidden"
-        >
-          {offered.map((k) => {
-            const name = OVERLAY_NAMES.find(([key]) => key === k)![1];
-            return (
-              <button
-                key={k}
-                type="button"
-                aria-pressed={overlays[k]}
-                onClick={() => onOverlay(k)}
-                className={cn(
-                  "shrink-0 rounded-full border px-2.5 py-px text-xs whitespace-nowrap",
-                  overlays[k]
-                    ? "border-border-strong bg-card-solid text-foreground before:mr-1 before:text-[9px] before:text-status-blue before:content-['●']"
-                    : "border-border text-foreground-tertiary",
-                )}
-              >
-                {k === "changed" && since ? `Since ${sinceWhen(since)}` : name}
-              </button>
-            );
-          })}
-        </span>
-      )}
+    <div className="mb-2 flex items-center gap-2.5">
+      <h2 className="px-0.5 text-[11px] tracking-[0.07em] text-foreground-tertiary uppercase">
+        {title}
+      </h2>
+      {sub && <span className="text-xs text-foreground-tertiary max-md:hidden">{sub}</span>}
+      <span className="flex-1" />
+      <LensMenu lenses={lenses} lens={lens} onLens={onLens} />
     </div>
   );
-}
-
-function childSub(c: ChildPage): string {
-  // `total` counts every child, also those past the first 60 not read yet.
-  const active = Math.max(c.items.length, c.total - c.later.length - c.ghosts.length);
-  const later = c.later.length ? ` · ${c.later.length} later` : "";
-  const fold = c.via_fold ? ` · ${c.via_fold} shown in place of an implicit parent` : "";
-  return `${active}${later}${fold}`;
-}
-
-function viewSub(v: View): string {
-  const grouped = v.parent_level_name ? ` · grouped under ${v.parent_level_name}` : "";
-  const fold = v.via_fold ? ` · ${v.via_fold} shown in place of an implicit parent` : "";
-  return `${v.total}${grouped}${fold}`;
 }
 
 /** What the section's heading says for a lens other than Map and List. */
@@ -218,7 +104,6 @@ function Below({
   const grouped = Boolean(level && level !== page.children.level);
   const view = useLevel(page.node.ref, grouped ? level : null, factoryId);
   const more = useMoreChildren(page.node.ref, page.children, factoryId);
-  const [overlays, setOverlays] = useState<Overlays>(DEFAULT_OVERLAYS);
   const c: ChildPage = more.items.length
     ? { ...page.children, items: [...page.children.items, ...more.items] }
     : page.children;
@@ -234,26 +119,19 @@ function Below({
       lensKey.current = null;
     };
   }, [choice.next, lensKey]);
-  const offered = usefulOverlays(items);
-  const toggle = (k: keyof Overlays) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
-  const since = page.rollup.since?.at;
   const other = lens === "lineage" || lens === "timeline" || lens === "money";
   if (other || choice.pending) {
     const shown: Lens = choice.pending ? "timeline" : lens!;
     const head = lensHead(shown, page, choice.timeline.data);
     const folds = !items.length && shown === "lineage";
     return (
-      <section className="mt-[18px]" aria-label={head.title} data-testid="v3-below">
+      <section className="mt-1" aria-label={head.title} data-testid="v3-below">
         <SectionHead
           title={head.title}
           sub={head.sub}
           lenses={lenses}
           lens={shown}
           onLens={choose}
-          overlays={overlays}
-          offered={offered}
-          onOverlay={toggle}
-          since={since}
         />
         {folds && (
           <button
@@ -281,28 +159,17 @@ function Below({
     if (!view.data) return null;
     const name = levelName(view.data.level, view.data.level_name);
     return (
-      <section className="mt-[18px]" aria-label={name} data-testid="v3-below">
-        <SectionHead
-          title={name}
-          sub={viewSub(view.data)}
-          lenses={lenses}
-          lens={lens}
-          onLens={choose}
-          overlays={overlays}
-          offered={offered}
-          onOverlay={toggle}
-          since={since}
-        />
+      <section className="mt-1" aria-label={name} data-testid="v3-below">
+        <SectionHead title={name} lenses={lenses} lens={lens} onLens={choose} />
         {explicit && (
-          <p className="-mt-0.5 mb-2.5 text-xs text-foreground-tertiary">
-            One level at a time: {name.toLowerCase()} under {page.node.title}, each under its
-            parent&rsquo;s name.{" "}
-            <NodeLink nodeRef={page.node.ref} className="text-status-blue-fg hover:underline">
-              Back to children
-            </NodeLink>
-          </p>
+          <NodeLink
+            nodeRef={page.node.ref}
+            className="-mt-1 mb-2 inline-block px-0.5 text-xs text-status-blue-fg hover:underline"
+          >
+            ‹ Back to children
+          </NodeLink>
         )}
-        <LevelView view={view.data} lens={shownLens} overlays={overlays} />
+        <LevelView view={view.data} lens={shownLens} overlays={DEFAULT_OVERLAYS} />
       </section>
     );
   }
@@ -313,55 +180,10 @@ function Below({
   }
   const name = levelName(c.level, c.level_name);
   return (
-    <section className="mt-[18px]" aria-label={name} data-testid="v3-below">
-      <SectionHead
-        title={name}
-        sub={childSub(c)}
-        lenses={lenses}
-        lens={lens}
-        onLens={choose}
-        overlays={overlays}
-        offered={offered}
-        onOverlay={toggle}
-        since={since}
-      />
-      <ChildrenView page={c} lens={shownLens} overlays={overlays} more={more} />
+    <section className="mt-1" aria-label={name} data-testid="v3-below">
+      <SectionHead title={name} lenses={lenses} lens={lens} onLens={choose} />
+      <ChildrenView page={c} lens={shownLens} more={more} />
     </section>
-  );
-}
-
-/** The keys this page answers: moving and stepping in only with nodes to move to, `w` only with a why. */
-function KeysLine({ stops, out, why }: { stops: boolean; out: boolean; why: boolean }) {
-  return (
-    <div
-      className="mt-6 flex flex-wrap gap-3 text-[11.5px] text-foreground-tertiary max-md:hidden"
-      data-testid="v3-keys"
-    >
-      {stops && (
-        <>
-          <span>
-            <Kbd>j</Kbd>
-            <Kbd>k</Kbd> move
-          </span>
-          <span>
-            <Kbd>↵</Kbd> or <Kbd>l</Kbd> step in
-          </span>
-        </>
-      )}
-      {out && (
-        <span>
-          <Kbd>h</Kbd> step out
-        </span>
-      )}
-      {why && (
-        <span>
-          <Kbd>w</Kbd> why
-        </span>
-      )}
-      <span>
-        <Kbd>?</Kbd> all keys
-      </span>
-    </div>
   );
 }
 
@@ -506,10 +328,17 @@ function LoadedNodePage({
   const navigate = useNavigate();
   const body = useRef<HTMLDivElement>(null);
   const [whyOpen, setWhyOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const parent = [...page.breadcrumb].reverse().find((c) => !c.folded);
-  const toggleWhy = useCallback(() => setWhyOpen((open) => !open), []);
+  // `w`: the why chain lives in Details, so it opens Details with it.
+  const toggleWhy = useCallback(() => {
+    setWhyOpen((open) => {
+      if (!open) setDetailsOpen(true);
+      return !open;
+    });
+  }, []);
   const why = hasWhy(page.status);
-  const stops = useRovingStops(body);
+  useRovingStops(body);
   const verbs = useOpenVerb(page, actions?.onVerb);
   const sheets = useSheetActions();
   useMarkSeen(page.node.ref, factoryId);
@@ -534,10 +363,12 @@ function LoadedNodePage({
     [actions, factoryId, prefetch, sheets, verbs.onVerb, openVerb],
   );
   const shown = level ?? page.home ?? (page.children.level || null);
-  const aboveId = page.status.ends === "person" ? (page.status.decision?.id ?? null) : null;
+  const move = useYourMove(page, shown, factoryId);
+  // Every ask Your move holds: tiles, rows, Details and the chat never repeat it.
+  const above = useMemo(() => movedAsks(move), [move]);
   return (
     <NodeContextProvider value={value}>
-      <AboveProvider aboveId={aboveId}>
+      <AboveProvider aboveId={above}>
         <div data-testid="v3-node-page" data-ref={page.node.ref} className="flex min-w-0 flex-col">
           {phone ? (
             <div className="mb-3">
@@ -549,9 +380,15 @@ function LoadedNodePage({
             </div>
           )}
           <div className={cn("grid min-w-0 gap-6", chat && "lg:grid-cols-[minmax(0,1fr)_auto]")}>
-            <div ref={body} className="min-w-0">
+            <div ref={body} className="min-w-0" data-testid="v3-main">
               {notice}
-              <NodeHeader page={page} whyOpen={whyOpen} onWhyChange={setWhyOpen} />
+              <NodeHeader
+                page={page}
+                whyOpen={whyOpen}
+                onWhyChange={setWhyOpen}
+                detailsOpen={detailsOpen}
+                onDetailsChange={setDetailsOpen}
+              />
               {verbs.open && (
                 <div className="mb-3">
                   <VerbPreview
@@ -562,9 +399,9 @@ function LoadedNodePage({
                   />
                 </div>
               )}
-              {!level && <NodeContent page={page} />}
+              <YourMove view={move} />
+              {!level && <NodeContent page={page} part="body" />}
               <Below page={page} level={shown} explicit={Boolean(level)} lensKey={lensKey} />
-              <KeysLine stops={stops} out={Boolean(parent)} why={why} />
             </div>
             {chat && <NodeChat page={page} sample={chat.sample} />}
           </div>

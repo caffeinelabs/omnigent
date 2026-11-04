@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { moveRow, statusLine, verbItem } from "./fixture/calmTest";
 import { renderNode } from "./fixture/renderNode";
 import { sampleNodeSource } from "./fixture/sampleNodeSource";
 import { type NodeSource, answerProposal } from "./nodeSource";
@@ -142,9 +143,7 @@ describe("cockpit v3 · the live server's previews", () => {
     await waitFor(() =>
       expect(screen.getByTestId("v3-node-page")).toHaveAttribute("data-ref", PANEL),
     );
-    await userEvent.click(
-      within(screen.getByTestId("v3-verbs")).getByRole("button", { name: /Start now/ }),
-    );
+    await userEvent.click(verbItem(/Start now/));
     const panel = await screen.findByTestId("v3-preview");
     const cols = await within(panel).findByTestId("v3-mini-columns");
     const ghost = within(cols).getByTestId("v3-mini-ghost");
@@ -168,9 +167,7 @@ describe("cockpit v3 · the live server's previews", () => {
     await waitFor(() =>
       expect(screen.getByTestId("v3-node-page")).toHaveAttribute("data-ref", PANEL),
     );
-    await userEvent.click(
-      within(screen.getByTestId("v3-verbs")).getByRole("button", { name: /Start now/ }),
-    );
+    await userEvent.click(verbItem(/Start now/));
     const panel = await screen.findByTestId("v3-preview");
     await waitFor(() => expect(within(panel).getByTestId("v3-preview-lines")).toBeInTheDocument());
     const apply = within(panel).getByTestId("v3-preview-apply");
@@ -192,9 +189,7 @@ describe("cockpit v3 · the live server's previews", () => {
     await waitFor(() =>
       expect(screen.getByTestId("v3-node-page")).toHaveAttribute("data-ref", "I-1"),
     );
-    await userEvent.click(
-      within(screen.getByTestId("v3-verbs")).getByRole("button", { name: /Add child/ }),
-    );
+    await userEvent.click(verbItem(/Add child/));
     const panel = await screen.findByTestId("v3-preview");
     // A new child lands in the first column unless it waits on a sibling.
     const order = within(panel).getByRole("group", { name: "Order" });
@@ -236,29 +231,28 @@ describe("cockpit v3 · an answer that applied a proposal can be taken back", ()
     expect(answerProposal(d45(), { id: "apply", label: "Apply" })).toBeNull();
   });
 
-  it("Apply on the status line offers its Undo beside the verbs; Undo puts the ask back", async () => {
+  it("Apply in Your move offers its Undo beside the title; Undo puts the ask back", async () => {
     const sample = sampleNodeSource();
     const undoAnswer = vi.fn(async (fid: string, decision: DecisionRef) =>
       sample.undoAnswer!(fid, decision),
     );
     renderNode("assistant-core", { source: { ...sample, undoAnswer }, answers: true });
+    const row = await waitFor(() => moveRow("D-45"));
+    expect(row).toHaveTextContent("Apply C-16");
+    await userEvent.click(within(row).getByRole("button", { name: "Apply" }));
     await waitFor(() =>
-      expect(screen.getByTestId("v3-status")).toHaveTextContent("needs you: Apply C-16 (D-45)"),
+      expect(screen.queryAllByTestId("v3-move-row").map((r) => r.dataset.decision)).not.toContain(
+        "D-45",
+      ),
     );
-    await userEvent.click(
-      within(screen.getByTestId("v3-status")).getByRole("button", { name: "Apply" }),
-    );
-    await waitFor(() => expect(screen.getByTestId("v3-status")).not.toHaveTextContent("D-45"));
     const undo = await screen.findByTestId("v3-undo-latest");
     expect(undo).toHaveTextContent("Apply C-16: Undo (10 min left)");
     await userEvent.click(undo);
     await waitFor(() => expect(undoAnswer).toHaveBeenCalledTimes(1));
     expect(undoAnswer.mock.calls[0]![1]).toMatchObject({ id: "D-45" });
     // As on the server: C-16 asks again under a fresh decision; D-45 stays answered.
-    await waitFor(() =>
-      expect(screen.getByTestId("v3-status")).toHaveTextContent(/needs you: Apply C-16 \(D-52\)/),
-    );
-    expect(screen.getByTestId("v3-status")).not.toHaveTextContent("D-45");
+    await waitFor(() => expect(moveRow("D-52")).toHaveTextContent("Apply C-16"));
+    expect(statusLine()).not.toHaveTextContent("D-45");
     expect(screen.queryByTestId("v3-undo-latest")).toBeNull();
     expect(sample.engine.writes).toContain("undo answer:D-45");
     // What C-16 held waits again, and the ask is back in Needs you.

@@ -7,6 +7,7 @@
 // the parent fold into "…" so every cell keeps a readable title.
 
 import { cn } from "@/lib/utils";
+import { nodeName } from "./calm/calmModel";
 import { inProductTree } from "./lenses/lensModel";
 import { useLensSupport } from "./lenses/lensQueries";
 import { useNodeActions } from "./NodeContext";
@@ -31,9 +32,12 @@ function Chev() {
   );
 }
 
-/** Levels that hold something: an empty level is left out, never shown as 0. */
+/**
+ * Levels that hold something: an empty level is left out, never shown as 0. A
+ * debug level (Runs) shows only within two levels of the node, where debugging is.
+ */
 export function heldLevels(below: LevelCount[]): LevelCount[] {
-  return below.filter((c) => c.count + c.later > 0);
+  return below.filter((c, i) => c.count + c.later > 0 && (!c.debug || i < 2));
 }
 
 /** "4 +4 later 2 you": what a level holds, never a bare zero. */
@@ -82,7 +86,7 @@ export function readoutWords(r: Results): string {
 }
 
 function crumbTitle(c: Crumb): string {
-  return c.tag ? `${c.tag} · ${c.title}` : c.title;
+  return nodeName(c);
 }
 
 /** A code that names the node ("T-16", "#9876", a sha), not a priority like "P0". */
@@ -99,6 +103,7 @@ export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | n
     level: node.level,
     level_name: node.level_name,
     title: node.title,
+    ...(node.short_title ? { short_title: node.short_title } : {}),
     state: node.state,
     tag: codeTag(node.tag),
   };
@@ -131,7 +136,7 @@ export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | n
             )}
             <NodeLink
               nodeRef={c.ref}
-              title={c.folded ? `${c.title} (implicit, folded into its only child)` : c.title}
+              title={c.folded ? `${nodeName(c)} (implicit, folded into its only child)` : c.title}
               className={cn(
                 CELL,
                 isHere && cn("bg-card-solid after:bg-status-blue", UNDER),
@@ -193,9 +198,8 @@ export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | n
           )}
         >
           <span className={LV}>Results</span>
-          <span className={CV}>{resultsWords(results)}</span>
-          <span className={cn(CV, "text-[11.5px] text-foreground-tertiary")}>
-            {readoutWords(results)}
+          <span className={CV} title={readoutWords(results)}>
+            {resultsWords(results)}
           </span>
         </span>
       )}
@@ -218,7 +222,7 @@ export function PhoneLevelRow({ page, shown }: { page: NodePage; shown?: string 
             nodeRef={parent.ref}
             className="min-w-0 flex-1 overflow-hidden py-1 text-[13.5px] text-ellipsis whitespace-nowrap text-status-blue-fg"
           >
-            ‹ {parent.title}
+            ‹ {nodeName(parent)}
           </NodeLink>
         ) : (
           <span className="flex-1 py-1 text-[13.5px] text-muted-foreground">

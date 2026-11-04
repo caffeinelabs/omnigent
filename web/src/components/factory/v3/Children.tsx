@@ -1,12 +1,11 @@
-// A node's children in one lens: tiles under First / Then / Later columns
-// (order among siblings is a column, never an arrow), rows past 12, rows
-// grouped by state past 60 (60 to a page), done work folded into one line,
-// held work in one dashed box with its reasons. Proposals and held work show
-// at every size.
+// A node's children in one lens, calm: one line each (List, the default) or
+// tiles (Map), under First / Then / Later when siblings have an order (order
+// is a heading, never an arrow), rows grouped by state past 60 (60 to a page),
+// done work folded into one "✓ n done" line, held work under Later.
 
 import { useState } from "react";
+import { ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { StateDot } from "./nodeParts";
 import type { MorePages } from "./nodeQueries";
 import { NodeRow, NodeTile, type Overlays, byState } from "./NodeTile";
 import type { ChildPage, NodeSummary } from "./nodeTypes";
@@ -22,20 +21,20 @@ const COLH =
 const ROWS = "overflow-hidden rounded-xl bg-card-solid ring-1 ring-border";
 const NEXT_BTN =
   "rounded-[7px] border border-border-strong bg-card-solid px-2 text-xs font-semibold text-foreground disabled:opacity-60";
+const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-3";
 
-/** "✓ 4 done  title · title · in base env  show": done siblings in one line; a click shows them. */
+/** "✓ 4 done": done siblings in one line; a click shows them. */
 export function DoneLine({
   done,
   label,
   compactTiles = true,
-  overlays,
   rows,
 }: {
   done: NodeSummary[];
   /** Overrides "n done" (a folded group of groups: "6 projects all done"). */
   label?: string;
   compactTiles?: boolean;
-  overlays: Overlays;
+  overlays?: Overlays;
   /** Show them as rows when unfolded. */
   rows?: boolean;
 }) {
@@ -47,82 +46,57 @@ export function DoneLine({
         {rows ? (
           <ul role="list" className={ROWS}>
             {done.map((n) => (
-              <NodeRow key={n.ref} node={n} overlays={overlays} />
+              <NodeRow key={n.ref} node={n} />
             ))}
           </ul>
         ) : (
-          <ul
-            role="list"
-            className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,290px),1fr))] gap-3"
-          >
+          <ul role="list" className={TILE_GRID}>
             {done.map((n) => (
-              <NodeTile key={n.ref} node={n} compact={compactTiles} overlays={overlays} />
+              <NodeTile key={n.ref} node={n} compact={compactTiles} />
             ))}
           </ul>
         )}
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="self-start rounded-[7px] border border-dashed border-border-strong px-2.5 text-[12.5px] text-muted-foreground hover:text-foreground"
+          className="self-start px-0.5 text-[12.5px] text-muted-foreground hover:text-foreground"
         >
           Fold done
         </button>
       </div>
     );
   }
-  const single = done.length === 1 ? done[0]! : null;
-  const names = done.map((d) =>
-    single && d.status_compact.detail ? `${d.title}: ${d.status_compact.detail}` : d.title,
-  );
-  const joined = names.join(" ");
-  const allIn = done.every((d) => d.in_base_env) && !joined.includes("in base env");
   return (
     <button
       type="button"
       data-testid="v3-done-line"
+      aria-expanded={false}
+      title={done.map((d) => d.title).join(" · ")}
       onClick={() => setOpen(true)}
-      className="flex w-full flex-wrap items-center gap-2 rounded-[10px] border border-dashed border-border-strong px-3 py-2 text-left text-[13px] text-muted-foreground hover:border-foreground-tertiary hover:text-foreground"
+      className="flex items-center gap-2 self-start rounded-[8px] px-1 py-1 text-left text-[13px] text-muted-foreground hover:text-foreground"
     >
       <span aria-hidden className="font-bold text-status-green-fg">
         ✓
       </span>
-      <b className="font-semibold text-foreground">{label ?? `${done.length} done`}</b>
-      <span className="min-w-0">
-        {names.slice(0, 4).join(" · ")}
-        {names.length > 4 ? ` +${names.length - 4}` : ""}
-      </span>
-      {allIn && <span className="text-foreground-tertiary">· in base env</span>}
-      <span className="flex-1" />
-      <span className="text-foreground-tertiary">show</span>
+      <span>{label ?? `${done.length} done`}</span>
+      <ChevronDownIcon aria-hidden className="size-3" />
     </button>
   );
 }
 
-/** Held work: one dashed box, each item with what it waits for. Not counted in progress or cost. */
-export function LaterBox({ later, note }: { later: NodeSummary[]; note?: string }) {
+/** Held work, one row each; its reason is the row's phrase. Not counted in progress or cost. */
+export function LaterBox({ later }: { later: NodeSummary[]; note?: string }) {
   if (!later.length) return null;
   return (
-    <div
+    <ul
+      role="list"
       data-testid="v3-later"
-      className="flex flex-col gap-[5px] rounded-[10px] border border-dashed border-border-strong px-3 py-2"
+      className="overflow-hidden rounded-xl border border-dashed border-border-strong"
     >
       {later.map((k) => (
-        <div
-          key={k.ref}
-          className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground"
-          title={k.held_for ? `Held for ${k.held_for}` : undefined}
-        >
-          <StateDot state="later" />
-          <span>{k.title}</span>
-          {k.held_for && (
-            <span className="-mt-1 basis-full pl-4 text-[11.5px] text-foreground-tertiary">
-              {k.held_for}
-            </span>
-          )}
-        </div>
+        <NodeRow key={k.ref} node={{ ...k, state: "later" }} />
       ))}
-      {note && <div className="text-[11.8px] text-foreground-tertiary">{note}</div>}
-    </div>
+    </ul>
   );
 }
 
@@ -130,8 +104,8 @@ function colOf(n: NodeSummary): number {
   return typeof n.col === "number" ? n.col : 0;
 }
 
-/** Siblings in their order columns: First / Then / … and the held column. At most four to a row. */
-export function OrderColumns({ page, overlays }: { page: ChildPage; overlays: Overlays }) {
+/** Siblings in their order columns as tiles (the Map lens): First / Then / … and Later. */
+export function OrderColumns({ page }: { page: ChildPage; overlays?: Overlays }) {
   const columns = page.columns ?? [{ title: "", col: 0 }];
   const hasLater = page.later.length > 0;
   const ncol = Math.min(4, columns.length + (hasLater ? 1 : 0));
@@ -143,38 +117,31 @@ export function OrderColumns({ page, overlays }: { page: ChildPage; overlays: Ov
       className="grid items-start gap-3.5 max-md:!grid-cols-1"
       style={{ gridTemplateColumns: `repeat(${ncol}, minmax(0, 1fr))` }}
     >
-      {columns.map((c, i) => {
+      {columns.map((c) => {
         const items = page.items.filter((k) => colOf(k) === c.col);
         const live = items.filter((k) => k.state !== "done").sort(byState);
         const done = items.filter((k) => k.state === "done");
         const ghosts = page.ghosts.filter((g) => colOf(g) === c.col);
         return (
           <li key={c.col} className="flex min-w-0 flex-col gap-2" data-testid="v3-column">
-            <div className={COLH}>
-              {c.title}
-              {i > 0 && (
-                <span className="text-[11.5px] tracking-normal normal-case">
-                  after {columns[i - 1]!.title.toLowerCase()}
-                </span>
-              )}
-            </div>
+            {c.title && <div className={COLH}>{c.title}</div>}
             <ul role="list" className="flex flex-col gap-2">
               {live.map((k) => (
-                <NodeTile key={k.ref} node={k} compact={compact} overlays={overlays} />
+                <NodeTile key={k.ref} node={k} compact={compact} />
               ))}
               {ghosts.map((k) => (
-                <NodeTile key={k.ref} node={k} compact overlays={overlays} />
+                <NodeTile key={k.ref} node={k} compact />
               ))}
-              {done.length === 1 && <NodeTile node={done[0]!} compact overlays={overlays} />}
+              {done.length === 1 && <NodeTile node={done[0]!} compact />}
             </ul>
-            {done.length > 1 && <DoneLine done={done} overlays={overlays} />}
+            {done.length > 1 && <DoneLine done={done} />}
           </li>
         );
       })}
       {hasLater && (
         <li className="flex min-w-0 flex-col gap-2">
           <div className={COLH}>{page.later_title ?? "Later"}</div>
-          <LaterBox later={page.later} note={page.later_note} />
+          <LaterBox later={page.later} />
         </li>
       )}
     </ul>
@@ -184,11 +151,9 @@ export function OrderColumns({ page, overlays }: { page: ChildPage; overlays: Ov
 /** Rows, 60 to a page. */
 export function PagedRows({
   items,
-  overlays,
-  owner,
 }: {
   items: NodeSummary[];
-  overlays: Overlays;
+  overlays?: Overlays;
   owner?: boolean;
 }) {
   const [pages, setPages] = useState(1);
@@ -196,7 +161,7 @@ export function PagedRows({
   return (
     <ul role="list" className={ROWS}>
       {shown.map((n) => (
-        <NodeRow key={n.ref} node={n} overlays={overlays} owner={owner} />
+        <NodeRow key={n.ref} node={n} />
       ))}
       {items.length > shown.length && (
         <li className="flex items-center justify-center gap-2.5 border-t border-border p-2 text-[12.5px] text-foreground-tertiary">
@@ -248,11 +213,9 @@ const STATE_GROUPS: [NodeSummary["state"][], string][] = [
 /** More than 60 children: rows grouped by state, done folded, 60 to a page. */
 export function StateGroups({
   items,
-  overlays,
-  owner,
 }: {
   items: NodeSummary[];
-  overlays: Overlays;
+  overlays?: Overlays;
   owner?: boolean;
 }) {
   const done = items.filter((k) => k.state === "done");
@@ -266,63 +229,56 @@ export function StateGroups({
             <div className={COLH}>
               {label} <span className="tracking-normal normal-case">{g.length}</span>
             </div>
-            <PagedRows items={g} overlays={overlays} owner={owner} />
+            <PagedRows items={g} />
           </div>
         );
       })}
-      <DoneLine done={done} overlays={overlays} rows />
+      <DoneLine done={done} rows />
     </div>
   );
 }
 
-/** Rows; under First / Then headings when siblings have an order. Held work in its box below. */
-export function ColumnRows({ page, overlays }: { page: ChildPage; overlays: Overlays }) {
+/** Live rows, then done folded into one line (one done child stays a row). */
+function LiveThenDone({ items }: { items: NodeSummary[] }) {
+  const live = items.filter((k) => k.state !== "done").sort(byState);
+  const done = items.filter((k) => k.state === "done");
+  const rows = done.length === 1 ? [...live, ...done] : live;
+  return (
+    <>
+      {rows.length > 0 && <PagedRows items={rows} />}
+      {done.length > 1 && <DoneLine done={done} rows />}
+    </>
+  );
+}
+
+/** Rows (the List lens); under First / Then / Later when siblings have an order. */
+export function ColumnRows({ page }: { page: ChildPage; overlays?: Overlays }) {
   const active = [...page.items, ...page.ghosts];
   const columns = page.columns && page.columns.length > 1 ? page.columns : null;
-  const owner = !drawsTiles(page);
+  const later = page.later.length > 0;
+  const headed = Boolean(columns) || (later && active.length > 0);
   return (
     <div className="flex flex-col gap-2.5">
       {columns ? (
-        columns.map((c, i) => {
-          const rows = active.filter((k) => colOf(k) === c.col).sort(byState);
+        columns.map((c) => {
+          const rows = active.filter((k) => colOf(k) === c.col);
           if (!rows.length) return null;
           return (
-            <div key={c.col} className="flex flex-col gap-1.5">
-              <div className={cn(COLH, "mx-0.5")}>
-                {c.title}
-                {i > 0 && (
-                  <span className="text-[11.5px] tracking-normal normal-case">
-                    after {columns[i - 1]!.title.toLowerCase()}
-                  </span>
-                )}
-              </div>
-              <PagedRows items={rows} overlays={overlays} owner={owner} />
+            <div key={c.col} className="flex flex-col gap-1.5" data-testid="v3-column">
+              <div className={cn(COLH, "mx-0.5")}>{c.title}</div>
+              <LiveThenDone items={rows} />
             </div>
           );
         })
       ) : (
-        <>
-          {active.some((k) => k.state !== "done") && (
-            <PagedRows
-              items={active.filter((k) => k.state !== "done").sort(byState)}
-              overlays={overlays}
-              owner={owner}
-            />
-          )}
-          {active.filter((k) => k.state === "done").length > 1 ? (
-            <DoneLine done={active.filter((k) => k.state === "done")} overlays={overlays} rows />
-          ) : (
-            active.some((k) => k.state === "done") && (
-              <PagedRows
-                items={active.filter((k) => k.state === "done")}
-                overlays={overlays}
-                owner={owner}
-              />
-            )
-          )}
-        </>
+        <LiveThenDone items={active} />
       )}
-      <LaterBox later={page.later} note={page.later_note} />
+      {later && (
+        <div className="flex flex-col gap-1.5">
+          {headed && <div className={cn(COLH, "mx-0.5")}>{page.later_title ?? "Later"}</div>}
+          <LaterBox later={page.later} />
+        </div>
+      )}
     </div>
   );
 }
@@ -331,12 +287,11 @@ export function ColumnRows({ page, overlays }: { page: ChildPage; overlays: Over
 export function ChildrenView({
   page,
   lens,
-  overlays,
   more,
 }: {
   page: ChildPage;
   lens: "map" | "list";
-  overlays: Overlays;
+  overlays?: Overlays;
   more?: MorePages;
 }) {
   const active = page.items.length;
@@ -352,45 +307,36 @@ export function ChildrenView({
   if (active > PAGE_ROWS || page.grouped_by_state) {
     return (
       <div className="flex flex-col gap-3">
-        <StateGroups items={[...page.items, ...page.ghosts]} overlays={overlays} owner={!tiles} />
-        <LaterBox later={page.later} note={page.later_note} />
+        <StateGroups items={[...page.items, ...page.ghosts]} />
+        <LaterBox later={page.later} />
         {footer}
       </div>
     );
   }
-  const autoRows = lens === "map" && tiles && active > TILES_MAX;
-  if (lens === "list" || !tiles || autoRows) {
+  if (lens === "list" || !tiles || active > TILES_MAX) {
     return (
       <div className="flex flex-col gap-2">
-        {autoRows && (
-          <p className="-mt-0.5 text-xs text-foreground-tertiary">
-            {active} children: shown as rows (tiles are for {TILES_MAX} or fewer).
-          </p>
-        )}
-        <ColumnRows page={page} overlays={overlays} />
+        <ColumnRows page={page} />
         {footer}
       </div>
     );
   }
-  if (page.columns) return <OrderColumns page={page} overlays={overlays} />;
+  if (page.columns) return <OrderColumns page={page} />;
   const live = page.items.filter((k) => k.state !== "done").sort(byState);
   const done = page.items.filter((k) => k.state === "done");
   return (
     <div className="flex flex-col gap-3">
       {(live.length > 0 || page.ghosts.length > 0) && (
-        <ul
-          role="list"
-          className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,290px),1fr))] gap-3"
-        >
+        <ul role="list" className={TILE_GRID}>
           {live.map((k) => (
-            <NodeTile key={k.ref} node={k} overlays={overlays} />
+            <NodeTile key={k.ref} node={k} />
           ))}
           {page.ghosts.map((k) => (
-            <NodeTile key={k.ref} node={k} compact overlays={overlays} />
+            <NodeTile key={k.ref} node={k} compact />
           ))}
         </ul>
       )}
-      <DoneLine done={done} overlays={overlays} />
+      <DoneLine done={done} />
     </div>
   );
 }

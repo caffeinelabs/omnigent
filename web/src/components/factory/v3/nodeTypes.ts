@@ -180,6 +180,8 @@ export interface Crumb {
   state: NodeState;
   /** A small code next to the title ("T-16"), on crumbs of row levels only. (client) */
   tag?: string;
+  /** The node's short name, 2–6 words (calm rule 2); the title is the full text. */
+  short_title?: string;
   implicit?: boolean;
   /** An implicit parent with one child, shown as that child (italic in the strip). */
   folded?: boolean;
@@ -199,6 +201,12 @@ export interface NodeSummary {
   /** A small code next to the title ("I-1", "#9876", "P0"). (client) */
   tag?: string;
   title: string;
+  /**
+   * The node's short name, 2–6 words (calm rule 2): what every page, row and
+   * crumb shows. The title is the full text (a person's ask, a machine label),
+   * shown only in Details. Absent on older servers: `nodeName` shortens the title.
+   */
+  short_title?: string;
   short?: string;
   /** The base a project merges into when it is not the factory's. (client) */
   base?: string;
@@ -396,6 +404,39 @@ export interface NodePage {
   version: string;
   /** At a root, the level the page shows by default ("feature": Home). (client) */
   home?: string;
+  /**
+   * What this viewer must do here (calm rule 1): at most three asks from the
+   * node's subtree, ranked by how much work each unblocks, and how many more.
+   * Absent on older servers: the page derives it from the status line and Needs you.
+   */
+  your_move?: YourMove;
+}
+
+// ── Your move (calm rule 1) ─────────────────────────────────────
+
+/** One thing the viewer must do: a verb, its object, what it unblocks, one answer. */
+export interface YourMoveItem {
+  /** The ask's id (`D-45`; a group of merges has its own). */
+  id: string;
+  /** "Apply". */
+  verb: string;
+  /** "C-16"; empty when the verb names it already ("Merge #9856 and #9857"). */
+  object?: string;
+  /** What answering it unblocks, as a short name ("Agent assistant"); absent: blocks nothing. */
+  unblocks?: string;
+  /** The node it unblocks. */
+  unblocks_ref?: string;
+  /** The node the ask is on. */
+  ref?: string;
+  /** The ask itself, with its answers (the row's button is the first). */
+  decision: DecisionRef;
+}
+
+/** The node's Your move: the first rows and how many more the subtree holds. */
+export interface YourMove {
+  items: YourMoveItem[];
+  /** Asks past the first rows (behind "+n more"). */
+  more: number;
 }
 
 export interface LevelGroup {

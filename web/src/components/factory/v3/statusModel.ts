@@ -30,13 +30,22 @@ export interface StatusOptions {
   compact?: boolean;
   /** The node the line belongs to (a moving line names its worker only when it is another node). */
   nodeRef?: string;
-  /** The decision the page's header asks: a compact line ending there says "the ask above". */
-  aboveId?: string | null;
+  /** The asks the page's Your move holds (their keys): a line ending there points up instead of repeating it. */
+  aboveId?: Above;
 }
 
-/** True when this compact line ends at the decision the header already asks. */
-export function endsAbove(line: StatusLine, aboveId: string | null | undefined): boolean {
-  return Boolean(aboveId && line.decision && line.decision.id === aboveId);
+/** The asks a page already shows: one id, or every key of its Your move. */
+export type Above = ReadonlySet<string> | string | null | undefined;
+
+function isAbove(decision: DecisionRef | undefined, above: Above): boolean {
+  if (!decision || !above) return false;
+  if (typeof above === "string") return decision.id === above;
+  return [decision.id, decision.row_id, decision.subject].some((k) => k && above.has(k));
+}
+
+/** True when this line ends at an ask the page already shows. */
+export function endsAbove(line: StatusLine, aboveId: Above): boolean {
+  return isAbove(line.decision, aboveId);
 }
 
 export function statusParts(line: StatusLine, options: StatusOptions = {}): StatusPart[] {
@@ -51,17 +60,22 @@ export function statusParts(line: StatusLine, options: StatusOptions = {}): Stat
     }
   }
   if (options.compact) compactPath(line, options.aboveId ?? null, parts);
-  else fullPath(line, parts);
-  if (line.detail) {
+  else fullPath(line, parts, options.aboveId ?? null);
+  // An ask's own words stay on its Your move row.
+  if (line.detail && !(line.kind === "needs" && isAbove(line.decision, options.aboveId))) {
     const lead = line.segments.length || moving ? " · " : "";
     parts.push({ t: line.kind === "needs" ? "muted" : "text", text: `${lead}${line.detail}` });
   }
   return parts.map((part, i) => ({ ...part, key: i }) as StatusPart);
 }
 
-function fullPath(line: StatusLine, parts: Part[]) {
+function fullPath(line: StatusLine, parts: Part[], above: Above) {
   line.segments.forEach((sg, i) => {
     if (i > 0) parts.push({ t: "sep", text: sg.sep });
+    if ("person" in sg && isAbove(sg.decision, above)) {
+      parts.push({ t: "muted", text: "your move, above" });
+      return;
+    }
     if ("person" in sg) {
       // "Needs you: Merge #9856 and #9857", not "Needs you: needs you: …".
       const alone = i === 0 && needsStyle(line.label);
@@ -89,7 +103,7 @@ function fullPath(line: StatusLine, parts: Part[]) {
   }
 }
 
-function compactPath(line: StatusLine, aboveId: string | null, parts: Part[]) {
+function compactPath(line: StatusLine, aboveId: Above, parts: Part[]) {
   const above = endsAbove(line, aboveId);
   const verbOnly = needsStyle(line.label);
   const via: string[] = [];

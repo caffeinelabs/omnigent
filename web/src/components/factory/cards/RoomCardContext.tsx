@@ -35,6 +35,8 @@ export interface RoomCardData {
     ((message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode) | null;
   /** Messages whose card a newer one of the same object repeats: their line, not the card (v3). */
   repeated?: ReadonlySet<string> | null;
+  /** A card under a message whose ask the page shows elsewhere: left out (v3). */
+  hidden?: ((message: ChatMessageView) => boolean) | null;
 }
 
 export const RoomCardContext = createContext<RoomCardData | null>(null);

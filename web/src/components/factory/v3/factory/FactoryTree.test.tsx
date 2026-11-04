@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import serverLenses from "../../__fixtures__/nodeLenses.server.json";
+import { verbItem } from "../fixture/calmTest";
 import { renderNode } from "../fixture/renderNode";
 import { sampleEngine } from "../fixture/sampleNodeSource";
 import type { NodeSource } from "../nodeSource";
@@ -79,8 +80,9 @@ describe("cockpit v3 · the factory tree's areas", () => {
     await page("fx:rules");
     const below = screen.getByTestId("v3-below");
     expect(below).toHaveTextContent("Spike unproven external capabilities before implementing");
-    expect(below).toHaveTextContent("Name pending scope decisions in READY posts");
-    expect(screen.getByTestId("v3-status")).toHaveTextContent("Apply rule C-17");
+    // Seven words: the row shows its short name (the full title is in its Details).
+    expect(below).toHaveTextContent("Name pending scope decisions in…");
+    expect(screen.getByTestId("v3-your-move")).toHaveTextContent("Apply rule C-17");
   });
 
   it("Definition: the levels as the definition names them, and Rename levels with r", async () => {
@@ -100,8 +102,9 @@ describe("cockpit v3 · the factory tree's areas", () => {
     ]);
     expect(rows[0]).toHaveTextContent("hidden now: no node on it yet");
     expect(rows[6]).toHaveTextContent("shows when debugging");
-    const verb = screen.getByRole("button", { name: /Rename levels/ });
+    const verb = verbItem(/Rename levels/);
     expect(verb).toHaveTextContent("r");
+    fireEvent.keyDown(verb, { key: "Escape" });
     fireEvent.keyDown(document.body, { key: "r" });
     expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Rename levels");
   });

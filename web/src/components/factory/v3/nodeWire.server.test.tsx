@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import serverLenses from "../__fixtures__/nodeLenses.server.json";
 import serverLevels from "../__fixtures__/nodeLevels.server.json";
 import serverPages from "../__fixtures__/nodePages.server.json";
+import { lensesOffered, openVerbs, verbItem } from "./fixture/calmTest";
 import { renderNode } from "./fixture/renderNode";
 import { resultsWords } from "./LevelStrip";
 import { liveNodeSource } from "./nodeSource";
@@ -122,9 +123,10 @@ describe("cockpit v3 · the server's node pages", () => {
       );
       await waitFor(() => expect(view.container.querySelector('[aria-busy="true"]')).toBeNull());
       expect({ ref, alert: screen.queryByRole("alert") }).toEqual({ ref, alert: null });
-      const lines = view.container.querySelectorAll(
-        "svg line, svg path, svg polyline, svg polygon",
-      );
+      // An icon inside a control (Details' chevron, the ⋯ menu) is a glyph, not a line.
+      const lines = [
+        ...view.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon"),
+      ].filter((el) => !(el.closest("svg.lucide") && el.closest("button, a")));
       expect({ ref, lines: lines.length }).toEqual({ ref, lines: 0 });
       expect({ ref, empty: emptyCells(view.container) }).toEqual({ ref, empty: [] });
       view.unmount();
@@ -133,10 +135,7 @@ describe("cockpit v3 · the server's node pages", () => {
 
   it("reads the server's lenses: the feature's timeline and money, a task's lineage", async () => {
     serve();
-    const lensBar = () =>
-      within(screen.getByTestId("v3-lens-bar"))
-        .getAllByRole("tab")
-        .map((t) => t.getAttribute("data-lens"));
+    const lensBar = () => lensesOffered();
     const timeline = LENSES["timeline/I-1"] as TimelineView;
     const t = renderNode("I-1", { source: liveNodeSource, query: "?lens=timeline" });
     const drawn = await screen.findByTestId("v3-timeline");
@@ -155,7 +154,9 @@ describe("cockpit v3 · the server's node pages", () => {
     expect(kinds("assistant-panel-ux")).toEqual(["wait"]);
     expect(kinds("connectors-core")).toEqual(["wait", "done"]);
     expect(
-      t.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon"),
+      [...t.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon")].filter(
+        (el) => !(el.closest("svg.lucide") && el.closest("button, a")),
+      ),
     ).toHaveLength(0);
     t.unmount();
 
@@ -190,7 +191,7 @@ describe("cockpit v3 · the server's node pages", () => {
     const levels = await screen.findByTestId("v3-levels-block");
     expect(levels).toHaveTextContent("definition version 14");
     expect(within(levels).getAllByTestId("v3-level-row")[0]).toHaveTextContent("hidden now");
-    expect(screen.getByRole("button", { name: /Rename levels/ })).toBeInTheDocument();
+    expect(verbItem(/Rename levels/)).toBeInTheDocument();
   });
 
   it("Definition shows the levels because the server says so, with or without Rename levels", async () => {
@@ -211,7 +212,7 @@ describe("cockpit v3 · the server's node pages", () => {
     });
     renderNode("fx:definition", { source: liveNodeSource });
     expect(await screen.findByTestId("v3-levels-block")).toHaveTextContent("definition version 14");
-    expect(screen.queryByRole("button", { name: /Rename levels/ })).toBeNull();
+    expect(within(openVerbs()).queryByRole("menuitem", { name: /Rename levels/ })).toBeNull();
   });
 
   it("the product page shows the server's strip and results", async () => {

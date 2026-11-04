@@ -7,6 +7,7 @@
 import type {
   ChildPage,
   Crumb,
+  DecisionAction,
   DecisionRef,
   FindHit,
   LevelView,
@@ -24,6 +25,8 @@ import type {
   TimelineView,
   VerbPreview,
   WhyItem,
+  YourMove,
+  YourMoveItem,
 } from "./nodeTypes";
 
 /** A level's name: the server's, else its key in words ("feature" → "Feature"). */
@@ -91,18 +94,86 @@ function children(page: ChildPage): ChildPage {
   };
 }
 
+type Wire = Record<string, unknown>;
+
+function str(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function wireAction(value: unknown): DecisionAction | null {
+  if (typeof value === "string" && value) return { id: value.toLowerCase(), label: value };
+  const v = value as Wire | null;
+  const label = str(v?.label);
+  return label ? { id: str(v?.id) ?? label.toLowerCase(), label } : null;
+}
+
+/** One Your move row as the server sends it: its ask in full, or the ask's fields beside the row's. */
+function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
+  const d = (raw.decision as DecisionRef | undefined) ?? undefined;
+  const id = str(raw.id) ?? str(raw.decision_id) ?? str(raw.merge_id) ?? d?.id;
+  if (!id) return null;
+  const verb = str(raw.verb) ?? d?.verb?.split(" ")[0] ?? "Answer";
+  const object = str(raw.object);
+  const actions = [
+    ...(d?.actions ?? []),
+    ...(d?.actions?.length ? [] : [raw.action, raw.primary].map(wireAction)),
+  ].filter((a): a is DecisionAction => Boolean(a));
+  const own = status.decision?.id === id ? status.decision : undefined;
+  const decision: DecisionRef = askWords({
+    ...(own ?? {}),
+    ...(d ?? {}),
+    id,
+    verb: d?.verb ?? own?.verb ?? [verb, object].filter(Boolean).join(" "),
+    actions: actions.length ? actions : (own?.actions ?? []),
+    asker: d?.asker ?? own?.asker ?? "",
+    age: d?.age ?? own?.age ?? "",
+    ...(str(raw.external_url) ? { external_url: str(raw.external_url) } : {}),
+  });
+  const unblocks = raw.unblocks as string | { ref?: string; title?: string; short_title?: string };
+  const target =
+    typeof unblocks === "string"
+      ? { title: unblocks }
+      : unblocks && (unblocks.short_title || unblocks.title)
+        ? { title: unblocks.short_title ?? unblocks.title!, ref: unblocks.ref }
+        : null;
+  return {
+    id,
+    verb,
+    ...(object ? { object } : {}),
+    ...(target ? { unblocks: target.title } : {}),
+    ...((str(raw.unblocks_ref) ?? target?.ref)
+      ? { unblocks_ref: str(raw.unblocks_ref) ?? target?.ref }
+      : {}),
+    ...(str(raw.ref) ? { ref: str(raw.ref) } : {}),
+    decision,
+  };
+}
+
+/** `your_move` as a list, `{items, more}` or absent (older servers). */
+export function normalizeYourMove(raw: unknown, status: StatusLine): YourMove | undefined {
+  if (raw == null) return undefined;
+  const list = Array.isArray(raw) ? raw : ((raw as Wire).items ?? (raw as Wire).rows);
+  if (!Array.isArray(list)) return undefined;
+  const items = list.flatMap((r) => moveItem(r as Wire, status) ?? []);
+  const more = Array.isArray(raw) ? 0 : Number((raw as Wire).more ?? 0) || 0;
+  return { items, more };
+}
+
 /** A node page from the server, in the shapes the page renders. */
 export function normalizeNodePage(page: NodePage): NodePage {
+  const status = normalizeStatus(page.status);
+  const yourMove = normalizeYourMove((page as { your_move?: unknown }).your_move, status);
   return {
     ...page,
     node: summary(page.node),
     breadcrumb: page.breadcrumb ?? [],
-    status: normalizeStatus(page.status),
+    status,
     chips: page.chips ?? [],
     more_chips: page.more_chips ?? 0,
     verbs: page.verbs ?? [],
     levels_below: page.levels_below ?? [],
     children: children(page.children),
+    ...(yourMove ? { your_move: yourMove } : {}),
   };
 }
 

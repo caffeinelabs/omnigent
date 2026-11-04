@@ -35,7 +35,16 @@ export function StateDot({ state, className }: { state: NodeState; className?: s
 }
 
 /** A progress ring (circles only): the value, a dashed tail while the plan grows, an inner build ring. */
-export function Ring({ progress, size = 36 }: { progress: Progress; size?: number }) {
+export function Ring({
+  progress,
+  size = 36,
+  bare = false,
+}: {
+  progress: Progress;
+  size?: number;
+  /** No label inside (a row's small ring); the label stays its accessible name. */
+  bare?: boolean;
+}) {
   const r = 15;
   const c = 2 * Math.PI * r;
   const p = Math.max(0, Math.min(1, progress.value));
@@ -90,15 +99,17 @@ export function Ring({ progress, size = 36 }: { progress: Progress; size?: numbe
           transform="rotate(-90 18 18)"
         />
       )}
-      <text
-        x="18"
-        y="21"
-        textAnchor="middle"
-        className="fill-muted-foreground"
-        style={{ fontSize: 9.5, fontWeight: 650 }}
-      >
-        {progress.label}
-      </text>
+      {!bare && (
+        <text
+          x="18"
+          y="21"
+          textAnchor="middle"
+          className="fill-muted-foreground"
+          style={{ fontSize: 9.5, fontWeight: 650 }}
+        >
+          {progress.label}
+        </text>
+      )}
     </svg>
   );
 }

@@ -161,6 +161,85 @@ def _backdate(db_uri: str, model: Any, at: dict[str, float]) -> None:
         engine.dispose()
 
 
+def _thread_activity(
+    fs: SqlAlchemyFactoryStore, fid: str, clock: float, closed: Any, *, lead: str
+) -> None:
+    """
+    What the factory's thread holds besides the conversation, as on a live
+    factory: base moves, a member spawned, three incidents resolved days ago
+    and a closed proposal (the chat folds them into its Activity line), and
+    one message from the lead.
+    """
+
+    def system(body: str, at: float, card: dict[str, Any]) -> None:
+        fs.append_chat(
+            fid,
+            thread=F.THREAD_FACTORY,
+            author_kind="system",
+            author="server",
+            body=body,
+            card=card,
+            created_at=int(at),
+        )
+
+    for n, (rule, summary) in enumerate(
+        (
+            ("cost.burn", "the factory spends $21.00/h (alert above $15/h)"),
+            ("session.idle", "Sentinel running with no new activity for 16 min"),
+            ("session.idle", "Atlas running with no new activity for 41 min"),
+        )
+    ):
+        at = clock - 6 * 24 * H - n * 600
+        issue, _ = fs.upsert_issue(
+            fid,
+            class_="incident",
+            rule=rule,
+            target=f"sample-{n}",
+            summary=summary,
+            dedupe_key=f"{rule}:sample-{n}",
+            severity="warning",
+            status="resolved",
+            resolved_at=int(at + H),
+            resolved_by="server",
+        )
+        meta = {"kind": "issue", "severity": "warning", "reopened": 0, "reopened_at": None}
+        ref = f"INC-{issue.number}"
+        system(summary, at, {"type": "issue", "ref": ref, "id": issue.id, "meta": meta})
+    system(
+        f"C-{closed.number} rejected",
+        clock - 23 * H,
+        {"type": "proposal", "ref": f"C-{closed.number}", "id": closed.id},
+    )
+    system(
+        "the server spawned PL · assistant-panel-ux",
+        clock - 3 * H,
+        {"type": "system", "ref": None, "id": None},
+    )
+    moves = [
+        {"at": int(clock - (90 - 20 * i) * 60), "from_sha": None, "to_sha": f"{i + 1:07x}", "pr": None}
+        for i in range(3)
+    ]
+    system(
+        f"base {BASE} moved 3 times since earlier today → {moves[-1]['to_sha']}",
+        clock - 50 * 60,
+        {
+            "type": "system",
+            "ref": None,
+            "id": None,
+            "meta": {"kind": "base.moved", "repo": REPO, "base": BASE, "moves": moves},
+        },
+    )
+    fs.append_chat(
+        fid,
+        thread=F.THREAD_FACTORY,
+        author_kind="agent",
+        author=lead,
+        body="Wave 1 is under way: connectors-core and skill-discovery merged. "
+        "assistant-core holds its next task until the change it waits on is applied.",
+        created_at=int(clock - 25 * 60),
+    )
+
+
 def seed_factory_1340(
     db_uri: str, base_url: str, owner: str, *, now: float | None = None
 ) -> Seeded:
@@ -671,6 +750,10 @@ def seed_factory_1340(
             options=[dict(o) for o in _APPLY_OPTIONS],
         )
         fs.update_proposal(proposal_row.id, decision_id=row.id)
+
+    # ── The factory thread's system events (the chat's Activity) and a lead's message ──
+    rejected = fs.list_proposals(fid, status="rejected", limit=1)[0]
+    _thread_activity(fs, fid, clock, rejected, lead=fid)
 
     # ── The base env: the base's head after the last merge, deployed and answering ──
     moved = int(clock - 14 * 60)

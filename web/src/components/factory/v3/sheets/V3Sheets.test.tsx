@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { useLocation, useNavigate } from "@/lib/routing";
 import { cockpitKeyList } from "../../cmdk/KeyboardHelp";
+import { openDetails } from "../fixture/calmTest";
 import { renderNode } from "../fixture/renderNode";
 import { sampleNodeSource } from "../fixture/sampleNodeSource";
 import type { NodeSource } from "../nodeSource";
@@ -220,8 +221,8 @@ describe("cockpit v3 · sheets", () => {
 
   it("Try it names the passing steps, the flag and the sign-in note", async () => {
     const view = renderNode("I-1");
-    await screen.findByTestId("v3-acceptance");
-    await userEvent.click(screen.getByTestId("v3-try-what-passes"));
+    await screen.findByTestId("v3-details-toggle");
+    await userEvent.click(within(openDetails()).getByTestId("v3-try-what-passes"));
     await waitFor(() => expect(view.search()).toBe("?peek=try&at=I-1"));
     const tried = await sheet("v3-try-sheet");
     expect(screen.getByRole("dialog")).toHaveTextContent(
@@ -240,15 +241,18 @@ describe("cockpit v3 · sheets", () => {
     expect(within(tried).getByRole("link", { name: /Open the API/ })).toBeInTheDocument();
   });
 
-  it("the roll-up's base env chip and a tile's badge open Try it for that node", async () => {
+  it("the base env chip in a node's Details opens Try it for that node", async () => {
     const view = renderNode("I-1");
-    await userEvent.click(await screen.findByTestId("v3-rollup-try"));
+    await screen.findByTestId("v3-details-toggle");
+    await userEvent.click(within(openDetails()).getByTestId("v3-rollup-try"));
     await waitFor(() => expect(view.search()).toBe("?peek=try&at=I-1"));
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(view.search()).toBe(""));
-    const core = screen.getAllByTestId("v3-tile").find((t) => t.dataset.ref === "assistant-core")!;
-    await userEvent.click(within(core).getByTestId("v3-try-badge"));
-    await waitFor(() => expect(view.search()).toBe("?peek=try&at=assistant-core"));
+    view.unmount();
+    const core = renderNode("assistant-core");
+    await screen.findByTestId("v3-details-toggle");
+    await userEvent.click(within(openDetails()).getByTestId("v3-rollup-try"));
+    await waitFor(() => expect(core.search()).toBe("?peek=try&at=assistant-core"));
     expect(await sheet("v3-try-sheet")).toHaveTextContent("Ask “how is my app doing?”");
   });
 

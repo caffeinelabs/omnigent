@@ -21,6 +21,7 @@ import {
 } from "../../team/__fixtures__/teamFixtures";
 import { resetTeamStaging } from "../../team/teamStaging";
 import { FactoryToastProvider } from "../../ui/Toast";
+import { verbItem } from "../fixture/calmTest";
 import { sampleEngine } from "../fixture/sampleNodeSource";
 import { NodePage } from "../NodePage";
 import { nodeHref } from "../nodeRoutes";
@@ -139,8 +140,8 @@ function renderTeam(
 
 /** Open Team, move the second builder (Codex today) to Claude and apply it. */
 async function applySwap(server: ReturnType<typeof serveFactory>) {
-  const team = await screen.findByRole("button", { name: /Team/ });
-  await userEvent.click(team);
+  await screen.findByTestId("v3-menu");
+  await userEvent.click(verbItem(/Team/));
   const panel = await screen.findByTestId("v3-preview");
   const rows = await within(panel).findAllByTestId("v3-team-row");
   expect(rows).toHaveLength(6);

@@ -41,6 +41,7 @@ export function RoomCard({
   const card = message.card;
   const line = <SystemLine message={message} sources={sources} />;
   if (!card) return attached ? null : line;
+  if (attached && data.hidden?.(message)) return null;
   switch (card.type) {
     case "proposal": {
       // A newer card of this proposal is in the thread: this one is its line.

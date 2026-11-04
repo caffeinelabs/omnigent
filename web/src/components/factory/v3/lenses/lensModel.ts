@@ -97,7 +97,8 @@ export function useLensChoice(
     return out;
   }, [grouped, items, lanes, page, support.lineage, support.money, tiles, timeline.data]);
   const pending = asked === "timeline" && lanes && timeline.isLoading;
-  const fallback = lenses.find((l) => l === "map" || l === "list") ?? null;
+  // Calm: children one line each (List) unless the address asks for Map.
+  const fallback = lenses.includes("list") ? "list" : lenses.includes("map") ? "map" : null;
   const lens: Lens | null = isLens(asked) && lenses.includes(asked) ? asked : fallback;
   const choose = useCallback(
     (next: Lens | null) =>

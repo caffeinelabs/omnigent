@@ -61,6 +61,16 @@ async function settle(container: HTMLElement) {
   await waitFor(() => expect(container.querySelector('[aria-busy="true"]')).toBeNull());
 }
 
+/**
+ * Lines, paths and polygons drawn on the page. An icon inside a control (the
+ * Details chevron, the ⋯ menu) is a glyph, not a drawing between nodes.
+ */
+function drawn(container: Element): Element[] {
+  return [...container.querySelectorAll("svg line, svg path, svg polyline, svg polygon")].filter(
+    (el) => !(el.closest("svg.lucide") && el.closest('button, a, [role="button"]')),
+  );
+}
+
 /** Leaf elements whose text is a count of nothing or "none". */
 function emptyCells(container: HTMLElement): string[] {
   return [...container.querySelectorAll("*")]
@@ -75,7 +85,7 @@ async function sweep(options: SampleOptions) {
   for (const { ref, level } of pages(options)) {
     const view = renderNode(ref, { ...options, level });
     await settle(view.container);
-    const lines = view.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon");
+    const lines = drawn(view.container);
     expect({ ref, level, lines: lines.length }).toEqual({ ref, level, lines: 0 });
     expect(view.container.querySelector("canvas")).toBeNull();
     expect({ ref, level, empty: emptyCells(view.container) }).toEqual({ ref, level, empty: [] });
@@ -122,9 +132,7 @@ describe("cockpit v3 · levels, not spaghetti; nothing empty", () => {
       for (const level of [undefined, ...roots]) {
         const view = renderNode("product", { scale: true, level });
         await settle(view.container);
-        expect(
-          view.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon"),
-        ).toHaveLength(0);
+        expect(drawn(view.container)).toHaveLength(0);
         expect(emptyCells(view.container)).toEqual([]);
         view.unmount();
       }
@@ -187,7 +195,7 @@ describe("cockpit v3 · levels, not spaghetti; nothing empty", () => {
         expect({ ref, empty: emptyCells(chat) }).toEqual({ ref, empty: [] });
         // The page body draws no line; the chat's icons (lucide paths) are not between nodes.
         const body = screen.getByTestId("v3-node-page");
-        const lines = [...body.querySelectorAll("svg line, svg path, svg polyline, svg polygon")];
+        const lines = drawn(body);
         expect({ ref, lines: lines.filter((el) => !chat.contains(el)).length }).toEqual({
           ref,
           lines: 0,
