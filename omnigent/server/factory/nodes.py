@@ -1173,23 +1173,33 @@ class Tree:
                 if not isinstance(wave, Mapping):
                     continue
                 goal = _clip(wave.get("goal"), _SHORT_MAX)
+                held: Mapping[str, Any] = (
+                    wave["held"] if isinstance(wave.get("held"), Mapping) else {}
+                )
+                titles: Mapping[str, Any] = (
+                    wave["titles"] if isinstance(wave.get("titles"), Mapping) else {}
+                )
                 for slug in wave.get("projects") or []:
                     slug = str(slug)
                     ref = _project_ref(slug) if PROJECT_SLUG_RE.match(slug) else ""
                     if not ref or slug in taken or ref in self.nodes:
                         continue
+                    n = int(wave.get("n") or 2)
+                    reason = _clip(held.get(slug), _SHORT_MAX) if held.get(slug) else ""
                     self._add(
                         _N(
                             ref,
                             PRODUCT_TREE,
                             "project",
                             "project",
-                            slug,
+                            _clip(titles.get(slug) or slug, _TITLE_MAX),
                             row.ref,
                             later=True,
-                            held_for=f"wave {int(wave.get('n') or 2)}: {goal}"
+                            held_for=f"wave {n}: {reason}"
+                            if reason
+                            else f"wave {n}: {goal}"
                             if goal
-                            else f"wave {int(wave.get('n') or 2)}",
+                            else f"wave {n}",
                             why=f"Planned for a later wave of {_esc(row.title)}.",
                         )
                     )

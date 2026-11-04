@@ -12,6 +12,11 @@ closed (status merged or done, or stage done), no planned wave is left and
 the last run passed at least one step and failed none), ``closed`` (a person
 closed it) and ``cancelled``.
 
+Waves (:func:`wave_state`, :func:`wave_phrase`): an initiative of several
+waves also says where they are, "wave 1 done · wave 2 started", "… · wave 2
+planned" or "… · wave 2 blocked on <the one input a person owes>" (the newest
+open ask whose subject is the initiative).
+
 This module imports nothing from the factory's service modules, so the
 status summary and the "Needs you" list can import it at module level.
 """
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -219,12 +225,153 @@ def _next_wave(plan: Mapping[str, Any]) -> dict[str, Any] | None:
     current = max((int(h.get("wave") or 1) for h in plan.get("history") or []), default=0)
     for wave in sorted(plan.get("waves") or [], key=lambda w: int(w.get("n") or 0)):
         if int(wave.get("n") or 0) > current:
-            return {
+            out: dict[str, Any] = {
                 "n": int(wave["n"]),
                 "goal": str(wave.get("goal") or ""),
                 "projects": list(wave.get("projects") or []),
             }
+            if isinstance(wave.get("held"), Mapping) and wave["held"]:
+                out["held"] = {str(k): str(v) for k, v in wave["held"].items()}
+            return out
     return None
+
+
+# ── Waves: what is done, what comes next ───────────────────────
+
+_FINISHED_STAGES: Final = frozenset({"merged", "done"})
+_ASK_WORDS_MAX: Final = 60
+_SUBJECT_RE: Final = re.compile(
+    r"^\s*(?:feature:|initiative:)?I-([1-9][0-9]{0,8})\s*$", re.IGNORECASE
+)
+
+
+def project_finished(project: Mapping[str, Any] | None) -> bool | None:
+    """
+    Whether a project of a wave is finished: ``True`` (merged or done), ``False``
+    (still live), ``None`` (cancelled or unknown to the viewer: not counted).
+    """
+    if project is None or project.get("status") == "cancelled":
+        return None
+    return project.get("stage") in _FINISHED_STAGES or project.get("status") in _CLOSED_STATUSES
+
+
+@dataclass(frozen=True)
+class WaveState:
+    """
+    Where an initiative is in its waves.
+
+    :param current: The newest wave built (``0``: none yet).
+    :param done: Every counted project of the current wave is finished.
+    :param done_upto: The highest wave that, with every wave before it, is finished.
+    :param projects: The current wave's projects.
+    :param live: The current wave's projects still being built.
+    :param next: The next planned wave (``{n, goal, projects, held?}``), if any.
+    """
+
+    current: int
+    done: bool
+    done_upto: int
+    projects: tuple[str, ...] = ()
+    live: tuple[str, ...] = ()
+    next: Mapping[str, Any] | None = None
+
+    @property
+    def multi(self) -> bool:
+        """A second wave is built or planned (one wave alone needs no wave words)."""
+        return self.current >= 2 or self.next is not None
+
+
+def wave_state(plan: Mapping[str, Any], projects: Mapping[str, Mapping[str, Any]]) -> WaveState:
+    """
+    The waves of *plan* against the projects as they are now. Pure.
+
+    :param projects: Slug -> ``{stage, status}`` (a snapshot's project views or rows).
+    """
+    by_wave: dict[int, list[str]] = {}
+    for entry in plan.get("history") or []:
+        if isinstance(entry, Mapping):
+            wave = int(entry.get("wave") or 1)
+            by_wave.setdefault(wave, []).extend(str(s) for s in entry.get("added") or [])
+
+    def finished(slugs: Sequence[str]) -> bool:
+        seen = [project_finished(projects.get(s)) for s in dict.fromkeys(slugs)]
+        counted = [x for x in seen if x is not None]
+        return bool(counted) and all(counted)
+
+    current = max(by_wave, default=0)
+    done_upto = 0
+    for wave in sorted(by_wave):
+        if not finished(by_wave[wave]):
+            break
+        done_upto = wave
+    mine = tuple(dict.fromkeys(by_wave.get(current, [])))
+    live = tuple(s for s in mine if project_finished(projects.get(s)) is False)
+    return WaveState(
+        current=current,
+        done=bool(current) and finished(mine),
+        done_upto=done_upto,
+        projects=mine,
+        live=live,
+        next=_next_wave(plan),
+    )
+
+
+def ask_words(question: Any, ref: Any = None) -> str:
+    """An ask as a wave line names it: ``"add the provider credentials (D-60)"``."""
+    text = " ".join(str(question or "").split()).rstrip("?.! ")
+    if len(text) > _ASK_WORDS_MAX:
+        text = text[: _ASK_WORDS_MAX - 1].rstrip() + "…"
+    if text[:1].isupper() and not text[1:2].isupper():
+        text = text[:1].lower() + text[1:]
+    return f"{text} ({ref})" if ref else text
+
+
+def initiative_ask(decisions: Sequence[Mapping[str, Any]], ref: str) -> str | None:
+    """
+    The one input the initiative waits on from a person: the newest open ask
+    whose subject is the initiative (``sys_factory_ask(subject="I-3")``), in words.
+    """
+    number = ref.removeprefix("I-")
+    found = [
+        d
+        for d in decisions
+        if d.get("status") == "open"
+        and (m := _SUBJECT_RE.match(str(d.get("subject") or ""))) is not None
+        and m.group(1) == number
+    ]
+    if not found:
+        return None
+    newest = max(found, key=lambda d: int(d.get("created_at") or 0))
+    return ask_words(newest.get("question"), newest.get("ref"))
+
+
+def wave_phrase(state: WaveState, ask: str | None = None) -> str | None:
+    """
+    The waves in a few words, e.g. ``"wave 1 done · wave 2 started"`` or ``"wave 1
+    done · wave 2 blocked on add the provider credentials (D-60)"``; ``None`` for
+    a one-wave initiative and while wave 1 is still being built. Pure.
+    """
+    if not state.current or not state.multi:
+        return None
+    parts: list[str] = []
+    if state.done:
+        parts.append(f"wave {state.current} done")
+        nxt = state.next
+        if nxt is not None:
+            parts.append(
+                f"wave {nxt['n']} blocked on {ask}" if ask else f"wave {nxt['n']} planned"
+            )
+        elif ask:
+            parts.append(f"needs {ask}")
+        return " · ".join(parts)
+    if state.current < 2:
+        return None
+    if state.done_upto:
+        parts.append(f"wave {state.done_upto} done")
+    parts.append(f"wave {state.current} started")
+    if ask:
+        parts.append(f"needs {ask}")
+    return " · ".join(parts)
 
 
 def _evidence(base_url: str, path: str | None) -> str | None:
@@ -317,6 +464,9 @@ def initiative_view(
     )
     next_wave = _next_wave(plan)
     state = _state(data, projects, tally, skeleton_on_base, waves_left=next_wave is not None)
+    waves_now = wave_state(plan, by_slug)
+    ref = str(data.get("ref") or f"I-{data['number']}")
+    blocked = initiative_ask(list(body.get("decisions") or []), ref)
     last_steps = {int(s.get("n") or 0): s for s in (last or {}).get("steps") or []}
     acceptance = []
     for step in plan["acceptance"]:
@@ -383,6 +533,14 @@ def initiative_view(
         "tally": tally,
         "runs": view_runs,
         "next_wave": next_wave,
+        "wave": {
+            "current": waves_now.current,
+            "done": waves_now.done,
+            "done_upto": waves_now.done_upto,
+            "phrase": wave_phrase(waves_now, blocked),
+            "ask": blocked,
+        },
+        "acceptance_note": plan.get("acceptance_note"),
         "waves": [
             {
                 "n": int(h.get("wave") or 1),
@@ -422,7 +580,8 @@ def _acceptance_phrase(view: Mapping[str, Any]) -> str:
     if tally["running"] and tally["status"] is None:
         return "acceptance running"
     if tally["status"] is None:
-        return "no acceptance run yet"
+        drafted = " (steps drafted from the plan)" if view.get("acceptance_note") else ""
+        return f"no acceptance run yet{drafted}"
     if tally["status"] == "FAIL":
         failed = next(
             (s["n"] for s in view["acceptance"] if (s.get("last") or {}).get("status") == "fail"),
@@ -441,10 +600,14 @@ def _acceptance_phrase(view: Mapping[str, Any]) -> str:
 def line_text(view: Mapping[str, Any]) -> str:
     """
     The one line Home, the status summary and the digest show, e.g. ``"Sample
-    assistant: 2/4 merged, skeleton not on base env yet, waiting on core (a merge of !12)"``.
+    assistant: 2/4 merged, skeleton not on base env yet, waiting on core (a merge of !12)"``;
+    an initiative of several waves says where its waves are first (``"Sample
+    assistant: wave 1 done · wave 2 started, 4/6 merged, …"``).
     """
     state = view["state"]
-    head = f"{view['title']}: {view['merged']}/{view['total']} merged"
+    phrase = (view.get("wave") or {}).get("phrase")
+    lead = f"{phrase}, " if phrase and state not in ("cancelled", "closed") else ""
+    head = f"{view['title']}: {lead}{view['merged']}/{view['total']} merged"
     if state == "cancelled":
         return f"{view['title']}: cancelled"
     if state == "closed":
@@ -487,6 +650,8 @@ class InitiativeLine(BaseModel):
     :param since: When it was asked (epoch seconds).
     :param try_url: The base env's app once the skeleton is on it (people try it there).
     :param flag: The flag key it ships behind (turn it on to try it).
+    :param waves: Where its waves are, e.g. ``"wave 1 done · wave 2 planned"`` (only an
+        initiative of several waves).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -502,6 +667,7 @@ class InitiativeLine(BaseModel):
     acceptance: InitiativeTally
     waiting_on: list[str] = Field(default_factory=list)
     next_wave: str | None = None
+    waves: str | None = None
     cost_usd: float | None = None
     since: int
     href: str
@@ -531,6 +697,7 @@ def initiative_line(view: Mapping[str, Any]) -> dict[str, Any]:
         acceptance=InitiativeTally(**view["tally"]),
         waiting_on=list(view.get("waiting_on") or [])[:5],
         next_wave=f"wave {nxt['n']}: {nxt['goal']}" if nxt else None,
+        waves=(view.get("wave") or {}).get("phrase"),
         cost_usd=view.get("cost_usd"),
         since=int(view.get("asked_at") or 0),
         href=view["href"],
@@ -579,12 +746,18 @@ __all__ = [
     "InitiativeLine",
     "InitiativeTally",
     "State",
+    "WaveState",
+    "ask_words",
+    "initiative_ask",
     "initiative_line",
     "initiative_view",
     "line_text",
     "lines_for",
     "plan_of",
+    "project_finished",
     "role_of",
     "shown",
     "try_url",
+    "wave_phrase",
+    "wave_state",
 ]

@@ -15,7 +15,9 @@ For each factory root this:
    "Mark it done?" of one its PL wrapped up (D-11 waited there forever with
    nobody left to tell), logging ``decision.expired``;
 6. repairs roster grants that drifted from the factory's people (a member
-   that missed the copy, a manual edit), logging ``people.drift_repaired``.
+   that missed the copy, a manual edit), logging ``people.drift_repaired``;
+7. gives an unfinished ask that predates initiatives its initiative
+   (:func:`.initiative_waves.backfill`), logging ``initiative.created``.
 
 A folder that fails skips only step 2 for that factory; a factory that fails is
 skipped. Either is counted in :attr:`ReconcileReport.failed`, logged at most
@@ -44,7 +46,7 @@ from omnigent.factory import (
     ROLE_PROJECT_LEAD,
     STAGE_READY,
 )
-from omnigent.server.factory import events, features, people, server_decisions
+from omnigent.server.factory import events, features, initiative_waves, people, server_decisions
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.membership import factory_members
 from omnigent.server.factory.snapshot import (
@@ -91,6 +93,8 @@ class ReconcileReport:
     grants_repaired: list[tuple[str, int]] = field(default_factory=list)
     # ``(slug, I-n)`` of each project whose home feature was backfilled.
     features_backfilled: list[tuple[str, str]] = field(default_factory=list)
+    # ``(C-n, I-n)`` of each ask that predates initiatives and got one.
+    initiatives_backfilled: list[tuple[str, str]] = field(default_factory=list)
     # ``(factory id, step)`` for each step that failed this pass, logged or not.
     failed: list[tuple[str, str]] = field(default_factory=list)
 
@@ -334,6 +338,15 @@ async def reconcile_factory(
     for decision, why in synced.stale:
         if await server_decisions.expire_decision(app_state, decision.id, why=why) is not None:
             report.decisions_expired.append((decision.ref, why))
+    try:
+        made = await asyncio.to_thread(initiative_waves.backfill, deps, root.id)
+    except Exception as exc:  # noqa: BLE001 - the next pass retries
+        _record_failure(report, root.id, "initiatives", exc)
+    else:
+        _clear_failure(root.id, "initiatives")
+        if made:
+            report.initiatives_backfilled += [(m.proposal, m.ref) for m in made]
+            await initiative_waves.announce_backfill(app_state, root.id, made)
     try:
         repaired = await people.repair_drift(app_state, root)
     except Exception as exc:  # noqa: BLE001 - the next pass retries

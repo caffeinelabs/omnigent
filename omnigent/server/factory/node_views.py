@@ -423,11 +423,23 @@ class YourMoveItemView(_View):
     blocks_nothing: bool | None = None
 
 
+class WaveLineView(_View):
+    """Where an initiative of several waves is: "Agent assistant: wave 1 done · wave 2 started"."""
+
+    ref: str
+    title: str
+    line: str
+
+
 class YourMoveView(_View):
-    """What the viewer must do here, most held work first; ``more`` waits behind "+n"."""
+    """
+    What the viewer must do here, most held work first; ``more`` waits behind "+n";
+    ``waves``: where each initiative of several waves at or under the node is.
+    """
 
     items: list[YourMoveItemView] = Field(max_length=3)
     more: int
+    waves: list[WaveLineView] | None = None
 
 
 class NodePageView(_View):

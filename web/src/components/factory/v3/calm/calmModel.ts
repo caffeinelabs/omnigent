@@ -14,6 +14,7 @@ import type {
   NodeSummary,
   QuietAsk,
   StatusLine,
+  WaveLine,
   YourMove,
   YourMoveItem,
 } from "../nodeTypes";
@@ -255,6 +256,8 @@ export interface MoveView {
   rows: MoveRow[];
   rest: MoveRow[];
   more: number;
+  /** Where each initiative of several waves here is: one quiet line each (the server's). */
+  waves?: WaveLine[];
 }
 
 /** Every id an ask goes by: its ref, its row id, its subject ("C-16"). */
@@ -563,7 +566,8 @@ export function moveView(
       ...derived.filter((r) => !askKeys(r.decision).some((k) => keys.has(k))),
     ];
     const more = Math.max(0, given.more) + Math.max(0, given.items.length - max);
-    return { rows, rest: rest.slice(0, more), more };
+    const waves = given.waves?.length ? { waves: given.waves } : {};
+    return { rows, rest: rest.slice(0, more), more, ...waves };
   }
   return {
     rows: derived.slice(0, max),

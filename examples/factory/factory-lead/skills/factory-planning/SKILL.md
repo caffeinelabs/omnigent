@@ -1,6 +1,6 @@
 ---
 name: factory-planning
-description: How Atlas turns work asked for in the Room, or an opportunity discovery found, into factory projects - when to plan alone and when to dispatch the read-only planner sub-agent, the splitting heuristics, an ask bigger than one project as ONE initiative (walking skeleton first, waves that widen it, integration through flags and stable contracts, acceptance steps the server runs on the base env after every merge), the planner's {changes, analysis} JSON contract with the scope-graph.mjs import-graph report and the analysis.initiative block, sys_factory_project(reply_to=…, analysis_file=…), autonomy, the one-line answer in the thread, the bet contract for work from an opportunity (flags from the product profile, decline with a reason), and filing your own ideas as idea signals.
+description: How Atlas turns work asked for in the Room, or an opportunity discovery found, into factory projects - when to plan alone and when to dispatch the read-only planner sub-agent, the splitting heuristics, an ask bigger than one project as ONE initiative (walking skeleton first, waves that widen it, integration through flags and stable contracts, acceptance steps the server runs on the base env after every merge), the next wave in the turn a wave is done (mock-first for work held for credentials, spend, personal data or copy; follow-ups of the initiative's own work planned, not asked), the planner's {changes, analysis} JSON contract with the scope-graph.mjs import-graph report and the analysis.initiative block, sys_factory_project(reply_to=…, analysis_file=…), autonomy, the one-line answer in the thread, the bet contract for work from an opportunity (flags from the product profile, decline with a reason), and filing your own ideas as idea signals.
 ---
 
 # Planning work into projects
@@ -126,6 +126,52 @@ to the planner's analysis:
 - `[Factory acceptance · I-<n> run <k> FAIL · step <s> · <slug> is closed]`
   or `… · fixes did not hold]`: plan the fix as a follow-up project of I-<n>
   (extend it); never ask a person.
+
+## 3c. The next wave, mock-first, and follow-ups
+
+An initiative is done when the person has what they asked for, not when one
+wave lands. `[Factory initiative · I-<n> wave <k> done]` lists what remains:
+the planned waves, what each item is held for, the acceptance and the ask.
+In that same turn, do one of two things:
+
+1. **Propose the next wave**: one `sys_factory_project` whose analysis
+   initiative is `{"id": "I-<n>", "waves": [<what still waits for a later
+   wave, with its held reasons>]}`. Restate what you do not build now, so
+   nothing the person asked for drops off. It applies at once for the person
+   who asked (no second approval; Undo stays open). Then one line in
+   `feature:I-<n>`: `I-<n> wave <k+1> planned as C-<m>: …`.
+2. **Or say exactly what blocks it**, in ONE line:
+   `sys_factory_chat(thread="feature:I-<n>", message="I-<n> wave <k+1>: blocked on <exactly what>")`.
+   Missing credentials, spend or copy is no block (build mock-first); a
+   broken base env or a choice only a person can make is.
+
+Never write "every project is done" while a planned wave is left.
+
+**Mock-first.** Work held for a person's input (credentials or an API key,
+ad or other spend, personal data, product copy) starts now anyway:
+- build it against a mock or sandbox provider behind the initiative's flag,
+  with a switch for the real provider and production off;
+- its DoD is checkable on the base env with the mock; the acceptance step
+  for the real provider says `needs: ["external"]`;
+- copy: write a draft behind the flag, marked as a draft;
+- at the end, ONE ask for the input that turns it on, about the initiative,
+  with your recommendation:
+  `sys_factory_ask(subject="I-<n>", question="Add the <provider> credentials and a spend cap to turn <capability> on?", options=[{label: "I will add them", recommended: true}, {label: "Keep it off"}], blocking=false)`.
+  Your move shows it, and the initiative reads "wave <k+1> blocked on …"
+  only while that input is all that holds it.
+
+**Follow-ups of the initiative's own work** (a step that fails, "live search
+does not work on the base env", "four edge paths a merged PR left
+uncovered") are fixes or completions, never questions:
+- its project is active: ask its PL for a task
+  (`sys_session_post(to=<PL id>, kind="request", message="Add a task: <the fix>, part of I-<n>")`);
+- its project is closed: propose a follow-up project of the initiative with
+  `{"id": "I-<n>", "same_wave": true}` (it applies at once for the person
+  who asked).
+
+Ask a person only for a product choice (placement, pricing, copy, scope the
+ask does not cover), and mark your recommended option (`recommended: true`,
+the why in `context`).
 
 ## 4. The contract and the proposal
 

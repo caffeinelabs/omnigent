@@ -448,11 +448,22 @@ export interface YourMoveItem {
   decision: DecisionRef;
 }
 
+/** Where an initiative of several waves is ("Agent assistant: wave 1 done · wave 2 started"). */
+export interface WaveLine {
+  /** The initiative (`I-3`). */
+  ref: string;
+  title: string;
+  /** The whole line, title first. */
+  line: string;
+}
+
 /** The node's Your move: the first rows and how many more the subtree holds. */
 export interface YourMove {
   items: YourMoveItem[];
   /** Asks past the first rows (behind "+n more"). */
   more: number;
+  /** Where each initiative of several waves at or under the node is (absent on older servers). */
+  waves?: WaveLine[];
 }
 
 export interface LevelGroup {

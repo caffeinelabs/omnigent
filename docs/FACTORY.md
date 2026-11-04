@@ -661,6 +661,35 @@ acceptance runs; its state is computed from the projects and runs.
   none); Home shows a card per initiative above the projects. People rename
   it, rewrite its steps, close, cancel or reopen it with `PATCH
   …/initiatives/{ref}` (human origin; every change is an event).
+- **Waves after the first** (`server/factory/initiative_waves.py`). Once
+  every project of an initiative's current wave is finished (merged or
+  done; cancelled ones do not count) and a later wave is still planned, the
+  proposals sweep tells the lead once per wave, `[Factory initiative · I-<n>
+  wave <k> done]`, with what remains (each planned item and what it is held
+  for, the acceptance, the ask verbatim). The lead's planning skill (3c)
+  proposes the next wave in that turn, which applies at once for the person
+  who asked, or posts one line in `feature:I-<n>` naming what blocks it.
+  Work held for a person's input (credentials, spend, personal data, copy)
+  is built mock-first behind the flag, with one `sys_factory_ask(subject=
+  "I-<n>")` at the end for what turns it on; a fix or completion of the
+  initiative's own work is a task or a `same_wave` project of it, never a
+  question. A next wave that does not restate `waves` keeps what it did not
+  build planned in the wave after it. Lines read "wave 1 done · wave 2
+  planned | started | blocked on <that ask>" (the asks' and status
+  summary's `initiatives[].waves`, the digest, and `your_move.waves` on the
+  node pages at or above the feature).
+- **Backfill.** Each reconcile pass gives an unfinished ask that predates
+  initiatives its own: an applied projects plan that created two or more
+  projects for one person's Room message with no `initiative` block becomes
+  an initiative owning those projects (charters stamped, `feature` set),
+  with the scope its rationale, analysis or the lead's answer to the ask
+  parked for later ("… are held for later waves (credentials, …)") as a
+  planned wave 2 with `held` reasons, and acceptance steps drafted from the
+  projects' DoDs (`acceptance_note: "drafted from the plan"`, dropped once a
+  person or a wave rewrites them). An ask whose projects all finished with
+  nothing parked gets none. It never creates a second initiative for an ask
+  or proposal one already records (any status) and never re-parents a
+  project another initiative owns.
 
 ### Factory previews
 

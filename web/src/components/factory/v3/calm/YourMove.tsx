@@ -2,7 +2,8 @@
 // ranked by what each unblocks, the rest behind "+n more", or one quiet line
 // when nothing needs them. A row is the ask in words, what it unblocks and one
 // answer button (filled only on the first row). A click on its words peeks at
-// the ask: its full text and its other answers. Enter never answers.
+// the ask: its full text and its other answers. Enter never answers. Under the
+// rows, one quiet line per initiative of several waves says where its waves are.
 
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -10,7 +11,7 @@ import { swallowEnter } from "../DecisionButtons";
 import { useNodeActions } from "../NodeContext";
 import { NodeLink } from "../nodeParts";
 import { AMBER } from "../nodeTokens";
-import type { NodePage } from "../nodeTypes";
+import type { NodePage, WaveLine } from "../nodeTypes";
 import { inProductTree } from "../lenses/lensModel";
 import { useNeedsYou } from "../nodeSteer";
 import {
@@ -198,20 +199,51 @@ export function MoveRowItem({
   );
 }
 
+/** One quiet line per initiative of several waves: "Agent assistant: wave 1 done · wave 2 started". */
+function WaveLines({ waves }: { waves?: WaveLine[] }) {
+  if (!waves?.length) return null;
+  return (
+    <ul
+      role="list"
+      data-testid="v3-move-waves"
+      className="mt-1.5 flex flex-col gap-0.5 px-0.5 text-[12.5px] text-muted-foreground"
+    >
+      {waves.map((wave) => (
+        <li key={wave.ref} data-testid="v3-move-wave" data-ref={wave.ref}>
+          <NodeLink nodeRef={wave.ref} className="hover:text-status-blue-fg hover:underline">
+            {wave.line}
+          </NodeLink>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function YourMove({ view }: { view: MoveView }) {
   const { onSheet } = useNodeActions();
   const [more, setMore] = useState(false);
   if (!view.rows.length) {
-    return (
+    const waves = view.waves?.length ? view.waves : null;
+    const none = (
       <p
         data-testid="v3-move-none"
-        className="mb-4 flex items-center gap-2 text-[13px] text-foreground-tertiary"
+        className={cn(
+          "flex items-center gap-2 text-[13px] text-foreground-tertiary",
+          !waves && "mb-4",
+        )}
       >
         <span aria-hidden className="text-status-green-fg">
           ✓
         </span>
         Nothing needs you
       </p>
+    );
+    if (!waves) return none;
+    return (
+      <div className="mb-4">
+        {none}
+        <WaveLines waves={waves} />
+      </div>
     );
   }
   const rows = more ? [...view.rows, ...view.rest] : view.rows;
@@ -236,6 +268,7 @@ export function YourMove({ view }: { view: MoveView }) {
           +{unseen} more
         </button>
       )}
+      <WaveLines waves={view.waves} />
     </section>
   );
 }
