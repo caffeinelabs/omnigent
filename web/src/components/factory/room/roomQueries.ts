@@ -17,6 +17,7 @@ import { useSessionUpdatesConnected } from "@/hooks/useSessionUpdatesConnected";
 import { ApiError } from "@/lib/sessionsApi";
 import type { DecisionStatus, IssueView, LoopView } from "@/lib/factoryApi";
 import {
+  type ChatFeed,
   type ChatPage,
   type GraphKind,
   type GraphResponse,
@@ -38,8 +39,11 @@ export const threadsQueryKey = (factoryId: string) =>
 /** The threads with cockpit v3's per-node ones (`?nodes=1`); under `threadsQueryKey`, so it reads again with it. */
 export const nodeThreadsQueryKey = (factoryId: string) =>
   [...threadsQueryKey(factoryId), "nodes"] as const;
-export const messagesQueryKey = (factoryId: string, thread: string) =>
-  [...roomQueryKey(factoryId), "chat", thread] as const;
+/** A thread's messages; cockpit v3's node chat reads them with their lanes (`feed`). */
+export const messagesQueryKey = (factoryId: string, thread: string, feed?: ChatFeed) =>
+  feed
+    ? ([...roomQueryKey(factoryId), "chat", thread, feed] as const)
+    : ([...roomQueryKey(factoryId), "chat", thread] as const);
 export const proposalsQueryKey = (factoryId: string) =>
   [...roomQueryKey(factoryId), "proposals"] as const;
 export const graphQueryKey = (
@@ -87,15 +91,19 @@ export function useRoomThreads(
  * One thread, newest page first; `fetchNextPage` reads the page before the
  * oldest message on screen (`before_seq`).
  */
-export function useRoomMessages(factoryId: string | null | undefined, thread: string | null) {
+export function useRoomMessages(
+  factoryId: string | null | undefined,
+  thread: string | null,
+  feed?: ChatFeed,
+) {
   const refetchInterval = useFallbackInterval();
   return useInfiniteQuery({
-    queryKey: messagesQueryKey(factoryId ?? "", thread ?? ""),
+    queryKey: messagesQueryKey(factoryId ?? "", thread ?? "", feed),
     queryFn: ({ pageParam, signal }) =>
       fetchRoomMessages(
         factoryId as string,
         thread as string,
-        { beforeSeq: pageParam, limit: ROOM_PAGE_SIZE },
+        { beforeSeq: pageParam, limit: ROOM_PAGE_SIZE, feed },
         signal,
       ),
     initialPageParam: null as number | null,

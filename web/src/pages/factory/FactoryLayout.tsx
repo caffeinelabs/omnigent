@@ -308,6 +308,8 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
       data-testid="factory-page"
       maxWidthClassName="max-w-[100rem]"
       contentClassName="px-4 md:px-6"
+      // Cockpit v3 never scrolls sideways (a phone's page is its width).
+      className={v2 && cockpit.v3 ? "overflow-x-hidden" : undefined}
       extraTop={PAGE_EXTRA_TOP}
       // Room for the phone's bottom tabs, or the Room button below 1280 px.
       extraBottom={pageExtraBottom(phone, wide && !v2)}

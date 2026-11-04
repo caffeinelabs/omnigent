@@ -59,7 +59,7 @@ export const ProjectFolded: Story = { args: { nodeRef: "build-tier-drafts-3" } }
 /** A project: tasks, changes, runs below. */
 export const Project: Story = { args: { nodeRef: "assistant-core" } };
 
-/** A task: nothing merged yet. */
+/** A task: nothing merged yet, so no Results cell. */
 export const Task: Story = { args: { nodeRef: "T-16" } };
 
 /** A run: the last level, nothing below. */

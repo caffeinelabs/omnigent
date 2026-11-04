@@ -1307,6 +1307,8 @@ export interface ChatMessageView {
   /** The server posted the agent's turn output for it. */
   auto_reply: boolean;
   created_at: number;
+  /** With `feed=all` (cockpit v3's node chat): what people and agents say, or the system's activity. */
+  lane?: "conversation" | "activity";
 }
 
 /** One Room thread: `factory`, `improvements`, `project:<slug>`, `pr:<id>` or a node's. */

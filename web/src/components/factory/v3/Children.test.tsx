@@ -7,8 +7,8 @@ import { DEFAULT_OVERLAYS } from "./NodeTile";
 import type { MorePages } from "./nodeQueries";
 import type { ChildPage, NodeSummary } from "./nodeTypes";
 
-// Zoom by count: tiles up to 12 children, rows (with a note) from 13 to 60,
-// rows grouped by state past 60 with done folded, 60 rows to a page.
+// Zoom by count: tiles (Map) up to 12 children, rows from 13 to 60, rows
+// grouped by state past 60 with done folded, 60 rows to a page.
 
 function child(i: number, state: NodeSummary["state"]): NodeSummary {
   return {
@@ -69,11 +69,11 @@ describe("cockpit v3 · children by count", () => {
     expect(screen.queryByTestId("v3-row")).toBeNull();
   });
 
-  it("turns 13 to 60 children into rows, and says so", () => {
+  it("turns 13 to 60 children into rows, without saying so", () => {
     show(Array.from({ length: 13 }, (_, i) => child(i, "moving")));
     expect(screen.queryByTestId("v3-tile")).toBeNull();
     expect(screen.getAllByTestId("v3-row")).toHaveLength(13);
-    expect(screen.getByText(/13 children: shown as rows/)).toBeInTheDocument();
+    expect(screen.queryByText(/shown as rows/)).toBeNull();
   });
 
   it("groups more than 60 by state, folds done, and pages each group at 60", () => {
@@ -83,7 +83,7 @@ describe("cockpit v3 · children by count", () => {
       ...Array.from({ length: 30 }, (_, i) => child(200 + i, "done")),
     ]);
     const groups = screen.getByTestId("v3-state-groups");
-    expect(within(groups).getByText("Needs you")).toBeInTheDocument();
+    expect(within(groups).getAllByText(/^Needs you/)[0]).toHaveTextContent("Needs you 5");
     expect(screen.getAllByTestId("v3-row")).toHaveLength(65);
     expect(screen.getByTestId("v3-done-line")).toHaveTextContent("30 done");
     fireEvent.click(screen.getByRole("button", { name: "Next 60" }));
@@ -99,10 +99,13 @@ describe("cockpit v3 · children by count", () => {
       { ghosts: [ghost], later: [held], later_note: "Held on purpose.", total: 63 },
     );
     const groups = screen.getByTestId("v3-state-groups");
-    expect(within(groups).getByText("Proposed")).toBeInTheDocument();
+    expect(within(groups).getAllByText(/^Proposed/)[0]).toHaveTextContent("Proposed 1");
     expect(within(groups).getByRole("link", { name: "a proposed project" })).toBeInTheDocument();
-    expect(screen.getByTestId("v3-later")).toHaveTextContent("a held projectafter the pilot");
-    expect(screen.getByTestId("v3-later")).toHaveTextContent("Held on purpose.");
+    // Held work: one line each, its reason as the phrase; the note is a detail.
+    expect(screen.getByTestId("v3-later")).toHaveTextContent(
+      "a held projectHeld for after the pilot",
+    );
+    expect(screen.getByTestId("v3-later")).not.toHaveTextContent("Held on purpose.");
   });
 
   it("reads the server's next 60 when the page has more than it holds", () => {

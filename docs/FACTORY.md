@@ -1332,17 +1332,64 @@ page and its preview again, so Apply works on what is there now. The Team
 Undo re-pins the version before only while the version it made is still the
 one in force (read again first); a later version says "undo from Versions".
 
+**Calm pages (cockpit v3).** A node page opens with the level strip, the
+node's short name (its ring or state dot beside it), Your move and its
+children, nothing else. Your move lists at most three asks of the node's
+subtree for this viewer, ranked by what each unblocks ("Apply C-16 · update
+assistant core · unblocks Agent assistant", one answer, filled only on the
+first row; a click on the words shows the ask in full with its other answers
+and who asked, "the factory" when it asked by itself; the rest behind "+n
+more"; "Nothing needs you" when empty). What a row unblocks is named as the
+page's rows name those nodes (`unblocks_refs`), the page's own node as "this
+task" or "this project", never by slug or bare id; "blocks nothing" and the
+grey dot only when the server says so (`blocks_nothing`). It reads the page's
+`your_move`; from a server without it, the rows come from the status line
+and Needs you. The "n need you" pill counts every ask of both trees, the
+Factory switch and each level strip cell ("Features 3 · 5 you") count the
+same asks under them, and the Needs you sheet lists them as Your move rows
+(one filled answer, the other tree's count as a link; the alarms the server
+closed live under Factory › Health).
+An ask in Your move shows nowhere else on the page: the status line, the
+children and the chat point at it or leave it out (`in_your_move`). Each
+child is one line: its short name, its ring or state dot, and one phrase only
+when it is not moving or needs someone ("Needs you", "Waits on Assistant
+core", "Held for wave 2"); done children fold into "✓ n done". The
+description, the status path and its why, the roll-up (counts, cost, team,
+base env, since the last look), the links, acceptance and evidence, codes
+and the full title sit behind one Details (`w` opens it with the why). The
+verbs are the ⋯ menu (their keys still work), the chat's `/` menu and plain
+words; the lens is one "List ▾" menu; there is no keys footer (`?` lists
+them). A node's `title` is its short name (`full_title` the text it
+shortens); a title a server did not shorten is cut to six words (never
+ending on "the" or "300 s"), a slug reads as words, also inside a title, and
+a child named after its parent keeps the rest ("Part 1" under "Build tier
+drafts 3"). The level strip leaves out an empty Below and Results; a node
+with nothing below opens its lineage from Details. On a phone the top bar
+is the switcher, the verdict, the asks and one ⋯ menu (search, the theme,
+you), the page never scrolls sideways, and the bottom bar is Product ·
+Factory · Chat. The node chat reads its thread with `feed=all` and shows the
+conversation only: people's and agents' messages and the live cards that
+need this viewer. Base moves, members spawned, incidents, closed or answered
+items fold into one "Activity · n since you looked" line that opens them as
+a list (a server without feeds is sorted the same way in the browser). The
+web test `calm/calmGate.test.tsx` and the browser test
+`tests/e2e_ui/factory_v3/test_v3_calm.py` fail when a default page shows
+more than about 120 words outside the chat, a title is longer than six words
+or holds a slug, Your move names a node by slug or id, an ask shows twice,
+the page scrolls sideways, or the chat shows a system event or a resolved
+incident inline.
+
 **Lenses and the factory tree (cockpit v3).** Below a node's header its
 children show in one lens, kept in the address (`?lens=`; `v` steps to the
-next): Map (tiles) and List (rows), Lineage (the ancestors top to bottom with
+next): List (rows, the default) and Map (tiles), Lineage (the ancestors top to bottom with
 their one line, the node, the counts per level below and the results; in the
-product tree only; a node with nothing below folds it into one line, and on
+product tree only; a node with nothing below opens it from Details, and on
 a phone the Lineage button opens it as a sheet, `?peek=lineage&at=<ref>`),
 Timeline (one lane per child from `…/timeline`: work solid, waits hatched,
 amber only when a person is the cause, the stretch since this viewer's last
 look shaded, nothing drawn between lanes) and Money (each child's cost
 against its budget from `…/money`, most first, the total and what no child
-holds). The bar offers a lens only when it has something to show: Timeline
+holds). The lens menu offers a lens only when it has something to show: Timeline
 once the server drew a lane, Money when two or more children have a cost or
 a budget, neither on a level grouped under parents (Home). Every page asks
 `…/timeline` whether it has lanes, so the route reads the spans once per

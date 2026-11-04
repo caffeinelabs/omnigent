@@ -4,7 +4,10 @@
 // never offers it).
 
 import type { ReactNode } from "react";
+import { ChevronRightIcon } from "lucide-react";
+import { useSearchParams } from "@/lib/routing";
 import type { NodePage, TimelineView } from "../nodeTypes";
+import { LENS_PARAM } from "./lensModel";
 import { useLineage, useMoney } from "./lensQueries";
 import { LineageLens } from "./LineageLens";
 import { MoneyLens } from "./MoneyLens";
@@ -52,24 +55,28 @@ export function TimelineBody({
   return query.data ? <TimelineLens view={query.data} /> : null;
 }
 
-/** Where a node came from, folded into one line on a page with nothing below it. */
-export function LineageFold({ page, onOpen }: { page: NodePage; onOpen: () => void }) {
-  // The first ancestor below the root, whatever its level is called.
-  const first = page.breadcrumb[1];
+/** Where a node came from, one quiet line on a page with nothing below it (a click shows it). */
+export function LineageFold({ page }: { page: NodePage }) {
+  const [, setParams] = useSearchParams();
   return (
     <button
       type="button"
       data-testid="v3-lineage-fold"
-      onClick={onOpen}
-      className="mt-[18px] flex w-full flex-wrap items-center gap-2 rounded-[10px] border border-dashed border-border-strong px-3 py-2 text-left text-[13px] text-muted-foreground hover:border-foreground-tertiary hover:text-foreground"
+      onClick={() =>
+        setParams(
+          (prev) => {
+            const p = new URLSearchParams(prev);
+            p.set(LENS_PARAM, "lineage");
+            return p;
+          },
+          { replace: true },
+        )
+      }
+      title={`Where ${page.node.title} came from, and where it landed`}
+      className="flex items-center gap-1 self-start text-left text-[12.5px] text-status-blue-fg hover:underline"
     >
-      <b className="font-semibold text-foreground">Lineage</b>
-      <span className="min-w-0">
-        where {page.node.title} came from{first ? `, up to ${first.title}` : ""}, and where it
-        landed
-      </span>
-      <span className="flex-1" />
-      <span className="text-foreground-tertiary">show</span>
+      Lineage
+      <ChevronRightIcon aria-hidden className="size-3" />
     </button>
   );
 }

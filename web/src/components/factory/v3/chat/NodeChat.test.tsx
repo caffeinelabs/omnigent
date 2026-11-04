@@ -67,24 +67,43 @@ async function threadOf(key: string) {
   );
 }
 
+/**
+ * The sample's messages with D-45's card also posted in connectors-core's
+ * thread: there it is a live card that needs the viewer, not that page's ask.
+ */
+function withOtherAsk(): ChatMessageView[] {
+  const all = sampleRoomMessages();
+  const card = all.find((m) => m.card?.type === "decision")!;
+  return [...all, { ...card, id: "m-other-ask", seq: 900, thread: "project:connectors-core" }];
+}
+
 describe("cockpit v3 · the node chat column", () => {
-  it("is the project's own thread, its cards from live state, beside the page", async () => {
+  it("is the project's own thread, a conversation: events behind Activity, its ask in Your move", async () => {
     setWindow("desktop");
     renderChat("assistant-core", { install });
     await threadOf("project:assistant-core");
     const column = screen.getByTestId("v3-chat");
-    expect(within(column).getByTestId("v3-chat-title")).toHaveTextContent("Chat · assistant-core");
-    expect(within(column).getByTestId("v3-chat-title")).toHaveTextContent(
-      "with Juno · #assistant-core",
-    );
-    // The demo, the alarm the server closed, and the ask with its answers.
-    expect(await within(column).findByTestId("v3-closed-alarm")).toHaveTextContent(
+    const title = within(column).getByTestId("v3-chat-title");
+    expect(title).toHaveTextContent("Chat · Assistant core");
+    expect(title).toHaveTextContent(/with Juno$/);
+    expect(title).toHaveAttribute("title", expect.stringContaining("#assistant-core"));
+    // Juno's words stay; the alarm the server closed is Activity; the ask is Your move's only.
+    const list = within(column).getByTestId("room-message-list");
+    await waitFor(() => expect(list).toHaveTextContent("T-16 (debit each turn) is done locally"));
+    expect(within(list).queryByTestId("v3-closed-alarm")).toBeNull();
+    expect(within(column).queryByTestId("decision-embed-D-45")).toBeNull();
+    expect(
+      within(list)
+        .queryAllByRole("listitem")
+        .filter((li) => li.dataset.kind === "system"),
+    ).toEqual([]);
+    const activity = within(column).getByTestId("v3-chat-activity");
+    expect(activity).toHaveTextContent(/^Activity · 1/);
+    await userEvent.setup().click(activity);
+    const sheet = await screen.findByTestId("v3-activity-list");
+    expect(within(sheet).getByTestId("v3-closed-alarm")).toHaveTextContent(
       "Closed by the server · D-48",
     );
-    expect(within(column).getByTestId("v3-closed-alarm")).toHaveTextContent(
-      "The real ask is D-45 (Apply C-16).",
-    );
-    expect(within(column).getByTestId("decision-embed-D-45")).toBeInTheDocument();
     expect(within(column).getByTestId("room-composer-to")).toHaveTextContent("To Juno");
     expect(within(column).queryByTestId("room-bus-toggle")).toBeNull();
   });
@@ -164,7 +183,7 @@ describe("cockpit v3 · the node chat column", () => {
 
   it("swallows Enter on the Room's decision card in the thread", async () => {
     setWindow("desktop");
-    renderChat("assistant-core", { install });
+    renderChat("connectors-core", { install, messages: withOtherAsk() });
     const embed = await screen.findByTestId("decision-embed-D-45", {}, { timeout: 4000 });
     const button = within(embed).getAllByRole("button")[0]!;
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
@@ -174,7 +193,7 @@ describe("cockpit v3 · the node chat column", () => {
 
   it("answers nothing on 1-5 anywhere in the Room's decision card: answers are a click", async () => {
     setWindow("desktop");
-    const view = renderChat("assistant-core", { install });
+    const view = renderChat("connectors-core", { install, messages: withOtherAsk() });
     const embed = await screen.findByTestId("decision-embed-D-45", {}, { timeout: 4000 });
     const card = within(embed).getByTestId("decision-card-D-45");
     for (const target of [card, ...within(card).getAllByRole("button")]) {
@@ -321,7 +340,7 @@ describe("cockpit v3 · the node chat column", () => {
     renderChat("run:luz-t16", { install });
     await threadOf("project:assistant-core");
     expect(await screen.findByTestId("v3-chat-via")).toHaveTextContent(
-      "This run has no thread of its own: this is T-16’s thread.",
+      "This run has no thread of its own: this is Debit each turn’s thread.",
     );
     expect(screen.getByTestId("v3-chat-title")).toHaveTextContent("Chat · Debit each turn");
   });
@@ -382,12 +401,17 @@ describe("cockpit v3 · the node chat column", () => {
     ];
     renderChat("assistant-core", { install, messages: [...base, ...extra] });
     const list = await screen.findByTestId("room-message-list", {}, { timeout: 4000 });
-    await waitFor(() => expect(list).toHaveTextContent("D-99 closed: the project merged."));
     await waitFor(() => expect(list).toHaveTextContent("Why gone-node is not moving"));
-    const empty = [...list.querySelectorAll(":scope > li")].filter(
-      (li) => !(li.textContent ?? "").trim(),
-    );
-    expect(empty).toEqual([]);
+    // A closed alarm is Activity: its line shows in that list.
+    await userEvent.setup().click(screen.getByTestId("v3-chat-activity"));
+    const activity = await screen.findByTestId("v3-activity-list");
+    await waitFor(() => expect(activity).toHaveTextContent("D-99 closed: the project merged."));
+    for (const shown of [list, activity]) {
+      const empty = [...shown.querySelectorAll(":scope > li")].filter(
+        (li) => !(li.textContent ?? "").trim(),
+      );
+      expect(empty).toEqual([]);
+    }
   });
 
   it("on a phone, a verb from the full-screen chat closes it and opens its preview on the page", async () => {
@@ -462,9 +486,10 @@ describe("cockpit v3 · the node chat column", () => {
       source: { ...sample, undo },
     });
     const list = await screen.findByTestId("room-message-list", {}, { timeout: 4000 });
-    await waitFor(() => expect(within(list).getAllByTestId("v3-applied")).toHaveLength(4));
+    // Only the newest is live (the first was undone, the last one's ten minutes are over);
+    // the others are Activity.
+    await waitFor(() => expect(within(list).getAllByTestId("v3-applied")).toHaveLength(1));
     const open = within(list).getAllByTestId("v3-applied-undo");
-    // Only the newest one: the first was undone, the last one's ten minutes are over.
     expect(open).toHaveLength(1);
     expect(open[0]).toHaveTextContent("Undo (7 min left)");
     expect(open[0]!.closest('[data-testid="v3-applied"]')).toHaveTextContent(
@@ -537,17 +562,13 @@ describe("cockpit v3 · the node chat column", () => {
     expect(open[0]!.closest('[data-testid="v3-applied"]')).toHaveTextContent("Ana added Usage");
   });
 
-  it("lists the node's verbs after / (the answer opens the card) and quick verbs above the box", async () => {
+  it("lists the node's verbs after / (the answer opens the card); no verb buttons above the box", async () => {
     setWindow("desktop");
     const onVerb = vi.fn();
     renderChat("assistant-core", { install, actions: { factoryId: "", onVerb } });
     const box = await composer();
-    const quick = screen.getByTestId("v3-chat-quick");
-    expect(
-      within(quick)
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Why?", "Add child", "Team", "Autonomy & merge", "Pause"]);
+    expect(screen.queryByTestId("v3-chat-quick")).toBeNull();
+    expect(screen.queryByTestId("v3-chat-hint")).toBeNull();
     const user = userEvent.setup();
     await user.click(box);
     await user.keyboard("/");
@@ -616,8 +637,8 @@ describe("cockpit v3 · the node chat column", () => {
     const thread = screen.getByTestId("room-message-list");
     const why = within(thread).getByTestId("v3-why");
     expect(why).toHaveTextContent("Why assistant-panel-ux has not started");
-    // In the chat the why card carries the answer and "Start it now instead".
-    expect(within(why).getByRole("button", { name: "Apply" })).toBeInTheDocument();
+    // The ask it ends at is the page's Your move, so the card offers no second answer.
+    expect(within(why).queryByRole("button", { name: "Apply" })).toBeNull();
     expect(within(why).getByRole("button", { name: "Start it now instead" })).toBeInTheDocument();
   });
 
@@ -659,15 +680,16 @@ describe("cockpit v3 · the node chat on a phone", () => {
     setWindow("phone");
     renderChat("assistant-core", { install, sampleNodes: true });
     const open = await screen.findByTestId("v3-chat-open");
-    await waitFor(() => expect(open).toHaveTextContent("Message Atlas about assistant-core"));
+    await waitFor(() => expect(open).toHaveTextContent("Message Atlas about Assistant core"));
   });
 
-  it("pins the box with the node's ask above it; a tap opens the thread full screen", async () => {
+  it("pins the box with the conversation's newest line; a tap opens the thread full screen", async () => {
     setWindow("phone");
     const view = renderChat("assistant-core", { install });
     const pinned = await screen.findByTestId("v3-chat-pinned");
-    expect(within(pinned).getByTestId("v3-chat-last")).toHaveTextContent(
-      "D-45 Atlas proposes C-16: update assistant-core (constraints, DoD)",
+    // The node's ask is the page's Your move; the box shows the newest words.
+    expect(await within(pinned).findByTestId("v3-chat-last")).toHaveTextContent(
+      "Juno: T-16 (debit each turn) is done locally",
     );
     expect(screen.queryByTestId("room-thread")).toBeNull();
     const user = userEvent.setup();

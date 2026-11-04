@@ -9,11 +9,11 @@ C-16, which waits on a person to apply it (D-45). Checked in the browser, at
 - Home, the feature, the project and the task, and the level views the strip
   links to, render from the server with no console error, no line drawn
   between nodes and no "0" or "none" cell;
-- each status line ends at the person who must act ("needs you: Apply C-16
-  (D-45)"), with the answer on it;
-- Apply on the status line answers through ``POST /decisions/{id}/answer``
-  and the page reads again: the line no longer ends at D-45 but at the lead
-  who starts T-16, and Home's at the merges;
+- each page opens with Your move: "Apply C-16" (D-45) with its one answer;
+  the status line, in Details, ends at the person and points up at it;
+- Apply in Your move answers through ``POST /decisions/{id}/answer`` and the
+  page reads again: the line no longer ends at D-45 but at the lead who
+  starts T-16, and Home's at the merges;
 - the chat column posts in the thread of the node it is on (a task in its own);
 - the keyboard walks from Home down to the task and back.
 """
@@ -28,6 +28,8 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from tests.e2e_ui.factory_v3.checks import BODY_CHECKS as _BODY_CHECKS
+from tests.e2e_ui.factory_v3.checks import details as _details
+from tests.e2e_ui.factory_v3.checks import move_row as _move_row
 from tests.e2e_ui.factory_v3.checks import node as _node
 from tests.e2e_ui.factory_v3.conftest import LOAD_MS, Cockpit, Theme, V3Server
 from tests.e2e_ui.factory_v3.seed import Seeded
@@ -60,7 +62,6 @@ def test_home_feature_project_and_task_render_the_servers_nodes(
 ) -> None:
     cockpit = open_cockpit(width, height, theme)
     page = cockpit.page
-    person = f"needs you: Apply {factory.proposal} ({factory.apply_decision})"
 
     for ref in PAGES:
         cockpit.open(ref)
@@ -72,13 +73,22 @@ def test_home_feature_project_and_task_render_the_servers_nodes(
             expect(node.get_by_text("Agent assistant (sample)").first).to_be_visible()
         expect(page.get_by_test_id("v3-sample-notice")).to_have_count(0)
 
-        # One line, ending at the person who must act, with the answer on it.
-        status = node.get_by_test_id("v3-status")
-        expect(status).to_have_attribute("data-kind", "needs")
-        expect(status).to_have_attribute("aria-label", re.compile(re.escape(person)))
-        decision = f'[data-testid="v3-answer"][data-decision="{factory.apply_decision}"]'
-        answer = status.locator(decision)
+        # Your move first: the ask that holds the most, with its one answer.
+        row = node.get_by_test_id("v3-move-row").first
+        expect(row).to_have_attribute("data-decision", factory.apply_decision, timeout=LOAD_MS)
+        expect(row).to_contain_text(f"Apply {factory.proposal}")
+        answer = row.get_by_test_id("v3-answer")
         expect(answer).to_have_text("Apply")
+        expect(
+            page.locator(f'[data-testid="v3-answer"][data-decision="{factory.apply_decision}"]')
+        ).to_have_count(1)
+
+        # The status line is a detail: it ends at the person and points up at Your move.
+        status = _details(page, ref).get_by_test_id("v3-status")
+        expect(status).to_have_attribute("data-kind", "needs")
+        expect(status).to_have_attribute("aria-label", re.compile("your move, above"))
+        expect(status.get_by_test_id("v3-answer")).to_have_count(0)
+        node.get_by_test_id("v3-details-toggle").click()
 
         found = node.evaluate(_BODY_CHECKS)
         assert found["lines"] == [], (ref, width, theme, found["lines"])
@@ -101,7 +111,7 @@ def test_home_feature_project_and_task_render_the_servers_nodes(
     assert cockpit.errors == [], cockpit.errors
 
 
-def test_apply_on_the_status_line_answers_through_the_server(
+def test_apply_in_your_move_answers_through_the_server(
     open_cockpit: Callable[[int, int, Theme], Cockpit],
     v3_server: V3Server,
     factory: Seeded,
@@ -110,20 +120,22 @@ def test_apply_on_the_status_line_answers_through_the_server(
     page = cockpit.page
     row_id = _api_page(v3_server, factory, factory.project)["status"]["decision"]["row_id"]
     cockpit.open(factory.project)
-    status = _node(page, factory.project).get_by_test_id("v3-status")
-    expect(status).to_contain_text(factory.apply_decision)
+    row = _move_row(page, factory.project, factory.apply_decision)
+    expect(row).to_contain_text(f"Apply {factory.proposal}", timeout=LOAD_MS)
+    status = _details(page, factory.project).get_by_test_id("v3-status")
+    expect(status).to_have_attribute("data-kind", "needs")
 
     with page.expect_response(
         lambda r: r.request.method == "POST" and r.url.endswith(f"/decisions/{row_id}/answer")
     ) as answered:
-        status.get_by_role("button", name="Apply", exact=True).click()
+        row.get_by_role("button", name="Apply", exact=True).click()
 
     assert answered.value.status == 200, answered.value.text()
     expect(page.get_by_text(f"{factory.apply_decision}: Apply")).to_be_visible()
     # The page reads again: the hold is gone, so the line no longer ends at D-45,
     # and it still says who acts next: the lead who starts T-16.
-    expect(status).not_to_contain_text(factory.apply_decision, timeout=LOAD_MS)
-    expect(status).not_to_have_attribute("data-kind", "needs")
+    expect(row).to_have_count(0, timeout=LOAD_MS)
+    expect(status).not_to_have_attribute("data-kind", "needs", timeout=LOAD_MS)
     expect(status).to_have_attribute(
         "aria-label",
         re.compile(rf"^Not started: {factory.held_task} → waits for \S.* to start it$"),

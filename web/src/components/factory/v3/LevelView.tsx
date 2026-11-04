@@ -4,34 +4,31 @@
 // from the server when it has more).
 
 import { useState } from "react";
+import { cn } from "@/lib/utils";
+import { fullTitle, nodeName } from "./calm/calmModel";
 import { DoneLine, MoreFooter, PagedRows } from "./Children";
 import { NodeLink, StateDot } from "./nodeParts";
 import { useMoreInGroup } from "./nodeQueries";
-import { NodeTile, type Overlays } from "./NodeTile";
+import { NodeTile, type Overlays, ParentNameContext } from "./NodeTile";
 import type { LevelGroup, LevelView as View } from "./nodeTypes";
-import { drawsTiles, levelName } from "./nodeWire";
+import { drawsTiles } from "./nodeWire";
 
+/** A group's head: its parent's short name, a link (the parent's level and lineage are Details there). */
 function GroupHead({ group }: { group: LevelGroup }) {
   const p = group.parent;
+  const name = nodeName(p);
   return (
-    <div className="mb-2 leading-normal" data-testid="v3-group-head">
+    <div className="mb-1.5 px-0.5 leading-normal" data-testid="v3-group-head">
       <NodeLink
         nodeRef={p.ref}
-        className="mr-2 text-[13.5px] font-semibold hover:text-status-blue-fg"
+        title={fullTitle(p) ?? undefined}
+        className={cn(
+          "text-[13px] font-semibold text-muted-foreground hover:text-status-blue-fg",
+          p.implicit && "italic",
+        )}
       >
-        {p.title}
+        {name}
       </NodeLink>
-      {p.tag && <span className="mr-2 font-mono text-xs text-foreground-tertiary">{p.tag}</span>}
-      {p.implicit && (
-        <span className="mr-2 rounded-full border border-dashed border-border-strong px-1.5 text-[11.5px] text-foreground-tertiary">
-          implicit
-        </span>
-      )}
-      <span className="mr-2 text-xs text-foreground-tertiary">
-        {levelName(p.level, p.level_name)}
-        {p.ancestors.length ? ` · in ${p.ancestors.join(" › ")}` : ""}
-      </span>
-      {p.evidence && <span className="text-[12.5px] text-muted-foreground">· {p.evidence}</span>}
     </div>
   );
 }
@@ -55,29 +52,37 @@ function Group({
     <div className="mb-[18px]" data-testid="v3-group" data-ref={group.parent.ref}>
       <GroupHead group={group} />
       {group.folded_done ? (
-        <DoneLine done={group.items} overlays={overlays} rows={rows} />
+        <DoneLine done={group.items} rows={rows} />
       ) : rows ? (
-        <PagedRows items={group.items} overlays={overlays} owner />
+        <div className="flex flex-col gap-1.5">
+          {(live.length > 0 || done.length === 1) && (
+            <PagedRows items={done.length === 1 ? group.items : live} />
+          )}
+          {done.length > 1 && <DoneLine done={done} rows />}
+        </div>
       ) : (
         <div className="flex flex-col gap-3">
           {live.length > 0 && (
             <ul
               role="list"
-              className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,290px),1fr))] gap-3"
+              className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-3"
             >
               {live.map((k) => (
                 <NodeTile key={k.ref} node={k} overlays={overlays} />
               ))}
             </ul>
           )}
-          <DoneLine done={done} overlays={overlays} />
+          <DoneLine done={done} />
         </div>
       )}
       <MoreFooter more={more} shown={group.items.length} />
       {group.later?.length ? (
-        <div className="mt-2 flex items-center gap-2 rounded-[10px] border border-dashed border-border-strong px-3 py-2 text-[13px] text-muted-foreground">
+        <div
+          className="mt-1.5 flex items-center gap-2 px-1 text-[13px] text-muted-foreground"
+          title={group.later.join(", ")}
+        >
           <StateDot state="later" />
-          {group.later.length} later: {group.later.join(", ")}
+          {group.later.length} later
         </div>
       ) : null}
     </div>
@@ -99,31 +104,29 @@ export function LevelView({
   const groups = fold ? view.groups.filter((g) => !g.folded_done) : view.groups;
   return (
     <div data-testid="v3-level-view">
-      {groups.map((g) => (
-        <Group key={g.parent.ref} view={view} group={g} rows={rows} overlays={overlays} />
-      ))}
+      {groups.map((g) => {
+        // A child named after its parent keeps only the rest ("Part 1").
+        const parentName = nodeName(g.parent);
+        return (
+          <ParentNameContext.Provider key={g.parent.ref} value={parentName}>
+            <Group view={view} group={g} rows={rows} overlays={overlays} />
+          </ParentNameContext.Provider>
+        );
+      })}
       {fold && view.done_groups && (
         <button
           type="button"
           data-testid="v3-done-groups"
           onClick={() => setShowDone(true)}
-          className="flex w-full flex-wrap items-center gap-2 rounded-[10px] border border-dashed border-border-strong px-3 py-2 text-left text-[13px] text-muted-foreground hover:text-foreground"
+          title={view.done_groups.titles.join(" · ")}
+          className="flex items-center gap-2 rounded-[8px] px-1 py-1 text-left text-[13px] text-muted-foreground hover:text-foreground"
         >
           <span aria-hidden className="font-bold text-status-green-fg">
             ✓
           </span>
-          <b className="font-semibold text-foreground">
-            {view.done_groups.count} {view.done_groups.noun ?? "all done"}
-          </b>
           <span>
-            {view.done_groups.titles.slice(0, 5).join(" · ")}
-            {view.done_groups.titles.length > 5 ? ` +${view.done_groups.titles.length - 5}` : ""}
+            {view.done_groups.count} {view.done_groups.noun ?? "all done"}
           </span>
-          {view.done_groups.in_base_env && (
-            <span className="text-foreground-tertiary">· in base env</span>
-          )}
-          <span className="flex-1" />
-          <span className="text-foreground-tertiary">show</span>
         </button>
       )}
     </div>

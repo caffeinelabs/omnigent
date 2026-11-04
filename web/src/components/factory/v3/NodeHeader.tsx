@@ -1,19 +1,28 @@
-// A node's header: at most five lines (what it is, why it exists, its status,
-// its roll-up, its links), then the verbs that steer it. A line with nothing
-// to say is left out; nothing renders empty.
+// A node's header, calm: its short name (with its ring or state dot), at most
+// one phrase when it is held by something other than the viewer, the ⋯ verbs
+// menu and one "Details" disclosure. Everything else (the full title, ids,
+// why it exists, the status path and why chain, the roll-up, links, acceptance
+// and evidence) waits behind Details; nothing renders empty.
 
 import { type ReactNode, useState } from "react";
-import { Undo2Icon } from "lucide-react";
+import { ChevronDownIcon, Undo2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { undoLabel } from "../steer/steerModel";
+import { childPhrase, fullTitle, nodeName } from "./calm/calmModel";
+import { VerbMenu } from "./calm/NodeMenu";
+import { LineageFold } from "./lenses/LensBodies";
+import { inProductTree } from "./lenses/lensModel";
+import { useLensSupport } from "./lenses/lensQueries";
 import { ChipList } from "./LinkChip";
 import { useNodeActions } from "./NodeContext";
-import { Avatar, Glyph, Kbd, NodeLink, Ring, money, sinceWhen } from "./nodeParts";
+import { NodeContent } from "./NodeContent";
+import { Avatar, Glyph, NodeLink, Ring, StateDot, hasRing, money, sinceWhen } from "./nodeParts";
 import { useNodeUndo } from "./nodeSteer";
-import type { NodePage, Rollup, RollupCount, VerbAvail } from "./nodeTypes";
+import type { NodePage, Rollup, RollupCount } from "./nodeTypes";
 import { levelName } from "./nodeWire";
 import { RichText } from "./RichText";
 import { StatusBox } from "./StatusLine";
+import { endsAbove } from "./statusModel";
 import { WhyCard } from "./WhyCard";
 
 const DOT = <span className="text-foreground-tertiary">·</span>;
@@ -181,7 +190,7 @@ export function RollupLine({ page }: { page: NodePage }) {
       data-testid="v3-rollup"
       className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground"
     >
-      {p && !isRoot && <Ring progress={p} size={28} />}
+      {hasRing(p) && !isRoot && <Ring progress={p} size={28} />}
       {parts.map((part, i) => (
         // The separator ends its part, so a wrapped line never starts with "·".
         <span key={part.id} className="inline-flex max-w-full min-w-0 items-center gap-2">
@@ -216,83 +225,65 @@ function UndoLatest({ nodeRef }: { nodeRef: string }) {
   );
 }
 
-function VerbBar({ verbs, nodeRef }: { verbs: VerbAvail[]; nodeRef: string }) {
-  const { onVerb, openVerb } = useNodeActions();
-  const undo = useNodeUndo(nodeRef);
-  if (!verbs.length && !undo) return null;
+/** What the node is, in words: its full title when the name shortens it, its code, level, kind and owner. */
+function MetaLine({ page }: { page: NodePage }) {
+  const { node } = page;
+  const level = levelName(node.level, node.level_name);
+  const kind = node.kind_name && node.kind_name !== level ? node.kind_name : null;
+  const full = fullTitle(node);
   return (
-    <div
-      role="toolbar"
-      aria-label="Steer this node"
-      data-testid="v3-verbs"
-      className="mt-0.5 flex gap-1.5 max-md:-mx-4 max-md:overflow-x-auto max-md:px-4 md:flex-wrap [&::-webkit-scrollbar]:hidden"
-    >
-      {verbs.map((v) => (
-        <button
-          key={v.verb}
-          type="button"
-          disabled={!v.enabled}
-          title={v.enabled ? undefined : v.reason}
-          aria-pressed={v.verb === "talk" ? undefined : openVerb === v.verb}
-          onClick={() => onVerb?.(v)}
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-card-solid px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground hover:border-border-strong hover:text-foreground disabled:opacity-50",
-            openVerb === v.verb && "border-status-blue bg-status-blue/12 text-status-blue-fg",
-          )}
-        >
-          {v.label}
-          {v.key && (
-            <span className="max-md:hidden">
-              <Kbd>{v.key}</Kbd>
-            </span>
-          )}
-        </button>
-      ))}
-      <UndoLatest nodeRef={nodeRef} />
+    <div className="flex flex-col gap-1">
+      {full && (
+        <p data-testid="v3-full-title" className="text-foreground [overflow-wrap:anywhere]">
+          {full}
+        </p>
+      )}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-foreground-tertiary">
+        {node.tag && <span className="font-mono text-xs">{node.tag}</span>}
+        <span>
+          {level}
+          {kind ? ` · ${kind}` : ""}
+          {node.implicit ? " · implicit" : ""}
+        </span>
+        {node.owner && (
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-muted-foreground">
+            <Avatar actor={node.owner} />
+            {node.owner.name}
+          </span>
+        )}
+      </p>
     </div>
   );
 }
 
-export function NodeHeader({
+/** Everything about the node that is not the viewer's move or its children, until asked. */
+export function NodeDetails({
   page,
-  whyOpen: whyOpenProp,
-  onWhyChange,
+  whyOpen,
+  onWhy,
 }: {
   page: NodePage;
-  /** Controlled "why? ▾" (the page binds `w`); uncontrolled when absent. */
-  whyOpen?: boolean;
-  onWhyChange?: (open: boolean) => void;
+  whyOpen: boolean;
+  onWhy: () => void;
 }) {
   const { node, status } = page;
-  const [ownWhy, setOwnWhy] = useState(false);
-  const whyOpen = whyOpenProp ?? ownWhy;
-  const setWhy = onWhyChange ?? setOwnWhy;
-  const level = levelName(node.level, node.level_name);
-  const glyph = page.breadcrumb.length > 0 && (!node.progress || node.implicit) && node.glyph;
-  const kind = node.kind_name && node.kind_name !== level ? ` · ${node.kind_name}` : "";
+  const { aboveId } = useNodeActions();
   const start = page.verbs.find((v) => v.verb === "start") ?? null;
+  const kids = page.children;
+  const lineage =
+    useLensSupport().lineage &&
+    inProductTree(page) &&
+    !kids.items.length &&
+    !kids.later.length &&
+    !kids.ghosts.length;
   return (
-    <section data-testid="v3-header" className="mb-3 flex flex-col gap-[7px]">
-      <div className="flex min-w-0 flex-wrap items-center gap-3">
-        {glyph && <Glyph glyph={glyph} dashed={node.kind === "study" || node.implicit} />}
-        <h1 className="min-w-0 text-[21px] font-bold tracking-[-0.01em] [overflow-wrap:anywhere] max-md:text-[19px]">
-          {node.title}
-        </h1>
-        <span className="flex flex-wrap items-center gap-2 text-[12.5px] text-foreground-tertiary">
-          {node.tag && <span className="font-mono text-xs">{node.tag}</span>}
-          <span>
-            {level}
-            {kind}
-            {node.implicit ? " · implicit" : ""}
-          </span>
-          {node.owner && (
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-muted-foreground">
-              <Avatar actor={node.owner} />
-              {node.owner.name}
-            </span>
-          )}
-        </span>
-      </div>
+    <section
+      id="v3-details"
+      data-testid="v3-details"
+      aria-label="Details"
+      className="mt-1 mb-1 flex flex-col gap-2.5 rounded-xl bg-muted/30 px-3.5 py-3 text-[13px] ring-1 ring-border"
+    >
+      <MetaLine page={page} />
       {node.why_html && (
         <p className="max-w-[80ch] text-muted-foreground">
           <RichText html={node.why_html} />
@@ -302,12 +293,92 @@ export function NodeHeader({
         line={status}
         nodeRef={node.ref}
         whyOpen={whyOpen}
-        onWhy={() => setWhy(!whyOpen)}
+        onWhy={onWhy}
+        answer={!endsAbove(status, aboveId)}
       />
       {whyOpen && <WhyCard line={status} startNow={start} />}
       <RollupLine page={page} />
       <ChipList chips={page.chips} more={page.more_chips} moreGroups={page.chips_more} />
-      <VerbBar verbs={page.verbs} nodeRef={node.ref} />
+      <NodeContent page={page} part="details" />
+      {/* A node with nothing below has no lens menu: its lineage opens from here. */}
+      {lineage && <LineageFold page={page} />}
+    </section>
+  );
+}
+
+/** The ring a node's progress draws, else its state dot (the root has neither). */
+function Mark({ page }: { page: NodePage }) {
+  const { node } = page;
+  if (!page.breadcrumb.length) return null;
+  if (hasRing(node.progress) && !node.implicit) return <Ring progress={node.progress} size={30} />;
+  if (node.glyph && (node.implicit || node.kind === "study")) {
+    return <Glyph glyph={node.glyph} dashed />;
+  }
+  return <StateDot state={node.state} className="size-2.5" />;
+}
+
+export function NodeHeader({
+  page,
+  whyOpen: whyOpenProp,
+  onWhyChange,
+  detailsOpen: detailsProp,
+  onDetailsChange,
+}: {
+  page: NodePage;
+  /** Controlled "why? ▾" (the page binds `w`); uncontrolled when absent. */
+  whyOpen?: boolean;
+  onWhyChange?: (open: boolean) => void;
+  /** Controlled Details (`w` opens it with the why); uncontrolled when absent. */
+  detailsOpen?: boolean;
+  onDetailsChange?: (open: boolean) => void;
+}) {
+  const { node } = page;
+  const [ownWhy, setOwnWhy] = useState(false);
+  const [ownDetails, setOwnDetails] = useState(false);
+  const whyOpen = whyOpenProp ?? ownWhy;
+  const setWhy = onWhyChange ?? setOwnWhy;
+  const details = detailsProp ?? ownDetails;
+  const setDetails = onDetailsChange ?? setOwnDetails;
+  const { aboveId } = useNodeActions();
+  const name = nodeName(node);
+  // The viewer's own asks are Your move; a phrase says only what holds it otherwise.
+  const covered = page.status.ends === "person" && endsAbove(page.status, aboveId);
+  const phrase = page.breadcrumb.length && !covered ? childPhrase(node) : null;
+  return (
+    <section data-testid="v3-header" className="mb-4 flex flex-col gap-1.5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Mark page={page} />
+        <h1
+          data-testid="v3-title"
+          title={fullTitle(node) ?? undefined}
+          className="min-w-0 text-[21px] font-bold tracking-[-0.01em] [overflow-wrap:anywhere] max-md:text-[19px]"
+        >
+          {name}
+        </h1>
+        <span className="flex-1" />
+        <UndoLatest nodeRef={node.ref} />
+        <button
+          type="button"
+          data-testid="v3-details-toggle"
+          aria-expanded={details}
+          aria-controls="v3-details"
+          onClick={() => setDetails(!details)}
+          className="inline-flex shrink-0 items-center gap-1 rounded-[7px] border border-transparent px-1.5 py-0.5 text-[12.5px] text-muted-foreground hover:border-border hover:text-foreground aria-expanded:border-border aria-expanded:text-foreground"
+        >
+          Details
+          <ChevronDownIcon
+            aria-hidden
+            className={cn("size-3 transition-transform", details && "rotate-180")}
+          />
+        </button>
+        <VerbMenu verbs={page.verbs} />
+      </div>
+      {phrase && phrase.tone !== "you" && (
+        <p data-testid="v3-phrase-here" className="text-[13px] text-muted-foreground">
+          {phrase.text}
+        </p>
+      )}
+      {details && <NodeDetails page={page} whyOpen={whyOpen} onWhy={() => setWhy(!whyOpen)} />}
     </section>
   );
 }

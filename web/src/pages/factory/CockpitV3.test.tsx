@@ -183,7 +183,9 @@ describe("cockpit v3 · the switch and routes", () => {
     renderAt("/n/product/project");
 
     expect(await screen.findByTestId("v3-level-view")).toBeInTheDocument();
-    expect(screen.getByTestId("v3-below")).toHaveTextContent("grouped under features");
+    expect(screen.getAllByTestId("v3-group").length).toBeGreaterThan(0);
+    // Grouped under the features' names; no meta text says so.
+    expect(screen.getByTestId("v3-below")).not.toHaveTextContent("grouped under");
   });
 
   it("goes back to v2 from the page, and saves v2 as before", async () => {
@@ -247,27 +249,30 @@ describe("cockpit v3 · the switch and routes", () => {
   it("says an answer on sample data answered nothing", async () => {
     serve();
     renderAt("?cockpit=v3");
-    const status = await screen.findByTestId("v3-status");
+    const move = await screen.findByTestId("v3-your-move");
 
-    fireEvent.click(within(status).getAllByRole("button", { name: "Apply" })[0]!);
+    fireEvent.click(within(move).getAllByRole("button", { name: "Apply" })[0]!);
 
     expect(await screen.findByText(/Sample data: nothing was answered/)).toBeInTheDocument();
     expect(server.calls.filter((c) => c.path.includes("/decisions/"))).toEqual([]);
   });
 
-  it("opens v3's sheets from the shell: Needs you from “Open C-16”, the base env, the keys", async () => {
+  it("opens v3's sheets from the shell: Needs you from an ask's peek, the base env, the keys", async () => {
     serve();
     renderAt("?cockpit=v3");
-    const status = await screen.findByTestId("v3-status");
-    fireEvent.click(within(status).getByRole("button", { name: "Open C-16" }));
-    expect(await screen.findByTestId("v3-needs-sheet", {}, { timeout: 4000 })).toHaveTextContent(
-      "Atlas proposes C-16",
-    );
+    const move = await screen.findByTestId("v3-your-move");
+    const row = within(move).getAllByTestId("v3-move-row")[0]!;
+    fireEvent.click(within(row).getByRole("button", { name: /Apply C-16/ }));
+    fireEvent.click(within(row).getByRole("button", { name: "All asks" }));
+    // The sheet lists the asks as Your move does (short words, never the raw title).
+    const needs = await screen.findByTestId("v3-needs-sheet", {}, { timeout: 4000 });
+    await waitFor(() => expect(needs).toHaveTextContent("Apply C-16"));
+    expect(needs).not.toHaveTextContent("proposes C-16");
     await waitFor(() => expect(location).toBe(`${BASE}?peek=needs`));
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("v3-needs-sheet")).toBeNull());
-    // The count is the ranked sheet's: every ask, also those that block nothing.
-    expect(await screen.findByTestId("cockpit-needs-you")).toHaveTextContent("5 need you");
+    // One count: every ask of both trees (Product's 5 and Factory's 3), also those that block nothing.
+    expect(await screen.findByTestId("cockpit-needs-you")).toHaveTextContent("8 need you");
     const env = await screen.findByTestId("cockpit-base-env");
     expect(env).toHaveTextContent("Base env sample-main @817480d");
     fireEvent.click(env);
@@ -301,7 +306,7 @@ describe("cockpit v3 · the switch and routes", () => {
     const { client } = renderAt("?cockpit=v3", source);
     // The ranked count (every ask, also those that block nothing) once the list is read.
     await waitFor(() =>
-      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("5 need you"),
+      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("8 need you"),
     );
     // An agent asks: the next snapshot (a push frame re-reads it) holds one more open decision.
     const open = snapshot.decisions.find((d) => d.status === "open")!;
@@ -309,7 +314,7 @@ describe("cockpit v3 · the switch and routes", () => {
     snapshot = { ...snapshot, decisions: [...snapshot.decisions, { ...open, id: "D-99" }] };
     await client.invalidateQueries({ queryKey: factoryQueryKey(LIVE_RUN_FACTORY_ID) });
     await waitFor(() =>
-      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("6 need you"),
+      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("9 need you"),
     );
   });
 
@@ -340,7 +345,7 @@ describe("cockpit v3 · the server's node API", () => {
     expect(reads).toContain(`${SNAPSHOT}/n/product/level/feature`);
   });
 
-  it("Apply on the status line answers through the answer route and reads the page again", async () => {
+  it("Apply in Your move answers through the answer route and reads the page again", async () => {
     const decision = PAGES["assistant-core"]!.status.decision!;
     const answer = `/v1/factory/decisions/${decision.row_id}/answer`;
     serve({
@@ -348,11 +353,11 @@ describe("cockpit v3 · the server's node API", () => {
     });
     localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
     renderAt("/n/assistant-core", null);
-    const status = await screen.findByTestId("v3-status");
+    const move = await screen.findByTestId("v3-your-move");
     const reads = () => server.calls.filter((c) => c.path === `${SNAPSHOT}/n/assistant-core`);
     const before = reads().length;
 
-    fireEvent.click(within(status).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(move).getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
       expect(server.calls.find((c) => c.path === answer)?.body).toEqual({ option_id: "apply" }),
@@ -388,6 +393,44 @@ describe("cockpit v3 · the factory tree in the shell", () => {
         within(screen.getByTestId("cockpit-trees")).getByTestId("cockpit-tree-product"),
       ).toHaveAttribute("aria-current", "page"),
     );
+  });
+
+  it("on a phone: one ⋯ menu in the top bar, and the bottom bar is Product · Factory · Chat", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width: 767.98px"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    serve();
+    renderAt("");
+    expect(await screen.findByTestId("v3-node-page")).toHaveAttribute("data-ref", "product");
+    const bar = screen.getByTestId("cockpit-topbar");
+    // Search, the chat, the theme and you fold into one menu: the bar fits 390 px.
+    for (const gone of ["cockpit-search", "cockpit-room", "cockpit-theme", "cockpit-you"]) {
+      expect(within(bar).queryByTestId(gone)).toBeNull();
+    }
+    fireEvent.pointerDown(within(bar).getByTestId("cockpit-more"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    expect(await screen.findByTestId("cockpit-more-search")).toBeInTheDocument();
+    expect(screen.getByTestId("cockpit-you-settings")).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    // No tab leaves v3: its two trees (each with its asks) and the chat.
+    const tabs = screen.getByTestId("cockpit-phone-tabs");
+    expect(tabs).toHaveAttribute("data-cockpit", "v3");
+    expect(tabs).toHaveTextContent(/^\d*Product\d*FactoryChat$/);
+    await waitFor(() =>
+      expect(within(tabs).getByTestId("cockpit-phone-product-badge")).toHaveTextContent("5"),
+    );
+    expect(within(tabs).getByTestId("cockpit-phone-factory-badge")).toHaveTextContent("3");
+    expect(screen.queryByTestId("cockpit-phone-discovery")).toBeNull();
   });
 
   it("an area deep in the factory tree is the Factory's too", async () => {
@@ -433,8 +476,9 @@ describe("cockpit v3 · the node chat in the shell", () => {
     expect(screen.queryByTestId("room-drawer")).toBeNull();
     // Sample nodes have no threads: the chat is this factory's #factory, and says so.
     expect(within(full).getByTestId("room-thread")).toHaveAttribute("data-thread", "factory");
-    expect(within(full).getByTestId("v3-chat-title")).toHaveTextContent(
-      "this factory’s #factory: the sample’s nodes have no threads",
+    expect(within(full).getByTestId("v3-chat-title")).toHaveAttribute(
+      "title",
+      expect.stringContaining("this factory’s #factory: the sample’s nodes have no threads"),
     );
     await waitFor(() => expect(location).toBe(`${BASE}?chat=1`));
   });

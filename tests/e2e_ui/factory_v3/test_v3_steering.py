@@ -32,7 +32,16 @@ from collections.abc import Callable
 import httpx
 from playwright.sync_api import Locator, Page, expect
 
-from tests.e2e_ui.factory_v3.checks import BODY_CHECKS, api, assert_clean, node
+from tests.e2e_ui.factory_v3.checks import (
+    BODY_CHECKS,
+    api,
+    assert_clean,
+    closed_menus,
+    details,
+    move_row,
+    node,
+    verb,
+)
 from tests.e2e_ui.factory_v3.conftest import LOAD_MS, Cockpit, Theme, V3Server
 from tests.e2e_ui.factory_v3.seed import BASE, DEPLOYED_SHA, REPO, Seeded
 
@@ -42,9 +51,8 @@ GOOGLE_ADS = "Google Ads integration"
 
 
 def _verb(page: Page, ref: str, label: str) -> Locator:
-    """The verb button *label* in the toolbar of node *ref*."""
-    bar = node(page, ref).get_by_test_id("v3-verbs")
-    return bar.get_by_role("button", name=re.compile(rf"^{re.escape(label)}\b"))
+    """The verb *label* in node *ref*'s ⋯ menu (the menu opens first)."""
+    return verb(page, ref, label)
 
 
 def _preview(page: Page) -> Locator:
@@ -77,20 +85,20 @@ def _apply(page: Page, preview: Locator, label: str | re.Pattern[str]) -> None:
 
 
 def _undo_latest(page: Page, ref: str, label: str) -> Locator:
-    """The "<label>: Undo (n min left)" button beside node *ref*'s verbs."""
+    """The "<label>: Undo (n min left)" button beside node *ref*'s title."""
     undo = node(page, ref).get_by_test_id("v3-undo-latest")
     expect(undo).to_contain_text(f"{label}: Undo (", timeout=LOAD_MS)
     return undo
 
 
 def _status(page: Page, ref: str) -> Locator:
-    return node(page, ref).get_by_test_id("v3-status")
+    """Node *ref*'s status line, in its Details."""
+    return details(page, ref).get_by_test_id("v3-status")
 
 
 def _chip(page: Page, ref: str, kind: str) -> Locator:
-    """Node *ref*'s header chip of *kind* ("auto-merge →", "depends on")."""
-    header = node(page, ref).get_by_test_id("v3-header")
-    return header.locator(f'[data-testid="v3-chip"][data-kind="{kind}"]')
+    """Node *ref*'s chip of *kind* ("auto-merge →", "depends on"), in its Details."""
+    return details(page, ref).locator(f'[data-testid="v3-chip"][data-kind="{kind}"]')
 
 
 def _clean(page: Page, ref: str, *where: object) -> None:
@@ -111,6 +119,12 @@ def _needs_you(v3_server: V3Server, factory: Seeded, tree: str = "product") -> l
     return [i["decision"]["id"] for i in found["items"]]
 
 
+def _asks_in(v3_server: V3Server, factory: Seeded, tree: str) -> int:
+    """How many asks *tree* holds for the viewer: those that hold work and those that do not."""
+    found = api(v3_server.base_url, factory.fid, "/needs-you", tree=tree)
+    return len(found["items"]) + len(found.get("blocks_nothing") or [])
+
+
 def _status_of(v3_server: V3Server, factory: Seeded, ref: str) -> dict[str, object]:
     """Node *ref*'s status line as the API gives it, without the ask's id."""
     status = api(v3_server.base_url, factory.fid, f"/n/{ref}")["status"]
@@ -127,20 +141,18 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
     held_before = _status_of(v3_server, factory, factory.held_task)
     assert factory.apply_decision in _needs_you(v3_server, factory)
     cockpit.open(factory.project)
-    status = _status(page, factory.project)
-    expect(status).to_contain_text(
-        f"needs you: Apply {factory.proposal} ({factory.apply_decision})"
-    )
+    row = move_row(page, factory.project, factory.apply_decision)
+    expect(row).to_contain_text(f"Apply {factory.proposal}", timeout=LOAD_MS)
 
     with page.expect_response(
         lambda r: r.request.method == "POST" and r.url.endswith("/answer")
     ) as answered:
-        status.get_by_role("button", name="Apply", exact=True).click()
+        row.get_by_role("button", name="Apply", exact=True).click()
     assert answered.value.status == 200, answered.value.text()
     expect(page.locator("[data-factory-toast]")).to_contain_text(
         f"{factory.apply_decision}: Apply"
     )
-    expect(status).not_to_contain_text(factory.apply_decision, timeout=LOAD_MS)
+    expect(row).to_have_count(0, timeout=LOAD_MS)
     applied = api(v3_server.base_url, factory.fid, f"/proposals/{factory.proposal}")
     assert applied["proposal"]["status"] == "applied", applied
     assert _status_of(v3_server, factory, factory.held_task) != held_before
@@ -160,9 +172,9 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
         f"{factory.proposal} asks again in {fresh}."
     )
     expect(node(page, factory.project).get_by_test_id("v3-undo-latest")).to_have_count(0)
-    # Put back: C-16 waits for a person again, T-16 is held for it, and the ask is in Needs you.
-    expect(status).to_contain_text(
-        f"needs you: Apply {factory.proposal} ({fresh})", timeout=LOAD_MS
+    # Put back: C-16 waits for a person again (Your move asks it), T-16 is held for it.
+    expect(move_row(page, factory.project, fresh)).to_contain_text(
+        f"Apply {factory.proposal}", timeout=LOAD_MS
     )
     after = api(v3_server.base_url, factory.fid, f"/proposals/{factory.proposal}")
     assert after["proposal"]["status"] == "pending", after
@@ -187,7 +199,8 @@ def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
     expect(sheet).to_be_visible(timeout=LOAD_MS)
     sheet.get_by_test_id("v3-needs-other-tree").click()
     items = sheet.get_by_test_id("v3-needs-item")
-    expect(items).to_have_count(2, timeout=LOAD_MS)
+    before = _asks_in(v3_server, factory, "factory")
+    expect(items).to_have_count(before, timeout=LOAD_MS)
     rule = items.filter(has_text="C-17")
     ask = rule.get_attribute("data-decision")
     assert ask, "C-17's ask has an id"
@@ -204,7 +217,7 @@ def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
     applied = api(v3_server.base_url, factory.fid, "/proposals/C-17")["proposal"]
     assert applied["status"] in ("applied", "trial"), applied
     assert applied["undo_until"] is None, applied
-    expect(items).to_have_count(1, timeout=LOAD_MS)
+    expect(items).to_have_count(before - 1, timeout=LOAD_MS)
     assert ask not in _needs_you(v3_server, factory, "factory")
     assert cockpit.errors == [], cockpit.errors
 
@@ -418,6 +431,7 @@ def test_team_model_swap_shows_the_cost_line_and_undoes(
 
 def test_needs_you_ranks_each_ask_by_what_it_holds(
     open_cockpit: Callable[[int, int, Theme], Cockpit],
+    v3_server: V3Server,
     factory: Seeded,
 ) -> None:
     cockpit = open_cockpit(1440, 900, "light")
@@ -427,24 +441,25 @@ def test_needs_you_ranks_each_ask_by_what_it_holds(
     sheet = page.get_by_test_id("v3-needs-sheet")
     expect(sheet).to_be_visible(timeout=LOAD_MS)
     items = sheet.get_by_test_id("v3-needs-item")
-    expect(items).to_have_count(3, timeout=LOAD_MS)
-    # What holds the most first: C-16 (T-16 and the panel), the merges on main, then D-49.
+    expect(items).to_have_count(_asks_in(v3_server, factory, "product"), timeout=LOAD_MS)
+    # What holds the most first: C-16 (T-16 and the panel), the merges on main, then D-49;
+    # the asks that block nothing come last, each a row of its own.
     expect(items.nth(0)).to_have_attribute("data-decision", factory.apply_decision)
-    expect(items.nth(0)).to_contain_text("Holds T-16, assistant-panel-ux.")
+    expect(items.nth(0)).to_contain_text(f"Apply {factory.proposal}")
     expect(items.nth(0)).not_to_contain_text("**")
     expect(items.nth(1)).to_have_attribute("data-decision", re.compile(r"^merge:"))
     expect(items.nth(1)).to_contain_text("Merge #9856 and #9857")
-    expect(items.nth(2)).to_contain_text("Start the live-search fix?")
-    quiet = sheet.get_by_test_id("v3-needs-quiet")
-    expect(quiet).to_contain_text("These block nothing")
-    expect(quiet.get_by_test_id("v3-needs-apply-all")).to_have_text("Apply all 2")
-    closed = sheet.get_by_test_id("v3-needs-closed")
-    expect(closed).to_contain_text("3 alarms closed by the server")
-    for alarm in ("D-46", "D-47", "D-48"):
-        expect(closed).to_contain_text(alarm)
+    # It holds work (Needs you ranks it with the asks that do): never "blocks nothing".
+    expect(items.nth(2)).not_to_contain_text("blocks nothing")
+    expect(items.last).to_contain_text("blocks nothing")
+    # One filled answer in the sheet; the alarms the server closed live under Factory › Health.
+    expect(sheet.locator('[data-testid="v3-answer"].bg-status-yellow')).to_have_count(1)
+    expect(sheet.get_by_test_id("v3-needs-closed")).to_have_count(0)
     # The factory tree's asks wait there.
     sheet.get_by_test_id("v3-needs-other-tree").click()
-    expect(sheet.get_by_test_id("v3-needs-item")).to_have_count(2, timeout=LOAD_MS)
+    expect(sheet.get_by_test_id("v3-needs-item")).to_have_count(
+        _asks_in(v3_server, factory, "factory"), timeout=LOAD_MS
+    )
     expect(sheet.get_by_test_id("v3-needs-item").first).to_contain_text("C-17")
     assert cockpit.errors == [], cockpit.errors
 
@@ -527,12 +542,17 @@ def test_every_lens_renders_without_lines_or_empty_cells(
     ):
         cockpit.open(ref)
         bar = node(page, ref).get_by_test_id("v3-lens-bar")
-        offered = [t.get_attribute("data-lens") for t in bar.get_by_role("tab").all()]
+        bar.click()
+        menu = page.get_by_test_id("v3-lens-menu")
+        offered = [t.get_attribute("data-lens") for t in menu.get_by_role("menuitemradio").all()]
+        page.keyboard.press("Escape")
         for lens in wanted:
             assert lens in offered, (ref, lens, offered)
         for lens in offered:
-            bar.locator(f'[data-lens="{lens}"]').click()
-            expect(bar.locator(f'[data-lens="{lens}"]')).to_have_attribute("aria-selected", "true")
+            closed_menus(page)
+            bar.click()
+            page.get_by_test_id("v3-lens-menu").locator(f'[data-lens="{lens}"]').click()
+            expect(bar).to_have_attribute("data-lens", lens)
             if lens in content:
                 expect(node(page, ref).get_by_test_id(content[lens]).first).to_be_visible(
                     timeout=LOAD_MS
@@ -556,11 +576,11 @@ def test_phone_chat_opens_full_screen_and_every_verb_is_reachable(
     page = cockpit.page
     cockpit.open(PANEL)
     _clean(page, PANEL, "phone")
-    # The verbs scroll sideways inside their row; the page never does.
-    bar = node(page, PANEL).get_by_test_id("v3-verbs")
-    for button in bar.get_by_role("button").all():
-        button.scroll_into_view_if_needed()
-        expect(button).to_be_in_viewport()
+    # The verbs are one ⋯ menu, every one of them in view; the page never scrolls sideways.
+    node(page, PANEL).get_by_test_id("v3-menu").click()
+    for item in page.get_by_test_id("v3-verbs").get_by_role("menuitem").all():
+        expect(item).to_be_in_viewport()
+    page.keyboard.press("Escape")
     _verb(page, PANEL, "Start now").click()
     preview = _preview(page)
     expect(preview).to_be_in_viewport()

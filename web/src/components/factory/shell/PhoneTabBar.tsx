@@ -4,7 +4,8 @@
  * Jump or act). It sits above the OS inset; pages leave room for it.
  *
  * The new cockpit's bar has its five places instead (`CockpitPhoneTabBar`);
- * the Room, search and the rest sit in its top bar.
+ * the Room, search and the rest sit in its top bar. Cockpit v3 has only its
+ * two trees and the chat (`TreePhoneTabBar`): Product · Factory · Chat.
  */
 
 import { useState } from "react";
@@ -12,7 +13,9 @@ import {
   ActivityIcon,
   BellIcon,
   BotIcon,
+  BoxIcon,
   CommandIcon,
+  FactoryIcon,
   EllipsisIcon,
   FolderKanbanIcon,
   GanttChartIcon,
@@ -334,6 +337,64 @@ export function CockpitPhoneTabBar({
           testId={`cockpit-phone-${tab.key}`}
         />
       ))}
+    </nav>
+  );
+}
+
+/**
+ * Cockpit v3's bottom bar on a phone: its two trees and the chat (Product ·
+ * Factory · Chat), each tree with the asks waiting there. Nothing leaves v3.
+ */
+export function TreePhoneTabBar({
+  productHref,
+  factoryHref,
+  current,
+  productNeeds,
+  factoryNeeds,
+  onChat,
+}: {
+  productHref: string;
+  factoryHref: string;
+  current: "product" | "factory";
+  /** Asks waiting on the viewer in each tree (the top bar's count is their sum). */
+  productNeeds: number;
+  factoryNeeds: number;
+  /** Opens the chat of the page's node, full screen. */
+  onChat: () => void;
+}) {
+  return (
+    <nav
+      aria-label="Cockpit"
+      data-testid="cockpit-phone-tabs"
+      data-cockpit="v3"
+      className="fixed inset-x-0 z-30 flex h-14 items-stretch border-t border-border bg-background/95 backdrop-blur-md md:hidden"
+      style={{ bottom: "var(--omnigent-inset-bottom, 0px)" }}
+    >
+      <Tab
+        to={productHref}
+        label="Product"
+        icon={BoxIcon}
+        active={current === "product"}
+        badge={productNeeds}
+        testId="cockpit-phone-product"
+      />
+      <Tab
+        to={factoryHref}
+        label="Factory"
+        icon={FactoryIcon}
+        active={current === "factory"}
+        badge={factoryNeeds}
+        testId="cockpit-phone-factory"
+      />
+      <button
+        type="button"
+        onClick={onChat}
+        data-testid="cockpit-phone-chat"
+        className="relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-xs text-muted-foreground"
+      >
+        <MessagesSquareIcon aria-hidden className="size-5" />
+        Chat
+      </button>
     </nav>
   );
 }

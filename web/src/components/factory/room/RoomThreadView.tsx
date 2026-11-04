@@ -27,7 +27,7 @@ import { Switch } from "@/components/ui/switch";
 import { useFactoryEvents, useFactoryPeople } from "@/hooks/useFactory";
 import type { ActiveRoomToken } from "@/lib/composerMentions";
 import type { ChatMessageView, FactorySnapshot, TaskView } from "@/lib/factoryApi";
-import { fetchFactoryTasks, postRoomMessage } from "@/lib/factoryRoomApi";
+import { type ChatFeed, fetchFactoryTasks, postRoomMessage } from "@/lib/factoryRoomApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { RoomCardContext, type RoomCardData } from "../cards/RoomCardContext";
@@ -40,7 +40,13 @@ import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 import { roomCandidateList } from "./roomCandidates";
 import { RoomComposer, type RoomComposerNodeOptions } from "./RoomComposer";
-import { foldRoomItems, namesRepos, supersededCards, supersededIssueCards } from "./roomFold";
+import {
+  type FoldedItem,
+  foldRoomItems,
+  namesRepos,
+  supersededCards,
+  supersededIssueCards,
+} from "./roomFold";
 import { BaseMovesLine, IssueRepeats } from "./RoomFolds";
 import { BusRow, RoomMessage } from "./RoomMessage";
 import {
@@ -163,6 +169,14 @@ export interface RoomThreadNodeOptions {
   /** Cards the Room does not draw (`why`, `closed_alarm`, `offer`, `preview_applied`); `fallback` when it cannot draw one. */
   card?: (message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode;
   composer?: RoomComposerNodeOptions;
+  /** Where each item goes: inline (`conversation`), the Activity list, or nowhere. All inline when absent. */
+  lane?: (item: FoldedItem) => "conversation" | "activity" | "hidden";
+  /** The Activity line under the header, from the activity items (`render` draws one as the thread would). */
+  activity?: (items: FoldedItem[], render: (item: FoldedItem) => ReactNode) => ReactNode;
+  /** A card under a person's or agent's message to leave out (its ask shows elsewhere on the page). */
+  hideCard?: (message: ChatMessageView) => boolean;
+  /** Read the thread with each row's lane (a server without feeds ignores it). */
+  feed?: ChatFeed;
 }
 
 export interface RoomThreadViewProps {
@@ -200,7 +214,8 @@ export function RoomThreadView({
   const nodeCard = node?.card ?? null;
   const title = threadTitle(snapshot, thread);
   const threads = useRoomThreads(fid);
-  const messagesQuery = useRoomMessages(fid, thread);
+  const feed = node?.feed;
+  const messagesQuery = useRoomMessages(fid, thread, feed);
   const messages = useMemo(() => flattenPages(messagesQuery.data), [messagesQuery.data]);
   const threadView = threads.data?.data.find((t) => t.key === thread) ?? null;
   const cardTypes = useMemo(() => new Set(messages.map((m) => m.card?.type)), [messages]);
@@ -234,6 +249,18 @@ export function RoomThreadView({
     const all = interleave(messages, lines, showBus);
     return foldRoomItems(all, supersededIssueCards(messages));
   }, [messages, lines, showBus]);
+  const laneOf = node?.lane;
+  const { shown, activity } = useMemo(() => {
+    if (!laneOf) return { shown: items, activity: [] as FoldedItem[] };
+    const inline: FoldedItem[] = [];
+    const folded: FoldedItem[] = [];
+    for (const item of items) {
+      const lane = laneOf(item);
+      if (lane === "conversation") inline.push(item);
+      else if (lane === "activity") folded.push(item);
+    }
+    return { shown: inline, activity: folded };
+  }, [items, laneOf]);
   const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
   const nameRepos = namesRepos(snapshot, items);
   const status = responderStatus(snapshot, threadView, messages);
@@ -282,6 +309,7 @@ export function RoomThreadView({
       compact: dock,
       nodeCard,
       repeated,
+      hidden: node?.hideCard ?? null,
     }),
     [
       fid,
@@ -294,6 +322,7 @@ export function RoomThreadView({
       dock,
       nodeCard,
       repeated,
+      node?.hideCard,
     ],
   );
   const candidates = useMemo(
@@ -334,7 +363,7 @@ export function RoomThreadView({
       el.scrollTop = el.scrollHeight;
     }
     // Messages too: an older page can fold into the first line without adding an item.
-  }, [items.length, messages.length, notes.length, node?.bottomCount]);
+  }, [shown.length, messages.length, notes.length, node?.bottomCount]);
   useLayoutEffect(() => {
     atBottom.current = true;
     const el = scrollerRef.current;
@@ -356,17 +385,57 @@ export function RoomThreadView({
   const send = async (body: string, mentions: string[]) => {
     const res = await postRoomMessage(fid, { thread, body, mentions });
     atBottom.current = true;
-    queryClient.setQueryData<typeof messagesQuery.data>(messagesQueryKey(fid, thread), (prev) => {
-      if (!prev || prev.pages.length === 0) return prev;
-      const [first, ...rest] = prev.pages;
-      const fresh: ChatMessageView[] = [res.message, ...res.notes].filter(
-        (m) => !first!.data.some((d) => d.id === m.id),
-      );
-      return { ...prev, pages: [{ ...first!, data: [...first!.data, ...fresh] }, ...rest] };
-    });
+    queryClient.setQueryData<typeof messagesQuery.data>(
+      messagesQueryKey(fid, thread, feed),
+      (prev) => {
+        if (!prev || prev.pages.length === 0) return prev;
+        const [first, ...rest] = prev.pages;
+        const fresh: ChatMessageView[] = [res.message, ...res.notes].filter(
+          (m) => !first!.data.some((d) => d.id === m.id),
+        );
+        return { ...prev, pages: [{ ...first!, data: [...first!.data, ...fresh] }, ...rest] };
+      },
+    );
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(fid) });
-    void queryClient.invalidateQueries({ queryKey: messagesQueryKey(fid, thread) });
+    void queryClient.invalidateQueries({ queryKey: messagesQueryKey(fid, thread, feed) });
   };
+
+  const renderItem = (item: FoldedItem, prev?: FoldedItem): ReactNode => {
+    if (item.type === "bus") return <BusRow key={item.key} line={item.line} />;
+    if (item.type === "base" || item.type === "repeats") {
+      return (
+        <li
+          key={item.key}
+          data-testid={`room-message-${item.messages[0]!.seq}`}
+          data-kind="system"
+          className="py-1"
+        >
+          {item.type === "base" ? (
+            <BaseMovesLine
+              base={item.base}
+              repo={nameRepos ? item.repo : null}
+              moves={item.moves}
+              messages={item.messages}
+              sources={sources}
+            />
+          ) : (
+            <IssueRepeats refText={item.ref} messages={item.messages} sources={sources} />
+          )}
+        </li>
+      );
+    }
+    const prevMessage = prev?.type === "message" ? prev.message : undefined;
+    return (
+      <RoomMessage
+        key={item.key}
+        message={item.message}
+        sources={sources}
+        continued={continuesRun(prevMessage, item.message)}
+        replyTo={item.message.reply_to ? (byId.get(item.message.reply_to) ?? null) : null}
+      />
+    );
+  };
+  const empty = laneOf ? shown.length === 0 : messages.length === 0;
 
   const charterProject = charter ? snapshot.projects.find((p) => p.slug === charter) : null;
   const responderBadge =
@@ -468,6 +537,7 @@ export function RoomThreadView({
         </header>
 
         {node?.lead}
+        {node?.activity?.(activity, (item) => renderItem(item))}
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scrollerRef}
@@ -511,8 +581,8 @@ export function RoomThreadView({
                 </Button>
               </div>
             )}
-            {messagesQuery.isSuccess && messages.length === 0 && node?.empty}
-            {messagesQuery.isSuccess && messages.length === 0 && !node?.empty && (
+            {messagesQuery.isSuccess && empty && node?.empty}
+            {messagesQuery.isSuccess && empty && !node?.empty && (
               <div
                 data-testid="room-empty"
                 className="flex flex-col items-center gap-1.5 px-4 py-10 text-center text-sm text-muted-foreground"
@@ -526,48 +596,7 @@ export function RoomThreadView({
               </div>
             )}
             <ol className="flex min-w-0 flex-col pb-2" data-testid="room-message-list">
-              {items.map((item, i) => {
-                if (item.type === "bus") return <BusRow key={item.key} line={item.line} />;
-                if (item.type === "base" || item.type === "repeats") {
-                  return (
-                    <li
-                      key={item.key}
-                      data-testid={`room-message-${item.messages[0]!.seq}`}
-                      data-kind="system"
-                      className="py-1"
-                    >
-                      {item.type === "base" ? (
-                        <BaseMovesLine
-                          base={item.base}
-                          repo={nameRepos ? item.repo : null}
-                          moves={item.moves}
-                          messages={item.messages}
-                          sources={sources}
-                        />
-                      ) : (
-                        <IssueRepeats
-                          refText={item.ref}
-                          messages={item.messages}
-                          sources={sources}
-                        />
-                      )}
-                    </li>
-                  );
-                }
-                const prev = items[i - 1];
-                const prevMessage = prev?.type === "message" ? prev.message : undefined;
-                return (
-                  <RoomMessage
-                    key={item.key}
-                    message={item.message}
-                    sources={sources}
-                    continued={continuesRun(prevMessage, item.message)}
-                    replyTo={
-                      item.message.reply_to ? (byId.get(item.message.reply_to) ?? null) : null
-                    }
-                  />
-                );
-              })}
+              {shown.map((item, i) => renderItem(item, shown[i - 1]))}
               {notes.map((note) => (
                 <NoteRow
                   key={note.id}

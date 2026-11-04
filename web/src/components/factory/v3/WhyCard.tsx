@@ -8,6 +8,7 @@ import { useNodeActions } from "./NodeContext";
 import { AMBER } from "./nodeTokens";
 import type { StatusLine, VerbAvail } from "./nodeTypes";
 import { RichText } from "./RichText";
+import { endsAbove } from "./statusModel";
 
 export function WhyCard({
   line,
@@ -20,10 +21,12 @@ export function WhyCard({
   /** In a chat thread the card carries its own answer (the header's line already does). */
   inChat?: boolean;
 }) {
-  const { onVerb } = useNodeActions();
+  const { onVerb, aboveId } = useNodeActions();
   if (!line.why?.length) return null;
   const moving = line.kind === "moving";
-  const answer = inChat && !moving && line.decision ? line.decision : null;
+  // Never a second answer, nor the ask's words again, for an ask Your move already shows.
+  const above = endsAbove(line, aboveId);
+  const answer = inChat && !moving && line.decision && !above ? line.decision : null;
   const start = !moving && startNow?.enabled ? startNow : null;
   return (
     <section
@@ -54,7 +57,11 @@ export function WhyCard({
               item.tone === "ok" && "font-semibold text-status-blue-fg",
             )}
           >
-            <RichText html={item.html} />
+            {item.tone === "you" && above ? (
+              "Needs you: the ask in Your move."
+            ) : (
+              <RichText html={item.html} />
+            )}
           </li>
         ))}
       </ol>

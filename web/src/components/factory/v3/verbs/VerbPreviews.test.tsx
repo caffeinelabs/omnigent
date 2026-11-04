@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openDetails, statusLine, verbItem } from "../fixture/calmTest";
 import { renderNode } from "../fixture/renderNode";
 import { sampleNodeSource } from "../fixture/sampleNodeSource";
 import type { NodeSource } from "../nodeSource";
@@ -16,8 +17,9 @@ async function shown(ref: string) {
   await waitFor(() => expect(screen.getByTestId("v3-node-page")).toHaveAttribute("data-ref", ref));
 }
 
+/** A verb in the ⋯ menu (it opens first). */
 function verbButton(name: RegExp) {
-  return within(screen.getByTestId("v3-verbs")).getByRole("button", { name });
+  return verbItem(name);
 }
 
 /** The preview's label · value lines, once the server's preview is in. */
@@ -42,7 +44,7 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
   it("Start now previews the parent's columns with a ghost, applies, and Undo restores", async () => {
     const view = renderNode("assistant-panel-ux");
     await shown("assistant-panel-ux");
-    expect(screen.getByTestId("v3-status")).toHaveTextContent("Not started for 7 h");
+    expect(statusLine()).toHaveTextContent("Not started for 7 h");
     await userEvent.click(verbButton(/Start now/));
     const panel = await screen.findByTestId("v3-preview");
     expect(panel).toHaveTextContent("Start assistant-panel-ux now");
@@ -56,18 +58,18 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     expect(within(cols).getByTestId("v3-mini-ghost")).toHaveTextContent("assistant-panel-ux");
     expect(within(cols).getByTestId("v3-mini-gone")).toHaveTextContent("assistant-panel-ux");
     expect(cols.querySelector("svg line, svg path, svg polygon")).toBeNull();
-    expect(verbButton(/Start now/)).toHaveAttribute("aria-pressed", "true");
+    const open = verbButton(/Start now/);
+    expect(open).toHaveAttribute("data-open");
+    fireEvent.keyDown(open, { key: "Escape" });
     await applyIt();
     await waitFor(() => expect(screen.queryByTestId("v3-preview")).toBeNull());
     expect(view.engine.writes).toEqual(["apply start assistant-panel-ux"]);
     const toast = await screen.findByTestId("factory-toast");
     expect(toast).toHaveTextContent("assistant-panel-ux started");
-    await waitFor(() => expect(screen.getByTestId("v3-status")).toHaveTextContent("Moving:"));
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Moving:"));
     expect(screen.getByTestId("v3-undo-latest")).toHaveTextContent("Start now: Undo (10 min left)");
     await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
-    await waitFor(() =>
-      expect(screen.getByTestId("v3-status")).toHaveTextContent("Not started for 7 h"),
-    );
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Not started for 7 h"));
     expect(view.engine.writes).toEqual(["apply start assistant-panel-ux", "undo u-1"]);
     expect(screen.queryByTestId("v3-undo-latest")).toBeNull();
   });
@@ -216,9 +218,7 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
       "main stays merged by people (build-tier-drafts-3 is outside this subtree)",
     );
     await applyIt();
-    await waitFor(() =>
-      expect(screen.getByTestId("v3-header")).toHaveTextContent("auto-merge → sample-main"),
-    );
+    await waitFor(() => expect(openDetails()).toHaveTextContent("auto-merge → sample-main"));
   });
 
   it("Autonomy & merge asks for an autonomy level only once one is picked", async () => {
@@ -270,9 +270,7 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     await userEvent.click(verbButton(/Autonomy & merge/));
     await lines();
     await applyIt();
-    await waitFor(() =>
-      expect(screen.getByTestId("v3-header")).toHaveTextContent("auto-merge → sample-main"),
-    );
+    await waitFor(() => expect(openDetails()).toHaveTextContent("auto-merge → sample-main"));
     asked.length = 0;
 
     await userEvent.click(verbButton(/^Autonomy & merge(?!.*Undo)/));
@@ -419,11 +417,11 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     await userEvent.click(verbButton(/Pause/));
     expect((await lines())["What changes"]).toContain("Nothing new starts under this node");
     await applyIt();
-    await waitFor(() => expect(screen.getByTestId("v3-status")).toHaveTextContent("Paused"));
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Paused"));
     await userEvent.click(verbButton(/Resume/));
     expect((await lines())["What changes"]).toBe("Work under this node can start again.");
     await applyIt();
-    await waitFor(() => expect(screen.getByTestId("v3-status")).not.toHaveTextContent("Paused"));
+    await waitFor(() => expect(statusLine()).not.toHaveTextContent("Paused"));
     expect(view.engine.writes).toEqual(["apply pause T-16", "apply resume T-16"]);
   });
 

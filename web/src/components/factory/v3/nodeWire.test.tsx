@@ -1,6 +1,7 @@
 /* oxlint-disable no-await-in-loop -- pages render one at a time, in order */
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { openDetails, statusLine } from "./fixture/calmTest";
 import { renderNode } from "./fixture/renderNode";
 import { sampleEngine } from "./fixture/sampleNodeSource";
 import { liveNodeSource } from "./nodeSource";
@@ -94,14 +95,16 @@ describe("cockpit v3 · the node API as api.md writes it", () => {
   it("names levels from their keys and reads plain also-holds and why sentences", async () => {
     serveBare();
     renderNode("product", { source: liveNodeSource });
-    await waitFor(() => expect(screen.getByTestId("v3-status")).toBeInTheDocument());
-    // "also holds assistant-panel-ux": a bare ref still links to the node.
-    const status = screen.getByTestId("v3-status");
+    await waitFor(() => expect(screen.getByTestId("v3-details-toggle")).toBeInTheDocument());
+    // "also holds assistant-panel-ux": a bare ref still links to the node (in Details).
+    const status = statusLine();
     expect(within(status).getByRole("link", { name: "assistant-panel-ux" })).toHaveAttribute(
       "href",
       "/factory/f-sample/n/assistant-panel-ux",
     );
-    expect(screen.getByTestId("v3-rollup")).toHaveTextContent("nothing in the product is moving");
+    expect(within(openDetails()).getByTestId("v3-rollup")).toHaveTextContent(
+      "nothing in the product is moving",
+    );
   });
 
   it("asks for the next children with the page's cursor", async () => {

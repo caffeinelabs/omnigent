@@ -70,17 +70,21 @@ export function StatusBox({
   nodeRef,
   whyOpen,
   onWhy,
+  answer = true,
 }: {
   line: Line;
   nodeRef: string;
   whyOpen: boolean;
   onWhy: () => void;
+  /** Its answer here; off when Your move already offers it. */
+  answer?: boolean;
 }) {
+  const { aboveId } = useNodeActions();
   const needs = line.kind === "needs";
   return (
     <div
       role="status"
-      aria-label={statusText(line, { nodeRef })}
+      aria-label={statusText(line, { nodeRef, aboveId })}
       data-testid="v3-status"
       data-kind={line.kind}
       className={cn(
@@ -102,7 +106,7 @@ export function StatusBox({
           </button>
         )}
       </span>
-      {line.decision && line.ends === "person" && (
+      {answer && line.decision && line.ends === "person" && (
         <DecisionButtons decision={line.decision} variant="header" />
       )}
     </div>

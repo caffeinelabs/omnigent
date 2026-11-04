@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openDetails, pickVerb } from "./fixture/calmTest";
 import { renderNode } from "./fixture/renderNode";
 import { sampleEngine, sampleNodeSource } from "./fixture/sampleNodeSource";
 import { SERVED_STEER, liveNodeSource, steerRoutes } from "./nodeSource";
@@ -17,6 +18,11 @@ const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
   authenticatedFetch: (...args: unknown[]) => authenticatedFetch(...args),
 }));
+
+/** The roll-up line, in Details (opened first). */
+function rollup(): HTMLElement {
+  return within(openDetails()).getByTestId("v3-rollup");
+}
 
 function reply(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -39,50 +45,44 @@ describe("cockpit v3 · since last look (W10)", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const source = sampleNodeSource();
     const first = renderNode("I-1", { source });
-    await waitFor(() => expect(screen.getByTestId("v3-rollup")).toHaveTextContent("since 12:30:"));
+    await waitFor(() => expect(rollup()).toHaveTextContent("since 12:30:"));
     vi.advanceTimersByTime(SEEN_AFTER_MS - 500);
     expect(source.engine.writes).toEqual([]);
     vi.advanceTimersByTime(600);
     await waitFor(() => expect(source.engine.writes).toEqual(["seen I-1"]));
-    // The line this visit showed stays until the next one.
-    expect(screen.getByTestId("v3-rollup")).toHaveTextContent("since 12:30:");
+    // The line this visit showed (in Details) stays until the next one.
+    expect(rollup()).toHaveTextContent("since 12:30:");
     first.unmount();
     renderNode("I-1", { source });
-    await waitFor(() => expect(screen.getByTestId("v3-rollup")).toBeInTheDocument());
-    expect(screen.getByTestId("v3-rollup")).not.toHaveTextContent("since");
-    const changed = screen
-      .queryAllByTestId("v3-tile")
-      .filter((t) => /merged 13:/.test(t.textContent ?? ""));
-    expect(changed).toEqual([]);
+    await waitFor(() => expect(rollup()).toBeInTheDocument());
+    expect(rollup()).not.toHaveTextContent("since");
   });
 
   it("keeps this visit's “since” line and changes while the page reads again after the mark", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const source = sampleNodeSource();
     renderNode("I-1", { source });
-    await waitFor(() => expect(screen.getByTestId("v3-rollup")).toHaveTextContent("since 12:30:"));
-    const line = screen.getByTestId("v3-rollup").textContent;
+    await waitFor(() => expect(rollup()).toHaveTextContent("since 12:30:"));
+    const line = rollup().textContent;
     expect(line).toContain("#9882 merged 13:25");
     vi.advanceTimersByTime(SEEN_AFTER_MS + 100);
     await waitFor(() => expect(source.engine.writes).toEqual(["seen I-1"]));
     // An apply reads every node page again, now counted from the new mark.
-    fireEvent.click(
-      within(screen.getByTestId("v3-verbs")).getByRole("button", { name: /Autonomy/ }),
-    );
+    pickVerb(/Autonomy/);
     const apply = await screen.findByTestId("v3-preview-apply");
     await waitFor(() => expect(apply).toBeEnabled());
     fireEvent.click(apply);
     await waitFor(() => expect(source.engine.writes).toEqual(["seen I-1", "apply auto I-1"]));
     await waitFor(() => expect(screen.queryByTestId("v3-preview")).toBeNull());
     expect(source.engine.node("I-1")!.rollup.since).toBeUndefined();
-    expect(screen.getByTestId("v3-rollup").textContent).toBe(line);
+    expect(rollup().textContent).toBe(line);
   });
 
   it("a page left before three seconds is not marked", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const source = sampleNodeSource();
     const view = renderNode("I-1", { source });
-    await waitFor(() => expect(screen.getByTestId("v3-rollup")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("v3-node-page")).toBeInTheDocument());
     vi.advanceTimersByTime(1000);
     view.unmount();
     vi.advanceTimersByTime(SEEN_AFTER_MS);
@@ -96,34 +96,21 @@ describe("cockpit v3 · since last look (W10)", () => {
     expect(sinceWhen(new Date("2026-11-01T09:00:00").toISOString(), now)).not.toContain("T");
   });
 
-  it("rows show what changed since the last look, with the “Since” overlay", () => {
+  it("a row is one line: what changed since the last look stays in Details", () => {
     const node = {
       ...sampleEngine().summary(sampleEngine().data.nodes.find((n) => n.id === "T-16")!),
       changed: ["#9882 merged 13:25", "D-49 new"],
     } as NodeSummary;
-    const { rerender } = render(
+    render(
       <MemoryRouter>
         <ul>
           <NodeRow node={node} />
         </ul>
       </MemoryRouter>,
     );
-    expect(screen.getByTestId("v3-row-since")).toHaveTextContent("2 new");
-    expect(screen.getByTestId("v3-row-since")).toHaveAttribute(
-      "title",
-      "#9882 merged 13:25, D-49 new",
-    );
-    rerender(
-      <MemoryRouter>
-        <ul>
-          <NodeRow
-            node={node}
-            overlays={{ needs: true, changed: false, env: true, cost: false, people: false }}
-          />
-        </ul>
-      </MemoryRouter>,
-    );
     expect(screen.queryByTestId("v3-row-since")).toBeNull();
+    // Held by an ask this page does not show: no id in the row.
+    expect(screen.getByTestId("v3-row")).toHaveTextContent(/^Debit each turnHeld for an ask$/);
   });
 });
 

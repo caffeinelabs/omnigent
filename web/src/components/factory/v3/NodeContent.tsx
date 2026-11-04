@@ -102,22 +102,27 @@ function Evidence({ evidence }: { evidence: NonNullable<NodeFull["evidence"]> })
   );
 }
 
-export function NodeContent({ page }: { page: NodePage }) {
+/**
+ * `body`: what a factory area is about (its base env, closed alarms, levels),
+ * shown on the page; `details`: a feature's acceptance and a need's evidence,
+ * shown only in Details (calm rule 4).
+ */
+export function NodeContent({ page, part }: { page: NodePage; part: "body" | "details" }) {
   const { onSheet } = useNodeActions();
   const node: NodeFull = page.node;
+  const details = part === "details";
   // A root carries the base env as a fact for the top bar; an area shows it as its content.
-  const env = page.breadcrumb.length > 0 ? node.env : undefined;
-  const levels = Boolean(node.levels);
-  const alarms = node.closed_alarms?.length ? node.closed_alarms : null;
-  if (!node.acceptance?.steps.length && !node.evidence?.items.length && !env && !levels && !alarms)
-    return null;
+  const env = !details && page.breadcrumb.length > 0 ? node.env : undefined;
+  const levels = !details && Boolean(node.levels);
+  const alarms = !details && node.closed_alarms?.length ? node.closed_alarms : null;
+  const acceptance = details && node.acceptance?.steps.length ? node.acceptance : null;
+  const evidence = details && node.evidence?.items.length ? node.evidence : null;
+  if (!acceptance && !evidence && !env && !levels && !alarms) return null;
   const tryIt = node.try_it?.length && onSheet ? () => onSheet("try", node.ref) : undefined;
   return (
     <div className="flex flex-col gap-3">
-      {node.acceptance?.steps.length ? (
-        <Acceptance acceptance={node.acceptance} onTry={tryIt} />
-      ) : null}
-      {node.evidence?.items.length ? <Evidence evidence={node.evidence} /> : null}
+      {acceptance && <Acceptance acceptance={acceptance} onTry={tryIt} />}
+      {evidence && <Evidence evidence={evidence} />}
       {env && <BaseEnvBlock env={env} />}
       {alarms && <ClosedAlarms alarms={alarms} />}
       {levels && <LevelsBlock page={page} />}

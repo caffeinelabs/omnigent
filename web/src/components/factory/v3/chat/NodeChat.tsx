@@ -1,9 +1,10 @@
-// The node's chat, a main column of every node page (never a drawer): the
-// Room thread that covers the node (`nodeThread.ts`), its children with news
-// as one line each, the node's cards, quick verbs over the box, the node's
-// verbs after `/`, and plain words that open the same previews. From 1024 px
-// it sits beside the page (drag its edge; the width stays in this browser);
-// narrower, its box is pinned at the bottom and opens the thread full screen.
+// The node's chat, a main column of every node page (never a drawer), calm:
+// the conversation only (people, agents, and live cards that need this
+// viewer); system events fold into one "Activity" line that opens them as a
+// list, and an ask the page's Your move shows is never repeated here. The
+// `/` menu holds the node's verbs, and plain words open the same previews.
+// From 1024 px it sits beside the page (drag its edge); narrower, its box is
+// pinned at the bottom and opens the thread full screen.
 
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -29,7 +30,13 @@ import { CHORD_MS, keyOwnedByTarget } from "../../cmdk/useFactoryPaletteHotkey";
 import { DockResizeHandle } from "../../room/RoomDock";
 import { ThreadNewsLines } from "../../room/RoomFolds";
 import { threadTitle } from "../../room/roomModel";
-import { flattenPages, useRoomMessages, useRoomThreads } from "../../room/roomQueries";
+import type { FoldedItem } from "../../room/roomFold";
+import {
+  flattenPages,
+  useProposals,
+  useRoomMessages,
+  useRoomThreads,
+} from "../../room/roomQueries";
 import { RoomThreadView } from "../../room/RoomThreadView";
 import { useStickyTop } from "../../room/useViewportFill";
 import { useFactoryShell } from "../../shell/FactoryShellContext";
@@ -37,7 +44,8 @@ import { PHONE_TAB_BAR_REM } from "../../shell/PhoneTabBar";
 import { PAGE_EXTRA_TOP } from "../../shell/scroll";
 import { swallowEnter } from "../DecisionButtons";
 import { useNodeActions } from "../NodeContext";
-import { Avatar, Kbd } from "../nodeParts";
+import { nodeName } from "../calm/calmModel";
+import { Avatar } from "../nodeParts";
 import { useNode } from "../nodeQueries";
 import { undoViewer, useUndoToken } from "../nodeSteer";
 import { nodeHref } from "../nodeRoutes";
@@ -46,7 +54,9 @@ import type { DecisionRef, NodePage, StatusLine, VerbArgs } from "../nodeTypes";
 import { levelName } from "../nodeWire";
 import { statusText } from "../statusModel";
 import { WhyCard } from "../WhyCard";
+import { ActivityLine } from "./ActivityLine";
 import { AppliedCard, AskCard, ClosedAlarmCard, OfferCard } from "./ChatCards";
+import { type LaneContext, itemLane, repeatsAsk, undoneTokens } from "./chatLanes";
 import { CHAT_BESIDE_QUERY, CHAT_PARAM, useChatWidth, useNodeChatSlot } from "./chatLayout";
 import { parseIntent } from "./chatIntents";
 import {
@@ -58,6 +68,9 @@ import {
   nodeThread,
   threadOwnerRef,
 } from "./nodeThread";
+
+/** The node chat reads its thread with each row's lane (the server's conversation / activity split). */
+const NODE_FEED = "all" as const;
 
 /** The Room's cards that answer an ask: a key never answers them (Enter, or 1-5 for an option). */
 const ANSWER_CARDS =
@@ -321,21 +334,32 @@ function QuickVerbs({ verbs }: { verbs: QuickVerb[] }) {
   );
 }
 
-function KeysHint() {
-  return (
-    <p
-      data-testid="v3-chat-hint"
-      className="flex flex-wrap gap-x-3 gap-y-0.5 px-1 text-[11.5px] text-foreground-tertiary max-lg:hidden"
-    >
-      <span>
-        <Kbd>/</Kbd> or <Kbd>c</Kbd> to focus
-      </span>
-      <span>
-        <Kbd>↵</Kbd> send
-      </span>
-      <span>Plain words work: “why”, “start … now”, “plan …”.</span>
-    </p>
-  );
+/**
+ * What was new in the thread when the page opened, so the Activity line can
+ * say "n since you looked": the server's count of activity after this
+ * viewer's read mark when it sends one, else the newest seq they had read
+ * (the thread's unread count says how many of the newest were not). Looking
+ * at the list makes nothing new. Null until the thread is read.
+ */
+function useSince(fid: string, key: string, unread: number | undefined) {
+  const messages = useRoomMessages(fid, key, NODE_FEED);
+  const [mark, setMark] = useState<{
+    key: string;
+    seq: number | null;
+    fresh: number | null;
+  } | null>(null);
+  if ((!mark || mark.key !== key) && messages.data) {
+    const told = messages.data.pages[0]?.activity_since;
+    if (typeof told === "number") setMark({ key, seq: null, fresh: told });
+    else if (unread != null) {
+      const sorted = [...flattenPages(messages.data)].sort((a, b) => a.seq - b.seq);
+      const read = sorted[sorted.length - unread - 1];
+      setMark({ key, seq: read ? read.seq : 0, fresh: null });
+    }
+  }
+  const seen = useCallback((seq: number) => setMark({ key, seq, fresh: null }), [key]);
+  const here = mark?.key === key ? mark : null;
+  return { seq: here?.seq ?? null, fresh: here?.fresh ?? null, seen };
 }
 
 export interface NodeChatProps {
@@ -557,8 +581,9 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
 
   const news = childNews(chat, threads, thread.key, snapshot, sample);
   const level = levelName(here.node.level, here.node.level_name).toLowerCase();
-  const subtitle = [
-    responder ? `with ${responder}${relay ? ` (relays to ${relay})` : ""}` : null,
+  // Who the thread is with; where it lives and what the agent sees are the title's tooltip.
+  const subtitle = responder ? `with ${responder}${relay ? ` (relays to ${relay})` : ""}` : null;
+  const about = [
     sample ? `this factory’s ${roomTitle}: the sample’s nodes have no threads` : roomTitle,
     perNode && responder
       ? `${responder} sees this node’s breadcrumb, status, roll-up and open asks`
@@ -568,13 +593,46 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
     .join(" · ");
 
   const title = (
-    <div className="flex min-w-0 flex-1 flex-col" data-testid="v3-chat-title">
+    <div className="flex min-w-0 flex-1 flex-col" data-testid="v3-chat-title" title={about}>
       <h2 className="flex min-w-0 items-center gap-2 text-[14px] font-semibold">
         {responder && <Avatar actor={{ name: responder }} size={20} />}
-        <span className="truncate">Chat · {node.title}</span>
+        <span className="truncate">Chat · {nodeName(node)}</span>
       </h2>
       {subtitle && <p className="truncate text-xs text-foreground-tertiary">{subtitle}</p>}
     </div>
+  );
+
+  // ── Conversation and Activity ───────────────────────────────
+  const above = actions.aboveId;
+  const proposals = useProposals(fid).data?.data ?? null;
+  const threadMessages = useRoomMessages(fid, thread.key, NODE_FEED).data;
+  const laneCtx = useMemo<LaneContext>(
+    () => ({
+      asked: above instanceof Set ? above : new Set(typeof above === "string" ? [above] : []),
+      decisions: snapshot.decisions,
+      proposals,
+      nowS: Math.floor(Date.now() / 1000 + clockOffsetS),
+      undone: undoneTokens(flattenPages(threadMessages)),
+    }),
+    [above, clockOffsetS, proposals, snapshot.decisions, threadMessages],
+  );
+  const lane = useCallback((item: FoldedItem) => itemLane(item, laneCtx), [laneCtx]);
+  const hideCard = useCallback(
+    (message: ChatMessageView) => repeatsAsk(message, laneCtx),
+    [laneCtx],
+  );
+  const since = useSince(fid, thread.key, room?.unread);
+  const activity = useCallback(
+    (items: FoldedItem[], render: (item: FoldedItem) => ReactNode) => (
+      <ActivityLine
+        items={items}
+        render={render}
+        since={since}
+        onSeen={since.seen}
+        title={nodeName(node)}
+      />
+    ),
+    [node, since],
   );
 
   const lead =
@@ -583,7 +641,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
         data-testid="v3-chat-via"
         className="mb-2 shrink-0 rounded-lg bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground"
       >
-        This {level} has no thread of its own: this is {aboutCode(node)}’s thread.
+        This {level} has no thread of its own: this is {nodeName(node)}’s thread.
       </p>
     ) : null;
 
@@ -614,7 +672,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   ));
 
   // A verb's card offers its Undo until it ran: the server's "undone" card names its token.
-  const messages = useRoomMessages(fid, thread.key);
+  const messages = useRoomMessages(fid, thread.key, NODE_FEED);
   const undoToken = useUndoToken(fid);
   const viewerId = snapshot.viewer?.user_id;
   const viewerOwner = undoViewer({ snapshot }).owner;
@@ -668,26 +726,31 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
           bottom,
           bottomCount: cards.length,
           card: renderCard,
+          lane,
+          activity,
+          hideCard,
+          feed: NODE_FEED,
           empty: (
             <p
               data-testid="v3-chat-empty"
               className="px-2 py-6 text-center text-[13px] text-muted-foreground"
             >
               {responder
-                ? `Ask ${responder} anything about ${node.title}: why it is not moving, what to change, or a verb such as “start it now”.`
+                ? `Ask ${responder} anything about ${nodeName(node)}: why it is not moving, what to change, or a verb such as “start it now”.`
                 : `Nothing in ${roomTitle} yet.`}
             </p>
           ),
           composer: {
             to: responder,
             about: thread.about?.label ?? null,
-            placeholder: `Message about ${node.title}, or / for verbs`,
+            placeholder: `Message about ${nodeName(node)}, or / for verbs`,
             prepare: (body) => namedBody(body, thread.about),
             interpret,
             verbs: verbsFor,
             onVerb: onMenuVerb,
-            above: <QuickVerbs verbs={quick} />,
-            hint: beside ? <KeysHint /> : null,
+            // Beside the page its verbs are the ⋯ menu and `/`; full screen keeps them at hand.
+            above: beside ? null : <QuickVerbs verbs={quick} />,
+            hint: null,
             inputRef,
             autoFocus,
           },
@@ -702,9 +765,8 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
       <PinnedComposer
         fid={fid}
         threadKey={thread.key}
-        decision={decision}
         responder={responder}
-        nodeTitle={node.title}
+        nodeTitle={nodeName(node)}
         phone={phone}
         onOpen={openFull}
       />
@@ -730,7 +792,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
               ‹ Back
             </button>
             <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">
-              {here.node.title}
+              {nodeName(here.node)}
             </span>
           </div>
           {threadView(true, "flex-1 px-4 pt-2 pb-3")}
@@ -741,10 +803,6 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
 }
 
 /** "T-16" for a code ref, else the title. */
-function aboutCode(node: NodePage["node"]): string {
-  return /^[A-Z]{1,3}-\d+$/.test(node.ref) ? node.ref : node.title;
-}
-
 /** Beside the page: sticky under the strip, as tall as the window, its left edge dragged to resize. */
 function ChatColumn({ here, children }: { here: NodePage; children: ReactNode }) {
   const ref = useRef<HTMLElement>(null);
@@ -776,11 +834,10 @@ function ChatColumn({ here, children }: { here: NodePage; children: ReactNode })
 const STUCK_HEIGHT =
   "calc(100dvh - var(--omnigent-header-height, 0px) - var(--omnigent-inset-top, 0px) - var(--omnigent-inset-bottom, 0px) - 2rem)";
 
-/** Narrow windows: the newest line (or the node's ask) over a box that opens the thread. */
+/** Narrow windows: the conversation's newest line over a box that opens the thread (the node's ask is Your move). */
 function PinnedComposer({
   fid,
   threadKey,
-  decision,
   responder,
   nodeTitle,
   phone,
@@ -788,21 +845,19 @@ function PinnedComposer({
 }: {
   fid: string;
   threadKey: string;
-  decision: DecisionRef | null;
   responder: string | null;
   nodeTitle: string;
   phone: boolean;
   onOpen: () => void;
 }) {
-  const messages = useRoomMessages(fid, threadKey);
+  const messages = useRoomMessages(fid, threadKey, NODE_FEED);
   const last = useMemo(
     () =>
       [...flattenPages(messages.data)]
         .reverse()
-        .find((m) => m.author_kind !== "system" && m.body.trim()),
+        .find((m) => m.author_kind !== "system" && m.lane !== "activity" && m.body.trim()),
     [messages.data],
   );
-  const ask = decision && !decision.blocks_nothing ? decision : null;
   return (
     <>
       <div aria-hidden className="h-24" />
@@ -815,27 +870,15 @@ function PinnedComposer({
             : "var(--omnigent-inset-bottom, 0px)",
         }}
       >
-        {(ask || last) && (
+        {last && (
           <button
             type="button"
             onClick={onOpen}
             data-testid="v3-chat-last"
             className="line-clamp-2 text-left text-[13px] text-muted-foreground"
           >
-            {ask ? (
-              <>
-                <b className={cn("font-semibold", AMBER.text)}>{ask.id}</b> {ask.title ?? ask.verb}
-              </>
-            ) : (
-              last && (
-                <>
-                  <b className="font-semibold text-foreground">
-                    {last.author_title ?? last.author}:
-                  </b>{" "}
-                  {last.body}
-                </>
-              )
-            )}
+            <b className="font-semibold text-foreground">{last.author_title ?? last.author}:</b>{" "}
+            {last.body}
           </button>
         )}
         <button

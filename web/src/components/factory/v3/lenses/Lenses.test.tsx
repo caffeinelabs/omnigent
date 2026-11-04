@@ -1,6 +1,7 @@
 /* oxlint-disable no-await-in-loop -- pages render one at a time, in order */
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { lensesOffered, openDetails, pickLens } from "../fixture/calmTest";
 import { renderNode } from "../fixture/renderNode";
 import { sampleInstant } from "../fixture/sampleLenses";
 import { sampleEngine } from "../fixture/sampleNodeSource";
@@ -38,15 +39,10 @@ async function settle(container: HTMLElement) {
   await waitFor(() => expect(container.querySelector('[aria-busy="true"]')).toBeNull());
 }
 
-/** The lenses the bar offers, once the timeline's read is in. */
+/** The lenses the "List ▾" menu offers, once the timeline's read is in. */
 async function offered(): Promise<string[]> {
   await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
-  const bar = screen.queryByTestId("v3-lens-bar");
-  return bar
-    ? within(bar)
-        .getAllByRole("tab")
-        .map((t) => t.getAttribute("data-lens")!)
-    : [];
+  return lensesOffered();
 }
 
 function emptyCells(container: HTMLElement): string[] {
@@ -82,7 +78,7 @@ describe("cockpit v3 · the lens bar offers only lenses with something to show",
     expect(await offered()).toEqual(["map", "list"]);
   });
 
-  it("a task's change is a row (no map); a run has nothing below, so its lineage folds", async () => {
+  it("a task's change is a row (no map); a run has nothing below, so its lineage is in Details", async () => {
     const task = renderNode("T-16");
     await settle(task.container);
     expect(await offered()).toEqual(["list", "lineage"]);
@@ -90,6 +86,9 @@ describe("cockpit v3 · the lens bar offers only lenses with something to show",
     const run = renderNode("run:luz-t16");
     await settle(run.container);
     expect(screen.queryByTestId("v3-lens-bar")).toBeNull();
+    // Nothing below: no lineage link on the page; it waits in Details.
+    expect(screen.queryByTestId("v3-lineage-fold")).toBeNull();
+    openDetails();
     fireEvent.click(screen.getByTestId("v3-lineage-fold"));
     expect(await screen.findByTestId("v3-lineage")).toBeInTheDocument();
     expect(run.search()).toBe("?lens=lineage");
@@ -102,7 +101,7 @@ describe("cockpit v3 · the lens bar offers only lenses with something to show",
     expect(screen.getByTestId("v3-below")).toHaveAttribute("aria-label", "Areas");
   });
 
-  it("`v` steps through the lenses it offers, and a tab click picks one", async () => {
+  it("`v` steps through the lenses it offers, and the lens menu picks one", async () => {
     const view = renderNode("I-1");
     await waitFor(async () => expect(await offered()).toHaveLength(5));
     const seen: string[] = [];
@@ -111,8 +110,9 @@ describe("cockpit v3 · the lens bar offers only lenses with something to show",
       await waitFor(() => expect(view.search()).toMatch(/lens=/));
       seen.push(new URLSearchParams(view.search()).get("lens")!);
     }
-    expect(seen).toEqual(["list", "lineage", "timeline", "money", "map"]);
-    fireEvent.click(within(screen.getByTestId("v3-lens-bar")).getByRole("tab", { name: "Money" }));
+    // Children start as one line each (List).
+    expect(seen).toEqual(["lineage", "timeline", "money", "map", "list"]);
+    pickLens("Money");
     expect(await screen.findByTestId("v3-money")).toBeInTheDocument();
   });
 });
@@ -253,9 +253,10 @@ describe("cockpit v3 · levels, not spaghetti, in every lens", () => {
         const view = renderNode(ref, { query: `?lens=${lens}` });
         await settle(view.container);
         const shown = await screen.findByTestId(LENS_TESTID[lens]!);
-        const lines = view.container.querySelectorAll(
-          "svg line, svg path, svg polyline, svg polygon",
-        );
+        // An icon inside a control (the menus' chevrons) is a glyph, not a line between nodes.
+        const lines = [
+          ...view.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon"),
+        ].filter((el) => !(el.closest("svg.lucide") && el.closest("button, a")));
         expect({ ref, lens, lines: lines.length }).toEqual({ ref, lens, lines: 0 });
         expect({ ref, lens, svg: shown.querySelectorAll("svg").length }).toEqual({
           ref,
