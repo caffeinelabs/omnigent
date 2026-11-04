@@ -51,47 +51,71 @@ async function sheet(testId: string) {
 }
 
 describe("cockpit v3 · sheets", () => {
-  it("Needs you ranks by what each ask holds, groups what blocks nothing, and lists closed alarms", async () => {
+  it("Needs you lists every ask as Your move does: short names, what each unblocks, one filled answer", async () => {
     renderNode("product", { query: "?peek=needs" });
     const list = await sheet("v3-needs-sheet");
     const items = within(list).getAllByTestId("v3-needs-item");
-    expect(items.map((i) => i.dataset.decision)).toEqual(["D-45", "merge:main", "D-49"]);
-    const first = items[0]!;
-    expect(first).toHaveTextContent(
-      "Agents that also do discovery, sales and promotion›Agent assistant (sample)›assistant-core",
-    );
-    expect(first).toHaveTextContent("Holds T-16, assistant-panel-ux.");
-    expect(
-      within(first)
-        .getAllByTestId("v3-answer")
-        .map((b) => b.textContent),
-    ).toEqual(["Apply", "Edit & apply", "Reject"]);
-    expect(within(first).getByRole("link", { name: "Open assistant-core" })).toBeInTheDocument();
-    // The merges on a human-merged base are one item, answered on GitHub.
-    expect(within(items[1]!).getByTestId("v3-answer")).toHaveAttribute("href");
-    expect(items[1]).toHaveTextContent("Merge #9856 and #9857 into main · 1h 10m");
-    expect(items[1]).toHaveTextContent("Holds #9856, #9857.");
-    expect(items[2]).toHaveTextContent("Holds nothing else.");
-    const quiet = within(list).getByTestId("v3-needs-quiet");
-    expect(quiet).toHaveTextContent("Apply C-14 and Apply C-15 · D-43, D-44");
-    expect(quiet).toHaveTextContent("These block nothing, so they never raise an alarm.");
-    const closed = within(list).getByTestId("v3-needs-closed");
-    expect(closed).toHaveTextContent("3 alarms closed by the server as noise, with their causes");
-    expect(closed).toHaveTextContent("The real ask is D-45 (Apply C-16).");
+    expect(items.map((i) => i.dataset.decision)).toEqual([
+      "D-45",
+      "merge:main",
+      "D-49",
+      "D-43",
+      "D-44",
+    ]);
+    expect(items[0]).toHaveTextContent("Apply C-16");
+    expect(items[0]).toHaveTextContent("unblocks Agent assistant (sample)");
+    expect(items[3]).toHaveTextContent("blocks nothing");
+    // One answer a row; only the first is filled.
+    const answers = items.map((i) => within(i).getAllByTestId("v3-answer"));
+    expect(answers.every((a) => a.length === 1)).toBe(true);
+    expect(answers.filter(([a]) => a!.className.includes("bg-status-yellow"))).toHaveLength(1);
+    expect(answers[0]![0]!.className).toContain("bg-status-yellow");
+    // The merges on a human-merged base are one row, answered on GitHub.
+    expect(answers[1]![0]).toHaveAttribute("href");
+    // No machine label, no raw title, no closed alarms (they live under Factory › Health).
+    expect(list.textContent).not.toMatch(/assistant-core|build-tier-drafts|proposes/);
+    expect(within(list).queryByTestId("v3-needs-closed")).toBeNull();
     expect(within(list).getByTestId("v3-needs-other-tree")).toHaveTextContent(
-      "2 more in Factory ›",
+      "3 more in Factory ›",
     );
-    expect(screen.getByRole("dialog")).toHaveTextContent("5 need you");
+    // One count everywhere: this tree's five and the factory's three.
+    expect(screen.getByRole("dialog")).toHaveTextContent("8 need you");
+    expect(screen.getByRole("dialog")).toHaveTextContent("5 in Product");
   });
 
-  it("“Apply all” answers every ask that blocks nothing, and the other tree is one click", async () => {
+  it("a row's words open the ask in full; who asked is never a factory id", async () => {
+    renderNode("product", {
+      query: "?peek=needs",
+      source: withNeeds((list) => ({
+        ...list,
+        items: list.items.map((item, i) =>
+          i === 0
+            ? { ...item, decision: { ...item.decision, asker: "090e6d1a022a440fa754264911e9980c" } }
+            : item,
+        ),
+      })),
+    });
+    const list = await sheet("v3-needs-sheet");
+    const first = within(list).getAllByTestId("v3-needs-item")[0]!;
+    await userEvent.click(within(first).getByRole("button", { name: /Apply C-16/ }));
+    const peek = await within(first).findByTestId("v3-move-peek");
+    expect(peek).toHaveTextContent("asked by the factory");
+    expect(peek).not.toHaveTextContent("090e6d1a");
+  });
+
+  it("an answer in the sheet takes its row away, and the other tree is one click", async () => {
     const view = renderNode("product", { query: "?peek=needs" });
     const list = await sheet("v3-needs-sheet");
-    await userEvent.click(within(list).getByTestId("v3-needs-apply-all"));
-    await waitFor(() => expect(within(list).queryByTestId("v3-needs-quiet")).toBeNull());
-    expect(view.engine.data.decisions.filter((d) => d.low && d.open).map((d) => d.id)).toEqual([
-      "D-37",
-    ]);
+    const quiet = within(list).getAllByTestId("v3-needs-item")[3]!;
+    expect(quiet.dataset.decision).toBe("D-43");
+    await userEvent.click(within(quiet).getByTestId("v3-answer"));
+    await waitFor(() =>
+      expect(
+        within(list)
+          .getAllByTestId("v3-needs-item")
+          .map((i) => i.dataset.decision),
+      ).not.toContain("D-43"),
+    );
     await userEvent.click(within(list).getByTestId("v3-needs-other-tree"));
     await waitFor(() => expect(view.search()).toContain("tree=factory"));
     const factory = await sheet("v3-needs-sheet");
@@ -100,61 +124,23 @@ describe("cockpit v3 · sheets", () => {
         within(factory)
           .getAllByTestId("v3-needs-item")
           .map((i) => i.dataset.decision),
-      ).toEqual(["D-50", "D-51"]),
+      ).toEqual(["D-50", "D-51", "D-37"]),
     );
-    expect(within(factory).queryByTestId("v3-needs-closed")).toBeNull();
   });
 
-  it("“Apply all” says in one toast which asks were answered", async () => {
-    const source = sampleNodeSource();
-    const answer = vi.fn(source.answer);
-    renderNode("product", {
-      query: "?peek=needs",
-      source: {
-        ...source,
-        answer: async (fid, decision, action) => {
-          if (decision.id === "D-44") throw new Error("the proposal moved on");
-          return answer(fid, decision, action);
-        },
-      },
-    });
-    const list = await sheet("v3-needs-sheet");
-    await userEvent.click(within(list).getByTestId("v3-needs-apply-all"));
-    const toast = await screen.findByTestId("factory-toast");
-    await waitFor(() =>
-      expect(toast).toHaveTextContent("Apply: D-43. Sample data: it changes only the sample."),
-    );
-    expect(toast).toHaveTextContent("D-44 was not answered: the proposal moved on");
-    expect(answer.mock.calls.map(([, d, a]) => [d.id, a.label])).toEqual([["D-43", "Apply"]]);
-  });
-
-  it("offers no “Apply all” when the asks' first answers differ", async () => {
-    renderNode("product", {
-      query: "?peek=needs",
-      source: withNeeds((list) => ({
-        ...list,
-        blocks_nothing: list.blocks_nothing.map((a, i) =>
-          i === 1 ? { ...a, actions: [{ id: "start", label: "Start" }, ...a.actions] } : a,
-        ),
-      })),
-    });
-    const quiet = await within(await sheet("v3-needs-sheet")).findByTestId("v3-needs-quiet");
-    expect(within(quiet).queryByTestId("v3-needs-apply-all")).toBeNull();
-  });
-
-  it("with nothing open, Needs you says so, names the tree and keeps the other tree's link", async () => {
+  it("with nothing open in a tree, Needs you says so and keeps the other tree's count and link", async () => {
     renderNode("product", {
       query: "?peek=needs",
       source: withNeeds((list) => ({ ...list, items: [], blocks_nothing: [], closed_alarms: [] })),
     });
     const list = await sheet("v3-needs-sheet");
-    expect(screen.getByRole("dialog")).toHaveTextContent("Nothing needs you");
+    expect(screen.getByRole("dialog")).toHaveTextContent("3 need you");
     expect(within(list).getByTestId("v3-needs-nothing")).toHaveTextContent(
       "Nothing in Product waits on you",
     );
-    expect(list.querySelector("ol")).toBeNull();
+    expect(within(list).queryAllByTestId("v3-needs-item")).toHaveLength(0);
     expect(within(list).getByTestId("v3-needs-other-tree")).toHaveTextContent(
-      "2 more in Factory ›",
+      "3 more in Factory ›",
     );
   });
 

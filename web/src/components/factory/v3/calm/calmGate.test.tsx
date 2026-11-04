@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeFetch, renderChat } from "../fixture/renderChat";
 import { renderNode } from "../fixture/renderNode";
 import { type SampleOptions, sampleEngine } from "../fixture/sampleNodeSource";
-import { TITLE_WORDS_MAX, words } from "./calmModel";
+import { TITLE_WORDS_MAX, holdsSlug, words } from "./calmModel";
 
 // The calm rules as a gate, over every node page of the sample factory: a
 // default page says little (about 120 words outside the chat), every title is
-// a short name, no ask shows twice, and the chat holds the conversation only.
+// a short name (never a slug), no ask shows twice, Your move names what it
+// unblocks by name (never a slug or a bare id), and the chat holds the
+// conversation only.
 
 let fake: FakeFetch | null = null;
 vi.mock("@/lib/identity", async (original) => ({
@@ -37,8 +39,13 @@ const TITLES = [
 interface CalmFindings {
   words: number;
   longTitles: string[];
+  slugTitles: string[];
   repeatedAsks: string[];
+  machineMoves: string[];
 }
+
+/** A bare id ("T-16", "PR-9856") or a slug in what a Your move row unblocks. */
+const MACHINE = /\b(?:T|I|PR|O|R|G|D)-\d+\b|\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b/;
 
 function text(el: Element): string {
   return (el.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -48,14 +55,17 @@ function text(el: Element): string {
 function calmFindings(page: Element): CalmFindings {
   const copy = page.cloneNode(true) as Element;
   for (const chat of copy.querySelectorAll(CHAT)) chat.remove();
-  const longTitles = [...copy.querySelectorAll(TITLES)]
+  const titles = [...copy.querySelectorAll(TITLES)].map(text);
+  const longTitles = titles.filter((t) => words(t).length > TITLE_WORDS_MAX);
+  const slugTitles = titles.filter(holdsSlug);
+  const machineMoves = [...page.querySelectorAll('[data-testid="v3-move-unblocks"]')]
     .map(text)
-    .filter((t) => words(t).length > TITLE_WORDS_MAX);
+    .filter((t) => MACHINE.test(t));
   const whole = text(page.ownerDocument.body);
   const repeatedAsks = [...page.querySelectorAll('[data-testid="v3-move-row"]')]
     .map((row) => row.getAttribute("data-ask") ?? "")
     .filter((ask) => ask && whole.split(ask).length - 1 > 1);
-  return { words: words(text(copy)).length, longTitles, repeatedAsks };
+  return { words: words(text(copy)).length, longTitles, slugTitles, repeatedAsks, machineMoves };
 }
 
 async function settle(container: HTMLElement) {
@@ -79,6 +89,8 @@ async function sweep(options: SampleOptions) {
         words: "ok",
       });
       expect({ ref, longTitles: found.longTitles }).toEqual({ ref, longTitles: [] });
+      expect({ ref, slugTitles: found.slugTitles }).toEqual({ ref, slugTitles: [] });
+      expect({ ref, machineMoves: found.machineMoves }).toEqual({ ref, machineMoves: [] });
       expect({ ref, repeated: found.repeatedAsks }).toEqual({ ref, repeated: [] });
       // A Your move row answers its ask; nothing else on the page does.
       const answers = [...page.querySelectorAll('[data-testid="v3-answer"]')];

@@ -1,7 +1,7 @@
 /* oxlint-disable no-await-in-loop -- pages render one at a time, in order */
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { lensesOffered, pickLens } from "../fixture/calmTest";
+import { lensesOffered, openDetails, pickLens } from "../fixture/calmTest";
 import { renderNode } from "../fixture/renderNode";
 import { sampleInstant } from "../fixture/sampleLenses";
 import { sampleEngine } from "../fixture/sampleNodeSource";
@@ -78,7 +78,7 @@ describe("cockpit v3 · the lens bar offers only lenses with something to show",
     expect(await offered()).toEqual(["map", "list"]);
   });
 
-  it("a task's change is a row (no map); a run has nothing below, so its lineage folds", async () => {
+  it("a task's change is a row (no map); a run has nothing below, so its lineage is in Details", async () => {
     const task = renderNode("T-16");
     await settle(task.container);
     expect(await offered()).toEqual(["list", "lineage"]);
@@ -86,6 +86,9 @@ describe("cockpit v3 · the lens bar offers only lenses with something to show",
     const run = renderNode("run:luz-t16");
     await settle(run.container);
     expect(screen.queryByTestId("v3-lens-bar")).toBeNull();
+    // Nothing below: no lineage link on the page; it waits in Details.
+    expect(screen.queryByTestId("v3-lineage-fold")).toBeNull();
+    openDetails();
     fireEvent.click(screen.getByTestId("v3-lineage-fold"));
     expect(await screen.findByTestId("v3-lineage")).toBeInTheDocument();
     expect(run.search()).toBe("?lens=lineage");

@@ -4,11 +4,18 @@
 // are real links: Enter or `l` steps in, middle-click opens a tab. No answer
 // buttons here: the viewer's asks are the page's Your move.
 
+import { createContext, useContext } from "react";
 import { cn } from "@/lib/utils";
-import { type Phrase, childPhrase, fullTitle, nodeName } from "./calm/calmModel";
+import { type Phrase, childPhrase, fullTitle, nameUnder } from "./calm/calmModel";
 import { Glyph, NodeLink, Ring, StateBar, StateDot } from "./nodeParts";
 import { AMBER, STATE_ORDER } from "./nodeTokens";
 import type { NodeState, NodeSummary } from "./nodeTypes";
+
+/**
+ * The short name of the node these children sit under: a child named after
+ * its parent ("Build tier drafts 3, part 1") keeps only what tells it apart.
+ */
+export const ParentNameContext = createContext<string | null>(null);
 
 /** Overlays on tiles and rows (kept for callers; the calm page shows none). */
 export interface Overlays {
@@ -132,6 +139,7 @@ export function NodeTile({
 }) {
   const phrase = childPhrase(node);
   const ghost = node.state === "ghost";
+  const name = nameUnder(node, useContext(ParentNameContext));
   return (
     <li
       data-testid="v3-tile"
@@ -157,7 +165,7 @@ export function NodeTile({
             compact ? "text-[13.5px]" : "text-[14.5px]",
           )}
         >
-          {nodeName(node)}
+          {name}
         </NodeLink>
       </div>
       {(phrase || node.grandchildren) && (
@@ -179,7 +187,7 @@ export function NodeRow({
   owner?: boolean;
 }) {
   const phrase = childPhrase(node);
-  const name = nodeName(node);
+  const name = nameUnder(node, useContext(ParentNameContext));
   return (
     <li
       data-testid="v3-row"

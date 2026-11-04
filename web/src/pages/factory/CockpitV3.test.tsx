@@ -264,14 +264,15 @@ describe("cockpit v3 · the switch and routes", () => {
     const row = within(move).getAllByTestId("v3-move-row")[0]!;
     fireEvent.click(within(row).getByRole("button", { name: /Apply C-16/ }));
     fireEvent.click(within(row).getByRole("button", { name: "All asks" }));
-    expect(await screen.findByTestId("v3-needs-sheet", {}, { timeout: 4000 })).toHaveTextContent(
-      "Atlas proposes C-16",
-    );
+    // The sheet lists the asks as Your move does (short words, never the raw title).
+    const needs = await screen.findByTestId("v3-needs-sheet", {}, { timeout: 4000 });
+    await waitFor(() => expect(needs).toHaveTextContent("Apply C-16"));
+    expect(needs).not.toHaveTextContent("proposes C-16");
     await waitFor(() => expect(location).toBe(`${BASE}?peek=needs`));
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("v3-needs-sheet")).toBeNull());
-    // The count is the ranked sheet's: every ask, also those that block nothing.
-    expect(await screen.findByTestId("cockpit-needs-you")).toHaveTextContent("5 need you");
+    // One count: every ask of both trees (Product's 5 and Factory's 3), also those that block nothing.
+    expect(await screen.findByTestId("cockpit-needs-you")).toHaveTextContent("8 need you");
     const env = await screen.findByTestId("cockpit-base-env");
     expect(env).toHaveTextContent("Base env sample-main @817480d");
     fireEvent.click(env);
@@ -305,7 +306,7 @@ describe("cockpit v3 · the switch and routes", () => {
     const { client } = renderAt("?cockpit=v3", source);
     // The ranked count (every ask, also those that block nothing) once the list is read.
     await waitFor(() =>
-      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("5 need you"),
+      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("8 need you"),
     );
     // An agent asks: the next snapshot (a push frame re-reads it) holds one more open decision.
     const open = snapshot.decisions.find((d) => d.status === "open")!;
@@ -313,7 +314,7 @@ describe("cockpit v3 · the switch and routes", () => {
     snapshot = { ...snapshot, decisions: [...snapshot.decisions, { ...open, id: "D-99" }] };
     await client.invalidateQueries({ queryKey: factoryQueryKey(LIVE_RUN_FACTORY_ID) });
     await waitFor(() =>
-      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("6 need you"),
+      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("9 need you"),
     );
   });
 
@@ -392,6 +393,44 @@ describe("cockpit v3 · the factory tree in the shell", () => {
         within(screen.getByTestId("cockpit-trees")).getByTestId("cockpit-tree-product"),
       ).toHaveAttribute("aria-current", "page"),
     );
+  });
+
+  it("on a phone: one ⋯ menu in the top bar, and the bottom bar is Product · Factory · Chat", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width: 767.98px"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    serve();
+    renderAt("");
+    expect(await screen.findByTestId("v3-node-page")).toHaveAttribute("data-ref", "product");
+    const bar = screen.getByTestId("cockpit-topbar");
+    // Search, the chat, the theme and you fold into one menu: the bar fits 390 px.
+    for (const gone of ["cockpit-search", "cockpit-room", "cockpit-theme", "cockpit-you"]) {
+      expect(within(bar).queryByTestId(gone)).toBeNull();
+    }
+    fireEvent.pointerDown(within(bar).getByTestId("cockpit-more"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    expect(await screen.findByTestId("cockpit-more-search")).toBeInTheDocument();
+    expect(screen.getByTestId("cockpit-you-settings")).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    // No tab leaves v3: its two trees (each with its asks) and the chat.
+    const tabs = screen.getByTestId("cockpit-phone-tabs");
+    expect(tabs).toHaveAttribute("data-cockpit", "v3");
+    expect(tabs).toHaveTextContent(/^\d*Product\d*FactoryChat$/);
+    await waitFor(() =>
+      expect(within(tabs).getByTestId("cockpit-phone-product-badge")).toHaveTextContent("5"),
+    );
+    expect(within(tabs).getByTestId("cockpit-phone-factory-badge")).toHaveTextContent("3");
+    expect(screen.queryByTestId("cockpit-phone-discovery")).toBeNull();
   });
 
   it("an area deep in the factory tree is the Factory's too", async () => {

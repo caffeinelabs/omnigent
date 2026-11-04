@@ -8,8 +8,9 @@ What every cockpit v3 screen must hold, checked in the browser. Not a test modul
   only "none", "0" or "—", and no sideways scroll of the page. In the chat
   column the Room's answer cards and the chat's icons stay as they are.
 - :data:`CALM_CHECKS` holds a page to the calm rules: about 120 words outside
-  the chat, titles of six words or fewer, each ask once (one answer button),
-  and a chat with no system event inline and no resolved incident.
+  the chat, titles of six words or fewer and never a slug, Your move naming
+  what it unblocks by name (no slug, no bare id), each ask once (one answer
+  button), and a chat with no system event inline and no resolved incident.
 - :func:`node` is a node page by ref; :func:`api` reads the factory's API as
   the browser's user (single-user server: no header). :func:`verb`,
   :func:`details` and :func:`move_row` reach what a calm page keeps behind its
@@ -49,11 +50,23 @@ BODY_CHECKS = """(node) => {
     .filter((el) => el.children.length === 0)
     .map((el) => (el.textContent ?? '').trim())
     .filter((text) => empty.has(text) || /^0(\\s|$)/.test(text));
+  // Sideways scroll of the page: the document, the factory's scroller and any
+  // scrolling ancestor of the node page (the page never scrolls sideways).
+  const scrollers = [
+    document.documentElement,
+    document.querySelector('[data-testid="factory-page"]'),
+  ];
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(el).overflowX)) scrollers.push(el);
+  }
+  const overflow = Math.max(
+    ...scrollers.filter(Boolean).map((el) => el.scrollWidth - el.clientWidth),
+  );
   return {
     lines,
     cells,
     chat: shown('*').filter((el) => chat.some((c) => c.contains(el))).length,
-    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    overflow,
   };
 }"""
 """Run with ``node.evaluate(BODY_CHECKS)`` on a ``v3-node-page``."""
@@ -82,6 +95,12 @@ CALM_CHECKS = """(node) => {
     .filter((el) => !el.closest(chatSel))
     .map((el) => el.innerText.trim())
     .filter(Boolean);
+  // A slug ("build-tier-drafts-3") is never a title, also inside one.
+  const slug = /(^|[^\\w-])[a-z][a-z0-9]*((-[a-z0-9]+){2,}|(-[a-z][a-z0-9]*)*-\\d+)(?![\\w-])/;
+  // What a Your move row unblocks names nodes by name, never a slug or a bare id.
+  const machine = /\\b(T|I|PR|O|R|G|D)-\\d+\\b|\\b[a-z][a-z0-9]*(-[a-z0-9]+)+\\b/;
+  const unblocks = [...node.querySelectorAll('[data-testid="v3-move-unblocks"]')]
+    .map((el) => el.innerText.trim());
   const body = document.body.innerText;
   const asks = [...node.querySelectorAll('[data-testid="v3-move-row"]')]
     .map((row) => row.dataset.ask)
@@ -102,6 +121,8 @@ CALM_CHECKS = """(node) => {
   return {
     words: count(outside),
     longTitles: titles.filter((t) => count(t) > TITLE_WORDS_MAX),
+    slugTitles: titles.filter((t) => slug.test(t)),
+    machineMoves: unblocks.filter((t) => machine.test(t)),
     repeatedAsks: asks.filter((a) => body.split(a).length - 1 > 1),
     doubledAnswers: Object.entries(answers).filter(([, n]) => n > 1).map(([id]) => id),
     systemInline: system,
@@ -115,6 +136,8 @@ def assert_calm(found: dict[str, Any], *where: object) -> None:
     """A :data:`CALM_CHECKS` result that holds every calm rule."""
     assert found["words"] <= PAGE_WORDS_MAX, (*where, "words", found["words"])
     assert found["longTitles"] == [], (*where, "long titles", found["longTitles"])
+    assert found["slugTitles"] == [], (*where, "slugs as titles", found["slugTitles"])
+    assert found["machineMoves"] == [], (*where, "ids in Your move", found["machineMoves"])
     assert found["repeatedAsks"] == [], (*where, "asks shown twice", found["repeatedAsks"])
     assert found["doubledAnswers"] == [], (*where, "answers twice", found["doubledAnswers"])
     assert found["systemInline"] == [], (*where, "system events inline", found["systemInline"])

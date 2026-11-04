@@ -119,6 +119,12 @@ def _needs_you(v3_server: V3Server, factory: Seeded, tree: str = "product") -> l
     return [i["decision"]["id"] for i in found["items"]]
 
 
+def _asks_in(v3_server: V3Server, factory: Seeded, tree: str) -> int:
+    """How many asks *tree* holds for the viewer: those that hold work and those that do not."""
+    found = api(v3_server.base_url, factory.fid, "/needs-you", tree=tree)
+    return len(found["items"]) + len(found.get("blocks_nothing") or [])
+
+
 def _status_of(v3_server: V3Server, factory: Seeded, ref: str) -> dict[str, object]:
     """Node *ref*'s status line as the API gives it, without the ask's id."""
     status = api(v3_server.base_url, factory.fid, f"/n/{ref}")["status"]
@@ -193,7 +199,8 @@ def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
     expect(sheet).to_be_visible(timeout=LOAD_MS)
     sheet.get_by_test_id("v3-needs-other-tree").click()
     items = sheet.get_by_test_id("v3-needs-item")
-    expect(items).to_have_count(2, timeout=LOAD_MS)
+    before = _asks_in(v3_server, factory, "factory")
+    expect(items).to_have_count(before, timeout=LOAD_MS)
     rule = items.filter(has_text="C-17")
     ask = rule.get_attribute("data-decision")
     assert ask, "C-17's ask has an id"
@@ -210,7 +217,7 @@ def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
     applied = api(v3_server.base_url, factory.fid, "/proposals/C-17")["proposal"]
     assert applied["status"] in ("applied", "trial"), applied
     assert applied["undo_until"] is None, applied
-    expect(items).to_have_count(1, timeout=LOAD_MS)
+    expect(items).to_have_count(before - 1, timeout=LOAD_MS)
     assert ask not in _needs_you(v3_server, factory, "factory")
     assert cockpit.errors == [], cockpit.errors
 
@@ -424,6 +431,7 @@ def test_team_model_swap_shows_the_cost_line_and_undoes(
 
 def test_needs_you_ranks_each_ask_by_what_it_holds(
     open_cockpit: Callable[[int, int, Theme], Cockpit],
+    v3_server: V3Server,
     factory: Seeded,
 ) -> None:
     cockpit = open_cockpit(1440, 900, "light")
@@ -433,24 +441,24 @@ def test_needs_you_ranks_each_ask_by_what_it_holds(
     sheet = page.get_by_test_id("v3-needs-sheet")
     expect(sheet).to_be_visible(timeout=LOAD_MS)
     items = sheet.get_by_test_id("v3-needs-item")
-    expect(items).to_have_count(3, timeout=LOAD_MS)
-    # What holds the most first: C-16 (T-16 and the panel), the merges on main, then D-49.
+    expect(items).to_have_count(_asks_in(v3_server, factory, "product"), timeout=LOAD_MS)
+    # What holds the most first: C-16 (T-16 and the panel), the merges on main, then D-49;
+    # the asks that block nothing come last, each a row of its own.
     expect(items.nth(0)).to_have_attribute("data-decision", factory.apply_decision)
-    expect(items.nth(0)).to_contain_text("Holds T-16, assistant-panel-ux.")
+    expect(items.nth(0)).to_contain_text(f"Apply {factory.proposal}")
     expect(items.nth(0)).not_to_contain_text("**")
     expect(items.nth(1)).to_have_attribute("data-decision", re.compile(r"^merge:"))
     expect(items.nth(1)).to_contain_text("Merge #9856 and #9857")
-    expect(items.nth(2)).to_contain_text("Start the live-search fix?")
-    quiet = sheet.get_by_test_id("v3-needs-quiet")
-    expect(quiet).to_contain_text("These block nothing")
-    expect(quiet.get_by_test_id("v3-needs-apply-all")).to_have_text("Apply all 2")
-    closed = sheet.get_by_test_id("v3-needs-closed")
-    expect(closed).to_contain_text("3 alarms closed by the server")
-    for alarm in ("D-46", "D-47", "D-48"):
-        expect(closed).to_contain_text(alarm)
+    expect(items.nth(2)).to_contain_text("unblocks")
+    expect(items.last).to_contain_text("blocks nothing")
+    # One filled answer in the sheet; the alarms the server closed live under Factory › Health.
+    expect(sheet.locator('[data-testid="v3-answer"].bg-status-yellow')).to_have_count(1)
+    expect(sheet.get_by_test_id("v3-needs-closed")).to_have_count(0)
     # The factory tree's asks wait there.
     sheet.get_by_test_id("v3-needs-other-tree").click()
-    expect(sheet.get_by_test_id("v3-needs-item")).to_have_count(2, timeout=LOAD_MS)
+    expect(sheet.get_by_test_id("v3-needs-item")).to_have_count(
+        _asks_in(v3_server, factory, "factory"), timeout=LOAD_MS
+    )
     expect(sheet.get_by_test_id("v3-needs-item").first).to_contain_text("C-17")
     assert cockpit.errors == [], cockpit.errors
 

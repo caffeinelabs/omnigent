@@ -33,8 +33,8 @@ import { useLevel, useMoreChildren, useNode, usePrefetchNode } from "./nodeQueri
 import { nodeHref } from "./nodeRoutes";
 import { useNodeSource } from "./nodeSource";
 import { useMarkSeen, useVisitSince } from "./nodeSteer";
-import { DEFAULT_OVERLAYS } from "./NodeTile";
-import { movedAsks } from "./calm/calmModel";
+import { DEFAULT_OVERLAYS, ParentNameContext } from "./NodeTile";
+import { movedAsks, nodeName } from "./calm/calmModel";
 import { YourMove, useYourMove } from "./calm/YourMove";
 import { LensMenu } from "./calm/NodeMenu";
 import type { ChildPage, NodePage as Page, TimelineView, VerbArgs, VerbAvail } from "./nodeTypes";
@@ -44,7 +44,7 @@ import { useSheetActions } from "./sheets/V3Sheets";
 import { hasWhy } from "./statusModel";
 import { useNodeKeys, useRovingStops } from "./useNodeKeys";
 import { useFactoryToast } from "../ui/Toast";
-import { LineageBody, LineageFold, MoneyBody, TimelineBody } from "./lenses/LensBodies";
+import { LineageBody, MoneyBody, TimelineBody } from "./lenses/LensBodies";
 import { type Lens, useLensChoice } from "./lenses/lensModel";
 import { type OpenVerb, VerbPreview } from "./verbs/VerbPreviews";
 
@@ -173,16 +173,16 @@ function Below({
       </section>
     );
   }
-  if (!c.items.length && !c.later.length && !c.ghosts.length) {
-    return lenses.includes("lineage") ? (
-      <LineageFold page={page} onOpen={() => choose("lineage")} />
-    ) : null;
-  }
+  // Nothing below: the page ends at Your move (its lineage is in Details and the strip).
+  if (!c.items.length && !c.later.length && !c.ghosts.length) return null;
   const name = levelName(c.level, c.level_name);
+  const parentName = nodeName(page.node);
   return (
     <section className="mt-1" aria-label={name} data-testid="v3-below">
       <SectionHead title={name} lenses={lenses} lens={lens} onLens={choose} />
-      <ChildrenView page={c} lens={shownLens} more={more} />
+      <ParentNameContext.Provider value={parentName}>
+        <ChildrenView page={c} lens={shownLens} more={more} />
+      </ParentNameContext.Provider>
     </section>
   );
 }
@@ -363,7 +363,7 @@ function LoadedNodePage({
     [actions, factoryId, prefetch, sheets, verbs.onVerb, openVerb],
   );
   const shown = level ?? page.home ?? (page.children.level || null);
-  const move = useYourMove(page, shown, factoryId);
+  const { view: move, you } = useYourMove(page, shown, factoryId);
   // Every ask Your move holds: tiles, rows, Details and the chat never repeat it.
   const above = useMemo(() => movedAsks(move), [move]);
   return (
@@ -372,11 +372,11 @@ function LoadedNodePage({
         <div data-testid="v3-node-page" data-ref={page.node.ref} className="flex min-w-0 flex-col">
           {phone ? (
             <div className="mb-3">
-              <PhoneLevelRow page={page} shown={shown} />
+              <PhoneLevelRow page={page} shown={shown} you={you} />
             </div>
           ) : (
             <div className="-mx-4 -mt-1 mb-[18px] md:-mx-6">
-              <LevelStrip page={page} shown={shown} />
+              <LevelStrip page={page} shown={shown} you={you} />
             </div>
           )}
           <div className={cn("grid min-w-0 gap-6", chat && "lg:grid-cols-[minmax(0,1fr)_auto]")}>

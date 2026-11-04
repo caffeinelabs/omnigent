@@ -41,7 +41,9 @@ describe("cockpit v3 · Your move, Details and answers", () => {
     await shown("I-1");
     const move = screen.getByTestId("v3-your-move");
     expect(within(moveRow("D-45")).getByRole("button", { name: "Apply" })).toBeInTheDocument();
-    expect(moveRow("D-45")).toHaveTextContent("Apply C-16 · unblocks Assistant core");
+    expect(moveRow("D-45")).toHaveTextContent(
+      "Apply C-16 · update assistant core · unblocks Assistant core",
+    );
     expect(within(move).getAllByTestId("v3-move-row").length).toBeLessThanOrEqual(3);
     const core = screen.getAllByTestId("v3-row").find((t) => t.dataset.ref === "assistant-core")!;
     expect(core).toHaveTextContent(/^Assistant coreNeeds you$/);
@@ -178,7 +180,7 @@ describe("cockpit v3 · Your move, Details and answers", () => {
 });
 
 describe("cockpit v3 · the level strip", () => {
-  it("counts and “you” numbers come from levels_below; empty levels are left out", async () => {
+  it("counts come from levels_below, “you” counts the asks Your move ranks under each level; empty levels are left out", async () => {
     const source = sampleNodeSource();
     const node = source.node;
     source.node = async (fid, ref) => {
@@ -202,7 +204,8 @@ describe("cockpit v3 · the level strip", () => {
     renderNode("I-1", { source });
     await shown("I-1");
     const strip = screen.getByTestId("v3-level-strip");
-    expect(screen.getByTestId("v3-level-project")).toHaveTextContent("7+2 later3 you");
+    // One ask (C-16) sits under a project of I-1: the strip says 1, as Your move counts it.
+    expect(screen.getByTestId("v3-level-project")).toHaveTextContent("7+2 later1 you");
     // A level holding only later work says so; it never shows a 0.
     expect(screen.getByTestId("v3-level-task")).toHaveTextContent("5 later");
     // A level with nothing in it is left out, even when the data lists it.
@@ -231,7 +234,8 @@ describe("cockpit v3 · the level strip", () => {
     const strip = screen.getByTestId("v3-level-strip");
     const folded = within(strip).getAllByTitle(/implicit, folded/);
     expect(folded).toHaveLength(2);
-    expect(within(strip).getByTestId("v3-results")).toHaveTextContent("nothing merged yet");
+    // Nothing merged yet: no Results cell (nothing renders empty).
+    expect(within(strip).queryByTestId("v3-results")).toBeNull();
   });
 
   it("an implicit parent's address shows its only child", async () => {

@@ -1,8 +1,9 @@
 // The big picture in one row: the node's ancestors (a state dot and a title;
 // implicit ones folded into their only child in italics), the node itself,
-// then each level below it with a count, "+n later", "n you" and a state bar,
-// and the results at the end. Levels with no node are left out, and no cell
-// ever says 0. On a phone: "‹ parent" and a row of level cells that scrolls
+// then each level below it with a count, "+n later", "n you" (the asks Your
+// move ranks under that level) and a state bar, and the results once
+// something merged. Levels with no node are left out, and no cell ever says 0
+// or "nothing yet". On a phone: "‹ parent" and a row of level cells that scrolls
 // sideways inside itself. Below 1024 px the ancestors between the root and
 // the parent fold into "…" so every cell keeps a readable title.
 
@@ -36,8 +37,13 @@ function Chev() {
  * Levels that hold something: an empty level is left out, never shown as 0. A
  * debug level (Runs) shows only within two levels of the node, where debugging is.
  */
-export function heldLevels(below: LevelCount[]): LevelCount[] {
-  return below.filter((c, i) => c.count + c.later > 0 && (!c.debug || i < 2));
+export function heldLevels(
+  below: LevelCount[],
+  you?: ReadonlyMap<string, number> | null,
+): LevelCount[] {
+  return below
+    .filter((c, i) => c.count + c.later > 0 && (!c.debug || i < 2))
+    .map((c) => (you ? { ...c, needs: you.get(c.level) ?? 0 } : c));
 }
 
 /** "4 +4 later 2 you": what a level holds, never a bare zero. */
@@ -95,9 +101,18 @@ function codeTag(tag: string | undefined): string | undefined {
 }
 
 /** The desktop strip. `shown` is the level the page lists (underlined). */
-export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | null }) {
+export function LevelStrip({
+  page,
+  shown,
+  you,
+}: {
+  page: NodePage;
+  shown?: string | null;
+  /** The viewer's asks under each level (`youByLevel`), in place of the server's counts. */
+  you?: ReadonlyMap<string, number> | null;
+}) {
   const { node, breadcrumb, results } = page;
-  const below = heldLevels(page.levels_below);
+  const below = heldLevels(page.levels_below, you);
   const here: Crumb = {
     ref: node.ref,
     level: node.level,
@@ -179,18 +194,7 @@ export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | n
           </NodeLink>
         </span>
       ))}
-      {!below.length && page.children.level && (
-        <span className="flex min-w-0 flex-[1_1_0]">
-          <Chev />
-          <span
-            className={cn(CELL, "cursor-default text-foreground-tertiary hover:bg-transparent")}
-          >
-            <span className={LV}>Below</span>
-            <span className={CV}>nothing yet</span>
-          </span>
-        </span>
-      )}
-      {results && (
+      {results && results.merged > 0 && (
         <span
           data-testid="v3-results"
           className={cn(
@@ -209,9 +213,17 @@ export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | n
 }
 
 /** The phone's row: back to the parent, then the levels below as cells scrolling inside the row. */
-export function PhoneLevelRow({ page, shown }: { page: NodePage; shown?: string | null }) {
+export function PhoneLevelRow({
+  page,
+  shown,
+  you,
+}: {
+  page: NodePage;
+  shown?: string | null;
+  you?: ReadonlyMap<string, number> | null;
+}) {
   const { node, breadcrumb, results } = page;
-  const below = heldLevels(page.levels_below);
+  const below = heldLevels(page.levels_below, you);
   const parent = [...breadcrumb].reverse().find((c) => !c.folded);
   const { onSheet } = useNodeActions();
   const lineage = useLensSupport().lineage && inProductTree(page);

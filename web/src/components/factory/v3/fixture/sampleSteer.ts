@@ -149,7 +149,8 @@ export class SampleSteerEngine extends SampleLensEngine {
           weight: 0,
         })) as unknown as NeedsYouList["blocks_nothing"],
       closed_alarms: root === "product" ? this.closedAlarms("fx:health") : [],
-      other_tree: this.needsIn(other).filter((d) => !d.low).length,
+      // Every ask waiting in the other tree, also those that block nothing (as the server counts).
+      other_tree: this.needsIn(other).length,
     };
   }
 

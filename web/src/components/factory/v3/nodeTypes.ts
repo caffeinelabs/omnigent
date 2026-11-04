@@ -428,10 +428,16 @@ export interface YourMoveItem {
   verb: string;
   /** "C-16"; empty when the verb names it already ("Merge #9856 and #9857"). */
   object?: string;
-  /** What answering it unblocks, as a short name ("Agent assistant"); absent: blocks nothing. */
+  /** What answering it unblocks, as a short name ("Agent assistant"); absent: it names nothing it frees. */
   unblocks?: string;
   /** The node it unblocks. */
   unblocks_ref?: string;
+  /** Every node it unblocks, as the page shows them (the page names them by its own rows). */
+  unblocks_refs?: string[];
+  /** It blocks nothing (a grey dot, "blocks nothing"). */
+  blocks_nothing?: boolean;
+  /** What the object is about in two to four words ("debit each turn"), when the object is a code. */
+  object_name?: string;
   /** The node the ask is on. */
   ref?: string;
   /** The row's one button: the recommended answer, a link out (a merge), or none (open the ask). */

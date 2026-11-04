@@ -5,7 +5,9 @@
 
 import type { ReactNode } from "react";
 import { ChevronRightIcon } from "lucide-react";
+import { useSearchParams } from "@/lib/routing";
 import type { NodePage, TimelineView } from "../nodeTypes";
+import { LENS_PARAM } from "./lensModel";
 import { useLineage, useMoney } from "./lensQueries";
 import { LineageLens } from "./LineageLens";
 import { MoneyLens } from "./MoneyLens";
@@ -54,14 +56,24 @@ export function TimelineBody({
 }
 
 /** Where a node came from, one quiet line on a page with nothing below it (a click shows it). */
-export function LineageFold({ page, onOpen }: { page: NodePage; onOpen: () => void }) {
+export function LineageFold({ page }: { page: NodePage }) {
+  const [, setParams] = useSearchParams();
   return (
     <button
       type="button"
       data-testid="v3-lineage-fold"
-      onClick={onOpen}
+      onClick={() =>
+        setParams(
+          (prev) => {
+            const p = new URLSearchParams(prev);
+            p.set(LENS_PARAM, "lineage");
+            return p;
+          },
+          { replace: true },
+        )
+      }
       title={`Where ${page.node.title} came from, and where it landed`}
-      className="mt-1 flex items-center gap-1 px-0.5 text-left text-[12.5px] text-muted-foreground hover:text-foreground"
+      className="flex items-center gap-1 self-start text-left text-[12.5px] text-status-blue-fg hover:underline"
     >
       Lineage
       <ChevronRightIcon aria-hidden className="size-3" />

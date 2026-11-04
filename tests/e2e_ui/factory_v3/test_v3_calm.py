@@ -8,7 +8,10 @@ Checked in the browser on Home, the feature, the project and the task, at
 1440 (light and dark) and 390:
 
 - a default page opens with Your move and says little: about 120 words
-  outside the chat, every title six words or fewer;
+  outside the chat, every title six words or fewer and never a slug;
+- Your move names what each ask unblocks as the rows do ("this task and
+  Assistant panel ux"), never by slug or id, and says "blocks nothing" only
+  of an ask that holds nothing;
 - each ask shows once, with one answer button (Your move's), never in a
   banner, a child's line or a chat card;
 - the chat is a conversation: no system event inline and no resolved
@@ -110,6 +113,69 @@ def test_default_pages_open_with_your_move_and_say_little(
     assert cockpit.errors == [], cockpit.errors
 
 
+BTD3 = "build-tier-drafts-3"
+"""The project two waiting merges hold (its tasks are the PRs' own, titled by its slug)."""
+
+
+def test_your_move_names_nodes_as_the_rows_do(
+    open_cockpit: Callable[[int, int, Theme], Cockpit],
+    factory: Seeded,
+) -> None:
+    cockpit = open_cockpit(1440, 900, "light")
+    page = cockpit.page
+    # On the held task's own page, the ask frees "this task", never "T-16".
+    cockpit.open(factory.held_task)
+    _settled(page, factory.held_task)
+    row = move_row(page, factory.held_task, factory.apply_decision)
+    unblocks = row.get_by_test_id("v3-move-unblocks")
+    expect(unblocks).to_contain_text("unblocks this task")
+    expect(unblocks).not_to_contain_text(factory.held_task)
+    # The merges that hold Build tier drafts 3 are what moves it: never "blocks nothing".
+    cockpit.open(BTD3)
+    _settled(page, BTD3)
+    here = node(page, BTD3)
+    first = here.get_by_test_id("v3-move-row").first
+    expect(first).to_have_attribute("data-decision", re.compile(r"^merge:"))
+    expect(first).not_to_contain_text("blocks nothing")
+    expect(first.get_by_test_id("v3-move-unblocks")).to_have_count(1)
+    # Its tasks are named apart from it, never by its slug.
+    names = here.locator('[data-testid="v3-row"] a[data-node-link]')
+    expect(names).to_have_text(["Part 1", "Part 2"])
+    found = here.evaluate(CALM_CHECKS)
+    assert_calm(found, BTD3)
+    assert_clean(here.evaluate(BODY_CHECKS), BTD3)
+    _shot(page, "btd3-1440-light")
+    assert cockpit.errors == [], cockpit.errors
+
+
+def test_needs_you_is_your_move_for_the_whole_tree(
+    open_cockpit: Callable[[int, int, Theme], Cockpit],
+    factory: Seeded,
+) -> None:
+    cockpit = open_cockpit(1440, 900, "light")
+    page = cockpit.page
+    cockpit.open("product")
+    _settled(page, "product")
+    pill = page.get_by_test_id("cockpit-needs-you")
+    expect(pill).to_have_text(re.compile(r"^\d+ need you$"), timeout=LOAD_MS)
+    total = int(pill.inner_text().split()[0])
+    pill.click()
+    sheet = page.get_by_test_id("v3-needs-sheet")
+    items = sheet.get_by_test_id("v3-needs-item")
+    expect(items.first).to_have_attribute("data-decision", factory.apply_decision, timeout=LOAD_MS)
+    # One count: the pill is this tree's rows and the other tree's.
+    other = sheet.get_by_test_id("v3-needs-other-tree")
+    more = int(other.inner_text().split()[0]) if other.count() else 0
+    assert items.count() + more == total, (items.count(), more, total)
+    # Rows as Your move draws them: one filled answer, short words, no closed alarms.
+    filled = sheet.locator('[data-testid="v3-answer"].bg-status-yellow')
+    expect(filled).to_have_count(1)
+    expect(sheet).not_to_contain_text("proposes")
+    expect(sheet.get_by_test_id("v3-needs-closed")).to_have_count(0)
+    _shot(page, "needs-sheet-1440-light")
+    assert cockpit.errors == [], cockpit.errors
+
+
 def test_the_chat_is_a_conversation_with_activity_apart(
     open_cockpit: Callable[[int, int, Theme], Cockpit],
     factory: Seeded,
@@ -135,6 +201,8 @@ def test_the_chat_is_a_conversation_with_activity_apart(
     expect(listed).to_be_visible(timeout=LOAD_MS)
     for text in ("moved 3 times", "spawned PL", "INC-1", "C-10"):
         expect(listed).to_contain_text(text, timeout=LOAD_MS)
+    # As on a live factory: the incidents were resolved days ago, not a minute ago.
+    expect(listed).to_contain_text("resolved · 6d")
     _shot(page, "chat-activity-1440-light")
     page.keyboard.press("Escape")
     expect(listed).to_have_count(0)
@@ -162,4 +230,14 @@ def test_the_phone_chat_is_a_conversation_too(
     expect(messages.locator(':scope > li[data-kind="system"]')).to_have_count(0)
     expect(full.get_by_test_id("v3-chat-activity")).to_be_visible()
     _shot(page, "chat-390-dark")
+    page.keyboard.press("Escape")
+    # The bottom bar never leaves v3: its two trees and the chat.
+    tabs = page.get_by_test_id("cockpit-phone-tabs")
+    expect(tabs).to_have_attribute("data-cockpit", "v3")
+    expect(tabs.get_by_test_id("cockpit-phone-discovery")).to_have_count(0)
+    # The top bar fits: search, the theme and you wait in one menu.
+    bar = page.get_by_test_id("cockpit-topbar")
+    expect(bar.get_by_test_id("cockpit-more")).to_be_visible()
+    box = bar.bounding_box()
+    assert box is not None and box["x"] + box["width"] <= 390, box
     assert cockpit.errors == [], cockpit.errors

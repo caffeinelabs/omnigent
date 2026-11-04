@@ -52,7 +52,7 @@ import {
 } from "@/components/factory/shell/FactoryShellContext";
 import { FactoryTopBar, fallbackVerdict } from "@/components/factory/shell/FactoryTopBar";
 import { HealthPeek } from "@/components/factory/shell/HealthPeek";
-import { CockpitPhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
+import { CockpitPhoneTabBar, TreePhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
 import { factoryLocation } from "@/components/factory/shell/shellRoutes";
 import { ViewerBanner } from "@/components/factory/shell/ViewerBanner";
 import { pageThread } from "@/components/factory/room/roomModel";
@@ -154,9 +154,11 @@ export function CockpitShell({
   const [chatSlot] = useState(createNodeChatSlot);
   const queryClient = useQueryClient();
   const nodeSource = useNodeSource(v3);
-  // v3 with a ranked Needs you: its count is the sheet's (every ask, also those that block nothing).
+  // v3 with a ranked Needs you: one count of asks everywhere, the sheet's (every
+  // ask of both trees, also those that block nothing), as Your move ranks them.
   const ranked = useNeedsYou("product", v3 && Boolean(nodeSource?.needsYou), fid).data;
-  const needsYou = ranked ? ranked.items.length + ranked.blocks_nothing.length : shellNeeds;
+  const productAsks = ranked ? ranked.items.length + ranked.blocks_nothing.length : null;
+  const needsYou = ranked ? productAsks! + ranked.other_tree : shellNeeds;
   // The ranked list and the base env chip (the product's page) move with the
   // factory: read them again whenever the snapshot's open asks change (a push
   // frame re-read it) or the summary's poll answers, as the polled count did.
@@ -326,7 +328,7 @@ export function CockpitShell({
                   current: inFactory ? "factory" : "product",
                   productHref: factoryPageHref(fid),
                   factoryHref: nodeHref(fid, FX_REF),
-                  factoryNeeds: fxRoot?.node.needs.open ?? 0,
+                  factoryNeeds: ranked?.other_tree ?? fxRoot?.node.needs.open ?? 0,
                 },
               }
             : {})}
@@ -389,7 +391,19 @@ export function CockpitShell({
       >
         {peek === "needs" && <DecisionsPage />}
       </Peek>
-      {phone && <CockpitPhoneTabBar factoryId={fid} location={location} needsYou={needsYou} />}
+      {phone &&
+        (v3 ? (
+          <TreePhoneTabBar
+            productHref={factoryPageHref(fid)}
+            factoryHref={nodeHref(fid, FX_REF)}
+            current={inFactory ? "factory" : "product"}
+            productNeeds={productAsks ?? needsYou}
+            factoryNeeds={ranked?.other_tree ?? fxRoot?.node.needs.open ?? 0}
+            onChat={openChat}
+          />
+        ) : (
+          <CockpitPhoneTabBar factoryId={fid} location={location} needsYou={needsYou} />
+        ))}
       <ShareDialog
         factoryId={fid}
         factoryName={snapshot.factory.name}

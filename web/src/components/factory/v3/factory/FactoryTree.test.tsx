@@ -68,7 +68,7 @@ describe("cockpit v3 · the factory tree's areas", () => {
       "https://app.example.com",
     );
     // The setup project that blocks nothing is an item here, never a product feature.
-    expect(screen.getByTestId("v3-below")).toHaveTextContent("base-env (setup project)");
+    expect(screen.getByTestId("v3-below")).toHaveTextContent("Base env (setup project)");
   });
 
   it("the product root keeps its base env in the top bar, not as a block on Home", async () => {
@@ -81,7 +81,7 @@ describe("cockpit v3 · the factory tree's areas", () => {
     const below = screen.getByTestId("v3-below");
     expect(below).toHaveTextContent("Spike unproven external capabilities before implementing");
     // Seven words: the row shows its short name (the full title is in its Details).
-    expect(below).toHaveTextContent("Name pending scope decisions in…");
+    expect(below).toHaveTextContent("Name pending scope decisions…");
     expect(screen.getByTestId("v3-your-move")).toHaveTextContent("Apply rule C-17");
   });
 

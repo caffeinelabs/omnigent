@@ -149,11 +149,18 @@ function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
             ...(typeof act.url === "string" ? { url: act.url } : {}),
           }
         : undefined;
+  const refs = Array.isArray(raw.unblocks_refs)
+    ? raw.unblocks_refs.filter((r): r is string => typeof r === "string" && Boolean(r))
+    : [];
+  const named = str(raw.object_name);
   return {
     id,
     verb,
     ...(object ? { object } : {}),
+    ...(named ? { object_name: named } : {}),
     ...(target ? { unblocks: target.title } : {}),
+    ...(refs.length && raw.blocks_nothing !== true ? { unblocks_refs: refs } : {}),
+    ...(raw.blocks_nothing === true ? { blocks_nothing: true } : {}),
     ...((str(raw.unblocks_ref) ?? target?.ref)
       ? { unblocks_ref: str(raw.unblocks_ref) ?? target?.ref }
       : {}),

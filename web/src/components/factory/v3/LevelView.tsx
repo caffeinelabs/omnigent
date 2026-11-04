@@ -9,7 +9,7 @@ import { fullTitle, nodeName } from "./calm/calmModel";
 import { DoneLine, MoreFooter, PagedRows } from "./Children";
 import { NodeLink, StateDot } from "./nodeParts";
 import { useMoreInGroup } from "./nodeQueries";
-import { NodeTile, type Overlays } from "./NodeTile";
+import { NodeTile, type Overlays, ParentNameContext } from "./NodeTile";
 import type { LevelGroup, LevelView as View } from "./nodeTypes";
 import { drawsTiles } from "./nodeWire";
 
@@ -104,9 +104,15 @@ export function LevelView({
   const groups = fold ? view.groups.filter((g) => !g.folded_done) : view.groups;
   return (
     <div data-testid="v3-level-view">
-      {groups.map((g) => (
-        <Group key={g.parent.ref} view={view} group={g} rows={rows} overlays={overlays} />
-      ))}
+      {groups.map((g) => {
+        // A child named after its parent keeps only the rest ("Part 1").
+        const parentName = nodeName(g.parent);
+        return (
+          <ParentNameContext.Provider key={g.parent.ref} value={parentName}>
+            <Group view={view} group={g} rows={rows} overlays={overlays} />
+          </ParentNameContext.Provider>
+        );
+      })}
       {fold && view.done_groups && (
         <button
           type="button"

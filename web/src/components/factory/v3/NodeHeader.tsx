@@ -10,6 +10,9 @@ import { cn } from "@/lib/utils";
 import { undoLabel } from "../steer/steerModel";
 import { childPhrase, fullTitle, nodeName } from "./calm/calmModel";
 import { VerbMenu } from "./calm/NodeMenu";
+import { LineageFold } from "./lenses/LensBodies";
+import { inProductTree } from "./lenses/lensModel";
+import { useLensSupport } from "./lenses/lensQueries";
 import { ChipList } from "./LinkChip";
 import { useNodeActions } from "./NodeContext";
 import { NodeContent } from "./NodeContent";
@@ -266,6 +269,13 @@ export function NodeDetails({
   const { node, status } = page;
   const { aboveId } = useNodeActions();
   const start = page.verbs.find((v) => v.verb === "start") ?? null;
+  const kids = page.children;
+  const lineage =
+    useLensSupport().lineage &&
+    inProductTree(page) &&
+    !kids.items.length &&
+    !kids.later.length &&
+    !kids.ghosts.length;
   return (
     <section
       id="v3-details"
@@ -290,6 +300,8 @@ export function NodeDetails({
       <RollupLine page={page} />
       <ChipList chips={page.chips} more={page.more_chips} moreGroups={page.chips_more} />
       <NodeContent page={page} part="details" />
+      {/* A node with nothing below has no lens menu: its lineage opens from here. */}
+      {lineage && <LineageFold page={page} />}
     </section>
   );
 }

@@ -13,14 +13,33 @@ import { AMBER } from "../nodeTokens";
 import type { NodePage } from "../nodeTypes";
 import { inProductTree } from "../lenses/lensModel";
 import { useNeedsYou } from "../nodeSteer";
-import { type MoveRow, type MoveView, deriveMoves, moveView } from "./calmModel";
+import {
+  MOVE_ROWS,
+  type MoveRow,
+  type MoveView,
+  askerName,
+  deriveMoves,
+  moveView,
+  youByLevel,
+} from "./calmModel";
 
-/** The page's Your move: the server's, else derived from its status line and Needs you. */
-export function useYourMove(page: NodePage, shown: string | null, factoryId?: string): MoveView {
+/**
+ * The page's Your move (the server's, else derived from its status line and
+ * Needs you) and the same asks counted under each level below (the strip's
+ * "n you"), so every count on the page is one set of asks.
+ */
+export function useYourMove(
+  page: NodePage,
+  shown: string | null,
+  factoryId?: string,
+): { view: MoveView; you: Map<string, number> | null } {
   const tree = inProductTree(page) ? "product" : "factory";
   const needs = useNeedsYou(tree, true, factoryId);
   return useMemo(
-    () => moveView(page, deriveMoves(page, needs.data, shown)),
+    () => ({
+      view: moveView(page, deriveMoves(page, needs.data, shown), MOVE_ROWS, needs.data),
+      you: youByLevel(page, needs.data),
+    }),
     [needs.data, page, shown],
   );
 }
@@ -58,11 +77,12 @@ function Answer({ row, primary, onOpen }: { row: MoveRow; primary: boolean; onOp
 
 /** The ask in full, under its row: what was asked, by whom, and its other answers. */
 function Peek({ row }: { row: MoveRow }) {
-  const { onAnswer, onOpenDecision } = useNodeActions();
+  const { onAnswer, onOpenDecision, factoryId } = useNodeActions();
   const d = row.decision;
   const text = [d.title, d.text].filter(Boolean).join(" · ");
+  const asker = askerName(d.asker, factoryId);
   const asked = [
-    d.asker && `asked by ${d.asker}`,
+    asker && `asked by ${asker}`,
     d.age && `${d.age} ago`,
     d.expires && `expires in ${d.expires}`,
   ]
@@ -115,12 +135,29 @@ function Peek({ row }: { row: MoveRow }) {
   );
 }
 
-function Row({ row, primary }: { row: MoveRow; primary: boolean }) {
+/** "· unblocks Agent assistant", "· blocks nothing", or nothing when it names nothing it frees. */
+function unblocksWords(row: MoveRow): string | null {
+  if (row.quiet) return "blocks nothing";
+  return row.unblocks ? `unblocks ${row.unblocks}` : null;
+}
+
+/** One ask: its words (a click peeks at it in full), what it unblocks and its one answer. */
+export function MoveRowItem({
+  row,
+  primary,
+  testId = "v3-move-row",
+}: {
+  row: MoveRow;
+  /** The one filled answer of its list (the first row). */
+  primary: boolean;
+  testId?: string;
+}) {
   const [open, setOpen] = useState(false);
-  const quiet = row.unblocks == null;
+  const quiet = row.quiet;
+  const frees = unblocksWords(row);
   return (
     <li
-      data-testid="v3-move-row"
+      data-testid={testId}
       data-decision={row.id}
       data-ask={row.text}
       className="border-t border-border px-3 py-2 first:border-t-0"
@@ -141,9 +178,18 @@ function Row({ row, primary }: { row: MoveRow; primary: boolean }) {
           title={open ? "Hide the ask" : "Show the ask in full"}
         >
           <span className="font-semibold text-foreground">{row.text}</span>
-          <span className="text-muted-foreground">
-            {quiet ? " · blocks nothing" : ` · unblocks ${row.unblocks}`}
-          </span>
+          {row.name && (
+            <span data-testid="v3-move-name" className="text-foreground">
+              {" "}
+              · {row.name}
+            </span>
+          )}
+          {frees && (
+            <span data-testid="v3-move-unblocks" className="text-muted-foreground">
+              {" "}
+              · {frees}
+            </span>
+          )}
         </button>
         <Answer row={row} primary={primary} onOpen={() => setOpen(true)} />
       </div>
@@ -177,7 +223,7 @@ export function YourMove({ view }: { view: MoveView }) {
       </h2>
       <ul role="list" className="overflow-hidden rounded-xl bg-card-solid ring-1 ring-border">
         {rows.map((row, i) => (
-          <Row key={row.id} row={row} primary={i === 0} />
+          <MoveRowItem key={row.id} row={row} primary={i === 0} />
         ))}
       </ul>
       {unseen > 0 && (

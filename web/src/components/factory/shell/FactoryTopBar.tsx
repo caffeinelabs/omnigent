@@ -13,6 +13,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CommandIcon,
+  EllipsisIcon,
   LayoutGridIcon,
   MessagesSquareIcon,
   MoonIcon,
@@ -228,6 +229,7 @@ function FactorySwitcher({
   snapshot,
   productName,
   compact,
+  shrink = false,
   onShare,
   onAddProject,
 }: {
@@ -235,6 +237,8 @@ function FactorySwitcher({
   /** The product the factory builds, from its product profile (absent until set). */
   productName: string | null;
   compact: boolean;
+  /** Its name gives way first (a phone's bar never scrolls sideways). */
+  shrink?: boolean;
   onShare: () => void;
   onAddProject: () => void;
 }) {
@@ -251,7 +255,8 @@ function FactorySwitcher({
           data-testid="cockpit-switcher"
           aria-label={`Factory ${factory.name}${productName ? `, building ${productName}` : ""}. Switch factory`}
           className={cn(
-            "inline-flex h-8 min-w-0 shrink-0 cursor-pointer items-center gap-2 rounded-md px-1.5 text-left hover:bg-muted",
+            "inline-flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 text-left hover:bg-muted",
+            shrink ? "shrink" : "shrink-0",
             FOCUS_RING,
           )}
         >
@@ -318,31 +323,61 @@ function YouMenu({
   userId,
   onClassic,
   onV2,
+  onPalette,
 }: {
   factoryId: string;
   userId: string | null;
   onClassic: () => void;
   onV2?: () => void;
+  /**
+   * Cockpit v3 on a phone: the bar keeps only the switcher, the verdict and
+   * the asks, so search, the theme and you fold into this one ⋯ menu.
+   */
+  onPalette?: () => void;
 }) {
   const navigate = useNavigate();
   const { setTheme } = useTheme();
   const mode = useResolvedThemeMode();
+  const folded = Boolean(onPalette);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-testid="cockpit-you"
-          aria-label={userId ? `You: ${userId}` : "You"}
-          className={cn(
-            "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-status-blue text-xs font-semibold text-white",
-            FOCUS_RING,
-          )}
-        >
-          {initialsOf(userId)}
-        </button>
+        {folded ? (
+          <button
+            type="button"
+            data-testid="cockpit-more"
+            aria-label="Search, theme and you"
+            className={cn(
+              "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground",
+              FOCUS_RING,
+            )}
+          >
+            <EllipsisIcon aria-hidden className="size-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="cockpit-you"
+            aria-label={userId ? `You: ${userId}` : "You"}
+            className={cn(
+              "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-status-blue text-xs font-semibold text-white",
+              FOCUS_RING,
+            )}
+          >
+            {initialsOf(userId)}
+          </button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-64">
+        {onPalette && (
+          <>
+            <DropdownMenuItem onSelect={onPalette} data-testid="cockpit-more-search">
+              <SearchIcon />
+              Search or run…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         {userId && <DropdownMenuLabel className="truncate">{userId}</DropdownMenuLabel>}
         <DropdownMenuItem
           onSelect={() => navigate(settingsPageHref(factoryId, "people"))}
@@ -456,6 +491,9 @@ export function FactoryTopBar({
   // Steer's grey count: proposals to change how the factory works (plans and
   // bets wait in Needs you); absent from older servers, so no count.
   const proposals = snapshot.counts?.definition_proposals_pending ?? 0;
+  // Cockpit v3 on a phone: the switcher, the verdict, the asks and one ⋯ menu
+  // (the chat is the bottom bar's), so the bar fits 390 px.
+  const folded = phone && Boolean(trees);
   return (
     <header
       data-testid="cockpit-topbar"
@@ -465,6 +503,7 @@ export function FactoryTopBar({
         snapshot={snapshot}
         productName={productName}
         compact={phone}
+        shrink={folded}
         onShare={onShare}
         onAddProject={onAddProject}
       />
@@ -522,58 +561,63 @@ export function FactoryTopBar({
           <span className="tabular-nums">{needsYou}</span> need you
         </button>
       )}
-      <button
-        type="button"
-        onClick={onPalette}
-        data-testid="cockpit-search"
-        aria-label="Search or run a command"
-        className={cn(
-          "inline-flex h-8 shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-muted/40 px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground",
-          phone
-            ? "w-8 justify-center border-0 bg-transparent px-0"
-            : "w-48 @max-[1020px]:w-8 @max-[1020px]:justify-center @max-[1020px]:px-0",
-          FOCUS_RING,
-        )}
-      >
-        <SearchIcon aria-hidden className="size-4 shrink-0" />
-        {!phone && (
-          <>
-            <span className="@max-[1020px]:hidden">Search or run…</span>
-            <kbd className="ml-auto inline-flex items-center gap-0.5 rounded-sm border border-border bg-background px-1 font-sans text-xs @max-[1020px]:hidden">
-              {mac ? <CommandIcon aria-hidden className="size-3" /> : "Ctrl "}K
-            </kbd>
-          </>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={onRoom}
-        data-testid="cockpit-room"
-        aria-label={`Room${mentions ? `, ${mentions} mention${mentions === 1 ? "" : "s"}` : ""}`}
-        className={cn(
-          "relative inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground",
-          FOCUS_RING,
-        )}
-      >
-        <MessagesSquareIcon aria-hidden className="size-4" />
-        {mentions > 0 && (
-          <span
-            data-testid="cockpit-room-count"
+      {!folded && (
+        <>
+          <button
+            type="button"
+            onClick={onPalette}
+            data-testid="cockpit-search"
+            aria-label="Search or run a command"
             className={cn(
-              "absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-xs font-semibold text-white tabular-nums",
-              "bg-status-blue",
+              "inline-flex h-8 shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-muted/40 px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground",
+              phone
+                ? "w-8 justify-center border-0 bg-transparent px-0"
+                : "w-48 @max-[1020px]:w-8 @max-[1020px]:justify-center @max-[1020px]:px-0",
+              FOCUS_RING,
             )}
           >
-            {mentions}
-          </span>
-        )}
-      </button>
-      <ThemeButton />
+            <SearchIcon aria-hidden className="size-4 shrink-0" />
+            {!phone && (
+              <>
+                <span className="@max-[1020px]:hidden">Search or run…</span>
+                <kbd className="ml-auto inline-flex items-center gap-0.5 rounded-sm border border-border bg-background px-1 font-sans text-xs @max-[1020px]:hidden">
+                  {mac ? <CommandIcon aria-hidden className="size-3" /> : "Ctrl "}K
+                </kbd>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onRoom}
+            data-testid="cockpit-room"
+            aria-label={`Room${mentions ? `, ${mentions} mention${mentions === 1 ? "" : "s"}` : ""}`}
+            className={cn(
+              "relative inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground",
+              FOCUS_RING,
+            )}
+          >
+            <MessagesSquareIcon aria-hidden className="size-4" />
+            {mentions > 0 && (
+              <span
+                data-testid="cockpit-room-count"
+                className={cn(
+                  "absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-xs font-semibold text-white tabular-nums",
+                  "bg-status-blue",
+                )}
+              >
+                {mentions}
+              </span>
+            )}
+          </button>
+        </>
+      )}
+      {!folded && <ThemeButton />}
       <YouMenu
         factoryId={fid}
         userId={snapshot.viewer?.user_id ?? null}
         onClassic={onClassic}
         onV2={onV2}
+        onPalette={folded ? onPalette : undefined}
       />
     </header>
   );

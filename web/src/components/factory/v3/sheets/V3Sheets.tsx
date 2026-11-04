@@ -1,6 +1,6 @@
 // Cockpit v3's sheets, opened by the address so a link opens the exact view:
-// `?peek=needs` (Needs you, ranked by what each ask holds, the asks that
-// block nothing grouped, the alarms the server closed with their causes),
+// `?peek=needs` (Needs you: every ask of a tree as Your move draws them,
+// ranked by what each one unblocks, and how many wait in the other tree),
 // `?peek=env` (the base env: what it runs, its health, how to sign in),
 // `?peek=try&at=<ref>` (what can be tried there: the passing steps by name,
 // the flag and the sign-in note) and `?peek=lineage&at=<ref>` (where a node
@@ -12,21 +12,20 @@ import { KeyboardHelp } from "../../cmdk/KeyboardHelp";
 import { type ReactNode, useCallback, useMemo } from "react";
 import { useFactoryNow } from "../../factoryClock";
 import { Peek } from "../../ui/Peek";
-import { useFactoryToast } from "../../ui/Toast";
 import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { DecisionButtons } from "../DecisionButtons";
 import { ago, envLines } from "../envWords";
-import { ClosedAlarmRows } from "../factory/FactoryAreas";
 import { LineageBody } from "../lenses/LensBodies";
 import { type NodeActions, NodeContextProvider, type SheetKind } from "../NodeContext";
 import { NodeLink } from "../nodeParts";
-import { useAnswerDecision, useNode } from "../nodeQueries";
-import { PRODUCT_REF } from "../nodeRoutes";
+import { useNode } from "../nodeQueries";
+import { FX_REF, PRODUCT_REF } from "../nodeRoutes";
 import { useNodeSource } from "../nodeSource";
 import { useAnswerAsk, useNeedsYou } from "../nodeSteer";
-import type { DecisionAction, DecisionRef, NeedsYouList, QuietAsk } from "../nodeTypes";
+import type { NeedsYouList } from "../nodeTypes";
 import { PreviewLines } from "../verbs/PreviewPanel";
+import { type MoveRow, askKeys, deriveMoves, moveView } from "../calm/calmModel";
+import { MoveRowItem } from "../calm/YourMove";
 
 /** The address of a sheet: `?peek=<sheet>` and, for Try it, `&at=<ref>`. */
 export const SHEET_PARAM = "peek";
@@ -116,184 +115,36 @@ function OutLink({
 
 // ── Needs you ──────────────────────────────────────────────────
 
-/** The deepest crumb every ask's breadcrumb shares (the node they all sit under). */
-function commonCrumb(asks: QuietAsk[]): { ref: string; title: string } | null {
-  const lists = asks.map((a) => a.breadcrumb ?? (a.node ? [{ ...a.node }] : []));
-  if (!lists.length || lists.some((l) => !l.length)) return null;
-  let at: { ref: string; title: string } | null = null;
-  for (let i = 0; i < Math.min(...lists.map((l) => l.length)); i += 1) {
-    const ref = lists[0]![i]!.ref;
-    if (!lists.every((l) => l[i]!.ref === ref)) break;
-    at = { ref, title: lists[0]![i]!.title };
-  }
-  return at;
-}
-
-function Crumbs({ crumbs }: { crumbs: { ref: string; title: string }[] }) {
-  return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
-      {crumbs.map((c, i) => (
-        <span key={c.ref} className="inline-flex min-w-0 items-center gap-1">
-          {i > 0 && <span aria-hidden>›</span>}
-          <NodeLink nodeRef={c.ref} className="underline-offset-2 hover:underline">
-            {c.title}
-          </NodeLink>
-        </span>
-      ))}
-    </span>
-  );
-}
-
-/** "D-49 · 18 min" (a grouped item has no id of its own; nothing when neither is known). */
-function meta(d: DecisionRef): string {
-  return [d.grouped ? null : d.id, d.age].filter(Boolean).join(" · ");
-}
-
-/** The asks that block nothing can be answered at once when each one's first answer is the same one. */
-function oneAnswer(quiet: QuietAsk[]): DecisionAction | null {
-  const first = quiet[0]?.actions[0];
-  if (quiet.length < 2 || !first) return null;
-  const same = quiet.every((a) => {
-    const act = a.actions[0];
-    return act && !a.external_url && (act.id === first.id || act.label === first.label);
-  });
-  return same ? first : null;
-}
-
+/**
+ * Every ask of a tree as Your move draws them (the root's rows, then the
+ * rest): short names, what each unblocks, one filled answer on the first row
+ * and outlined ones after. Closed alarms live under Factory › Health.
+ */
 function NeedsList({
+  rows,
   list,
   tree,
   onTree,
-  onAnswerAll,
 }: {
+  rows: MoveRow[];
   list: NeedsYouList;
   tree: string;
   onTree: (tree: string) => void;
-  /** Answer each ask with its own first answer (the same one for all: `oneAnswer`). */
-  onAnswerAll: (asks: QuietAsk[]) => void;
 }) {
-  const quiet = list.blocks_nothing;
-  const all = oneAnswer(quiet);
   const treeName = tree === "factory" ? "Factory" : "Product";
-  const nothing = !list.items.length && !quiet.length && !list.closed_alarms.length;
-  // The asks that block nothing are one group: where they sit in common, and each node once.
-  const common = useMemo(() => commonCrumb(quiet), [quiet]);
-  const nodes = useMemo(() => {
-    const out = new Map<string, string>();
-    for (const q of quiet) if (q.node) out.set(q.node.ref, q.node.title);
-    return [...out.entries()];
-  }, [quiet]);
   return (
     <div className="flex flex-col gap-3" data-testid="v3-needs-sheet">
-      {nothing && (
+      {!rows.length && (
         <p data-testid="v3-needs-nothing" className="text-[13.5px] text-muted-foreground">
           Nothing in {treeName} waits on you.
         </p>
       )}
-      {list.items.length > 0 && (
-        <ol className="flex flex-col">
-          {list.items.map((item, i) => {
-            const d = item.decision;
-            const at = item.breadcrumb.at(-1);
-            return (
-              <li
-                key={d.id}
-                data-testid="v3-needs-item"
-                data-decision={d.id}
-                className="flex flex-col gap-1 border-t border-border py-3 first:border-t-0 first:pt-0"
-              >
-                <div className="flex min-w-0 items-baseline gap-1.5">
-                  <span className="text-xs font-semibold text-foreground-tertiary">{i + 1}</span>
-                  <Crumbs crumbs={item.breadcrumb} />
-                </div>
-                <div className="text-[14px] font-semibold [overflow-wrap:anywhere]">
-                  {d.title ?? d.verb}
-                  {meta(d) && (
-                    <span className="font-normal text-foreground-tertiary"> · {meta(d)}</span>
-                  )}
-                </div>
-                <p className="text-[13px] text-muted-foreground">
-                  {d.text}{" "}
-                  {item.holds.length ? (
-                    <b className="font-semibold text-foreground">Holds {item.holds.join(", ")}.</b>
-                  ) : (
-                    "Holds nothing else."
-                  )}
-                </p>
-                <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                  <DecisionButtons decision={d} variant="card" />
-                  {at && (
-                    <NodeLink
-                      nodeRef={at.ref}
-                      className={cn(ACT, "border-dashed border-border-strong font-medium")}
-                    >
-                      Open {at.title}
-                    </NodeLink>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      {quiet.length > 0 && (
-        <section
-          data-testid="v3-needs-quiet"
-          className="flex flex-col gap-1 border-t border-border pt-3"
-        >
-          {common && <span className="text-xs text-muted-foreground">{common.title}</span>}
-          <div className="text-[13.5px] font-medium">
-            {quiet.length <= 3 ? quiet.map((a) => a.verb).join(" and ") : `${quiet.length} asks`}{" "}
-            <span className="text-foreground-tertiary">· {quiet.map((a) => a.id).join(", ")}</span>
-          </div>
-          <p className="text-[13px] text-muted-foreground">
-            These block nothing, so they never raise an alarm.
-          </p>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {all && (
-              <button
-                type="button"
-                data-testid="v3-needs-apply-all"
-                onClick={() => onAnswerAll(quiet)}
-                className={cn(ACT, "border-border-strong hover:border-status-blue")}
-              >
-                {all.label} all {quiet.length}
-              </button>
-            )}
-            {quiet.length === 1 && <DecisionButtons decision={quiet[0]!} variant="ghost" />}
-            {(common && nodes.length > 1 ? [[common.ref, common.title] as const] : nodes).map(
-              ([ref, title]) => (
-                <NodeLink
-                  key={ref}
-                  nodeRef={ref}
-                  className={cn(ACT, "border-dashed border-border-strong font-medium")}
-                >
-                  Open {title}
-                </NodeLink>
-              ),
-            )}
-          </div>
-        </section>
-      )}
-      {list.closed_alarms.length > 0 && (
-        <section
-          data-testid="v3-needs-closed"
-          className="flex flex-col gap-1.5 rounded-[10px] bg-muted/40 px-3 py-2.5 text-[13px]"
-        >
-          <b className="font-semibold">
-            {list.closed_alarms.length} alarm{list.closed_alarms.length > 1 ? "s" : ""} closed by
-            the server as noise, with their causes
-          </b>
-          <ClosedAlarmRows alarms={list.closed_alarms} />
-          <p className="text-xs text-foreground-tertiary">
-            An alarm reaches you only when its cause path ends at a person. Waits the factory heals
-            by itself live under{" "}
-            <NodeLink nodeRef="fx:health" className="text-status-blue-fg hover:underline">
-              Factory › Health
-            </NodeLink>
-            .
-          </p>
-        </section>
+      {rows.length > 0 && (
+        <ul role="list" className="overflow-hidden rounded-xl bg-card-solid ring-1 ring-border">
+          {rows.map((row, i) => (
+            <MoveRowItem key={row.id} row={row} primary={i === 0} testId="v3-needs-item" />
+          ))}
+        </ul>
       )}
       {list.other_tree > 0 && (
         <div>
@@ -311,6 +162,29 @@ function NeedsList({
   );
 }
 
+/** A tree's asks in Your move's order: its root's rows, then every other ask it holds. */
+function useSheetRows(
+  tree: string,
+  list: NeedsYouList | undefined,
+  open: boolean,
+  fid: string,
+): MoveRow[] | null {
+  const root = useNode(open ? (tree === "factory" ? FX_REF : PRODUCT_REF) : "", fid).data;
+  return useMemo(() => {
+    if (!list || !root) return null;
+    const shown = root.home ?? (root.children.level || null);
+    // Ranked as Needs you ranks them (by what each holds), the root's own ask not first.
+    const view = moveView(root, deriveMoves(root, list, shown, false), Infinity, list);
+    // The list's asks only, so the sheet counts what the top bar counts.
+    const listed = new Set(
+      [...list.items.map((i) => i.decision), ...list.blocks_nothing].flatMap(askKeys),
+    );
+    return [...view.rows, ...view.rest].filter((r) =>
+      askKeys(r.decision).some((k) => listed.has(k)),
+    );
+  }, [list, root]);
+}
+
 interface SheetProps {
   factoryId: string;
   open: boolean;
@@ -322,35 +196,14 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
   const { state } = useLocation();
   const tree = params.get(SHEET_TREE_PARAM) ?? "product";
   const query = useNeedsYou(tree, open, fid);
-  const toast = useFactoryToast();
   const source = useNodeSource();
-  const { mutateAsync } = useAnswerDecision(fid);
   const sample = source?.kind === "sample";
   // An answer that applied a proposal offers its Undo in the toast.
   const onAnswer = useAnswerAsk(null, { sample, factoryId: fid });
-  /** Every quiet ask with its own first answer, at once; one toast says how it went. */
-  const onAnswerAll = useCallback(
-    (asks: QuietAsk[]) => {
-      const label = asks[0]?.actions[0]?.label ?? "";
-      void Promise.allSettled(
-        asks.map((a) => mutateAsync({ decision: a, action: a.actions[0]! })),
-      ).then((results) => {
-        const done = asks.filter((_, i) => results[i]!.status === "fulfilled").map((a) => a.id);
-        const failed = results.flatMap((r, i) =>
-          r.status === "rejected"
-            ? [`${asks[i]!.id} was not answered: ${errorWords(r.reason)}`]
-            : [],
-        );
-        const said = done.length
-          ? `${label}: ${done.join(", ")}.${sample ? " Sample data: it changes only the sample." : ""}`
-          : null;
-        toast.show({ message: [said, ...failed].filter(Boolean).join(" ") });
-      });
-    },
-    [mutateAsync, sample, toast],
-  );
   const list = query.data;
-  const count = list ? list.items.length + list.blocks_nothing.length : null;
+  const rows = useSheetRows(tree, list, open, fid);
+  const here = rows?.length ?? null;
+  const count = here == null || !list ? null : here + list.other_tree;
   const treeName = tree === "factory" ? "Factory" : "Product";
   return (
     <Peek
@@ -365,15 +218,15 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
             : `${count} need${count === 1 ? "s" : ""} you`
       }
       description={
-        count === 0 ? `in ${treeName}` : `in ${treeName} · ranked by what each one holds`
+        !here ? `in ${treeName}` : `${here} in ${treeName}, ranked by what each one unblocks`
       }
     >
-      {list ? (
+      {list && rows ? (
         <NodeContextProvider value={{ factoryId: fid, onAnswer }}>
           <NeedsList
+            rows={rows}
             list={list}
             tree={tree}
-            onAnswerAll={onAnswerAll}
             onTree={(next) =>
               setParams(
                 (prev) => {
