@@ -641,7 +641,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
         data-testid="v3-chat-via"
         className="mb-2 shrink-0 rounded-lg bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground"
       >
-        This {level} has no thread of its own: this is {aboutCode(node)}’s thread.
+        This {level} has no thread of its own: this is {nodeName(node)}’s thread.
       </p>
     ) : null;
 
@@ -803,10 +803,6 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
 }
 
 /** "T-16" for a code ref, else the title. */
-function aboutCode(node: NodePage["node"]): string {
-  return /^[A-Z]{1,3}-\d+$/.test(node.ref) ? node.ref : node.title;
-}
-
 /** Beside the page: sticky under the strip, as tall as the window, its left edge dragged to resize. */
 function ChatColumn({ here, children }: { here: NodePage; children: ReactNode }) {
   const ref = useRef<HTMLElement>(null);

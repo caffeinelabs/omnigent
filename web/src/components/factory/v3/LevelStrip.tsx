@@ -1,7 +1,7 @@
 // The big picture in one row: the node's ancestors (a state dot and a title;
 // implicit ones folded into their only child in italics), the node itself,
-// then each level below it with a count, "+n later", "n you" (the asks Your
-// move ranks under that level) and a state bar, and the results once
+// then each level below it with a count, "+n later", "n you" on the first (the
+// asks Your move ranks under it) and a state bar, and the results once
 // something merged. Levels with no node are left out, and no cell ever says 0
 // or "nothing yet". On a phone: "‹ parent" and a row of level cells that scrolls
 // sideways inside itself. Below 1024 px the ancestors between the root and
@@ -36,6 +36,7 @@ function Chev() {
 /**
  * Levels that hold something: an empty level is left out, never shown as 0. A
  * debug level (Runs) shows only within two levels of the node, where debugging is.
+ * Only the first level says "n you": the same asks pass every level below it.
  */
 export function heldLevels(
   below: LevelCount[],
@@ -43,7 +44,7 @@ export function heldLevels(
 ): LevelCount[] {
   return below
     .filter((c, i) => c.count + c.later > 0 && (!c.debug || i < 2))
-    .map((c) => (you ? { ...c, needs: you.get(c.level) ?? 0 } : c));
+    .map((c, i) => ({ ...c, needs: i ? 0 : you ? (you.get(c.level) ?? 0) : c.needs }));
 }
 
 /** "4 +4 later 2 you": what a level holds, never a bare zero. */

@@ -340,7 +340,7 @@ describe("cockpit v3 · the node chat column", () => {
     renderChat("run:luz-t16", { install });
     await threadOf("project:assistant-core");
     expect(await screen.findByTestId("v3-chat-via")).toHaveTextContent(
-      "This run has no thread of its own: this is T-16’s thread.",
+      "This run has no thread of its own: this is Debit each turn’s thread.",
     );
     expect(screen.getByTestId("v3-chat-title")).toHaveTextContent("Chat · Debit each turn");
   });

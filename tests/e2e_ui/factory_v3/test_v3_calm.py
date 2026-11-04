@@ -10,7 +10,7 @@ Checked in the browser on Home, the feature, the project and the task, at
 - a default page opens with Your move and says little: about 120 words
   outside the chat, every title six words or fewer and never a slug;
 - Your move names what each ask unblocks as the rows do ("this task and
-  Assistant panel ux"), never by slug or id, and says "blocks nothing" only
+  Assistant panel UX"), never by slug or id, and says "blocks nothing" only
   of an ask that holds nothing;
 - each ask shows once, with one answer button (Your move's), never in a
   banner, a child's line or a chat card;

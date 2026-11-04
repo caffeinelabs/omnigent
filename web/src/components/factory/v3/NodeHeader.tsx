@@ -16,7 +16,7 @@ import { useLensSupport } from "./lenses/lensQueries";
 import { ChipList } from "./LinkChip";
 import { useNodeActions } from "./NodeContext";
 import { NodeContent } from "./NodeContent";
-import { Avatar, Glyph, NodeLink, Ring, StateDot, money, sinceWhen } from "./nodeParts";
+import { Avatar, Glyph, NodeLink, Ring, StateDot, hasRing, money, sinceWhen } from "./nodeParts";
 import { useNodeUndo } from "./nodeSteer";
 import type { NodePage, Rollup, RollupCount } from "./nodeTypes";
 import { levelName } from "./nodeWire";
@@ -190,7 +190,7 @@ export function RollupLine({ page }: { page: NodePage }) {
       data-testid="v3-rollup"
       className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground"
     >
-      {p && !isRoot && <Ring progress={p} size={28} />}
+      {hasRing(p) && !isRoot && <Ring progress={p} size={28} />}
       {parts.map((part, i) => (
         // The separator ends its part, so a wrapped line never starts with "·".
         <span key={part.id} className="inline-flex max-w-full min-w-0 items-center gap-2">
@@ -310,7 +310,7 @@ export function NodeDetails({
 function Mark({ page }: { page: NodePage }) {
   const { node } = page;
   if (!page.breadcrumb.length) return null;
-  if (node.progress && !node.implicit) return <Ring progress={node.progress} size={30} />;
+  if (hasRing(node.progress) && !node.implicit) return <Ring progress={node.progress} size={30} />;
   if (node.glyph && (node.implicit || node.kind === "study")) {
     return <Glyph glyph={node.glyph} dashed />;
   }

@@ -7,7 +7,8 @@
 import { createContext, useContext } from "react";
 import { cn } from "@/lib/utils";
 import { type Phrase, childPhrase, fullTitle, nameUnder } from "./calm/calmModel";
-import { Glyph, NodeLink, Ring, StateBar, StateDot } from "./nodeParts";
+import { useNodeActions } from "./NodeContext";
+import { Glyph, NodeLink, Ring, StateBar, StateDot, hasRing } from "./nodeParts";
 import { AMBER, STATE_ORDER } from "./nodeTokens";
 import type { NodeState, NodeSummary } from "./nodeTypes";
 
@@ -67,7 +68,7 @@ function Mark({ node, size }: { node: NodeSummary; size: number }) {
       </span>
     );
   }
-  if (node.progress && node.state !== "ghost") {
+  if (hasRing(node.progress) && node.state !== "ghost") {
     return <Ring progress={node.progress} size={size} bare={size < 26} />;
   }
   if (node.glyph && size >= 26 && (node.kind === "study" || node.implicit)) {
@@ -137,7 +138,7 @@ export function NodeTile({
   compact?: boolean;
   overlays?: Overlays;
 }) {
-  const phrase = childPhrase(node);
+  const phrase = childPhrase(node, useNodeActions().aboveId);
   const ghost = node.state === "ghost";
   const name = nameUnder(node, useContext(ParentNameContext));
   return (
@@ -186,7 +187,7 @@ export function NodeRow({
   /** Kept for callers; a row shows no owner (that is a detail). */
   owner?: boolean;
 }) {
-  const phrase = childPhrase(node);
+  const phrase = childPhrase(node, useNodeActions().aboveId);
   const name = nameUnder(node, useContext(ParentNameContext));
   return (
     <li

@@ -109,7 +109,8 @@ describe("cockpit v3 · since last look (W10)", () => {
       </MemoryRouter>,
     );
     expect(screen.queryByTestId("v3-row-since")).toBeNull();
-    expect(screen.getByTestId("v3-row")).toHaveTextContent(/^Debit each turnHeld for C-16$/);
+    // Held by an ask this page does not show: no id in the row.
+    expect(screen.getByTestId("v3-row")).toHaveTextContent(/^Debit each turnHeld for an ask$/);
   });
 });
 

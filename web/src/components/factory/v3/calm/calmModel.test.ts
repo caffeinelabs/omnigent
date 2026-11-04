@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { DecisionRef, NeedsYouList, NodePage, NodeSummary, StatusLine } from "../nodeTypes";
 import { normalizeNeedsYou, normalizeYourMove } from "../nodeWire";
 import { sampleEngine } from "../fixture/sampleNodeSource";
+import { heldLevels } from "../LevelStrip";
+import { hasRing } from "../nodeParts";
 import {
   askName,
   askerName,
@@ -121,6 +123,21 @@ describe("calm · one phrase per child", () => {
     expect(childPhrase(child("notstarted", { label: "Not started:" }))).toEqual({
       text: "Not started",
     });
+  });
+
+  it("points at the ask above instead of naming its id", () => {
+    const held = child("waiting", {
+      label: "Held for C-16:",
+      ends: "person",
+      decision: ask("D-45", "Apply C-16", { subject: "C-16" }),
+    });
+    expect(childPhrase(held, new Set(["D-45"]))).toEqual({
+      text: "Held for the ask above",
+      tone: "you",
+    });
+    // Not on this page: still no id.
+    expect(childPhrase(held, new Set())).toEqual({ text: "Held for an ask" });
+    expect(childPhrase(held)?.text).not.toMatch(/C-16/);
   });
 });
 
@@ -244,6 +261,14 @@ describe("calm · Your move", () => {
     )!;
     const view = moveView({ ...task, your_move: given }, [], 3, needs);
     expect(view.rows[0]!.unblocks).toBe("this task and Assistant panel ux");
+    // A node the page does not list takes the server's spelling of its name.
+    const spelled = normalizeYourMove(
+      { items: [{ ...given.items[0]!, unblocks: "Debit each turn and Assistant panel UX" }] },
+      status,
+    )!;
+    expect(moveView({ ...task, your_move: spelled }, [], 3, needs).rows[0]!.unblocks).toBe(
+      "this task and Assistant panel UX",
+    );
     // On the panel's page it is "this project"; a node the page knows only by its code is "+1".
     const panel = engine.node("assistant-panel-ux") as NodePage;
     const fromPanel = moveView({ ...panel, your_move: given }, [], 3, needs);
@@ -339,5 +364,32 @@ describe("calm · Your move", () => {
     );
     expect(view.rows).toEqual([]);
     expect(view.more).toBe(0);
+  });
+});
+
+describe("calm · one count, one mark", () => {
+  it("says “n you” on the first level below only: the same asks pass every level", () => {
+    const level = (key: string, needs: number) => ({
+      level: key,
+      name: key,
+      count: 2,
+      later: 0,
+      needs,
+      by_state: {},
+    });
+    const below = [level("feature", 5), level("project", 5), level("task", 5)];
+    expect(heldLevels(below).map((c) => c.needs)).toEqual([5, 0, 0]);
+    const you = new Map([
+      ["feature", 4],
+      ["project", 4],
+      ["task", 3],
+    ]);
+    expect(heldLevels(below, you).map((c) => c.needs)).toEqual([4, 0, 0]);
+  });
+
+  it("draws no ring for a node with nothing planned: its state dot says it", () => {
+    expect(hasRing({ value: 0, label: "–", what: "not planned", growing: true })).toBe(false);
+    expect(hasRing({ value: 0.5, label: "1/2", what: "tasks" })).toBe(true);
+    expect(hasRing(null)).toBe(false);
   });
 });

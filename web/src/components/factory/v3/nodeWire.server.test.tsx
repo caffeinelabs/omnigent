@@ -87,7 +87,8 @@ describe("cockpit v3 · the server's node pages", () => {
 
   it("reads the server's status lines the way the header and the tiles show them", () => {
     const page = (ref: string) => normalizeNodePage(PAGES[ref]!);
-    const held = "T-16 → held for C-16 → needs you: Apply C-16 (D-45)";
+    // The server marks the ask its Your move shows: the path points up at it.
+    const held = "T-16 → held for C-16 → your move, above";
     expect(statusText(page("assistant-core").status)).toBe(`Not moving: ${held}`);
     expect(statusText(page("assistant-panel-ux").status)).toBe(
       `Not started for 7 h: waits on Assistant core › ${held}`,

@@ -3,6 +3,7 @@
 // it sends one, else derived from the status line and Needs you).
 
 import { levelName } from "../nodeWire";
+import { type Above, endsAbove } from "../statusModel";
 import type {
   Crumb,
   DecisionAction,
@@ -175,8 +176,15 @@ function firstHop(line: StatusLine): string | null {
   return null;
 }
 
-/** "Waits on assistant-core", "Held for C-16", "Needs you", or null (moving, done, nothing to say). */
-export function childPhrase(node: NodeSummary): Phrase | null {
+/** A record's code in a phrase ("Held for C-16"): a phrase never shows one. */
+const CODE_IN = /(?:^|\s)(?:[A-Z]{1,3}-\d+|#\d+)(?=$|[\s,.:;])/;
+
+/**
+ * "Waits on Assistant core", "Held for the ask above", "Needs you", or null
+ * (moving, done, nothing to say). `above`: the asks the page's Your move
+ * shows; a child held by one of them points up at it and names no id.
+ */
+export function childPhrase(node: NodeSummary, above?: Above): Phrase | null {
   const line = node.status_compact;
   switch (node.state) {
     case "moving":
@@ -201,7 +209,15 @@ export function childPhrase(node: NodeSummary): Phrase | null {
   const hop = firstHop(line);
   if (hop && /^(waits on|held for)$/i.test(label)) return { text: `${label} ${hop}` };
   if (/^(waiting|not moving|top blocker)$/i.test(label) && hop) return { text: `Waits on ${hop}` };
+  // Held by the ask itself (no node between), and Your move shows it.
+  if (!hop && line.ends === "person" && endsAbove(line, above)) {
+    return { text: "Held for the ask above", tone: "you" };
+  }
   if (!label) return node.state === "broken" ? { text: "Broken" } : null;
+  // An ask known only by its id ("Held for C-16") reads as what it is.
+  if (CODE_IN.test(label)) {
+    return { text: line.ends === "person" ? "Held for an ask" : "Waiting" };
+  }
   return { text: shortTitle(label, 4) };
 }
 
@@ -345,6 +361,8 @@ export function unblocksNames(
   refs: readonly string[],
   page: NodePage,
   names: Map<string, string>,
+  /** The server's words for them: a slug read as words takes their spelling ("Assistant panel UX"). */
+  spelled?: string | null,
 ): { text: string; complete: boolean } | null {
   const own = page.node ? [page.node.ref, page.node.tag].filter(Boolean) : [];
   const said: string[] = [];
@@ -352,14 +370,24 @@ export function unblocksNames(
   for (const ref of refs) {
     const name = own.includes(ref)
       ? thisNode(page)
-      : (names.get(ref) ?? (SLUG.test(ref) ? shortTitle(ref) : null));
+      : (names.get(ref) ?? (SLUG.test(ref) ? spelledAs(shortTitle(ref), spelled) : null));
     if (!name) unnamed += 1;
     else if (!said.includes(name)) said.push(name);
   }
-  // The page's own node goes first ("this task and Assistant panel ux").
+  // The page's own node goes first ("this task and Assistant panel UX").
   said.sort((a, b) => Number(b.startsWith("this ")) - Number(a.startsWith("this ")));
   const text = joinNames(said, unnamed);
   return text ? { text, complete: unnamed === 0 } : null;
+}
+
+/** `name` as `text` spells it, when `text` holds it as whole words ("Assistant panel ux" → "… UX"). */
+function spelledAs(name: string, text: string | null | undefined): string {
+  if (!text) return name;
+  const at = text.toLowerCase().indexOf(name.toLowerCase());
+  if (at < 0) return name;
+  const end = at + name.length;
+  const edge = (c: string | undefined) => !c || !/[\p{L}\p{N}-]/u.test(c);
+  return edge(text[at - 1]) && edge(text[end]) ? text.slice(at, end) : name;
 }
 
 /** A bare id ("T-16", "PR-9856", "#9856"): never what "unblocks" says. */
@@ -487,7 +515,7 @@ function itemRow(item: YourMoveItem, page: NodePage, names: Map<string, string>)
   const quiet = item.blocks_nothing === true || item.decision.blocks_nothing === true;
   const refs = item.unblocks_refs ?? (item.unblocks_ref ? [item.unblocks_ref] : []);
   // Named as the page names them (the server's words are the fallback); a slug never shows.
-  const named = !quiet && refs.length ? unblocksNames(refs, page, names) : null;
+  const named = !quiet && refs.length ? unblocksNames(refs, page, names, item.unblocks) : null;
   // The server's words when they hold no id and no slug (a newer server names the nodes).
   const given =
     item.unblocks && !BARE_REF.test(item.unblocks) && slugWords(item.unblocks) === item.unblocks

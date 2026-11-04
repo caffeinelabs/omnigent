@@ -34,6 +34,11 @@ export function StateDot({ state, className }: { state: NodeState; className?: s
   );
 }
 
+/** Whether a node's progress draws a ring: nothing planned yet draws its state dot instead. */
+export function hasRing(progress: Progress | null | undefined): progress is Progress {
+  return Boolean(progress) && progress!.what !== "not planned";
+}
+
 /** A progress ring (circles only): the value, a dashed tail while the plan grows, an inner build ring. */
 export function Ring({
   progress,
