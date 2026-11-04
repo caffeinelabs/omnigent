@@ -85,10 +85,15 @@ class Cockpit:
     factory: Seeded
     errors: list[str] = field(default_factory=list)
 
-    def open(self, ref: str) -> None:
-        """Open node *ref* in cockpit v3 and wait until its page has read everything."""
+    def open(self, ref: str, level: str | None = None) -> None:
+        """Open node *ref* (or one *level* under it) in cockpit v3 and wait for its page."""
         path = f"/factory/{self.factory.fid}"
-        self.page.goto(f"{path}?cockpit=v3" if ref == "product" else f"{path}/n/{ref}?cockpit=v3")
+        if level:
+            self.page.goto(f"{path}/n/{ref}/{level}?cockpit=v3")
+        elif ref == "product":
+            self.page.goto(f"{path}?cockpit=v3")
+        else:
+            self.page.goto(f"{path}/n/{ref}?cockpit=v3")
         self.wait_for(ref)
 
     def wait_for(self, ref: str) -> None:

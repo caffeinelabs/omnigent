@@ -384,10 +384,31 @@ class Paths:
         mine = self.own_ask(node)
         if mine is not None:
             return Path((Step("→", ask=mine),), "person", mine)
-        for found in (own, merge, down, self._start_path(node)):
+        for found in (own, merge, down, self._start_path(node), self._idle_path(node)):
             if found is not None:
                 return found
         return Path(end=state, at=node.ref)
+
+    def _idle_path(self, node: _N) -> Path | None:
+        """
+        With nothing blocked under it, step down to the child that has not
+        started, so the line still ends at who starts it ("Not started: T-16 →
+        waits for Juno to start it"), not at a bare "Not started".
+        """
+        t = self.tree
+        best: tuple[int, ...] | None = None
+        found: Path | None = None
+        for index, kid in enumerate(t.shown_children(node.ref)):
+            if kid.ghost or kid.later or kid.level == "run" or t.state(kid.ref) != "notstarted":
+                continue
+            sub = self.path(kid.ref)
+            if not sub.steps or sub.end == "cycle":
+                continue
+            key = (len(t.dependents_of(kid.ref)), -(kid.col or 0), -index)
+            if best is None or key > best:
+                best = key
+                found = Path((Step("›", ref=kid.ref), *sub.steps), sub.end, sub.ask, sub.at)
+        return found
 
     def _own_path(self, node: _N) -> Path | None:
         """The path of the node's first own wait, when it ends or hops somewhere."""
@@ -408,13 +429,17 @@ class Paths:
         it: the snapshot's ``start`` (the server's next pass, Atlas, a starting
         sandbox), else who its charter says spawns its lead; so does the base
         env's setup project. A task its project's lead has not started yet
-        ends at that lead.
+        ends at that lead; in a project nobody has started, at who starts that.
         """
         t = self.tree
         if node.level == "task" and node.own == "notstarted" and not node.history:
             project = t.nodes.get(node.parent or "")
-            lead = (project.owner if project is not None else None) or "its lead"
-            label = f"waits for {lead} to start it"
+            lead = project.owner if project is not None else None
+            starts = self._start_path(project) if project is not None and not lead else None
+            if project is not None and starts is not None:
+                hop = Step("→", label="waits on", ref=project.ref)
+                return Path((hop, *starts.steps), starts.end, at=project.ref)
+            label = f"waits for {lead or 'its lead'} to start it"
             step = Step("→", label=clip(label, _LABEL_MAX), why=f"Nothing holds it: {label}.")
             return Path((step,), "other", at=node.ref)
         if not _started_like_a_project(node) or node.own != "notstarted":
@@ -833,8 +858,15 @@ class Paths:
             label = "Waiting:"
             if since and not first.ref and not first.hold:
                 label = "Not started:" if compact else f"Not started for {since}:"
-            elif node.level == "task" and t.state(node.ref) == "notstarted" and not first.hold:
+            elif (
+                t.state(node.ref) == "notstarted"
+                and not first.hold
+                and (node.level == "task" or first.sep == "›")
+            ):
                 label = "Not started:"
+                # The label says it already; "· not started" would repeat it.
+                if tail == _STATE_WORDS["notstarted"]:
+                    tail = None
             out = {
                 "kind": "waiting",
                 "label": label,

@@ -1025,7 +1025,10 @@ holds ends at who starts it (the snapshot's `start`: "the server starts it
 within a minute", "waits for Atlas to start it", "starting: pulling the
 image", or the capacity wait with how full the machines are); so does the
 base env's setup project in the factory tree, and a task nothing holds ends
-at its project's lead ("Not started: waits for Juno to start it"). It stops at a
+at its project's lead ("Not started: waits for Juno to start it"), or at who
+starts the project while nobody has. A node with nothing blocked under it and
+work not started steps down to that work ("Not started: T-16 → waits for Juno
+to start it"), never a bare "Not started". It stops at a
 cycle, a person or the server; a line shows at most 6 segments, keeping the
 first steps, an elision (`…`) and the end, so the person and their ask stay.
 Ready PRs a person merges into one base are one ask (`merge:<base>`,

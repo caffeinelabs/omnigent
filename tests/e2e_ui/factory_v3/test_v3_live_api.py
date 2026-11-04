@@ -6,12 +6,14 @@ person's ask planned as the feature I-1, ``assistant-core`` holding T-16 for
 C-16, which waits on a person to apply it (D-45). Checked in the browser, at
 1440 and 390 wide, light and dark:
 
-- Home, the feature, the project and the task render from the server with no
-  console error, no line drawn between nodes and no "0" or "none" cell;
+- Home, the feature, the project and the task, and the level views the strip
+  links to, render from the server with no console error, no line drawn
+  between nodes and no "0" or "none" cell;
 - each status line ends at the person who must act ("needs you: Apply C-16
   (D-45)"), with the answer on it;
 - Apply on the status line answers through ``POST /decisions/{id}/answer``
-  and the page reads again: the line no longer ends at D-45;
+  and the page reads again: the line no longer ends at D-45 but at the lead
+  who starts T-16, and Home's at the merges;
 - the chat column posts in the thread of the node it is on;
 - the keyboard walks from Home down to the task and back.
 """
@@ -30,6 +32,8 @@ from tests.e2e_ui.factory_v3.seed import Seeded
 
 PAGES = ("product", "I-1", "assistant-core", "T-16")
 """Home, the feature, the project and the task."""
+LEVEL_PAGES = (("product", "project"), ("product", "task"), ("I-1", "task"))
+"""Level views the strip links to (``/n/<ref>/<level>``)."""
 
 # What the node page shows outside its chat column (the Room's own cards stay as they are).
 _BODY_CHECKS = """(node) => {
@@ -103,6 +107,18 @@ def test_home_feature_project_and_task_render_the_servers_nodes(
         assert found["cells"] == [], (ref, width, theme, found["cells"])
         assert found["overflow"] <= 0, (ref, width, theme, found["overflow"])
 
+    # One level under a node (the strip's cells): grouped under parents, never joined by lines.
+    for ref, level in LEVEL_PAGES:
+        cockpit.open(ref, level)
+        node = _node(page, ref)
+        view = node.get_by_test_id("v3-level-view")
+        expect(view).to_be_visible(timeout=LOAD_MS)
+        expect(view.get_by_test_id("v3-group").first).to_be_visible()
+        found = node.evaluate(_BODY_CHECKS)
+        assert found["lines"] == [], (ref, level, width, theme, found["lines"])
+        assert found["cells"] == [], (ref, level, width, theme, found["cells"])
+        assert found["overflow"] <= 0, (ref, level, width, theme, found["overflow"])
+
     assert cockpit.errors == [], cockpit.errors
 
 
@@ -125,16 +141,26 @@ def test_apply_on_the_status_line_answers_through_the_server(
 
     assert answered.value.status == 200, answered.value.text()
     expect(page.get_by_text(f"{factory.apply_decision}: Apply")).to_be_visible()
-    # The page reads again: the hold is gone, so the line no longer ends at D-45.
+    # The page reads again: the hold is gone, so the line no longer ends at D-45,
+    # and it still says who acts next: the lead who starts T-16.
     expect(status).not_to_contain_text(factory.apply_decision, timeout=LOAD_MS)
     expect(status).not_to_have_attribute("data-kind", "needs")
+    expect(status).to_have_attribute(
+        "aria-label",
+        re.compile(rf"^Not started: {factory.held_task} → waits for \S.* to start it$"),
+    )
     after = _api_page(v3_server, factory, factory.project)
     assert after["status"].get("decision") is None
     assert after["node"]["needs"]["blocking"] == 0
-    # The task held for it now says who starts it.
+    # The task held for it, and the project waiting on it, end at that lead too.
     task = _api_page(v3_server, factory, factory.held_task)
     assert task["status"]["label"] == "Not started:", task["status"]
     assert "to start it" in task["status"]["segments"][-1]["label"]
+    panel = _api_page(v3_server, factory, "assistant-panel-ux")["status"]
+    assert panel["segments"][-1]["label"].endswith("to start it"), panel
+    # Home's top blocker moves on to the merges a person makes.
+    home = _api_page(v3_server, factory, "product")["status"]
+    assert home["ends"] == "person" and home["decision"]["id"].startswith("merge:"), home
     assert cockpit.errors == [], cockpit.errors
 
 

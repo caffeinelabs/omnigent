@@ -260,6 +260,55 @@ def test_a_task_nothing_holds_ends_at_the_lead_who_starts_it() -> None:
     assert line["ends"] == "other"
     assert line["why"][-1]["html"] == "Nothing holds it: waits for Juno to start it."
 
+    # Its project and what waits on it end at the same lead, not at a bare "Not started".
+    core = _page(tree, "assistant-core")["status"]
+    panel = _page(tree, "assistant-panel-ux")["status"]
+    assert full(core) == "Not started: T-16 → waits for Juno to start it"
+    assert core["ends"] == "other" and "detail" not in core
+    assert full(panel) == (
+        "Waiting: waits on assistant-core › T-16 → waits for Juno to start it · not started"
+    )
+    assert panel["ends"] == "other"
+    tile = _kid(_page(tree, "I-1"), "assistant-core")["status_compact"]
+    assert tile["label"] == "Not started:" and tile["segments"][-1]["label"].endswith("start it")
+
+
+def test_a_task_in_a_project_nobody_started_ends_at_who_starts_the_project() -> None:
+    facts = factory_1340()
+    facts.projects = [
+        dataclasses.replace(p, stage="queued", pl_session_id=None)
+        if p.slug == "build-tier-drafts-3"
+        else p
+        for p in facts.projects
+    ]
+    view = {k: v for k, v in facts.views["build-tier-drafts-3"].items() if k != "pl"}
+    facts.views = {**facts.views, "build-tier-drafts-3": {**view, "stage": "queued"}}
+    facts.prs = [p for p in facts.prs if p.project_slug != "build-tier-drafts-3"]
+    facts.tasks = [
+        *facts.tasks,
+        FactoryTask(
+            id=hex_id(299),
+            factory_id=FID,
+            number=19,
+            project_slug="build-tier-drafts-3",
+            key="drafts",
+            title="Draft the tiers",
+            state="ready",
+            estimate_min=60,
+            created_at=NOW - 3600,
+            updated_at=NOW - 3600,
+        ),
+    ]
+    tree = build(facts)
+
+    project = _page(tree, "build-tier-drafts-3")["status"]
+    task = _page(tree, "T-19")["status"]
+
+    starts = project["segments"][-1]["label"]
+    assert starts.startswith("waits for") and "its lead" not in full(task)
+    assert full(task) == f"Not started: waits on build-tier-drafts-3 → {starts}"
+    assert task["ends"] == project["ends"]
+
 
 def test_the_base_envs_setup_project_says_who_starts_it() -> None:
     facts = factory_1340()
