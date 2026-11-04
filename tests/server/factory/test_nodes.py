@@ -450,6 +450,14 @@ def test_the_factory_tree(tree: Tree) -> None:
         assert _page(tree, area["ref"])["node"]["why_html"], area["ref"]
 
 
+def test_a_team_with_nobody_running_says_so_without_a_zero() -> None:
+    facts = factory_1340()
+    facts.members = [{**m, "running": False} for m in facts.members]
+    tree = assert_levels(Tree(facts))
+
+    assert _page(tree, "fx:team")["node"]["short"] == f"{len(facts.members)} members · all idle"
+
+
 def test_the_team_draws_working_agents_and_counts_idle_ones(tree: Tree) -> None:
     team = _page(tree, "fx:team")
 

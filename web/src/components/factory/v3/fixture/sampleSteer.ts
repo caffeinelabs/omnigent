@@ -56,6 +56,15 @@ function text(value: VerbRequest["args"][string]): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** What a new child waits on: the first ref of `depends_on`, and its reason from `depends_why`. */
+function dependsOn(args: VerbRequest["args"]): { ref: string; why: string } {
+  const list = args.depends_on;
+  const ref = Array.isArray(list) ? (list[0] ?? "").trim() : text(list);
+  const why = args.depends_why;
+  const reason = why && typeof why === "object" && !Array.isArray(why) ? why[ref] : undefined;
+  return { ref, why: typeof reason === "string" ? reason.trim() : "" };
+}
+
 /** A sample engine that also previews and applies verbs, ranks asks, finds nodes and keeps marks. */
 export class SampleSteerEngine extends SampleLensEngine {
   private undos = new Map<string, string>();
@@ -350,8 +359,9 @@ export class SampleSteerEngine extends SampleLensEngine {
         const held = this.heldMatch(n, title);
         const laterNow = this.kids(n.id).filter((k) => k.state === "later").length;
         const who = this.responder(n) ?? "Atlas";
-        const dep = this.N(text(request.args.depends_on));
-        const because = text(request.args.because);
+        const wanted = dependsOn(request.args);
+        const dep = this.N(wanted.ref);
+        const because = wanted.why;
         const progress =
           n.lvl === "feature"
             ? `build progress gets one more unplanned ${noun} (its ring has a dashed tail until its lead plans it).`
@@ -674,17 +684,18 @@ export class SampleSteerEngine extends SampleLensEngine {
 
   // ── Apply and Undo ───────────────────────────────────────────
 
+  private snapshot(): string {
+    return JSON.stringify({
+      nodes: this.data.nodes,
+      decisions: this.data.decisions,
+      trees: this.data.trees,
+    });
+  }
+
   private save(): string {
     this.seq += 1;
     const token = `u-${this.seq}`;
-    this.undos.set(
-      token,
-      JSON.stringify({
-        nodes: this.data.nodes,
-        decisions: this.data.decisions,
-        trees: this.data.trees,
-      }),
-    );
+    this.undos.set(token, this.snapshot());
     return token;
   }
 
@@ -709,10 +720,8 @@ export class SampleSteerEngine extends SampleLensEngine {
         }
         const to = colArg(request.args.col) ?? 0;
         const held = this.heldMatch(n, title);
-        const dep = text(request.args.depends_on);
-        const waits: RawWait[] = dep
-          ? [{ kind: "dep", to: dep, why: text(request.args.because) || undefined }]
-          : [];
+        const { ref: dep, why } = dependsOn(request.args);
+        const waits: RawWait[] = dep ? [{ kind: "dep", to: dep, why: why || undefined }] : [];
         const L = this.levels(n.tree)[this.lvlIdx(n) + 1]!;
         if (held && to !== "later") {
           Object.assign(held, {
@@ -827,6 +836,19 @@ export class SampleSteerEngine extends SampleLensEngine {
       ...(filed ? { filed } : {}),
       message,
     };
+  }
+
+  /** Answer a decision, keeping the factory as it was so the answer can be taken back. */
+  override answer(decisionId: string, actionLabel: string): boolean {
+    const before = this.snapshot();
+    const done = super.answer(decisionId, actionLabel);
+    if (done) this.undos.set(`answer:${decisionId}`, before);
+    return done;
+  }
+
+  /** Take an answer back (the proposal it applied is undone): the factory as it was before it. */
+  unanswer(decisionId: string): void {
+    this.undo(`answer:${decisionId}`);
   }
 
   undo(token: string): void {

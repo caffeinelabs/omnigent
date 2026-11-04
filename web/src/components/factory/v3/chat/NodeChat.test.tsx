@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessageView } from "@/lib/factoryApi";
 import { type FakeFetch, renderChat } from "../fixture/renderChat";
+import { sampleNodeSource } from "../fixture/sampleNodeSource";
 import { sampleRoomMessages } from "../fixture/sampleRoom";
 import { CHAT_WIDTH_KEY, createNodeChatSlot } from "./chatLayout";
 
@@ -387,6 +388,90 @@ describe("cockpit v3 · the node chat column", () => {
       (li) => !(li.textContent ?? "").trim(),
     );
     expect(empty).toEqual([]);
+  });
+
+  it("on a phone, a verb from the full-screen chat closes it and opens its preview on the page", async () => {
+    setWindow("phone");
+    const view = renderChat("assistant-panel-ux", { install, search: "?chat=1" });
+    const full = await screen.findByTestId("v3-chat-full", {}, { timeout: 4000 });
+    await userEvent.setup().click(await within(full).findByTestId("v3-chat-quick-start"));
+    await waitFor(() => expect(screen.queryByTestId("v3-chat-full")).toBeNull());
+    expect(view.search()).not.toContain("chat=1");
+    expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Start now");
+  });
+
+  it("reads the per-node threads for its children's news (`?nodes=1`)", async () => {
+    setWindow("desktop");
+    const paths: string[] = [];
+    renderChat("I-1", {
+      install: (f) => {
+        install(((path: string, init?: RequestInit) => {
+          paths.push(path);
+          return f(path, init);
+        }) as FakeFetch);
+      },
+      nodeThreads: true,
+    });
+    await waitFor(() => expect(paths.some((p) => p.endsWith("/chat/threads?nodes=1"))).toBe(true));
+  });
+
+  it("draws a verb's card with its Undo while its token is open and unused", async () => {
+    setWindow("desktop");
+    const base = sampleRoomMessages();
+    const like = base.find((m) => m.thread === "project:assistant-core")!;
+    const now = Math.floor(Date.now() / 1000);
+    const card = (id: string, seq: number, body: string, meta: Record<string, unknown>) => ({
+      ...like,
+      id,
+      seq,
+      author_kind: "system" as const,
+      author: "server",
+      author_title: null,
+      body,
+      card: {
+        type: "preview_applied" as const,
+        ref: "assistant-core",
+        id: null,
+        meta: { kind: "preview_applied" as const, verb: "add", ...meta },
+      },
+    });
+    const extra: ChatMessageView[] = [
+      card("m-old", 900, "Lena added Usage (C-30).", {
+        undo_token: "tok-old",
+        undo_until: now + 400,
+      }),
+      card("m-old-undone", 901, "Undone by Lena: Lena added Usage (C-30).", {
+        undone: true,
+        undo_token: "tok-old",
+      }),
+      card("m-new", 902, "Lena added Docs (C-31).", {
+        label: "Add a task under assistant-core",
+        undo_token: "tok-new",
+        undo_until: now + 400,
+      }),
+      card("m-closed", 903, "Lena added Notes (C-32).", {
+        undo_token: "tok-x",
+        undo_until: now - 5,
+      }),
+    ];
+    const sample = sampleNodeSource();
+    const undo = vi.fn(async () => undefined);
+    renderChat("assistant-core", {
+      install,
+      messages: [...base, ...extra],
+      source: { ...sample, undo },
+    });
+    const list = await screen.findByTestId("room-message-list", {}, { timeout: 4000 });
+    await waitFor(() => expect(within(list).getAllByTestId("v3-applied")).toHaveLength(4));
+    const open = within(list).getAllByTestId("v3-applied-undo");
+    // Only the newest one: the first was undone, the last one's ten minutes are over.
+    expect(open).toHaveLength(1);
+    expect(open[0]).toHaveTextContent("Undo (7 min left)");
+    expect(open[0]!.closest('[data-testid="v3-applied"]')).toHaveTextContent(
+      "Lena added Docs (C-31).",
+    );
+    await userEvent.setup().click(open[0]!);
+    await waitFor(() => expect(undo).toHaveBeenCalledWith(expect.any(String), "tok-new"));
   });
 
   it("lists the node's verbs after / (the answer opens the card) and quick verbs above the box", async () => {

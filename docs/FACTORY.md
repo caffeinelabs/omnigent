@@ -1189,7 +1189,10 @@ undone, and a `preview_id` that digests the plan and the facts it touches.
 only that plan (409 `stale`, with the new preview, when what it touches
 moved), then posts a `preview_applied` card and returns the node page with
 an Undo token; `POST …/undo/{token}` takes it back once within 10 minutes
-(the person who applied it, or an owner). The verbs run today's cores: `add`
+(the person who applied it, or an owner). The card carries the token
+(`meta.undo_token`, `undo_until`), so cockpit v3's chat offers the same Undo
+after a reload; the card an Undo posts (`meta.undone`) names the token it
+undid, and the applied card stops offering it. The verbs run today's cores: `add`
 under a feature files the person's projects proposal extending it and
 applies it at once ("Plan X now" goes to the feature's thread; a title that
 matches a held item pulls that item forward; `col: "later"` holds it in a
@@ -1305,7 +1308,7 @@ sentences, or (`rollup_delta`) as `{field: {before, after}}` or the S12
 server's `{nodes: [{ref, title, items: [{key, label, before, after}]}],
 text}` (one line per changed item, then the sentence; `null` when nothing in
 the roll-up changes). The arguments
-the web sends: add `{title, col, depends_on?, because?, held_for?}`, start,
+the web sends: add `{title, col, depends_on?: [ref], depends_why?: {ref: reason}, held_for?}`, start,
 pause and resume `{}`, auto `{auto_merge?, autonomy?, base?}` (what is left out
 stays as it is; `base` once the preview asks for it, `args.base`; the server
 also takes `repo`, and sends its effects as `{label, text}` lines), move `{to?}`, name

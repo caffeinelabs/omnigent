@@ -936,6 +936,8 @@ async def test_move_and_name_first_read_lists_the_parents(cockpit: Cockpit) -> N
     assert {p["ref"] for p in move["parents"]} == {"I-1", other.ref}
     assert move["can_apply"] is False and "one level up" in move["effects"][0]
     assert {p["ref"] for p in name["parents"]} == {"I-1", other.ref}
+    # Name it files the work under a stored node of its own level, and says so.
+    assert "only a stored feature is offered" in name["effects"][0], name["effects"]
     assert (applied.status_code, error_code(applied)) == (400, "invalid_args")
     assert picked["can_apply"] is True and picked["parents"] == move["parents"]
 
@@ -966,3 +968,57 @@ async def test_apply_answers_in_one_line_with_an_undo_until_a_time(cockpit: Cock
     assert applied["message"] == applied["line"] and "Docs" in applied["message"]
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", applied["undo"]["expires_at"])
     assert undone.json()["message"].startswith("Undone: ")
+
+
+async def test_start_now_keeps_links_to_finished_work_without_warning(cockpit: Cockpit) -> None:
+    # The panel also waited on a spike that is done: a met link it already had.
+    spike = cockpit.store.upsert_project(cockpit.fid, "spike", title="spike", repo=REPO)
+    cockpit.store.update_project(spike.id, stage="merged", status="done")
+    row = cockpit.store.get_project(cockpit.fid, "panel")
+    assert row is not None
+    charter = {**normalize_charter(row.charter), "depends_on": ["core", "spike"]}
+    cockpit.store.update_project(row.id, charter=charter)
+
+    preview = await _preview(cockpit, "panel", "start")
+
+    assert preview["args"]["depends_on"] == ["PR-9001", "spike"]
+    assert not any("spike" in w for w in preview["warnings"]), preview["warnings"]
+    added = await _preview(cockpit, "I-1", "add", title="Late", depends_on=["spike"])
+    assert any("spike" in w for w in added["warnings"]), "a new link to done work still warns"
+
+
+async def test_the_undone_card_names_the_token_it_undid(cockpit: Cockpit) -> None:
+    applied = await _apply(cockpit, "I-1", await _preview(cockpit, "I-1", "add", title="Usage"))
+    token = applied["undo"]["token"]
+
+    undone = await _undo(cockpit, token)
+
+    assert undone.status_code == 200, undone.text
+    cards = [
+        (m.card or {}).get("meta") or {}
+        for m in cockpit.store.list_chat(cockpit.fid, "feature:I-1", limit=20)
+        if (m.card or {}).get("type") == "preview_applied"
+    ]
+    assert [c.get("undo_token") for c in cards] == [token, token]
+    assert [bool(c.get("undone")) for c in cards] == [False, True]
+
+
+async def test_add_takes_what_it_waits_on_as_a_list_with_reasons(cockpit: Cockpit) -> None:
+    preview = await _preview(
+        cockpit,
+        "I-1",
+        "add",
+        title="Usage",
+        depends_on=["core"],
+        depends_why={"core": "reads the core's API"},
+    )
+
+    assert preview["args"]["depends_on"] == ["core"]
+    assert preview["args"]["depends_why"] == {"core": "reads the core's API"}
+    ghost = preview["columns_after"]["ghosts"][-1]
+    assert (ghost["ref"], ghost["col"]) == ("usage", 1)
+    one = await cockpit.post(
+        _url(cockpit, "I-1", "preview"),
+        {"verb": "add", "args": {"title": "Usage", "depends_on": "core"}},
+    )
+    assert (one.status_code, error_code(one)) == (400, "invalid_args")

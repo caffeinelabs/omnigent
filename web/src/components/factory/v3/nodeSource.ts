@@ -7,11 +7,11 @@
 // Steering (verb previews with apply and Undo, Needs you, Find, last-look
 // marks) is optional on a source: a panel that needs a route the source lacks
 // falls back (a toast, the older Needs you list, the snapshot's search). The
-// live source gains each route once its endpoint is on the server
-// (`SERVED_STEER`).
+// live source carries every route the server serves (`SERVED_STEER`).
 
 import { type ReactNode, createContext, createElement, useContext } from "react";
 import { answerDecision, factoryErrorFromResponse } from "@/lib/factoryApi";
+import { undoProposal } from "@/lib/factoryRoomApi";
 import { authenticatedFetch } from "@/lib/identity";
 import type {
   DecisionAction,
@@ -62,6 +62,12 @@ export interface NodeSource {
   ) => Promise<LevelView | null>;
   /** Answer a decision with one of its actions. */
   answer: (factoryId: string, decision: DecisionRef, action: DecisionAction) => Promise<void>;
+  /**
+   * Take back an answer that applied a proposal ("Apply C-16"), within its
+   * window: the proposal's own Undo (`POST …/proposals/{C-n}/undo`). Only for
+   * answers `answerProposal` names.
+   */
+  undoAnswer?: (factoryId: string, decision: DecisionRef, action: DecisionAction) => Promise<void>;
   /** A verb's dry run: nothing changes (`POST …/n/{ref}/preview`). */
   preview?: (
     factoryId: string,
@@ -170,15 +176,19 @@ export const steerRoutes: SteerRoutes = {
 };
 
 /**
- * The steering routes this server has. Each joins the live source once its
- * endpoint is on staging; until then the panels fall back.
- *
- * TODO(S12): `preview`, `apply`, `undo` once `POST …/n/{ref}/preview|apply` and
- * `POST …/undo/{token}` land.
- * TODO(S9): `needsYou`, `find` once `GET …/needs-you` and `GET …/find` land.
- * TODO(S10): `seen` once `PUT …/n/{ref}/seen` lands.
+ * The steering routes this server has: every one api.md §3.8 and §4 names is
+ * on the server (S9 Needs you and Find, S10 last look, S12 preview, apply and
+ * Undo), so the live source carries them all. A source without one (an
+ * older server behind a story) still falls back where a panel needs it.
  */
-export const SERVED_STEER: readonly (keyof SteerRoutes)[] = [];
+export const SERVED_STEER: readonly (keyof SteerRoutes)[] = [
+  "preview",
+  "apply",
+  "undo",
+  "needsYou",
+  "find",
+  "seen",
+];
 
 function served(): Partial<NodeSource> {
   return Object.fromEntries(
@@ -227,7 +237,21 @@ export const liveNodeSource: NodeSource = {
     // The answer route takes the decision's row id; `id` is its ref ("D-45").
     await answerDecision(decision.row_id ?? decision.id, { option_id: action.id });
   },
+  undoAnswer: async (fid, decision, action) => {
+    const proposal = answerProposal(decision, action);
+    if (!proposal) throw new Error(`${decision.id}: ${action.label} cannot be undone here.`);
+    await undoProposal(fid, proposal);
+  },
 };
+
+/**
+ * The proposal an answer applies, which its own Undo takes back ("C-16" for
+ * Apply on D-45, whose subject is C-16), else null: other answers stand.
+ */
+export function answerProposal(decision: DecisionRef, action: DecisionAction): string | null {
+  const subject = decision.subject ?? "";
+  return action.id === "apply" && /^C-\d+$/.test(subject) ? subject : null;
+}
 
 const NodeSourceContext = createContext<NodeSource | null>(null);
 

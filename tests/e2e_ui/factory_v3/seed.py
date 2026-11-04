@@ -15,7 +15,10 @@ relative to now:
   a person to merge them into ``main``;
 - C-14 and C-15 ask things that block nothing; C-19 (D-49) proposes a follow-up
   under I-1; C-17 and C-18 are rule proposals for the factory tree;
-- the server closed three alarms today (D-46, D-47, D-48).
+- the server closed three alarms today (D-46, D-47, D-48);
+- the base env (the integration project ``base-env``) runs the base's head,
+  which holds every merge, and answers its smoke checks;
+- Agent assistant's later waves hold "Google Ads integration" and a sales skill.
 
 Rows are written with the server's own stores (the same SQL tables the server
 reads), and C-16 is filed through ``POST …/proposals`` so its decision (D-45)
@@ -42,6 +45,14 @@ from omnigent import factory as F
 from omnigent.db.db_models import SqlFactoryDecision, SqlFactoryProject
 from omnigent.entities.factory import EventDraft
 from omnigent.server.auth import LEVEL_OWNER, RESERVED_USER_LOCAL
+from omnigent.server.factory.base import (
+    BaseHead,
+    DeployedHead,
+    deployed_label,
+    deployed_value,
+    head_label,
+    head_value,
+)
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.factory_store.sqlalchemy_store import SqlAlchemyFactoryStore
@@ -59,6 +70,8 @@ ASK: Final = (
     "discovery and sales too."
 )
 H: Final = 3600
+DEPLOYED_SHA: Final = "5a3c9e1" + "0" * 33
+"""The base head the base env runs (it holds every merge of the story)."""
 
 
 @dataclass(frozen=True)
@@ -338,7 +351,25 @@ def seed_factory_1340(
             }
             for slug in SHORTLIST
         },
-        "base-env": {"stage": "planning", "charter": {"kind": "integration"}},
+        "base-env": {
+            "stage": "planning",
+            "charter": {"kind": "integration"},
+            "env": {
+                "reported": {
+                    "state": "ready",
+                    "at": int(clock - 12 * 60),
+                    "urls": {"app": "https://app.example.com", "api": "https://api.example.com"},
+                    "deployed": {"sha": DEPLOYED_SHA[:7]},
+                    "note": "Sign in with a test account (sample).",
+                },
+                "probe": {
+                    "health": "ok",
+                    "app": {"code": 200},
+                    "api": {"code": 200},
+                    "at": int(clock - 60),
+                },
+            },
+        },
     }
     made: dict[str, float] = {}
     for slug, fields in work.items():
@@ -384,7 +415,11 @@ def seed_factory_1340(
                 {"wave": 1, "proposal": "C-11", "added": list(WAVE_1), "at": int(clock - 7 * H)}
             ],
             "waves": [
-                {"n": 2, "goal": "ads network and growth", "projects": ["ads-integration"]},
+                {
+                    "n": 2,
+                    "goal": "ads network and growth",
+                    "projects": ["google-ads-integration"],
+                },
                 {"n": 3, "goal": "sales and promotion", "projects": ["sales-skill"]},
             ],
             "asked_at": int(clock - 7 * H - 45 * 60),
@@ -619,6 +654,18 @@ def seed_factory_1340(
             options=[dict(o) for o in _APPLY_OPTIONS],
         )
         fs.update_proposal(proposal_row.id, decision_id=row.id)
+
+    # ── The base env: the base's head after the last merge, deployed and answering ──
+    moved = int(clock - 14 * 60)
+    conv.set_labels(
+        fid,
+        {
+            head_label(REPO, BASE): head_value(BaseHead(DEPLOYED_SHA, moved), REPO, BASE),
+            deployed_label(REPO, BASE): deployed_value(
+                DeployedHead(DEPLOYED_SHA, int(clock - 12 * 60), moved), REPO, BASE
+            ),
+        },
+    )
 
     # ── An hour of work on assistant-core (its burn) ──
     fs.insert_span(

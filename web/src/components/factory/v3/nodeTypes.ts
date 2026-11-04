@@ -409,10 +409,17 @@ export interface LevelView {
 // ── Steering: verb previews, apply and Undo (api.md §4) ─────────
 
 /** What a verb's preview and apply send: the verb, its arguments and the facts version read. */
+/** One argument of a verb: a word, a number, a switch, a list of refs, or a reason per ref. */
+export type VerbArg = string | number | boolean | null | string[] | Record<string, string>;
+
 export interface VerbRequest {
   verb: string;
-  /** The verb's own arguments (a new child's title and column, a parent to move under …). */
-  args: Record<string, string | number | boolean | null>;
+  /**
+   * The verb's own arguments (a new child's title and column, a parent to move
+   * under …). Add child names what it waits on as `depends_on: [ref]` with
+   * `depends_why: {ref: reason}`, as the server's projects op does.
+   */
+  args: Record<string, VerbArg>;
   /** The page's `version`: a write based on older facts is refused (409 stale). */
   based_on: string;
 }
@@ -448,6 +455,10 @@ export interface VerbPreview {
   parents?: NodeLink[];
   /** The apply button's words ("Pull forward and plan"). (client) */
   apply_label?: string;
+  /** False when this viewer may only look (an owner's verb for an editor; a form's first read). */
+  can_apply?: boolean;
+  /** Who may apply it, in words ("an owner"). */
+  who_may?: string;
 }
 
 /** What `POST …/n/{ref}/apply` returns: the page after, and the Undo for 10 minutes. */

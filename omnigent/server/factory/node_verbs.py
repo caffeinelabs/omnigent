@@ -146,6 +146,8 @@ REASON_MAX: Final = 300
 _SLUG_CHARS: Final = re.compile(r"[^a-z0-9]+")
 _TOKEN_RE: Final = re.compile(r"^[0-9a-f]{24}$")
 _PAUSE_HOLD: Final = "paused from the cockpit"
+_ENDED_DEP: Final = re.compile(r"^depends_on_(?:done|cancelled): \S+ waits on \w+ (\S+)$")
+"""A projects plan's warning that a dependency already finished (``proposals``' wording)."""
 
 
 class VerbIn(BaseModel):
@@ -479,6 +481,13 @@ def _pick_parent(
         )
 
     up = tree.level_name(tree.ladder[node.tree][max(0, tree.level_index(node) - 1)]).lower()
+    # Name it files an implicit node's work under a stored node of its own level.
+    same = tree.level_name(node.level).lower()
+    offered = (
+        f"only a stored {same} is offered"
+        if verb == "name"
+        else f"only a {up} one level up is offered"
+    )
     return Plan(
         verb,
         node.ref,
@@ -486,9 +495,9 @@ def _pick_parent(
         {},
         [f"parents:{_digest([p['ref'] for p in parents])}"],
         [
-            f"{what.capitalize()}: only a {up} one level up is offered."
+            f"{what.capitalize()}: {offered}."
             if parents
-            else f"No stored {up} to put it under yet."
+            else f"No stored {same if verb == 'name' else up} to put it under yet."
         ],
         run,
         ready=False,
@@ -1089,7 +1098,14 @@ async def _plan_start(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any
         if patch
         else None
     )
-    warnings = list(plan.warnings) if plan is not None else []
+    # A link it already had to a finished project is history (its chip says "met"):
+    # starting now neither adds it nor changes it, so it is no warning here.
+    kept = {d for d in new if d in current}
+    warnings = [
+        w
+        for w in (plan.warnings if plan is not None else [])
+        if not ((m := _ENDED_DEP.match(w)) and m.group(1) in kept)
+    ]
     if not swaps and unmet and explicit is None:
         warnings.append("Nothing it waits on can be relaxed to a merged change.")
 
@@ -2850,7 +2866,13 @@ async def undo(env: Env, token: str) -> dict[str, Any]:
         ref,
         "preview_applied",
         f"Undone by {env.by}: {event.summary}",
-        meta={"verb": str(data.get("verb") or ""), "by": env.by, "undone": True},
+        # The token it undid: the applied card in the thread stops offering its Undo.
+        meta={
+            "verb": str(data.get("verb") or ""),
+            "by": env.by,
+            "undone": True,
+            "undo_token": token,
+        },
         message_id=derived_id(env.fid, "undone", token),
     )
     fresh = await env.tree(fresh=True)

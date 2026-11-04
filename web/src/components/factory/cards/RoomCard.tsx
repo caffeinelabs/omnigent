@@ -101,7 +101,8 @@ export function RoomCard({
     }
     case "why":
     case "closed_alarm":
-    case "offer": {
+    case "offer":
+    case "preview_applied": {
       // The cockpit's card shows the line itself when it cannot draw.
       const fallback = attached ? null : line;
       return data.nodeCard ? data.nodeCard(message, attached, fallback) : fallback;

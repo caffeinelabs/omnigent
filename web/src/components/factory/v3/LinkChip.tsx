@@ -28,11 +28,12 @@ function toneClass(tone: Chip["tone"]): string {
 
 function ChipBody({ chip }: { chip: Chip }) {
   const quiet = chip.tone ? "opacity-80" : "text-foreground-tertiary";
+  // A chip wider than its row ends in "…" (its parts shrink; the kind stays).
   return (
     <>
-      {chip.kind && <span className={quiet}>{chip.kind}</span>}
-      <span>{chip.title}</span>
-      {chip.state && <span className={quiet}>· {chip.state}</span>}
+      {chip.kind && <span className={cn(quiet, "shrink-0")}>{chip.kind}</span>}
+      <span className="min-w-0 truncate">{chip.title}</span>
+      {chip.state && <span className={cn(quiet, "min-w-0 truncate")}>· {chip.state}</span>}
     </>
   );
 }
@@ -49,7 +50,13 @@ export function LinkChip({
 }) {
   if (chip.ref && !chip.list) {
     return (
-      <NodeLink nodeRef={chip.ref} title={chip.reason} className={cn(CHIP, toneClass(chip.tone))}>
+      <NodeLink
+        nodeRef={chip.ref}
+        title={chip.reason}
+        data-testid="v3-chip"
+        data-kind={chip.kind}
+        className={cn(CHIP, toneClass(chip.tone))}
+      >
         <ChipBody chip={chip} />
       </NodeLink>
     );
@@ -61,6 +68,8 @@ export function LinkChip({
         aria-expanded={open}
         onClick={onToggle}
         title={chip.reason}
+        data-testid="v3-chip"
+        data-kind={chip.kind}
         className={cn(CHIP, "cursor-pointer", toneClass(chip.tone))}
       >
         <ChipBody chip={chip} />
@@ -68,7 +77,12 @@ export function LinkChip({
     );
   }
   return (
-    <span title={chip.reason} className={cn(CHIP, toneClass(chip.tone))}>
+    <span
+      title={chip.reason}
+      data-testid="v3-chip"
+      data-kind={chip.kind}
+      className={cn(CHIP, toneClass(chip.tone))}
+    >
       <ChipBody chip={chip} />
     </span>
   );

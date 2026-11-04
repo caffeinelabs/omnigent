@@ -160,7 +160,7 @@ export interface RoomThreadNodeOptions {
   bottomCount?: number;
   /** What an empty thread says instead of "Nothing in #x yet". */
   empty?: ReactNode;
-  /** Cards the Room does not draw (`why`, `closed_alarm`, `offer`); `fallback` when it cannot draw one. */
+  /** Cards the Room does not draw (`why`, `closed_alarm`, `offer`, `preview_applied`); `fallback` when it cannot draw one. */
   card?: (message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode;
   composer?: RoomComposerNodeOptions;
 }

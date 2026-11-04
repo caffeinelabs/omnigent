@@ -79,8 +79,10 @@ export interface PostChatResponse {
 export async function fetchRoomThreads(
   factoryId: string,
   signal?: AbortSignal,
+  { nodes = false }: { nodes?: boolean } = {},
 ): Promise<ThreadsResponse> {
-  return readJson(await authenticatedFetch(factoryPath(factoryId, "/chat/threads"), { signal }));
+  const path = `/chat/threads${nodes ? "?nodes=1" : ""}`;
+  return readJson(await authenticatedFetch(factoryPath(factoryId, path), { signal }));
 }
 
 /**

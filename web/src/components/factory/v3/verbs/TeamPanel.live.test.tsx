@@ -162,6 +162,11 @@ async function applySwap(server: ReturnType<typeof serveFactory>) {
   await waitFor(() =>
     expect(server.calls.some((c) => c.path.endsWith("/definition/preview"))).toBe(true),
   );
+  // The first pick never sends a preview with no changes (the server refuses it).
+  const previews = server.calls.filter((c) => c.path.endsWith("/definition/preview"));
+  for (const call of previews) {
+    expect((call.body as { changes: unknown[] }).changes.length).toBeGreaterThan(0);
+  }
   const lines = await within(panel).findByTestId("v3-preview-lines");
   expect(lines).toHaveTextContent("From each member’s next task.");
   expect(lines).toHaveTextContent("Cost$5.6/h → about $5.9/h while working (estimate)");

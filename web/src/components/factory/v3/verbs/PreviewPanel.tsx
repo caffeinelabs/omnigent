@@ -183,7 +183,13 @@ export function PreviewPanel({
         },
       ]
     : [];
-  const off = blocked ?? (preview || bare ? null : "Reading the preview…");
+  // The server says who may apply it: a viewer who may not reads it, and Apply stays off.
+  const notYours =
+    preview?.can_apply === false
+      ? (preview.approver_note ??
+        `${approverWords(preview.who_may ?? preview.approver)} You can read what it would do.`)
+      : null;
+  const off = blocked ?? notYours ?? (preview || bare ? null : "Reading the preview…");
   return (
     <section
       ref={root}

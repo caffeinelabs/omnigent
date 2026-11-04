@@ -5,6 +5,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { undoLabel } from "../../steer/steerModel";
 import { DecisionButtons } from "../DecisionButtons";
 import { AMBER } from "../nodeTokens";
 import type { DecisionRef } from "../nodeTypes";
@@ -140,6 +141,46 @@ export function AskCard({ decision }: { decision: DecisionRef }) {
       <span className="mt-0.5">
         <DecisionButtons decision={decision} variant="card" />
       </span>
+    </section>
+  );
+}
+
+/**
+ * A verb applied from the cockpit, in its node's thread: what it did and, for
+ * its 10 minutes, its Undo (the same token as the toast's, so it still works
+ * after a reload). An undone one says so in the card after it.
+ */
+export function AppliedCard({
+  text,
+  leftS,
+  busy,
+  onUndo,
+}: {
+  text: string;
+  /** Seconds its Undo is open; none once it closed or ran. */
+  leftS?: number | null;
+  busy?: boolean;
+  onUndo?: () => void;
+}) {
+  const open = leftS != null && leftS > 0 && onUndo;
+  return (
+    <section
+      data-testid="v3-applied"
+      data-undo={open ? "open" : undefined}
+      className={cn(CARD, "flex-row flex-wrap items-baseline gap-x-2 border-border bg-muted/30")}
+    >
+      <span className="min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]">{text}</span>
+      {open && (
+        <button
+          type="button"
+          data-testid="v3-applied-undo"
+          disabled={busy}
+          onClick={onUndo}
+          className={cn(BTN, "border-border-strong bg-card-solid hover:border-status-blue")}
+        >
+          {undoLabel(leftS ?? 0)}
+        </button>
+      )}
     </section>
   );
 }

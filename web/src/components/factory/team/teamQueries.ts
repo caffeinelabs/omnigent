@@ -89,10 +89,12 @@ export function useTeamPreview(
   );
   const settled =
     body === JSON.stringify({ changes, when, base_version: baseVersion ?? undefined });
+  // What is sent is the settled body: the first pick waits for it, never sending no changes.
+  const sends = (JSON.parse(body) as { changes: unknown[] }).changes.length > 0;
   const query = useQuery<DefinitionPreviewResponse>({
     queryKey: teamKey(factoryId, "preview", body),
     queryFn: () => previewFactoryDefinition(factoryId, JSON.parse(body)),
-    enabled: Boolean(factoryId) && changes.length > 0,
+    enabled: Boolean(factoryId) && changes.length > 0 && sends,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
     retry: retryTransient,

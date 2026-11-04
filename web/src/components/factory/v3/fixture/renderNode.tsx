@@ -9,6 +9,7 @@ import { FactoryToastProvider } from "../../ui/Toast";
 import { NodePage, type NodePageProps } from "../NodePage";
 import { nodeHref } from "../nodeRoutes";
 import { type NodeSource, NodeSourceProvider } from "../nodeSource";
+import { useAnswerAsk } from "../nodeSteer";
 import { V3Sheets } from "../sheets/V3Sheets";
 import { useLocation, useParams } from "@/lib/routing";
 import { type SampleOptions, sampleNodeSource } from "./sampleNodeSource";
@@ -25,15 +26,17 @@ function Probe() {
   return null;
 }
 
-function Routed({ actions }: { actions?: NodePageProps["actions"] }) {
+function Routed({ actions, answers }: { actions?: NodePageProps["actions"]; answers?: boolean }) {
   const { ref = "product", level } = useParams<{ ref: string; level?: string }>();
+  // As the cockpit answers: through the source, with the Undo of an applied proposal.
+  const answer = useAnswerAsk(ref, { factoryId: TEST_FID });
   return (
     <NodePage
       key={`${ref}/${level ?? ""}`}
       factoryId={TEST_FID}
       nodeRef={ref}
       level={level ?? null}
-      actions={actions}
+      actions={answers ? { onAnswer: answer, ...actions } : actions}
     />
   );
 }
@@ -46,9 +49,11 @@ export function renderNode(
     source?: NodeSource;
     /** The address's query (`?verb=add&title=…`, `?peek=needs`). */
     query?: string;
+    /** Answers go through the source as the cockpit's do (`useAnswerAsk`). */
+    answers?: boolean;
   } = {},
 ) {
-  const { level, actions, source: given, query = "", ...sample } = options;
+  const { level, actions, source: given, query = "", answers, ...sample } = options;
   const source = given ?? sampleNodeSource(sample);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
@@ -57,10 +62,13 @@ export function renderNode(
         <MemoryRouter initialEntries={[`${nodeHref(TEST_FID, nodeRef, level)}${query}`]}>
           <FactoryToastProvider>
             <Routes>
-              <Route path="/factory/:factoryId/n/:ref" element={<Routed actions={actions} />} />
+              <Route
+                path="/factory/:factoryId/n/:ref"
+                element={<Routed actions={actions} answers={answers} />}
+              />
               <Route
                 path="/factory/:factoryId/n/:ref/:level"
-                element={<Routed actions={actions} />}
+                element={<Routed actions={actions} answers={answers} />}
               />
             </Routes>
             <V3Sheets factoryId={TEST_FID} />

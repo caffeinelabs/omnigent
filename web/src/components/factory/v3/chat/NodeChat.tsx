@@ -39,13 +39,14 @@ import { swallowEnter } from "../DecisionButtons";
 import { useNodeActions } from "../NodeContext";
 import { Avatar, Kbd } from "../nodeParts";
 import { useNode } from "../nodeQueries";
+import { useUndoToken } from "../nodeSteer";
 import { nodeHref } from "../nodeRoutes";
 import { AMBER, STATE_WORDS } from "../nodeTokens";
 import type { DecisionRef, NodePage, StatusLine, VerbArgs } from "../nodeTypes";
 import { levelName } from "../nodeWire";
 import { statusText } from "../statusModel";
 import { WhyCard } from "../WhyCard";
-import { AskCard, ClosedAlarmCard, OfferCard } from "./ChatCards";
+import { AppliedCard, AskCard, ClosedAlarmCard, OfferCard } from "./ChatCards";
 import { CHAT_BESIDE_QUERY, CHAT_PARAM, useChatWidth, useNodeChatSlot } from "./chatLayout";
 import { parseIntent } from "./chatIntents";
 import {
@@ -157,12 +158,53 @@ function OfferOf({
  * it cannot draw (its node loading or gone, an alarm it knows nothing of)
  * shows `fallback`, the message's own line, so it never renders empty.
  */
+/** What a verb's card needs to offer its Undo: the tokens already undone, now, and how. */
+interface AppliedUndo {
+  undone: ReadonlySet<string>;
+  nowS: number;
+  run: ((token: string, label: string) => Promise<void>) | null;
+}
+
+/** A verb's card: what it did, and its Undo while the token is open and not yet used. */
+function AppliedOf({
+  message,
+  applied,
+  fallback,
+}: {
+  message: ChatMessageView;
+  applied: AppliedUndo;
+  fallback: ReactNode;
+}) {
+  const [busy, setBusy] = useState(false);
+  const meta = message.card?.meta?.kind === "preview_applied" ? message.card.meta : null;
+  if (!meta) return fallback;
+  const token = meta.undone ? null : (meta.undo_token ?? null);
+  const open = token && !applied.undone.has(token) && applied.run;
+  const left = open && meta.undo_until ? meta.undo_until - applied.nowS : null;
+  return (
+    <AppliedCard
+      text={message.body}
+      leftS={left}
+      busy={busy}
+      onUndo={
+        open && token
+          ? () => {
+              setBusy(true);
+              void applied.run!(token, meta.label ?? meta.verb).finally(() => setBusy(false));
+            }
+          : undefined
+      }
+    />
+  );
+}
+
 function NodeMessageCard({
   message,
   attached,
   chat,
   here,
   onVerb,
+  applied,
   fallback,
 }: {
   message: ChatMessageView;
@@ -170,6 +212,7 @@ function NodeMessageCard({
   chat: NodePage;
   here: NodePage;
   onVerb: (verb: string, at: string) => void;
+  applied: AppliedUndo;
   fallback: ReactNode;
 }) {
   const { snapshot } = useFactoryShell();
@@ -177,6 +220,8 @@ function NodeMessageCard({
   if (!card) return fallback;
   const nodeRef = card.ref ?? chat.node.ref;
   switch (card.type) {
+    case "preview_applied":
+      return <AppliedOf message={message} applied={applied} fallback={fallback} />;
     case "why":
       return <WhyOf nodeRef={nodeRef} chat={chat} here={here} fallback={fallback} />;
     case "offer":
@@ -293,7 +338,8 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   const owner = useNode(ownerRef === here.node.ref ? "" : ownerRef, fid);
   const chat = ownerRef === here.node.ref ? here : (owner.data ?? here);
   const perNode = usePreflight().data?.node_threads === true;
-  const threads = useRoomThreads(fid).data?.data ?? null;
+  // With the per-node threads (`?nodes=1`): a child's own thread can have news.
+  const threads = useRoomThreads(fid, { nodes: perNode }).data?.data ?? null;
   const thread = nodeThread(chat, { snapshot, threads, perNode, sample });
   const room = threads?.find((t) => t.key === thread.key) ?? null;
   // Who answers the thread the chat actually posts to: the node's own
@@ -405,6 +451,9 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
       }
       const v = at === here.node.ref ? here.verbs.find((x) => x.verb === verb && x.enabled) : null;
       if (v) {
+        // The preview opens on the page: a full-screen chat (a phone) steps
+        // back to it first, or the preview would open out of sight.
+        if (full) latestClose.current();
         // Always with an object: the preview then leaves focus in this box.
         actions.onVerb?.(v, args ?? {});
         return;
@@ -413,7 +462,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
       for (const [k, value] of Object.entries(args ?? {})) if (value) search.set(k, value);
       navigate(`${nodeHref(fid, at)}?${search.toString()}`);
     },
-    [actions, fid, here.node.ref, here.verbs, navigate],
+    [actions, fid, full, here.node.ref, here.verbs, navigate],
   );
 
   const decision = chat.status.ends === "person" ? (chat.status.decision ?? null) : null;
@@ -538,6 +587,28 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
     </li>
   ));
 
+  // A verb's card offers its Undo until it ran: the server's "undone" card names its token.
+  const messages = useRoomMessages(fid, thread.key);
+  const undoToken = useUndoToken(fid);
+  // "Now" on the server's clock, every 15 s: "Undo (n min left)" counts down and goes at 0.
+  const [nowS, setNowS] = useState(() => Math.floor(Date.now() / 1000 + clockOffsetS));
+  useEffect(() => {
+    const read = () => setNowS(Math.floor(Date.now() / 1000 + clockOffsetS));
+    read();
+    const timer = setInterval(read, 15_000);
+    return () => clearInterval(timer);
+  }, [clockOffsetS]);
+  const applied = useMemo<AppliedUndo>(() => {
+    const undone = new Set<string>();
+    for (const m of flattenPages(messages.data)) {
+      const meta = m.card?.type === "preview_applied" ? m.card.meta : null;
+      if (meta?.kind === "preview_applied" && meta.undone && meta.undo_token) {
+        undone.add(meta.undo_token);
+      }
+    }
+    return { undone, nowS, run: undoToken };
+  }, [messages.data, nowS, undoToken]);
+
   const renderCard = useCallback(
     (message: ChatMessageView, attached: boolean, fallback: ReactNode) => (
       <NodeMessageCard
@@ -546,10 +617,11 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
         chat={chat}
         here={here}
         onVerb={(verb, at) => runVerb(verb, at)}
+        applied={applied}
         fallback={fallback}
       />
     ),
-    [chat, here, runVerb],
+    [applied, chat, here, runVerb],
   );
 
   const threadView = (autoFocus: boolean, className: string) => (

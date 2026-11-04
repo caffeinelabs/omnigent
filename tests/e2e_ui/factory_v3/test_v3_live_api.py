@@ -27,6 +27,8 @@ import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e_ui.factory_v3.checks import BODY_CHECKS as _BODY_CHECKS
+from tests.e2e_ui.factory_v3.checks import node as _node
 from tests.e2e_ui.factory_v3.conftest import LOAD_MS, Cockpit, Theme, V3Server
 from tests.e2e_ui.factory_v3.seed import Seeded
 
@@ -34,43 +36,6 @@ PAGES = ("product", "I-1", "assistant-core", "T-16")
 """Home, the feature, the project and the task."""
 LEVEL_PAGES = (("product", "project"), ("product", "task"), ("I-1", "task"))
 """Level views the strip links to (``/n/<ref>/<level>``)."""
-
-# What the node page shows: the page, and v3's own parts of its chat column (title,
-# quick verbs, any why/ask/alarm/offer card). The Room's answer cards and the chat's
-# icons stay as they are.
-_BODY_CHECKS = """(node) => {
-  const chat = [...document.querySelectorAll(
-    '[data-testid="v3-chat"], [data-testid="v3-chat-pinned"]',
-  )];
-  const roots = new Set(chat);
-  const room = '[data-testid^="decision-card-"], [data-testid^="proposal-card-"], '
-    + '[data-testid^="loop-card-"], svg.lucide';
-  const own = (el) => {
-    const part = el.closest('[data-testid^="v3-"]');
-    return part !== null && !roots.has(part) && el.closest(room) === null;
-  };
-  const body = (el) => !chat.some((c) => c.contains(el)) || own(el);
-  const shown = (sel) => [...document.querySelectorAll(sel)]
-    .filter((el) => node.contains(el) || chat.some((c) => c.contains(el)))
-    .filter(body);
-  const lines = shown('svg line, svg path, svg polyline, svg polygon')
-    .map((el) => el.closest('[data-testid]')?.dataset.testid ?? el.tagName);
-  const empty = new Set(['none', 'None', '—', '-', '0']);
-  const cells = shown('*')
-    .filter((el) => el.children.length === 0)
-    .map((el) => (el.textContent ?? '').trim())
-    .filter((text) => empty.has(text) || /^0(\\s|$)/.test(text));
-  return {
-    lines,
-    cells,
-    chat: shown('*').filter((el) => chat.some((c) => c.contains(el))).length,
-    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  };
-}"""
-
-
-def _node(page: Page, ref: str):
-    return page.locator(f'[data-testid="v3-node-page"][data-ref="{ref}"]')
 
 
 def _api_page(v3_server: V3Server, factory: Seeded, ref: str) -> dict:

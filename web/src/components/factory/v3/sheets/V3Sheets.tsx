@@ -24,7 +24,7 @@ import { NodeLink } from "../nodeParts";
 import { useAnswerDecision, useNode } from "../nodeQueries";
 import { PRODUCT_REF } from "../nodeRoutes";
 import { useNodeSource } from "../nodeSource";
-import { useNeedsYou } from "../nodeSteer";
+import { useAnswerAsk, useNeedsYou } from "../nodeSteer";
 import type { DecisionAction, DecisionRef, NeedsYouList, QuietAsk } from "../nodeTypes";
 import { PreviewLines } from "../verbs/PreviewPanel";
 
@@ -324,25 +324,10 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
   const query = useNeedsYou(tree, open, fid);
   const toast = useFactoryToast();
   const source = useNodeSource();
-  const { mutate, mutateAsync } = useAnswerDecision(fid);
+  const { mutateAsync } = useAnswerDecision(fid);
   const sample = source?.kind === "sample";
-  const onAnswer = useCallback(
-    (decision: DecisionRef, action: DecisionAction) =>
-      mutate(
-        { decision, action },
-        {
-          onSuccess: () =>
-            toast.show({
-              message: sample
-                ? `Sample data: ${decision.id} ${action.label} changes only the sample.`
-                : `${decision.id}: ${action.label}`,
-            }),
-          onError: (error) =>
-            toast.show({ message: `${decision.id} was not answered: ${errorWords(error)}` }),
-        },
-      ),
-    [mutate, sample, toast],
-  );
+  // An answer that applied a proposal offers its Undo in the toast.
+  const onAnswer = useAnswerAsk(null, { sample, factoryId: fid });
   /** Every quiet ask with its own first answer, at once; one toast says how it went. */
   const onAnswerAll = useCallback(
     (asks: QuietAsk[]) => {

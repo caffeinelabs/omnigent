@@ -26,9 +26,17 @@ import { UNDO_WINDOW_S, undoLeft, versionRows } from "../steer/steerModel";
 import { useDebounced } from "../team/teamQueries";
 import { useFactoryToast } from "../ui/Toast";
 import { useNodeActions } from "./NodeContext";
-import { NODE_STALE_MS, nodeQueryKeys } from "./nodeQueries";
-import { useNodeSource } from "./nodeSource";
-import type { NodePage, NodeSummary, Rollup, VerbPreview, VerbRequest } from "./nodeTypes";
+import { NODE_STALE_MS, nodeQueryKeys, useAnswerDecision } from "./nodeQueries";
+import { answerProposal, useNodeSource } from "./nodeSource";
+import type {
+  DecisionAction,
+  DecisionRef,
+  NodePage,
+  NodeSummary,
+  Rollup,
+  VerbPreview,
+  VerbRequest,
+} from "./nodeTypes";
 
 /** Typing in a preview's form reads the preview again once it pauses. */
 export const PREVIEW_DEBOUNCE_MS = 250;
@@ -102,6 +110,8 @@ export interface NodeUndo {
   /** Epoch ms after which it cannot be undone (a version's own time wins, see `version`). */
   expiresAt: number;
   run: () => Promise<unknown>;
+  /** The server's Undo token (`POST …/undo/{token}`), when it has one: its card in the thread carries it too. */
+  token?: string;
   /**
    * It re-pins a definition version: offered only while `version.version` is
    * the version in force and was made from `version.parent`, for the window
@@ -132,6 +142,14 @@ export function forgetUndo(fid: string, ref: string, undo?: NodeUndo): void {
   const key = undoKey(fid, ref);
   if (undo && undos.get(key) !== undo) return;
   undos.delete(key);
+  notify();
+}
+
+/** Forget the Undo whose server token is `token` (it ran from its card in the thread). */
+export function forgetUndoToken(fid: string, token: string): void {
+  for (const [key, undo] of undos) {
+    if (key.startsWith(`${fid}/`) && undo.token === token) undos.delete(key);
+  }
   notify();
 }
 
@@ -282,6 +300,11 @@ export function useVersionUndo(ref: string, factoryId?: string) {
   );
 }
 
+/** Words for why something failed. */
+function errorWords(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** "Not applied: …", from a refused write (409 stale, 422 wrong level, 403 with who may). */
 export function refusal(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -335,12 +358,10 @@ export function useApplyVerb(page: NodePage, factoryId?: string) {
       void refresh();
       const token = applied.undo?.token;
       const undoFn = source?.undo;
-      const message = [
-        applied.message ?? `${label}: applied`,
-        applied.filed && `Filed ${applied.filed}.`,
-      ]
-        .filter(Boolean)
-        .join(". ");
+      const said = (applied.message ?? `${label}: applied`).trim();
+      const filed =
+        applied.filed && !said.includes(applied.filed) ? ` Filed ${applied.filed}.` : "";
+      const message = `${/[.!?]$/.test(said) ? said : `${said}.`}${filed}`;
       if (!token || !undoFn) {
         toast.show({ message });
         return;
@@ -348,6 +369,7 @@ export function useApplyVerb(page: NodePage, factoryId?: string) {
       const expires = Date.parse(applied.undo!.expires_at);
       const entry: NodeUndo = {
         label,
+        token,
         expiresAt: Number.isFinite(expires) ? expires : Date.now() + UNDO_WINDOW_S * 1000,
         run: () =>
           undoFn(fid, token).then(
@@ -372,6 +394,100 @@ export function useApplyVerb(page: NodePage, factoryId?: string) {
       void refresh();
     },
   });
+}
+
+/**
+ * Undo by the server's token, from a verb's card in its node's thread (the
+ * same Undo as the toast's and "Undo (n min left)", which it also closes).
+ */
+export function useUndoToken(factoryId?: string) {
+  const fid = useFid(factoryId);
+  const source = useNodeSource();
+  const toast = useFactoryToast();
+  const refresh = useRefreshNodes(fid);
+  const undo = source?.undo;
+  return useMemo(
+    () =>
+      undo
+        ? async (token: string, label: string) => {
+            try {
+              await undo(fid, token);
+            } catch (error) {
+              void refresh();
+              toast.show({ message: `Could not undo: ${errorWords(error)}` });
+              return;
+            }
+            forgetUndoToken(fid, token);
+            void refresh();
+            toast.show({ message: `Undone: ${label}` });
+          }
+        : null,
+    [fid, refresh, toast, undo],
+  );
+}
+
+// ── Answers, with Undo when they applied a proposal ────────────
+
+/**
+ * Answer an ask (always a click). An answer that applied a proposal ("Apply
+ * C-16") can be taken back with the proposal's own Undo for 10 minutes: the
+ * toast offers it, and the node it was answered on (`at`) keeps "Apply C-16:
+ * Undo (n min left)" beside its verbs. Every node page reads again after
+ * either. `sample`: the toast says only the sample changed.
+ */
+export function useAnswerAsk(
+  at: string | null,
+  { sample = false, factoryId }: { sample?: boolean; factoryId?: string } = {},
+) {
+  const fid = useFid(factoryId);
+  const source = useNodeSource();
+  const toast = useFactoryToast();
+  const refresh = useRefreshNodes(fid);
+  const { mutate } = useAnswerDecision(fid);
+  return useCallback(
+    (decision: DecisionRef, action: DecisionAction) =>
+      mutate(
+        { decision, action },
+        {
+          onSuccess: () => {
+            const message = sample
+              ? `Sample data: nothing was answered. The sample shows what ${decision.id}: ${action.label} would do.`
+              : `${decision.id}: ${action.label}`;
+            const proposal = answerProposal(decision, action);
+            const back = source?.undoAnswer;
+            if (!proposal || !back) {
+              toast.show({ message });
+              return;
+            }
+            const entry: NodeUndo = {
+              label: `${action.label} ${proposal}`,
+              expiresAt: Date.now() + UNDO_WINDOW_S * 1000,
+              run: () =>
+                back(fid, decision, action).then(
+                  () => {
+                    if (at) forgetUndo(fid, at, entry);
+                    void refresh();
+                    toast.show({
+                      message: `Undone: ${action.label} ${proposal} (${decision.id}).`,
+                    });
+                  },
+                  (error: unknown) => {
+                    // Its window closed, or what it changed moved on: it stays applied.
+                    if (at) forgetUndo(fid, at, entry);
+                    void refresh();
+                    toast.show({ message: `Could not undo: ${errorWords(error)}` });
+                  },
+                ),
+            };
+            if (at) rememberUndo(fid, at, entry);
+            toast.show({ message, undo: () => void entry.run() });
+          },
+          onError: (error) =>
+            toast.show({ message: `${decision.id} was not answered: ${errorWords(error)}` }),
+        },
+      ),
+    [at, fid, mutate, refresh, sample, source?.undoAnswer, toast],
+  );
 }
 
 // ── Needs you, Find, last look ─────────────────────────────────
