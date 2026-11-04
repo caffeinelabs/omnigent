@@ -198,14 +198,14 @@ def _stored(row: FactoryCheckpoint, proposals: Mapping[str, FactoryProposal]) ->
     )
 
 
-def _decision_item(deps: FactoryDeps, row: FactoryDecision) -> Item | None:
+def _decision_item(deps: FactoryDeps, row: FactoryDecision, names: Names) -> Item | None:
     from omnigent.server.factory.server_decisions import SERVER_BY
 
     if row.status not in ("open", "answered") or row.source == "proposal":
         return None
     if row.status == "answered" and (row.answered_by or "") in (SERVER_BY, FACTORY_BY):
         return None
-    asker = _title(deps, row.asked_by_session_id)
+    asker = _title(deps, row.asked_by_session_id, names)
     options = options_of(row.options)
     answered = row.status == "answered"
     return Item(
@@ -230,7 +230,7 @@ def _decision_item(deps: FactoryDeps, row: FactoryDecision) -> Item | None:
     )
 
 
-def _proposal_item(deps: FactoryDeps, row: FactoryProposal) -> Item | None:
+def _proposal_item(deps: FactoryDeps, row: FactoryProposal, names: Names) -> Item | None:
     status = row.status
     if status not in (*_PROPOSAL_DECIDED, "pending", "rejected"):
         return None
@@ -256,7 +256,7 @@ def _proposal_item(deps: FactoryDeps, row: FactoryProposal) -> Item | None:
         return Item(
             status="asked",
             by_kind="agent" if row.author_kind == "agent" else "person",
-            by_name=_title(deps, row.author) or "",
+            by_name=_title(deps, row.author, names) or "",
             by=row.author,
             at=row.created_at,
             **base,
@@ -265,7 +265,7 @@ def _proposal_item(deps: FactoryDeps, row: FactoryProposal) -> Item | None:
         return Item(
             status="answered",
             by_kind="person",
-            by_name=_person(deps, row.factory_id, row.decided_by),
+            by_name=_person(deps, row.factory_id, row.decided_by, names),
             by=row.decided_by,
             at=row.decided_at or row.updated_at,
             choice_id="reject",
@@ -288,7 +288,7 @@ def _proposal_item(deps: FactoryDeps, row: FactoryProposal) -> Item | None:
         return Item(
             status="answered",
             by_kind="person",
-            by_name=_person(deps, row.factory_id, person),
+            by_name=_person(deps, row.factory_id, person, names),
             by=person,
             at=at,
             choice_id="apply",
@@ -307,7 +307,7 @@ def _proposal_item(deps: FactoryDeps, row: FactoryProposal) -> Item | None:
     return Item(
         status="decided",
         by_kind="server" if server else "agent",
-        by_name=FACTORY_NAME if server else (_title(deps, row.author) or FACTORY_NAME),
+        by_name=FACTORY_NAME if server else (_title(deps, row.author, names) or FACTORY_NAME),
         by=row.decided_by,
         by_factory=True,
         at=at,
@@ -332,25 +332,36 @@ def _proposal_effects(row: FactoryProposal) -> list[dict[str, Any]]:
     return out
 
 
-def _title(deps: FactoryDeps, session_id: str | None) -> str | None:
+Names = dict[tuple[str, str], str | None]
+"""Names read during one :func:`load` (sessions and people repeat across rows)."""
+
+
+def _title(deps: FactoryDeps, session_id: str | None, names: Names) -> str | None:
     if not session_id:
         return None
+    key = ("session", session_id)
+    if key in names:
+        return names[key]
     try:
         conv = deps.conversation_store.get_conversation(session_id)
     except Exception:  # noqa: BLE001 - a name is a courtesy
-        return None
-    return display_title(conv.title, conv.id) if conv is not None else None
+        conv = None
+    names[key] = display_title(conv.title, conv.id) if conv is not None else None
+    return names[key]
 
 
-def _person(deps: FactoryDeps, factory_id: str, user_id: str | None) -> str:
+def _person(deps: FactoryDeps, factory_id: str, user_id: str | None, names: Names) -> str:
     from omnigent.server.factory import people
 
     if not user_id:
         return "a person"
-    try:
-        return people.human_label(deps, factory_id, user_id)
-    except Exception:  # noqa: BLE001 - a name is a courtesy
-        return user_id
+    key = ("person", user_id)
+    if key not in names:
+        try:
+            names[key] = people.human_label(deps, factory_id, user_id)
+        except Exception:  # noqa: BLE001 - a name is a courtesy
+            names[key] = user_id
+    return names[key] or user_id
 
 
 # ── Loading ────────────────────────────────────────────────────
@@ -384,6 +395,7 @@ def load(deps: FactoryDeps, factory_id: str, *, now: float | None = None) -> Boo
         )
     }
     items = [_stored(row, proposals) for row in stored]
+    names: Names = {}
     covered_decisions = {norm_id(r.decision_id) for r in stored if r.decision_id}
     covered_proposals = {norm_id(r.proposal_id) for r in stored if r.proposal_id}
     for row in store.list_decisions(
@@ -391,12 +403,12 @@ def load(deps: FactoryDeps, factory_id: str, *, now: float | None = None) -> Boo
     ):
         if norm_id(row.id) in covered_decisions or (row.answered_at or row.created_at) < since:
             continue
-        if (item := _decision_item(deps, row)) is not None:
+        if (item := _decision_item(deps, row, names)) is not None:
             items.append(item)
     for key, row in proposals.items():
         if key in covered_proposals or (row.applied_at or row.updated_at) < since:
             continue
-        if (item := _proposal_item(deps, row)) is not None:
+        if (item := _proposal_item(deps, row, names)) is not None:
             items.append(item)
     changed = {r.overrides: r.ref for r in stored if r.overrides}
     for item in items:
