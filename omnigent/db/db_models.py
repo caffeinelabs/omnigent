@@ -2105,6 +2105,28 @@ class SqlFactoryNodeRead(OmnigentBase):
     seen_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class SqlFactoryNodeName(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_node_names``: the short name a node shows.
+
+    :param node_ref: The node's ref in the cockpit's level tree (``ask:<id>``, ``T-16`` …).
+    :param name: 2–6 words.
+    :param source_hash: Digest of the full text it was made from.
+    :param named_by: The person who named it; ``NULL`` when the factory did.
+    :param updated_at: Epoch seconds.
+    """
+
+    __tablename__ = "factory_node_names"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    node_ref: Mapped[str] = mapped_column(String(96), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(32), nullable=False)
+    named_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SqlFactoryProposal(OmnigentBase):
     """
     SQLAlchemy model for ``factory_proposals``: a proposed change, shown as ``C-<number>``.

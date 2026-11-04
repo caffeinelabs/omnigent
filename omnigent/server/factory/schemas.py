@@ -1650,6 +1650,17 @@ class RoutedView(_View):
     replied_at: int | None = None
 
 
+class ChatActivityView(_View):
+    """
+    What an activity row is: a card type or its meta kind (``base.moved``,
+    ``issue``, ``proposal``, ``system`` …, or ``note``), and whether the thing it
+    shows is answered, applied, closed or resolved.
+    """
+
+    kind: str
+    closed: bool
+
+
 class ChatMessageView(_View):
     """
     One Room message.
@@ -1675,6 +1686,13 @@ class ChatMessageView(_View):
     routed: list[RoutedView] = Field(default_factory=list)
     auto_reply: bool = False
     created_at: int
+    lane: Literal["conversation", "activity"] | None = None
+    """``GET …/chat?feed=``: conversation (said, or a live card for this reader) or activity."""
+    needs_you: bool | None = None
+    """A live card this reader acts on (an open ask, a merge, an offer)."""
+    ask: str | None = None
+    """The ask the card carries (``D-45``, ``merge:main``): Your move may already show it."""
+    activity: ChatActivityView | None = None
 
 
 class ThreadMentionView(_View):

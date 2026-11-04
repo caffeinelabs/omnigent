@@ -93,6 +93,7 @@ from omnigent.server.factory import (
     events,
     gating,
     initiatives,
+    node_names,
     node_refs,
     nodes,
     people,
@@ -101,6 +102,7 @@ from omnigent.server.factory import (
     snapshot,
     start,
     subtrees,
+    your_move,
 )
 from omnigent.server.factory import definition_blocks as blocks
 from omnigent.server.factory.actor import Actor, proposal_ref
@@ -1786,8 +1788,8 @@ async def _feature_status(
 
 
 async def _plan_name(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]) -> Plan:
-    if not node.implicit:
-        raise _not_here("name", node, tree, "it is already a stored node")
+    if not tree.materializes(node):
+        return await _plan_rename(env, tree, node, args)
     title = _text(args, "title", 80)
     to = _text(args, "to", 200)
     if title and to:
@@ -1802,6 +1804,98 @@ async def _plan_name(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
     if node.level == "need":
         return await _plan_name_need(env, tree, node, title, to)
     raise _not_here("name", node, tree, "only an implicit feature or need is named")
+
+
+async def _plan_rename(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]) -> Plan:
+    """
+    A person's short name for a node (``args.title``, 1–6 words): every page, tile
+    and crumb shows it; the node's full text stays in its details. The factory
+    never names it again. Undo puts the name before back.
+    """
+    if not tree.renames(node):
+        raise _not_here(
+            "name", node, tree, "only a node of the product tree shown as a tile or row is named"
+        )
+    if _text(args, "to", 200):
+        raise _err(
+            400,
+            "invalid_args",
+            "a stored node is renamed, not filed under another: send args.title",
+            field="args.to",
+        )
+    raw = _text(args, "title", node_names.NAME_CHARS_MAX)
+    if not raw:
+        return _name_form(node)
+    name = node_names.clean(raw)
+    if name is None:
+        raise _err(
+            422,
+            "invalid_args",
+            f"a name is 1 to {node_names.WORDS_MAX} words",
+            field="args.title",
+        )
+    before = tree.facts.names.get(node.ref)
+    if before is not None and before.named_by and before.name == name:
+        raise _err(409, "nothing_to_do", f"it is already named “{name}”")
+    deps, fid = env.deps, env.fid
+    source = node.source or node.full_title or node.title
+    was = node.title
+
+    async def run() -> Applied:
+        await asyncio.to_thread(
+            deps.factory_store.set_node_name,
+            fid,
+            node.ref,
+            name,
+            source_hash=node_names.digest(source),
+            named_by=env.user_id or "human",
+        )
+        restore = (
+            {"name": before.name, "source_hash": before.source_hash, "named_by": before.named_by}
+            if before is not None
+            else None
+        )
+        return Applied(
+            {"kind": "short_name", "ref": node.ref, "before": restore},
+            f"{env.by} named {was} “{name}”.",
+            page=node.ref,
+        )
+
+    return Plan(
+        "name",
+        node.ref,
+        f"Rename {was}",
+        {"title": name},
+        [node.ref, f"name:{before.name if before is not None else ''}"],
+        [
+            f"Shows it as “{name}” on every page, tile and crumb.",
+            "Its full text stays in its details; the factory will not rename it.",
+        ],
+        run,
+    )
+
+
+def _name_form(node: Any) -> Plan:
+    """A rename's first read: the name it shows now and its full text, nothing to apply."""
+
+    async def run() -> Applied:
+        raise _err(400, "invalid_args", "args.title: the name, 1 to 6 words", field="args.title")
+
+    shown = {"title": node.title, "named": node.named, "full_title": node.full_title}
+    return Plan(
+        "name",
+        node.ref,
+        f"Rename {node.title}",
+        {},
+        [node.ref],
+        [
+            f"Give it a name of 1 to {node_names.WORDS_MAX} words; its full text stays "
+            "in its details."
+        ],
+        run,
+        ready=False,
+        extra={"parents": [], "name": {k: v for k, v in shown.items() if v}},
+    )
 
 
 async def _plan_name_feature(env: Env, tree: nodes.Tree, node: Any, title: str, to: str) -> Plan:
@@ -2748,10 +2842,17 @@ async def apply(env: Env, ref: str, payload: Any) -> dict[str, Any]:
         undo = await _record(env, plan, applied)
     await _card(env, plan, applied, undo)
     fresh = await env.tree(fresh=True)
-    page = fresh.page(applied.page or plan.ref, can_edit=True) or fresh.page(ref, can_edit=True)
+    viewer = your_move.Viewer(env.user_id, env.level)
+    page = fresh.page(applied.page or plan.ref, can_edit=True, viewer=viewer) or fresh.page(
+        ref, can_edit=True, viewer=viewer
+    )
     if page is None:
         node = tree.lookup(plan.ref)
-        page = fresh.page(node.parent or node_refs.PRODUCT, can_edit=True) if node else None
+        page = (
+            fresh.page(node.parent or node_refs.PRODUCT, can_edit=True, viewer=viewer)
+            if node
+            else None
+        )
     return {
         "result": page,
         "undo": {"token": undo["token"], "expires_at": iso_utc(undo["expires_at"])}
@@ -2879,7 +2980,7 @@ async def undo(env: Env, token: str) -> dict[str, Any]:
         message_id=derived_id(env.fid, "undone", token),
     )
     fresh = await env.tree(fresh=True)
-    page = fresh.page(ref, can_edit=True)
+    page = fresh.page(ref, can_edit=True, viewer=your_move.Viewer(env.user_id, env.level))
     return {
         "undone": True,
         "verb": data.get("verb"),
@@ -2993,6 +3094,22 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
                     data={**env.actor.event_data(), "opportunity": row.ref, "reason": "undone"},
                 )
         return "the need is implicit again"
+    if kind == "short_name":
+        ref = str(record.get("ref"))
+        before = record.get("before")
+        await asyncio.to_thread(store.delete_node_name, fid, ref)
+        if isinstance(before, Mapping) and before.get("name"):
+            # The name it had: a person's, or the factory's (which a person's row would block).
+            await asyncio.to_thread(
+                store.set_node_name,
+                fid,
+                ref,
+                str(before["name"]),
+                source_hash=str(before.get("source_hash") or ""),
+                named_by=str(before["named_by"]) if before.get("named_by") else None,
+            )
+            return f"{ref} is “{before['name']}” again"
+        return f"{ref} shows its own words again"
     if kind == "definition":
         version = int(record.get("version") or 0)
         made = record.get("made")

@@ -49,10 +49,29 @@ def test_needs_you_ranks_by_what_each_ask_holds(tree: Tree) -> None:
     assert all(i["decision"]["blocks_nothing"] for i in view["blocks_nothing"])
     d45, merges, d49 = view["items"]
     # D-45 holds T-16 and, through assistant-core, the panel that waits on it.
-    assert d45["holds"] == ["T-16", "assistant-panel-ux"]
+    assert d45["holds"] == ["T-16", "Assistant panel UX"]
     assert d45["weight"] > merges["weight"] > d49["weight"] == 0
     assert [c["ref"] for c in d45["breadcrumb"]] == ["product", ASK, "I-1", "assistant-core"]
     assert d45["decision"]["row_id"] and d45["decision"]["actions"][0]["label"] == "Apply"
+
+
+def test_each_ask_comes_with_the_row_your_move_shows_for_it(tree: Tree) -> None:
+    view = _needs(tree)
+    home = tree.page("product") or {}
+    shown = {i["id"]: i for i in home["your_move"]["items"]}
+
+    rows = [i["move"] for i in view["items"] + view["blocks_nothing"]]
+    # Short names and one action, as the home page's Your move words them.
+    assert [r["id"] for r in rows] == ["D-45", "merge:main", "D-49", "D-43", "D-44"]
+    assert rows[0] == {**shown["D-45"], "decision": rows[0]["decision"]}
+    assert (rows[0]["object_name"], rows[0]["unblocks"]) == (
+        "Update assistant core",
+        "Agent assistant (sample)",
+    )
+    assert rows[1]["unblocks"] == "Build tier drafts 3"
+    assert all(r["blocks_nothing"] for r in rows[3:])
+    factory = _needs(tree, "factory")
+    assert [i["move"]["verb"] for i in factory["items"]] == ["Apply rule", "Apply rule"]
 
 
 def test_merges_on_one_human_merged_base_are_one_item(tree: Tree) -> None:

@@ -287,7 +287,7 @@ def test_the_other_feature_sees_an_also_serves_link() -> None:
         {
             "kind": "also serves",
             "ref": "assistant-core",
-            "title": "assistant-core",
+            "title": "Assistant core",
             "state": "home: Agent assistant (sample)",
         }
     ]

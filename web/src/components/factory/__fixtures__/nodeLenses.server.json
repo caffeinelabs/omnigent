@@ -15,7 +15,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -30,7 +30,7 @@
         "match": "ask",
         "ref": "assistant-core",
         "state": "needs",
-        "title": "assistant-core",
+        "title": "Assistant core",
         "via": "D-45"
       }
     ],
@@ -53,7 +53,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -68,7 +68,7 @@
         "match": "title",
         "ref": "assistant-panel-ux",
         "state": "waiting",
-        "title": "assistant-panel-ux"
+        "title": "Assistant panel UX"
       }
     ],
     "q": "panel",
@@ -246,10 +246,10 @@
       "item": ["talk"],
       "need": ["talk", "add", "research", "name"],
       "product": ["talk", "add"],
-      "project": ["talk", "add", "start", "team", "auto", "pause", "move"],
+      "project": ["talk", "add", "start", "team", "auto", "pause", "move", "name"],
       "run": [],
       "study": ["talk", "research"],
-      "task": ["talk", "pause", "move"]
+      "task": ["talk", "pause", "move", "name"]
     },
     "version": 14
   },
@@ -411,7 +411,7 @@
         },
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       }
     ],
     "below": [
@@ -496,7 +496,7 @@
           {
             "ref": "assistant-core",
             "sep": "›",
-            "title": "assistant-core"
+            "title": "Assistant core"
           },
           {
             "ref": "T-16",
@@ -719,7 +719,7 @@
         },
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "level": "feature",
@@ -757,7 +757,7 @@
             {
               "ref": "assistant-core",
               "sep": "›",
-              "title": "assistant-core"
+              "title": "Assistant core"
             },
             {
               "ref": "T-16",
@@ -889,7 +889,7 @@
         },
         "ref": "assistant-core",
         "state": "needs",
-        "title": "assistant-core"
+        "title": "Assistant core"
       }
     ],
     "below": [],
@@ -1086,26 +1086,26 @@
         "cost": 25.13,
         "ref": "assistant-core",
         "state": "needs",
-        "title": "assistant-core"
+        "title": "Assistant core"
       },
       {
         "cost": 14.2,
         "ref": "connectors-core",
         "state": "done",
-        "title": "connectors-core"
+        "title": "Connectors core"
       },
       {
         "cost": 11.8,
         "ref": "skill-discovery",
         "state": "done",
-        "title": "skill-discovery"
+        "title": "Skill discovery"
       },
       {
         "budget": 150.0,
         "cost": 0.0,
         "ref": "assistant-panel-ux",
         "state": "waiting",
-        "title": "assistant-panel-ux"
+        "title": "Assistant panel UX"
       }
     ],
     "scope": "I-1",
@@ -1120,19 +1120,19 @@
         "cost": 51.13,
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "cost": 38.4,
         "ref": "build-tier-drafts-3",
         "state": "waiting",
-        "title": "build-tier-drafts-3"
+        "title": "Build tier drafts 3"
       },
       {
         "cost": 27.6,
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
         "state": "done",
-        "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+        "title": "Your shortlist pick"
       }
     ],
     "scope": "product",
@@ -1176,6 +1176,28 @@
           "verb": "Answer D-37"
         },
         "holds": [],
+        "move": {
+          "about": "Decision 37",
+          "action": {
+            "label": "Answer"
+          },
+          "blocks_nothing": true,
+          "decision": {
+            "actions": [],
+            "age": "5h 54m",
+            "asker": "an agent",
+            "blocks_nothing": true,
+            "id": "D-37",
+            "row_id": "00000000000000000000000000000219",
+            "title": "Decision 37",
+            "verb": "Answer D-37"
+          },
+          "id": "D-37",
+          "object": "D-37",
+          "ref": "member:0000000000000000000000000000025b",
+          "verb": "Answer",
+          "weight": 0.0
+        },
         "weight": 0.0
       }
     ],
@@ -1228,6 +1250,41 @@
           "verb": "Apply rule C-17"
         },
         "holds": [],
+        "move": {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-50",
+            "row_id": "00000000000000000000000000000226",
+            "subject": "C-17",
+            "title": "Decision 50",
+            "verb": "Apply rule C-17"
+          },
+          "id": "D-50",
+          "object": "C-17",
+          "object_name": "Spike unproven external capabilities",
+          "ref": "C-17",
+          "verb": "Apply rule",
+          "weight": 0.0
+        },
         "weight": 0.0
       },
       {
@@ -1278,6 +1335,41 @@
           "verb": "Apply rule C-18"
         },
         "holds": [],
+        "move": {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-51",
+            "row_id": "00000000000000000000000000000227",
+            "subject": "C-18",
+            "title": "Decision 51",
+            "verb": "Apply rule C-18"
+          },
+          "id": "D-51",
+          "object": "C-18",
+          "object_name": "Name pending scope decisions",
+          "ref": "C-18",
+          "verb": "Apply rule",
+          "weight": 0.0
+        },
         "weight": 0.0
       }
     ],
@@ -1301,7 +1393,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1315,7 +1407,7 @@
             "level_name": "Project",
             "ref": "connectors-core",
             "state": "done",
-            "title": "connectors-core"
+            "title": "Connectors core"
           }
         ],
         "decision": {
@@ -1344,6 +1436,44 @@
           "verb": "Apply C-14"
         },
         "holds": [],
+        "move": {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "blocks_nothing": true,
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "blocks_nothing": true,
+            "expires": "2d 16h",
+            "id": "D-43",
+            "row_id": "0000000000000000000000000000021f",
+            "subject": "C-14",
+            "title": "Decision 43",
+            "verb": "Apply C-14"
+          },
+          "id": "D-43",
+          "object": "C-14",
+          "object_name": "Proposal 14",
+          "ref": "connectors-core",
+          "verb": "Apply",
+          "weight": 0.0
+        },
         "weight": 0.0
       },
       {
@@ -1360,7 +1490,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1374,7 +1504,7 @@
             "level_name": "Project",
             "ref": "skill-discovery",
             "state": "done",
-            "title": "skill-discovery"
+            "title": "Skill discovery"
           }
         ],
         "decision": {
@@ -1403,6 +1533,44 @@
           "verb": "Apply C-15"
         },
         "holds": [],
+        "move": {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "blocks_nothing": true,
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "blocks_nothing": true,
+            "expires": "2d 16h",
+            "id": "D-44",
+            "row_id": "00000000000000000000000000000220",
+            "subject": "C-15",
+            "title": "Decision 44",
+            "verb": "Apply C-15"
+          },
+          "id": "D-44",
+          "object": "C-15",
+          "object_name": "Proposal 15",
+          "ref": "skill-discovery",
+          "verb": "Apply",
+          "weight": 0.0
+        },
         "weight": 0.0
       }
     ],
@@ -1443,7 +1611,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1457,7 +1625,7 @@
             "level_name": "Project",
             "ref": "assistant-core",
             "state": "needs",
-            "title": "assistant-core"
+            "title": "Assistant core"
           }
         ],
         "decision": {
@@ -1485,7 +1653,47 @@
           "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
           "verb": "Apply C-16"
         },
-        "holds": ["T-16", "assistant-panel-ux"],
+        "holds": ["T-16", "Assistant panel UX"],
+        "move": {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 180.0
+        },
         "weight": 180.0
       },
       {
@@ -1504,7 +1712,7 @@
             "level_name": "Need",
             "ref": "need:from-C-12",
             "state": "waiting",
-            "title": "From C-12"
+            "title": "Third round of build-tier drafts"
           },
           {
             "folded": true,
@@ -1513,14 +1721,14 @@
             "level_name": "Feature",
             "ref": "feature:from-C-12",
             "state": "waiting",
-            "title": "From C-12: Third round of build-tier drafts"
+            "title": "Third round of build-tier drafts"
           },
           {
             "level": "project",
             "level_name": "Project",
             "ref": "build-tier-drafts-3",
             "state": "waiting",
-            "title": "build-tier-drafts-3"
+            "title": "Build tier drafts 3"
           }
         ],
         "decision": {
@@ -1540,6 +1748,37 @@
           "verb": "Merge #9856 and #9857"
         },
         "holds": ["#9856", "#9857"],
+        "move": {
+          "action": {
+            "label": "Review and merge",
+            "option": "merge",
+            "url": "https://github.com/sample-org/sample-app/pull/9856"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "merge",
+                "label": "Review and merge"
+              }
+            ],
+            "age": "1h 40m",
+            "asker": "Nova",
+            "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+            "grouped": true,
+            "id": "merge:main",
+            "text": "Ready to merge into main. A person merges main, so the factory does not.",
+            "title": "Merge #9856 and #9857 into main",
+            "verb": "Merge #9856 and #9857"
+          },
+          "id": "merge:main",
+          "object": "#9856 and #9857",
+          "ref": "build-tier-drafts-3",
+          "unblocks": "Build tier drafts 3",
+          "unblocks_ref": "build-tier-drafts-3",
+          "unblocks_refs": ["build-tier-drafts-3"],
+          "verb": "Merge",
+          "weight": 120.0
+        },
         "weight": 120.0
       },
       {
@@ -1556,7 +1795,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1598,6 +1837,45 @@
           "verb": "Apply C-19"
         },
         "holds": [],
+        "move": {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "35m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-49",
+            "row_id": "00000000000000000000000000000225",
+            "subject": "C-19",
+            "title": "Start the live-search fix?",
+            "verb": "Apply C-19"
+          },
+          "id": "D-49",
+          "object": "C-19",
+          "object_name": "Fix live search",
+          "ref": "live-search-fix",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 0.0
+        },
         "weight": 0.0
       }
     ],
@@ -1607,7 +1885,7 @@
   },
   "since/I-1": {
     "changed": {
-      "connectors-core": ["#9882 merged 13:25", "T-17 done", "connectors-core: merged"],
+      "connectors-core": ["#9882 merged 13:25", "T-17 done", "Connectors core: merged"],
       "live-search-fix": ["D-49 new"],
       "skill-discovery": ["#9881 merged 13:03"]
     },
@@ -1649,14 +1927,14 @@
         ],
         "ref": "assistant-core",
         "state": "needs",
-        "title": "assistant-core"
+        "title": "Assistant core"
       },
       {
         "bars": [
           {
             "from": "2026-11-03T06:01:00Z",
             "kind": "wait",
-            "label": "waits on assistant-core",
+            "label": "waits on Assistant core",
             "to": "2026-11-03T06:55:00Z"
           },
           {
@@ -1668,14 +1946,14 @@
         ],
         "ref": "connectors-core",
         "state": "done",
-        "title": "connectors-core"
+        "title": "Connectors core"
       },
       {
         "bars": [
           {
             "from": "2026-11-03T06:01:00Z",
             "kind": "wait",
-            "label": "waits on assistant-core",
+            "label": "waits on Assistant core",
             "to": "2026-11-03T06:55:00Z"
           },
           {
@@ -1687,20 +1965,20 @@
         ],
         "ref": "skill-discovery",
         "state": "done",
-        "title": "skill-discovery"
+        "title": "Skill discovery"
       },
       {
         "bars": [
           {
             "from": "2026-11-03T06:01:00Z",
             "kind": "wait",
-            "label": "Waits on assistant-core · held for C-16",
+            "label": "Waits on Assistant core · held for C-16",
             "to": "2026-11-03T13:40:00Z"
           }
         ],
         "ref": "assistant-panel-ux",
         "state": "waiting",
-        "title": "assistant-panel-ux"
+        "title": "Assistant panel UX"
       },
       {
         "bars": [

@@ -89,11 +89,11 @@ describe("cockpit v3 · the server's node pages", () => {
     const held = "T-16 → held for C-16 → needs you: Apply C-16 (D-45)";
     expect(statusText(page("assistant-core").status)).toBe(`Not moving: ${held}`);
     expect(statusText(page("assistant-panel-ux").status)).toBe(
-      `Not started for 7 h: waits on assistant-core › ${held}`,
+      `Not started for 7 h: waits on Assistant core › ${held}`,
     );
     expect(page("assistant-panel-ux").status.note).toMatch(/3 projects linked without a reason/);
     expect(statusText(page("product").status)).toBe(
-      `Not moving: Agent assistant (sample) › assistant-core › ${held} · also holds assistant-panel-ux`,
+      `Not moving: Agent assistant (sample) › Assistant core › ${held} · also holds Assistant panel UX`,
     );
     const feature = page("I-1");
     const tile = (ref: string) => feature.children.items.find((k) => k.ref === ref)!;
@@ -102,7 +102,7 @@ describe("cockpit v3 · the server's node pages", () => {
     ).toBe("Needs you: Apply C-16 · via T-16 · the ask above");
     expect(
       statusText(tile("assistant-panel-ux").status_compact, { compact: true, aboveId: "D-45" }),
-    ).toBe("Waits on assistant-core · held for C-16");
+    ).toBe("Waits on Assistant core · held for C-16");
     expect(JSON.stringify(PAGES["assistant-core"])).not.toContain('"D-48"');
     expect(page("product").rollup.alarms_closed).toEqual({ count: 3, ref: "fx:health" });
     expect(page("fx:health").node.closed_alarms?.map((a) => a.id)).toEqual([

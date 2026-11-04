@@ -13,7 +13,7 @@
         "level_name": "Need",
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       }
     ],
     "children": {
@@ -60,6 +60,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-49",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000225",
               "subject": "C-19",
               "title": "Start the live-search fix?",
@@ -82,6 +83,7 @@
           "burn": 2.5,
           "col": 0,
           "cost": 25.13,
+          "full_title": "assistant-core",
           "grandchildren": {
             "by_state": {
               "done": 1,
@@ -97,6 +99,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 1,
             "open": 1
@@ -133,6 +136,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -168,6 +172,7 @@
                   "asker": "Atlas",
                   "expires": "2d 16h",
                   "id": "D-45",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000221",
                   "subject": "C-16",
                   "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -179,13 +184,14 @@
               }
             ]
           },
-          "title": "assistant-core",
+          "title": "Assistant core",
           "try_ready": true,
           "working": []
         },
         {
           "col": 1,
           "cost": 14.2,
+          "full_title": "connectors-core",
           "grandchildren": {
             "by_state": {
               "done": 1
@@ -199,6 +205,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 1
@@ -217,11 +224,12 @@
             "label": "Done",
             "segments": []
           },
-          "title": "connectors-core"
+          "title": "Connectors core"
         },
         {
           "col": 1,
           "cost": 11.8,
+          "full_title": "skill-discovery",
           "grandchildren": {
             "by_state": {
               "done": 1
@@ -235,6 +243,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 1
@@ -253,15 +262,17 @@
             "label": "Done",
             "segments": []
           },
-          "title": "skill-discovery"
+          "title": "Skill discovery"
         },
         {
           "budget": 150.0,
           "col": 1,
+          "full_title": "assistant-panel-ux",
           "kind": "project",
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -299,6 +310,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -313,7 +325,7 @@
                 "label": "",
                 "ref": "assistant-core",
                 "sep": "→",
-                "title": "assistant-core"
+                "title": "Assistant core"
               },
               {
                 "label": "held for C-16",
@@ -321,17 +333,19 @@
               }
             ]
           },
-          "title": "assistant-panel-ux"
+          "title": "Assistant panel UX"
         }
       ],
       "later": [
         {
           "col": "later",
+          "full_title": "ads-integration",
           "held_for": "wave 2: ads network and growth",
           "kind": "project",
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -345,16 +359,18 @@
             "label": "Later",
             "segments": []
           },
-          "title": "ads-integration",
+          "title": "Ads integration",
           "try_ready": true
         },
         {
           "col": "later",
+          "full_title": "growth-seo",
           "held_for": "wave 2: ads network and growth",
           "kind": "project",
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -368,16 +384,18 @@
             "label": "Later",
             "segments": []
           },
-          "title": "growth-seo",
+          "title": "Growth SEO",
           "try_ready": true
         },
         {
           "col": "later",
+          "full_title": "sales-skill",
           "held_for": "wave 3: sales and promotion",
           "kind": "project",
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -391,16 +409,18 @@
             "label": "Later",
             "segments": []
           },
-          "title": "sales-skill",
+          "title": "Sales skill",
           "try_ready": true
         },
         {
           "col": "later",
+          "full_title": "promotion-skill",
           "held_for": "wave 3: sales and promotion",
           "kind": "project",
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -414,7 +434,7 @@
             "label": "Later",
             "segments": []
           },
-          "title": "promotion-skill",
+          "title": "Promotion skill",
           "try_ready": true
         }
       ],
@@ -563,6 +583,7 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -576,7 +597,7 @@
           {
             "ref": "assistant-core",
             "sep": "›",
-            "title": "assistant-core"
+            "title": "Assistant core"
           },
           {
             "ref": "T-16",
@@ -603,6 +624,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -620,13 +642,13 @@
         {
           "acceptance_step": 2,
           "api": true,
-          "how": "API only: assistant-panel-ux not built yet",
+          "how": "API only: Assistant panel UX not built yet",
           "text": "Ask how the app is doing: the answer uses analytics"
         },
         {
           "acceptance_step": 3,
           "api": true,
-          "how": "API only: assistant-panel-ux not built yet",
+          "how": "API only: Assistant panel UX not built yet",
           "text": "A flag-off user gets no assistant"
         }
       ],
@@ -659,7 +681,7 @@
       "also_holds": [
         {
           "ref": "assistant-panel-ux",
-          "title": "assistant-panel-ux"
+          "title": "Assistant panel UX"
         }
       ],
       "decision": {
@@ -681,6 +703,7 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -694,7 +717,7 @@
         {
           "ref": "assistant-core",
           "sep": "›",
-          "title": "assistant-core"
+          "title": "Assistant core"
         },
         {
           "ref": "T-16",
@@ -725,6 +748,7 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -740,7 +764,7 @@
           "html": "Agent assistant (sample) is not moving."
         },
         {
-          "html": "The project that holds it is <a data-ref=\"assistant-core\">assistant-core</a>."
+          "html": "The project that holds it is <a data-ref=\"assistant-core\">Assistant core</a>."
         },
         {
           "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
@@ -790,9 +814,137 @@
         "key": "m",
         "label": "Move",
         "verb": "move"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Rename",
+        "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "Assistant core and Assistant panel UX",
+          "unblocks_ref": "assistant-core",
+          "unblocks_refs": ["assistant-core", "assistant-panel-ux"],
+          "verb": "Apply",
+          "weight": 180.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "35m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-49",
+            "row_id": "00000000000000000000000000000225",
+            "subject": "C-19",
+            "title": "Start the live-search fix?",
+            "verb": "Apply C-19"
+          },
+          "id": "D-49",
+          "object": "C-19",
+          "object_name": "Fix live search",
+          "ref": "live-search-fix",
+          "unblocks": "this feature",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 0.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "blocks_nothing": true,
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "blocks_nothing": true,
+            "expires": "2d 16h",
+            "id": "D-43",
+            "row_id": "0000000000000000000000000000021f",
+            "subject": "C-14",
+            "title": "Decision 43",
+            "verb": "Apply C-14"
+          },
+          "id": "D-43",
+          "object": "C-14",
+          "object_name": "Proposal 14",
+          "ref": "connectors-core",
+          "verb": "Apply",
+          "weight": 0.0
+        }
+      ],
+      "more": 1
+    }
   },
   "PR-9876": {
     "breadcrumb": [
@@ -808,7 +960,7 @@
         "level_name": "Need",
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "level": "feature",
@@ -822,7 +974,7 @@
         "level_name": "Project",
         "ref": "assistant-core",
         "state": "needs",
-        "title": "assistant-core"
+        "title": "Assistant core"
       },
       {
         "level": "task",
@@ -943,7 +1095,11 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [],
+      "more": 0
+    }
   },
   "T-16": {
     "breadcrumb": [
@@ -959,7 +1115,7 @@
         "level_name": "Need",
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "level": "feature",
@@ -973,7 +1129,7 @@
         "level_name": "Project",
         "ref": "assistant-core",
         "state": "needs",
-        "title": "assistant-core"
+        "title": "Assistant core"
       }
     ],
     "children": {
@@ -1034,6 +1190,7 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1064,6 +1221,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1109,6 +1267,7 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1143,6 +1302,7 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1184,9 +1344,60 @@
         "key": "p",
         "label": "Pause",
         "verb": "pause"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Rename",
+        "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "this task and Assistant panel UX",
+          "unblocks_ref": "assistant-panel-ux",
+          "unblocks_refs": ["T-16", "assistant-panel-ux"],
+          "verb": "Apply",
+          "weight": 180.0
+        }
+      ],
+      "more": 0
+    }
   },
   "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1": {
     "breadcrumb": [
@@ -1258,6 +1469,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1271,7 +1483,7 @@
               {
                 "ref": "assistant-core",
                 "sep": "›",
-                "title": "assistant-core"
+                "title": "Assistant core"
               },
               {
                 "ref": "T-16",
@@ -1298,6 +1510,7 @@
                   "asker": "Atlas",
                   "expires": "2d 16h",
                   "id": "D-45",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000221",
                   "subject": "C-16",
                   "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1392,6 +1605,7 @@
         ],
         "summary": "an ask · no user evidence yet"
       },
+      "full_title": "I want an assistant in the app that helps with building, and later with discovery and sales too.",
       "glyph": "ASK",
       "grandchildren": {
         "by_state": {
@@ -1406,6 +1620,7 @@
       "kind_name": "Ask",
       "level": "need",
       "level_name": "Need",
+      "named": "words",
       "needs": {
         "blocking": 2,
         "open": 4
@@ -1436,6 +1651,7 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1476,6 +1692,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1487,7 +1704,7 @@
           }
         ]
       },
-      "title": "I want an assistant in the app that helps with building, and later with discovery and sales too.",
+      "title": "An assistant in the app",
       "why_html": "<b>“I want an assistant in the app that helps with building, and later with discovery and sales too.”</b>"
     },
     "results": {
@@ -1509,7 +1726,7 @@
       "also_holds": [
         {
           "ref": "assistant-panel-ux",
-          "title": "assistant-panel-ux"
+          "title": "Assistant panel UX"
         }
       ],
       "decision": {
@@ -1531,6 +1748,7 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1549,7 +1767,7 @@
         {
           "ref": "assistant-core",
           "sep": "›",
-          "title": "assistant-core"
+          "title": "Assistant core"
         },
         {
           "ref": "T-16",
@@ -1580,6 +1798,7 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1592,13 +1811,13 @@
       ],
       "why": [
         {
-          "html": "I want an assistant in the app that helps with building, and later with discovery and sales too. is not moving."
+          "html": "An assistant in the app is not moving."
         },
         {
           "html": "The feature that holds it is <a data-ref=\"I-1\">Agent assistant (sample)</a>."
         },
         {
-          "html": "The project that holds it is <a data-ref=\"assistant-core\">assistant-core</a>."
+          "html": "The project that holds it is <a data-ref=\"assistant-core\">Assistant core</a>."
         },
         {
           "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
@@ -1611,7 +1830,7 @@
           "tone": "you"
         }
       ],
-      "why_title": "Why I want an assistant in the app that helps with building, and later with discovery and sales too. is not moving"
+      "why_title": "Why An assistant in the app is not moving"
     },
     "thread": {
       "key": "need:ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
@@ -1630,9 +1849,137 @@
         "key": "a",
         "label": "Add child",
         "verb": "add"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Rename",
+        "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 180.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "35m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-49",
+            "row_id": "00000000000000000000000000000225",
+            "subject": "C-19",
+            "title": "Start the live-search fix?",
+            "verb": "Apply C-19"
+          },
+          "id": "D-49",
+          "object": "C-19",
+          "object_name": "Fix live search",
+          "ref": "live-search-fix",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 0.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "blocks_nothing": true,
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "blocks_nothing": true,
+            "expires": "2d 16h",
+            "id": "D-43",
+            "row_id": "0000000000000000000000000000021f",
+            "subject": "C-14",
+            "title": "Decision 43",
+            "verb": "Apply C-14"
+          },
+          "id": "D-43",
+          "object": "C-14",
+          "object_name": "Proposal 14",
+          "ref": "connectors-core",
+          "verb": "Apply",
+          "weight": 0.0
+        }
+      ],
+      "more": 1
+    }
   },
   "assistant-core": {
     "breadcrumb": [
@@ -1648,7 +1995,7 @@
         "level_name": "Need",
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "level": "feature",
@@ -1737,6 +2084,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1767,6 +2115,7 @@
                   "asker": "Atlas",
                   "expires": "2d 16h",
                   "id": "D-45",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000221",
                   "subject": "C-16",
                   "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1793,7 +2142,7 @@
         "kind": "needed by",
         "ref": "assistant-panel-ux",
         "state": "waiting",
-        "title": "assistant-panel-ux"
+        "title": "Assistant panel UX"
       }
     ],
     "levels_below": [
@@ -1836,6 +2185,7 @@
       "burn": 2.5,
       "col": 0,
       "cost": 25.13,
+      "full_title": "assistant-core",
       "grandchildren": {
         "by_state": {
           "done": 1,
@@ -1851,6 +2201,7 @@
       "kind_name": "Project",
       "level": "project",
       "level_name": "Project",
+      "named": "words",
       "needs": {
         "blocking": 1,
         "open": 1
@@ -1887,6 +2238,7 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1922,6 +2274,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1933,18 +2286,18 @@
           }
         ]
       },
-      "title": "assistant-core",
+      "title": "Assistant core",
       "try_it": [
         {
           "acceptance_step": 2,
           "api": true,
-          "how": "API only: assistant-panel-ux not built yet",
+          "how": "API only: Assistant panel UX not built yet",
           "text": "Ask how the app is doing: the answer uses analytics"
         },
         {
           "acceptance_step": 3,
           "api": true,
-          "how": "API only: assistant-panel-ux not built yet",
+          "how": "API only: Assistant panel UX not built yet",
           "text": "A flag-off user gets no assistant"
         }
       ],
@@ -1997,6 +2350,7 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2036,6 +2390,7 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2048,7 +2403,7 @@
       ],
       "why": [
         {
-          "html": "assistant-core is not moving."
+          "html": "Assistant core is not moving."
         },
         {
           "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
@@ -2061,7 +2416,7 @@
           "tone": "you"
         }
       ],
-      "why_title": "Why assistant-core is not moving"
+      "why_title": "Why Assistant core is not moving"
     },
     "thread": {
       "key": "project:assistant-core",
@@ -2104,9 +2459,60 @@
         "key": "m",
         "label": "Move",
         "verb": "move"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Rename",
+        "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "Debit each turn and Assistant panel UX",
+          "unblocks_ref": "T-16",
+          "unblocks_refs": ["T-16", "assistant-panel-ux"],
+          "verb": "Apply",
+          "weight": 180.0
+        }
+      ],
+      "more": 0
+    }
   },
   "assistant-panel-ux": {
     "breadcrumb": [
@@ -2122,7 +2528,7 @@
         "level_name": "Need",
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "level": "feature",
@@ -2148,7 +2554,7 @@
         "reason": "needs the session API and per-turn debit",
         "ref": "assistant-core",
         "state": "needs you",
-        "title": "assistant-core"
+        "title": "Assistant core"
       },
       {
         "list": [
@@ -2158,19 +2564,19 @@
                 "kind": "depended on",
                 "ref": "ux-env-badge-copy",
                 "state": "done · no reason given, across features",
-                "title": "ux-env-badge-copy"
+                "title": "UX env badge copy"
               },
               {
                 "kind": "depended on",
                 "ref": "ux-slash-focus",
                 "state": "done · no reason given, across features",
-                "title": "ux-slash-focus"
+                "title": "UX slash focus"
               },
               {
                 "kind": "depended on",
                 "ref": "ux-status-page",
                 "state": "done · no reason given, across features",
-                "title": "ux-status-page"
+                "title": "UX status page"
               }
             ],
             "note": "Met links are history; they no longer hold this node."
@@ -2186,10 +2592,12 @@
     "node": {
       "budget": 150.0,
       "col": 1,
+      "full_title": "assistant-panel-ux",
       "kind": "project",
       "kind_name": "Project",
       "level": "project",
       "level_name": "Project",
+      "named": "words",
       "needs": {
         "blocking": 0,
         "open": 0
@@ -2227,6 +2635,7 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2241,7 +2650,7 @@
             "label": "",
             "ref": "assistant-core",
             "sep": "→",
-            "title": "assistant-core"
+            "title": "Assistant core"
           },
           {
             "label": "held for C-16",
@@ -2249,7 +2658,7 @@
           }
         ]
       },
-      "title": "assistant-panel-ux",
+      "title": "Assistant panel UX",
       "why_html": "The assistant panel inside the app <b>Wave 1 of Agent assistant (sample).</b>"
     },
     "results": {
@@ -2289,6 +2698,7 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2298,14 +2708,14 @@
       "ends": "person",
       "kind": "needs",
       "label": "Not started for 7 h:",
-      "note": "It also waited on 3 projects linked without a reason (ux-env-badge-copy, ux-slash-focus, ux-status-page). They are done, so those links are met and no longer hold it.",
+      "note": "It also waited on 3 projects linked without a reason (UX env badge copy, UX slash focus, UX status page). They are done, so those links are met and no longer hold it.",
       "segments": [
         {
           "label": "waits on",
           "reason": "needs the session API and per-turn debit",
           "ref": "assistant-core",
           "sep": "→",
-          "title": "assistant-core"
+          "title": "Assistant core"
         },
         {
           "ref": "T-16",
@@ -2336,6 +2746,7 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2348,10 +2759,10 @@
       ],
       "why": [
         {
-          "html": "assistant-panel-ux has not started for 7 h."
+          "html": "Assistant panel UX has not started for 7 h."
         },
         {
-          "html": "It waits on <a data-ref=\"assistant-core\">assistant-core</a>, because it needs the session API and per-turn debit."
+          "html": "It waits on <a data-ref=\"assistant-core\">Assistant core</a>, because it needs the session API and per-turn debit."
         },
         {
           "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
@@ -2364,7 +2775,7 @@
           "tone": "you"
         }
       ],
-      "why_title": "Why assistant-panel-ux has not started"
+      "why_title": "Why Assistant panel UX has not started"
     },
     "thread": {
       "key": "project:assistant-panel-ux",
@@ -2413,9 +2824,60 @@
         "key": "m",
         "label": "Move",
         "verb": "move"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Rename",
+        "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "this project and Debit each turn",
+          "unblocks_ref": "T-16",
+          "unblocks_refs": ["assistant-panel-ux", "T-16"],
+          "verb": "Apply",
+          "weight": 180.0
+        }
+      ],
+      "more": 0
+    }
   },
   "base-env": {
     "breadcrumb": [
@@ -2497,7 +2959,11 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [],
+      "more": 0
+    }
   },
   "build-tier-drafts-3": {
     "breadcrumb": [
@@ -2515,7 +2981,7 @@
         "level_name": "Need",
         "ref": "need:from-C-12",
         "state": "waiting",
-        "title": "From C-12"
+        "title": "Third round of build-tier drafts"
       },
       {
         "folded": true,
@@ -2524,7 +2990,7 @@
         "level_name": "Feature",
         "ref": "feature:from-C-12",
         "state": "waiting",
-        "title": "From C-12: Third round of build-tier drafts"
+        "title": "Third round of build-tier drafts"
       }
     ],
     "children": {
@@ -2534,11 +3000,13 @@
         {
           "base": "main",
           "folded_from": ["adhoc:00000000000000000000000000002680"],
+          "full_title": "build-tier-drafts-3, part 1",
           "glyph": "PR",
           "kind": "pr",
           "kind_name": "Pull request",
           "level": "change",
           "level_name": "Change",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -2558,6 +3026,7 @@
               "external_url": "https://github.com/sample-org/sample-app/pull/9856",
               "grouped": true,
               "id": "merge:main",
+              "in_your_move": true,
               "text": "Ready to merge into main. A person merges main, so the factory does not.",
               "title": "Merge #9856 and #9857 into main",
               "verb": "Merge #9856 and #9857"
@@ -2579,6 +3048,7 @@
                   "external_url": "https://github.com/sample-org/sample-app/pull/9856",
                   "grouped": true,
                   "id": "merge:main",
+                  "in_your_move": true,
                   "text": "Ready to merge into main. A person merges main, so the factory does not.",
                   "title": "Merge #9856 and #9857 into main",
                   "verb": "Merge #9856 and #9857"
@@ -2589,16 +3059,18 @@
             ]
           },
           "tag": "#9856",
-          "title": "build-tier-drafts-3, part 1"
+          "title": "Part 1"
         },
         {
           "base": "main",
           "folded_from": ["adhoc:00000000000000000000000000002681"],
+          "full_title": "build-tier-drafts-3, part 2",
           "glyph": "PR",
           "kind": "pr",
           "kind_name": "Pull request",
           "level": "change",
           "level_name": "Change",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -2618,6 +3090,7 @@
               "external_url": "https://github.com/sample-org/sample-app/pull/9856",
               "grouped": true,
               "id": "merge:main",
+              "in_your_move": true,
               "text": "Ready to merge into main. A person merges main, so the factory does not.",
               "title": "Merge #9856 and #9857 into main",
               "verb": "Merge #9856 and #9857"
@@ -2639,6 +3112,7 @@
                   "external_url": "https://github.com/sample-org/sample-app/pull/9856",
                   "grouped": true,
                   "id": "merge:main",
+                  "in_your_move": true,
                   "text": "Ready to merge into main. A person merges main, so the factory does not.",
                   "title": "Merge #9856 and #9857 into main",
                   "verb": "Merge #9856 and #9857"
@@ -2649,7 +3123,7 @@
             ]
           },
           "tag": "#9857",
-          "title": "build-tier-drafts-3, part 2"
+          "title": "Part 2"
         }
       ],
       "later": [],
@@ -2663,23 +3137,23 @@
     "levels_below": [
       {
         "by_state": {
-          "waiting": 2
+          "needs": 2
         },
         "count": 2,
         "later": 0,
         "level": "task",
         "name": "Tasks",
-        "needs": 0
+        "needs": 2
       },
       {
         "by_state": {
-          "waiting": 2
+          "needs": 2
         },
         "count": 2,
         "later": 0,
         "level": "change",
         "name": "Changes",
-        "needs": 0
+        "needs": 2
       }
     ],
     "more_chips": 0,
@@ -2687,6 +3161,7 @@
       "base": "main",
       "cost": 38.4,
       "folded_from": ["feature:from-C-12", "need:from-C-12"],
+      "full_title": "build-tier-drafts-3",
       "grandchildren": {
         "by_state": {
           "waiting": 2
@@ -2699,6 +3174,7 @@
       "kind_name": "Project",
       "level": "project",
       "level_name": "Project",
+      "named": "words",
       "needs": {
         "blocking": 0,
         "open": 0
@@ -2727,6 +3203,7 @@
           "external_url": "https://github.com/sample-org/sample-app/pull/9856",
           "grouped": true,
           "id": "merge:main",
+          "in_your_move": true,
           "text": "Ready to merge into main. A person merges main, so the factory does not.",
           "title": "Merge #9856 and #9857 into main",
           "verb": "Merge #9856 and #9857"
@@ -2748,6 +3225,7 @@
               "external_url": "https://github.com/sample-org/sample-app/pull/9856",
               "grouped": true,
               "id": "merge:main",
+              "in_your_move": true,
               "text": "Ready to merge into main. A person merges main, so the factory does not.",
               "title": "Merge #9856 and #9857 into main",
               "verb": "Merge #9856 and #9857"
@@ -2757,7 +3235,7 @@
           }
         ]
       },
-      "title": "build-tier-drafts-3",
+      "title": "Build tier drafts 3",
       "why_html": ""
     },
     "results": {
@@ -2788,6 +3266,7 @@
         "external_url": "https://github.com/sample-org/sample-app/pull/9856",
         "grouped": true,
         "id": "merge:main",
+        "in_your_move": true,
         "text": "Ready to merge into main. A person merges main, so the factory does not.",
         "title": "Merge #9856 and #9857 into main",
         "verb": "Merge #9856 and #9857"
@@ -2810,6 +3289,7 @@
             "external_url": "https://github.com/sample-org/sample-app/pull/9856",
             "grouped": true,
             "id": "merge:main",
+            "in_your_move": true,
             "text": "Ready to merge into main. A person merges main, so the factory does not.",
             "title": "Merge #9856 and #9857 into main",
             "verb": "Merge #9856 and #9857"
@@ -2820,14 +3300,14 @@
       ],
       "why": [
         {
-          "html": "build-tier-drafts-3 is not moving."
+          "html": "Build tier drafts 3 is not moving."
         },
         {
           "html": "Needs you: Merge #9856 and #9857, asked by Nova 1h 40m ago.",
           "tone": "you"
         }
       ],
-      "why_title": "Why build-tier-drafts-3 is not moving"
+      "why_title": "Why Build tier drafts 3 is not moving"
     },
     "thread": {
       "key": "project:build-tier-drafts-3",
@@ -2870,9 +3350,51 @@
         "key": "m",
         "label": "Move",
         "verb": "move"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Rename",
+        "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Review and merge",
+            "option": "merge",
+            "url": "https://github.com/sample-org/sample-app/pull/9856"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "merge",
+                "label": "Review and merge"
+              }
+            ],
+            "age": "1h 40m",
+            "asker": "Nova",
+            "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+            "grouped": true,
+            "id": "merge:main",
+            "text": "Ready to merge into main. A person merges main, so the factory does not.",
+            "title": "Merge #9856 and #9857 into main",
+            "verb": "Merge #9856 and #9857"
+          },
+          "id": "merge:main",
+          "object": "#9856 and #9857",
+          "ref": "build-tier-drafts-3",
+          "unblocks": "this project",
+          "unblocks_ref": "build-tier-drafts-3",
+          "unblocks_refs": ["build-tier-drafts-3"],
+          "verb": "Merge",
+          "weight": 120.0
+        }
+      ],
+      "more": 0
+    }
   },
   "feature:from-C-13": {
     "breadcrumb": [
@@ -2888,7 +3410,7 @@
         "level_name": "Need",
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
         "state": "done",
-        "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+        "title": "Your shortlist pick"
       }
     ],
     "children": {
@@ -2898,6 +3420,7 @@
         {
           "col": 0,
           "cost": 6.4,
+          "full_title": "ux-env-badge-copy",
           "grandchildren": {
             "by_state": {
               "done": 1
@@ -2911,6 +3434,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -2929,11 +3453,12 @@
             "label": "Done",
             "segments": []
           },
-          "title": "ux-env-badge-copy"
+          "title": "UX env badge copy"
         },
         {
           "col": 0,
           "cost": 5.1,
+          "full_title": "ux-slash-focus",
           "grandchildren": {
             "by_state": {
               "done": 1
@@ -2947,6 +3472,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -2965,11 +3491,12 @@
             "label": "Done",
             "segments": []
           },
-          "title": "ux-slash-focus"
+          "title": "UX slash focus"
         },
         {
           "col": 0,
           "cost": 8.9,
+          "full_title": "ux-status-page",
           "grandchildren": {
             "by_state": {
               "done": 1
@@ -2983,6 +3510,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -3001,11 +3529,12 @@
             "label": "Done",
             "segments": []
           },
-          "title": "ux-status-page"
+          "title": "UX status page"
         },
         {
           "col": 0,
           "cost": 7.2,
+          "full_title": "api-request-id",
           "grandchildren": {
             "by_state": {
               "done": 1
@@ -3019,6 +3548,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -3037,7 +3567,7 @@
             "label": "Done",
             "segments": []
           },
-          "title": "api-request-id"
+          "title": "API request ID"
         }
       ],
       "later": [],
@@ -3082,6 +3612,7 @@
     "more_chips": 0,
     "node": {
       "cost": 27.6,
+      "full_title": "From C-13: Shortlist fixes",
       "glyph": "C",
       "grandchildren": {
         "by_state": {
@@ -3097,6 +3628,7 @@
       "kind_name": "From a proposal",
       "level": "feature",
       "level_name": "Feature",
+      "named": "words",
       "needs": {
         "blocking": 0,
         "open": 0
@@ -3119,7 +3651,7 @@
         "label": "Done",
         "segments": []
       },
-      "title": "From C-13: Shortlist fixes",
+      "title": "Shortlist fixes",
       "why_html": "Implicit: the projects C-13 created, with no initiative. Name it, or file it under a feature."
     },
     "results": {
@@ -3167,7 +3699,11 @@
         "verb": "name"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [],
+      "more": 0
+    }
   },
   "fx": {
     "breadcrumb": [],
@@ -3219,6 +3755,7 @@
               "age": "5h 54m",
               "asker": "Atlas",
               "id": "D-50",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000226",
               "subject": "C-17",
               "title": "Decision 50",
@@ -3252,6 +3789,7 @@
                   "age": "5h 54m",
                   "asker": "Atlas",
                   "id": "D-50",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000226",
                   "subject": "C-17",
                   "title": "Decision 50",
@@ -3493,6 +4031,7 @@
           "age": "5h 54m",
           "asker": "Atlas",
           "id": "D-50",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000226",
           "subject": "C-17",
           "title": "Decision 50",
@@ -3531,6 +4070,7 @@
               "age": "5h 54m",
               "asker": "Atlas",
               "id": "D-50",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000226",
               "subject": "C-17",
               "title": "Decision 50",
@@ -3576,6 +4116,7 @@
         "age": "5h 54m",
         "asker": "Atlas",
         "id": "D-50",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000226",
         "subject": "C-17",
         "title": "Decision 50",
@@ -3614,6 +4155,7 @@
             "age": "5h 54m",
             "asker": "Atlas",
             "id": "D-50",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000226",
             "subject": "C-17",
             "title": "Decision 50",
@@ -3653,7 +4195,104 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-50",
+            "row_id": "00000000000000000000000000000226",
+            "subject": "C-17",
+            "title": "Decision 50",
+            "verb": "Apply rule C-17"
+          },
+          "id": "D-50",
+          "object": "C-17",
+          "object_name": "Spike unproven external capabilities",
+          "ref": "C-17",
+          "verb": "Apply rule",
+          "weight": 0.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-51",
+            "row_id": "00000000000000000000000000000227",
+            "subject": "C-18",
+            "title": "Decision 51",
+            "verb": "Apply rule C-18"
+          },
+          "id": "D-51",
+          "object": "C-18",
+          "object_name": "Name pending scope decisions",
+          "ref": "C-18",
+          "verb": "Apply rule",
+          "weight": 0.0
+        },
+        {
+          "about": "Decision 37",
+          "action": {
+            "label": "Answer"
+          },
+          "blocks_nothing": true,
+          "decision": {
+            "actions": [],
+            "age": "5h 54m",
+            "asker": "an agent",
+            "blocks_nothing": true,
+            "id": "D-37",
+            "row_id": "00000000000000000000000000000219",
+            "title": "Decision 37",
+            "verb": "Answer D-37"
+          },
+          "id": "D-37",
+          "object": "D-37",
+          "ref": "member:0000000000000000000000000000025b",
+          "verb": "Answer",
+          "weight": 0.0
+        }
+      ],
+      "more": 0
+    }
   },
   "fx:definition": {
     "breadcrumb": [
@@ -3734,7 +4373,11 @@
         "verb": "rename"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [],
+      "more": 0
+    }
   },
   "fx:environments": {
     "breadcrumb": [
@@ -3890,7 +4533,11 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [],
+      "more": 0
+    }
   },
   "fx:health": {
     "breadcrumb": [
@@ -4083,7 +4730,11 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [],
+      "more": 0
+    }
   },
   "fx:rules": {
     "breadcrumb": [
@@ -4134,6 +4785,7 @@
               "age": "5h 54m",
               "asker": "Atlas",
               "id": "D-50",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000226",
               "subject": "C-17",
               "title": "Decision 50",
@@ -4162,6 +4814,7 @@
                   "age": "5h 54m",
                   "asker": "Atlas",
                   "id": "D-50",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000226",
                   "subject": "C-17",
                   "title": "Decision 50",
@@ -4210,6 +4863,7 @@
               "age": "5h 54m",
               "asker": "Atlas",
               "id": "D-51",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000227",
               "subject": "C-18",
               "title": "Decision 51",
@@ -4238,6 +4892,7 @@
                   "age": "5h 54m",
                   "asker": "Atlas",
                   "id": "D-51",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000227",
                   "subject": "C-18",
                   "title": "Decision 51",
@@ -4316,6 +4971,7 @@
           "age": "5h 54m",
           "asker": "Atlas",
           "id": "D-50",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000226",
           "subject": "C-17",
           "title": "Decision 50",
@@ -4349,6 +5005,7 @@
               "age": "5h 54m",
               "asker": "Atlas",
               "id": "D-50",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000226",
               "subject": "C-17",
               "title": "Decision 50",
@@ -4385,6 +5042,7 @@
         "age": "5h 54m",
         "asker": "Atlas",
         "id": "D-50",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000226",
         "subject": "C-17",
         "title": "Decision 50",
@@ -4418,6 +5076,7 @@
             "age": "5h 54m",
             "asker": "Atlas",
             "id": "D-50",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000226",
             "subject": "C-17",
             "title": "Decision 50",
@@ -4454,7 +5113,82 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-50",
+            "row_id": "00000000000000000000000000000226",
+            "subject": "C-17",
+            "title": "Decision 50",
+            "verb": "Apply rule C-17"
+          },
+          "id": "D-50",
+          "object": "C-17",
+          "object_name": "Spike unproven external capabilities",
+          "ref": "C-17",
+          "verb": "Apply rule",
+          "weight": 0.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-51",
+            "row_id": "00000000000000000000000000000227",
+            "subject": "C-18",
+            "title": "Decision 51",
+            "verb": "Apply rule C-18"
+          },
+          "id": "D-51",
+          "object": "C-18",
+          "object_name": "Name pending scope decisions",
+          "ref": "C-18",
+          "verb": "Apply rule",
+          "weight": 0.0
+        }
+      ],
+      "more": 0
+    }
   },
   "product": {
     "breadcrumb": [],
@@ -4465,6 +5199,7 @@
         {
           "burn": 2.5,
           "cost": 51.13,
+          "full_title": "I want an assistant in the app that helps with building, and later with discovery and sales too.",
           "glyph": "ASK",
           "grandchildren": {
             "by_state": {
@@ -4479,6 +5214,7 @@
           "kind_name": "Ask",
           "level": "need",
           "level_name": "Need",
+          "named": "words",
           "needs": {
             "blocking": 2,
             "open": 4
@@ -4509,6 +5245,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -4549,6 +5286,7 @@
                   "asker": "Atlas",
                   "expires": "2d 16h",
                   "id": "D-45",
+                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000221",
                   "subject": "C-16",
                   "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -4560,12 +5298,13 @@
               }
             ]
           },
-          "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+          "title": "An assistant in the app"
         },
         {
           "base": "main",
           "cost": 38.4,
           "folded_from": ["feature:from-C-12", "need:from-C-12"],
+          "full_title": "build-tier-drafts-3",
           "grandchildren": {
             "by_state": {
               "waiting": 2
@@ -4578,6 +5317,7 @@
           "kind_name": "Project",
           "level": "project",
           "level_name": "Project",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -4606,6 +5346,7 @@
               "external_url": "https://github.com/sample-org/sample-app/pull/9856",
               "grouped": true,
               "id": "merge:main",
+              "in_your_move": true,
               "text": "Ready to merge into main. A person merges main, so the factory does not.",
               "title": "Merge #9856 and #9857 into main",
               "verb": "Merge #9856 and #9857"
@@ -4627,6 +5368,7 @@
                   "external_url": "https://github.com/sample-org/sample-app/pull/9856",
                   "grouped": true,
                   "id": "merge:main",
+                  "in_your_move": true,
                   "text": "Ready to merge into main. A person merges main, so the factory does not.",
                   "title": "Merge #9856 and #9857 into main",
                   "verb": "Merge #9856 and #9857"
@@ -4636,10 +5378,11 @@
               }
             ]
           },
-          "title": "build-tier-drafts-3"
+          "title": "Build tier drafts 3"
         },
         {
           "cost": 27.6,
+          "full_title": "Your shortlist pick: env badge copy, / to chat, status page, request id.",
           "glyph": "ASK",
           "grandchildren": {
             "by_state": {
@@ -4654,6 +5397,7 @@
           "kind_name": "Ask",
           "level": "need",
           "level_name": "Need",
+          "named": "words",
           "needs": {
             "blocking": 0,
             "open": 0
@@ -4671,7 +5415,7 @@
             "label": "Done",
             "segments": []
           },
-          "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+          "title": "Your shortlist pick"
         }
       ],
       "later": [],
@@ -4687,60 +5431,59 @@
       {
         "by_state": {
           "done": 1,
-          "needs": 1,
-          "waiting": 1
+          "needs": 2
         },
         "count": 3,
         "later": 0,
         "level": "need",
         "name": "Needs",
-        "needs": 1
+        "needs": 2
       },
       {
         "by_state": {
           "done": 1,
-          "needs": 1,
-          "waiting": 1
+          "needs": 2
         },
         "count": 3,
         "later": 0,
         "level": "feature",
         "name": "Features",
-        "needs": 1
+        "needs": 2
       },
       {
         "by_state": {
           "done": 6,
-          "needs": 1,
-          "waiting": 2
+          "needs": 2,
+          "waiting": 1
         },
         "count": 9,
         "later": 4,
         "level": "project",
         "name": "Projects",
-        "needs": 1
+        "needs": 2
       },
       {
         "by_state": {
           "done": 7,
-          "waiting": 3
+          "needs": 2,
+          "waiting": 1
         },
         "count": 10,
         "later": 0,
         "level": "task",
         "name": "Tasks",
-        "needs": 0
+        "needs": 2
       },
       {
         "by_state": {
           "done": 7,
-          "waiting": 2
+          "needs": 2
         },
         "count": 9,
         "later": 0,
         "level": "change",
         "name": "Changes",
-        "needs": 0
+        "needs": 2
       },
       {
         "by_state": {
@@ -4813,6 +5556,7 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
+          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -4853,6 +5597,7 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
+              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -4905,7 +5650,7 @@
       "also_holds": [
         {
           "ref": "assistant-panel-ux",
-          "title": "assistant-panel-ux"
+          "title": "Assistant panel UX"
         }
       ],
       "decision": {
@@ -4927,6 +5672,7 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
+        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -4945,7 +5691,7 @@
         {
           "ref": "assistant-core",
           "sep": "›",
-          "title": "assistant-core"
+          "title": "Assistant core"
         },
         {
           "ref": "T-16",
@@ -4976,6 +5722,7 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
+            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -4994,7 +5741,7 @@
           "html": "The feature that holds it is <a data-ref=\"I-1\">Agent assistant (sample)</a>."
         },
         {
-          "html": "The project that holds it is <a data-ref=\"assistant-core\">assistant-core</a>."
+          "html": "The project that holds it is <a data-ref=\"assistant-core\">Assistant core</a>."
         },
         {
           "html": "The task that holds it is <a data-ref=\"T-16\">T-16 Debit each turn</a>."
@@ -5022,6 +5769,121 @@
         "verb": "talk"
       }
     ],
-    "version": "bf03ded18b13b923"
+    "version": "bf03ded18b13b923",
+    "your_move": {
+      "items": [
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-45",
+            "row_id": "00000000000000000000000000000221",
+            "subject": "C-16",
+            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
+            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
+            "verb": "Apply C-16"
+          },
+          "id": "D-45",
+          "object": "C-16",
+          "object_name": "Update assistant core",
+          "ref": "assistant-core",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 180.0
+        },
+        {
+          "action": {
+            "label": "Review and merge",
+            "option": "merge",
+            "url": "https://github.com/sample-org/sample-app/pull/9856"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "merge",
+                "label": "Review and merge"
+              }
+            ],
+            "age": "1h 40m",
+            "asker": "Nova",
+            "external_url": "https://github.com/sample-org/sample-app/pull/9856",
+            "grouped": true,
+            "id": "merge:main",
+            "text": "Ready to merge into main. A person merges main, so the factory does not.",
+            "title": "Merge #9856 and #9857 into main",
+            "verb": "Merge #9856 and #9857"
+          },
+          "id": "merge:main",
+          "object": "#9856 and #9857",
+          "ref": "build-tier-drafts-3",
+          "unblocks": "Build tier drafts 3",
+          "unblocks_ref": "build-tier-drafts-3",
+          "unblocks_refs": ["build-tier-drafts-3"],
+          "verb": "Merge",
+          "weight": 120.0
+        },
+        {
+          "action": {
+            "label": "Apply",
+            "option": "apply"
+          },
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "35m",
+            "asker": "Atlas",
+            "expires": "2d 16h",
+            "id": "D-49",
+            "row_id": "00000000000000000000000000000225",
+            "subject": "C-19",
+            "title": "Start the live-search fix?",
+            "verb": "Apply C-19"
+          },
+          "id": "D-49",
+          "object": "C-19",
+          "object_name": "Fix live search",
+          "ref": "live-search-fix",
+          "unblocks": "Agent assistant (sample)",
+          "unblocks_ref": "I-1",
+          "unblocks_refs": ["I-1"],
+          "verb": "Apply",
+          "weight": 0.0
+        }
+      ],
+      "more": 2
+    }
   }
 }

@@ -25,6 +25,7 @@ from omnigent.db.db_models import (
     SqlFactoryFeedback,
     SqlFactoryIssue,
     SqlFactoryLoop,
+    SqlFactoryNodeName,
     SqlFactoryNodeRead,
     SqlFactoryPerson,
     SqlFactoryPr,
@@ -107,6 +108,7 @@ from omnigent.entities.factory import (
     FactoryFeedback,
     FactoryIssue,
     FactoryLoop,
+    FactoryNodeName,
     FactoryNodeRead,
     FactoryPerson,
     FactoryPr,
@@ -536,6 +538,18 @@ def _node_read(row: SqlFactoryNodeRead) -> FactoryNodeRead:
         user_id=row.user_id,
         node_ref=row.node_ref,
         seen_at=row.seen_at,
+        workspace_id=row.workspace_id,
+    )
+
+
+def _node_name(row: SqlFactoryNodeName) -> FactoryNodeName:
+    return FactoryNodeName(
+        factory_id=row.factory_id,
+        node_ref=row.node_ref,
+        name=row.name,
+        source_hash=row.source_hash,
+        named_by=row.named_by,
+        updated_at=row.updated_at,
         workspace_id=row.workspace_id,
     )
 
@@ -1868,6 +1882,69 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore
         with self._session("list_factory_node_reads") as session:
             rows = session.execute(stmt.order_by(model.node_ref)).scalars().all()
             return [_node_read(r) for r in rows]
+
+    # ── Short names of nodes ────────────────────────────────────
+
+    def list_node_names(self, factory_id: str) -> builtins.list[FactoryNodeName]:
+        model = SqlFactoryNodeName
+        stmt = select(model).where(
+            model.workspace_id == current_workspace_id(),
+            model.factory_id == norm_id(factory_id),
+        )
+        with self._session("list_factory_node_names") as session:
+            rows = session.execute(stmt.order_by(model.node_ref)).scalars().all()
+            return [_node_name(r) for r in rows]
+
+    def set_node_name(
+        self,
+        factory_id: str,
+        node_ref: str,
+        name: str,
+        *,
+        source_hash: str,
+        named_by: str | None = None,
+    ) -> FactoryNodeName:
+        key = (current_workspace_id(), norm_id(factory_id), node_ref)
+        model = SqlFactoryNodeName
+
+        def write(session: Session) -> FactoryNodeName:
+            row = session.get(model, key, populate_existing=True)
+            if row is None:
+                row = model(
+                    factory_id=key[1],
+                    node_ref=node_ref,
+                    name=name,
+                    source_hash=source_hash,
+                    named_by=named_by,
+                    updated_at=now_s(),
+                )
+                session.add(row)
+            elif named_by is not None or row.named_by is None:
+                row.name = name
+                row.source_hash = source_hash
+                row.named_by = named_by
+                row.updated_at = now_s()
+            session.flush()
+            return _node_name(row)
+
+        return self._write("set_factory_node_name", write)
+
+    def delete_node_name(self, factory_id: str, node_ref: str) -> bool:
+        model = SqlFactoryNodeName
+
+        def write(session: Session) -> bool:
+            result = session.execute(
+                delete(model)
+                .where(
+                    model.workspace_id == current_workspace_id(),
+                    model.factory_id == norm_id(factory_id),
+                    model.node_ref == node_ref,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            return bool(getattr(result, "rowcount", 0))
+
+        return self._write("delete_factory_node_name", write)
 
     # ── Proposals ───────────────────────────────────────────────
 

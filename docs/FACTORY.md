@@ -1080,6 +1080,69 @@ A proposal's decision is stored as blocking nothing; the projection counts
 it as holding work while the proposal adds a project or a rule, or changes
 a project that is still active, so "needs you" follows what really waits.
 
+**Calm pages** (cockpit v3). A node page opens with what the viewer must do
+and shows every node under a short name; the chat is a conversation.
+
+- *Short names* (`node_names.py`, `factory_node_names`). Every node of the
+  product tree shows a `title` of two to six words. A slug is read as words
+  (`assistant-panel-ux` -> "Assistant panel UX", `named: "words"`, never sent
+  to the model). A person's raw ask, a machine label (`From C-11: create … ·
+  create …`, pieces joined with ` · `, a title holding a slug, a project's
+  slug, a code such as `T-16`, `PR-9856` or `#9856`, or a path) or a title
+  longer than six words shows its first words at once (`named: "words"`:
+  codes, paths, measurements such as `300 s` and lists of picks dropped, a
+  slug that opens it dropped, "build-tier-drafts-3, part 1" -> "Part 1", cut
+  at a clause boundary) and the factory names it in the background with the
+  server's cheap title path: the runner bound to the factory's root session
+  runs the economy title model (the one that names new sessions), a few
+  nodes at a time, higher levels first (`named: "factory"`). The full text stays in
+  `full_title` (Details). A name is made again only when the text it was made
+  from changes (`source_hash`); a runner that cannot answer three times in a
+  row makes the factory wait ten minutes. A person renames a node with the
+  `name` verb (`args.title`, 1–6 words, labelled "Rename" on a stored node;
+  an implicit feature or need is still made a stored node by it), with Undo,
+  and the factory never renames what a person named (`named: "person"`).
+  The factory tree keeps its own words.
+- *Your move* (`your_move.py`): `your_move: {items, more}` on every node page,
+  at most three asks this viewer answers (a decision assigned to them or a
+  role they hold; merges for editors): the asks in the node's subtree and the
+  ones its blocker path and its children's end at, ranked like Needs you
+  (held work first, then the oldest; asks that block nothing last). Each item
+  is `{id, ref, verb, object, object_name?, action: {label, option?, url?},
+  unblocks?, unblocks_ref?, unblocks_refs?, about?, blocks_nothing?,
+  decision, weight}`: "Apply C-16 · Update assistant core · unblocks Agent
+  assistant · [Apply]", where `object_name` is what a proposal changes in at
+  most four words (the factory names a machine or long proposal title too,
+  stored under its code), `unblocks` names, by the short names the rows
+  carry, the children (at a root, the home level's nodes) that hold the work
+  the ask holds, with the page's own node as "this task" / "this project"
+  ("unblocks this task and Assistant panel UX"); when the object already
+  names all it holds (a project's merges), it unblocks the node the ask sits
+  on ("Merge #9856 and #9857 · unblocks this project"). `blocks_nothing`
+  alone marks an ask that holds nothing. `action` is the recommended or
+  applying answer, the merge link, or "Answer" (open the ask). Every other
+  place the page carries one of these asks (the status line, a child's line,
+  a segment) is marked `in_your_move`, so the cockpit asks once. An empty
+  `items` reads "Nothing needs you". Each Needs you item carries the same
+  row as `move` (as the tree's root page words it), and a level's "n you" in
+  the strip (`levels_below[].needs`) counts the nodes whose own row says
+  "Needs you" (a project waiting on its merges included). A decision asked by
+  the factory's own session reads as asked by whoever answers its root
+  (Atlas), never by an id.
+- *Conversation and activity* (`chat_feed.py`). `GET …/chat?thread=&feed=
+  conversation` reads only what people and agents said plus the live cards
+  this reader acts on (an open ask they answer, a ready PR to merge, an offer,
+  a `why`, a verb they can still undo); `feed=activity` reads the rest (base
+  moves, spawns, incidents, loops, controls, closed alarms, and decisions or
+  proposals that are answered, applied, closed or someone else's), each with
+  `activity: {kind, closed}`; `feed=all` reads every row with its `lane`. Each
+  page carries `limit` rows of its feed (reading past the other feed, at most
+  1000 rows a call), `before_seq` / `after_seq` to read on, `unread`
+  (conversation from others) and `activity_since` after the reader's read
+  mark (capped at 99). Resolved incidents and closed or applied proposals are
+  never conversation. The node page's `thread.unread` counts only the
+  conversation and `thread.activity` the activity since the read mark.
+
 **Status lines** (`node_status.py`) say in one line why a node is or isn't
 moving, ending at the person who must act. The blocker path reads the
 node's own waits first (`waits.py`: the snapshot's `waiting_on` for a
@@ -1153,7 +1216,9 @@ counts them (`alarms_closed`).
 `pr:<id>`, the Room has a thread per need, feature, study and task:
 `need:<ref>` (`need:O-3`, `need:ask:<id>`, `need:from-C-12`), `feature:<ref>`,
 `study:R-<n>` and `task:<ref>` (`task:T-16`; `T-16` spells it too). A key
-resolves only to a node of this factory (404 `unknown_node`). Who answers is
+resolves only to a node of this factory (404 `unknown_node`). A node page's
+`thread.key` is a thread that exists: a run shows its task's, and a project
+with no row yet (a later wave's, a proposal's) its feature's. Who answers is
 the definition's `structure.responders` per level: Atlas for features, Scout
 for needs and studies (Atlas while discovery is off), the project's lead for
 a task (the delivery names the task); `null` routes a plain message to

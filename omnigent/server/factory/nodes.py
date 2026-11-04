@@ -82,10 +82,12 @@ from omnigent.server.factory import (
     autonomy,
     features,
     levels,
+    node_names,
     node_refs,
     node_status,
     subtrees,
     waits,
+    your_move,
 )
 from omnigent.server.factory.base import DeployedHead, contains, same_commit
 from omnigent.server.factory.charter import (
@@ -110,6 +112,7 @@ if TYPE_CHECKING:
         FactoryDecision,
         FactoryInitiative,
         FactoryLoop,
+        FactoryNodeName,
         FactoryPr,
         FactoryProject,
         FactoryProposal,
@@ -241,6 +244,9 @@ _AREA_WHY: Final[dict[str, str]] = {
 """Each factory area's one line on what it holds (``fx:<area>``)."""
 _WHO_RE: Final = re.compile(r"[^a-z0-9]+")
 _TITLE_MAX: Final = 120
+_SOURCE_MAX: Final = 2000
+OBJECT_WORDS: Final = 4
+"""A proposal's few words in a Your move row ("Apply C-16 · Update assistant core")."""
 _SHORT_MAX: Final = 140
 _WHY_MAX: Final = 600
 
@@ -286,6 +292,7 @@ class NodeFacts:
         samples): the only inputs an ETA is computed from.
     :param turns: Recent ``turn`` spans (the cost of the last hour: burn).
     :param closed_alarms: Alarms the server closed today, with their causes.
+    :param names: Node ref -> its stored short name (:mod:`.node_names`).
     """
 
     factory_id: str
@@ -320,6 +327,7 @@ class NodeFacts:
     observed: Mapping[str, float] = field(default_factory=dict)
     turns: Sequence[FactorySpan] = ()
     closed_alarms: Sequence[alarms.ClosedAlarm] = ()
+    names: Mapping[str, FactoryNodeName] = field(default_factory=dict)
 
     def version(self) -> str:
         """:returns: A digest of the rows read (``NodePage.version``; a write's ``based_on``)."""
@@ -472,6 +480,7 @@ def load_facts(
         observed=observed_weights(deps, fid),
         turns=turns,
         closed_alarms=alarms.load(store, fid, clock),
+        names={r.node_ref: r for r in store.list_node_names(fid)},
     )
 
 
@@ -523,6 +532,19 @@ class _N:
     done_note: str | None = None
     steps: tuple[tuple[int, str, str | None, str], ...] = ()
     surfaces: tuple[str, ...] = ()
+    source: str | None = None
+    """The full text a short name is made from, when not the title (an ask's words)."""
+    full_title: str | None = None
+    """The title before the node took its short name (shown in its details)."""
+    named: str | None = None
+    """Where its short name came from: ``person``, ``factory`` or ``words`` (its first words)."""
+
+
+def _proposal_text(proposal: FactoryProposal) -> str:
+    """What a proposal's short name is made from: its title, then why."""
+    title = " ".join(str(proposal.title or "").split())
+    why = " ".join(str(proposal.rationale or "").split())
+    return (f"{title}\n{why}" if why else title)[:_SOURCE_MAX]
 
 
 def _esc(text: Any) -> str:
@@ -591,6 +613,8 @@ class Tree:
             t.ref: t for t in facts.tasks if t.project_slug not in self.hidden
         }
         self.pr_rows: dict[str, FactoryPr] = {norm_id(p.id): p for p in facts.prs}
+        self.slugs: frozenset[str] = frozenset(p.slug for p in facts.projects)
+        """Every project slug: a title holding one is a machine label (:mod:`.node_names`)."""
         self.lineage = (
             facts.lineage
             if facts.lineage is not None
@@ -617,10 +641,13 @@ class Tree:
         )
         self.closed_alarms = alarms.visible(facts.closed_alarms, self.hidden)
         self._quiet = self._held_alarms()
+        self.unnamed: list[node_names.Want] = []
         self._build()
         self._hide_levels()
         self._index()
+        self._apply_names()
         self._place_decisions()
+        self._name_proposals()
         self._order_columns()
         self.paths = node_status.Paths(self)
 
@@ -653,6 +680,99 @@ class Tree:
         self._later_and_ghosts()
         self._tasks_and_changes()
         self._factory_items()
+
+    def _apply_names(self) -> None:
+        """
+        Every node of the product tree under its short name (:mod:`.node_names`): a
+        person's, else the factory's, else (a raw ask, a machine label, a long
+        title) its first words, with the factory asked for one (:attr:`unnamed`;
+        changes keep their first words). The full title stays in ``full_title``.
+        """
+        stored = self.facts.names
+        slugs = self.slugs
+        wants: list[node_names.Want] = []
+        for node in self.nodes.values():
+            # The factory tree keeps its own words (rules read as they are written).
+            if node.parent is None or node.tree != PRODUCT_TREE or node.level == "run":
+                continue
+            text = node.source or node.title
+            found = stored.get(node.ref)
+            # A folded implicit parent shows as its child: its first words are enough.
+            asks_model = node.level in node_names.NAMED_LEVELS and not self.folded(node)
+            if found is not None:
+                short, how = found.name, "person" if found.named_by else "factory"
+                if not found.named_by and asks_model:
+                    if found.source_hash != node_names.digest(text):
+                        wants.append(self._want(node, text))
+            elif not node.source and node_names.is_slug(node.title):
+                # A slug's words are the name people already use ("Assistant core").
+                short, how = node_names.slug_words(node.title), "words"
+            elif node_names.wants_name(node.title, kind=node.kind, slugs=slugs):
+                short, how = node_names.fallback(text, slugs=slugs), "words"
+                if asks_model:
+                    wants.append(self._want(node, text))
+            else:
+                continue
+            node.named = how
+            if short and short != node.title:
+                node.full_title, node.title = node.title, short
+        ladder = TREES[PRODUCT_TREE]
+        wants.sort(key=lambda w: ladder.index(w.level) if w.level in ladder else len(ladder))
+        self.unnamed = wants
+
+    @staticmethod
+    def _want(node: _N, text: str) -> node_names.Want:
+        return node_names.Want(node.ref, text, node_names.digest(text), node.level)
+
+    def _name_proposals(self) -> None:
+        """
+        The open proposals a person is asked to apply, by a few words too (Your
+        move's "Apply C-16 · Update assistant core"): a machine title or a long
+        one is named by the factory (stored under the proposal's ref), after
+        the nodes.
+        """
+        wants: list[node_names.Want] = []
+        seen: set[str] = set()
+        for decisions in self.decisions_at.values():
+            for decision in decisions:
+                if decision.source != "proposal":
+                    continue
+                proposal = node_status.decision_proposal(decision, self._proposals)
+                if proposal is None or proposal.ref in seen:
+                    continue
+                seen.add(proposal.ref)
+                text = _proposal_text(proposal)
+                want = node_names.Want(proposal.ref, text, node_names.digest(text), "proposal")
+                found = self.facts.names.get(proposal.ref)
+                if found is not None:
+                    if not found.named_by and found.source_hash != want.hash:
+                        wants.append(want)
+                elif node_names.wants_name(proposal.title, slugs=self.slugs):
+                    wants.append(want)
+        self.unnamed.extend(wants)
+
+    def proposal_name(self, proposal: FactoryProposal) -> str | None:
+        """
+        What *proposal* changes in a few words (at most :data:`OBJECT_WORDS`):
+        the factory's name for it, else its title when that is short and no
+        machine label, else the title's first words; ``None`` when nothing
+        but a code is left.
+        """
+        found = self.facts.names.get(proposal.ref)
+        if found is not None:
+            return found.name
+        title = " ".join(str(proposal.title or "").split())
+        if not title:
+            return None
+        if (
+            not node_names.wants_name(title, slugs=self.slugs)
+            and node_names.word_count(title) <= OBJECT_WORDS
+        ):
+            return title[:1].upper() + title[1:]
+        name = node_names.fallback(title, limit=OBJECT_WORDS, slugs=self.slugs)
+        if not name or node_names.machine_label(name, self.slugs):
+            return None
+        return name
 
     def _roots(self) -> None:
         facts = self.facts
@@ -765,6 +885,7 @@ class Tree:
                     "ask",
                     _clip(text.splitlines()[0] if text else "", _TITLE_MAX) or "An ask",
                     self._need_parent(at_goal),
+                    source=_clip(text, _SOURCE_MAX) or None,
                     why=f"<b>“{_esc(_clip(text, _WHY_MAX))}”</b>" if text else "",
                     evidence={
                         "summary": "an ask · no user evidence yet",
@@ -783,7 +904,7 @@ class Tree:
             )
         return ref
 
-    def _implicit_need(self, key: str, title: str, why: str) -> str:
+    def _implicit_need(self, key: str, title: str, why: str, source: str | None = None) -> str:
         ref = f"need:{key}"
         self._add(
             _N(
@@ -795,6 +916,7 @@ class Tree:
                 self._need_parent(None),
                 implicit=True,
                 why=why,
+                source=source,
             )
         )
         return ref
@@ -818,6 +940,9 @@ class Tree:
             f"From {origin}",
             f"Implicit: the work {_esc(origin)} planned names no ask or opportunity. "
             "Name it, or file it under a need.",
+            source=f"From {origin}: {proposal.title}"
+            if proposal is not None and proposal.title
+            else None,
         )
 
     def _initiatives(self) -> None:
@@ -879,19 +1004,28 @@ class Tree:
             ref = f"feature:from-{origin}"
             if ref not in self.nodes:
                 proposal = self._proposals.get(origin)
+                need = self._proposal_need(proposal, origin)
+                label = (
+                    f"From {origin}: {proposal.title}"
+                    if proposal is not None and proposal.title
+                    else f"From {origin}"
+                )
+                asked = self.nodes[need]
                 self._add(
                     _N(
                         ref,
                         PRODUCT_TREE,
                         "feature",
                         "proposal",
-                        _clip(f"From {origin}: {proposal.title}", _TITLE_MAX)
-                        if proposal is not None and proposal.title
-                        else f"From {origin}",
-                        self._proposal_need(proposal, origin),
+                        _clip(label, _TITLE_MAX),
+                        need,
                         implicit=True,
                         why=f"Implicit: the projects {_esc(origin)} created, with no initiative. "
                         "Name it, or file it under a feature.",
+                        # What the work answers names it better than the list of its projects.
+                        source=f"{label}\nIt answers: {asked.source}"
+                        if asked.kind == "ask" and asked.source
+                        else label,
                     )
                 )
             return ref
@@ -1663,6 +1797,21 @@ class Tree:
             state = "needs"
         return state
 
+    def shown_state(self, node: _N) -> str:
+        """
+        The state a count shows *node* in: ``needs`` when its own row says
+        "Needs you" (the end of its path is a person's ask on it, such as its
+        ready PRs' merge), else :meth:`state`. The strip's "n you" then counts
+        the rows that say so.
+        """
+        state = self.state(node.ref)
+        if (
+            state in ("waiting", "notstarted")
+            and self.status(node, compact=True)["kind"] == "needs"
+        ):
+            return "needs"
+        return state
+
     def blocks(self, decision: FactoryDecision) -> bool:
         """
         Whether an open decision holds work. An ask says so itself; a proposal's
@@ -2017,6 +2166,10 @@ class Tree:
             out["glyph"] = glyph
         if node.tag:
             out["tag"] = node.tag
+        if node.full_title:
+            out["full_title"] = node.full_title
+        if node.named:
+            out["named"] = node.named
         if node.short:
             out["short"] = node.short
         if node.base:
@@ -2130,7 +2283,7 @@ class Tree:
             active = [n for n in items if not n.later]
             by_state: dict[str, int] = {}
             for item in active:
-                state = self.state(item.ref)
+                state = self.shown_state(item)
                 by_state[state] = by_state.get(state, 0) + 1
             row: dict[str, Any] = {
                 "level": key,
@@ -2769,11 +2922,18 @@ class Tree:
         return list(self._cached("dependents", ref, make))
 
     def asker_of(self, decision: FactoryDecision, proposal: FactoryProposal | None = None) -> str:
-        """Who asked a decision, by name: the asking member, the proposal's author, the server."""
-        member = self._members.get(_bare(decision.asked_by_session_id) or "")
-        if member is not None and member.get("title"):
-            return str(member["title"])
+        """
+        Who asked a decision, by name: the asking member, the proposal's author,
+        the server. A session id is never a name: the factory's own session is
+        whoever answers its root (its lead), another one the member it is.
+        """
+        if (named := self._session_name(decision.asked_by_session_id)) is not None:
+            return named
         if proposal is not None and proposal.author:
+            if _bare(proposal.author) is not None:
+                return self._session_name(proposal.author) or (
+                    "a person" if proposal.author_kind == "human" else "an agent"
+                )
             author = str(proposal.author).split("@", 1)[0]
             named = next(
                 (
@@ -2785,6 +2945,19 @@ class Tree:
             )
             return named or author[:1].upper() + author[1:]
         return "an agent" if decision.source == "agent" else "the server"
+
+    def _session_name(self, session_id: str | None) -> str | None:
+        """The name a session goes by: its member's, or the factory's own: its root's responder."""
+        sid = _bare(session_id)
+        if sid is None:
+            return None
+        member = self._members.get(sid)
+        if member is not None and member.get("title"):
+            return str(member["title"])
+        if sid == _bare(self.facts.factory_id):
+            root = self.nodes.get(node_refs.PRODUCT)
+            return (self.responder(root) if root is not None else None) or "the factory"
+        return None
 
     def lead_name(self, slug: str | None) -> str | None:
         """The name of project *slug*'s lead, when the viewer may see it."""
@@ -2825,6 +2998,8 @@ class Tree:
                 continue
             shown = "resume" if verb == "pause" and node.paused else verb
             label, keys = _VERB_LABELS.get(shown, (shown.capitalize(), ""))
+            if verb == "name" and not self.materializes(node):
+                label = "Rename"
             item: dict[str, Any] = {"verb": shown, "label": label, "enabled": can_edit}
             if keys:
                 item["key"] = keys
@@ -2856,7 +3031,7 @@ class Tree:
             ),
             "pause": lambda: state not in ("done", "later", "offered") and not node.ghost,
             "move": lambda: stored and self._seats(self.moves(node), "move"),
-            "name": lambda: node.implicit and self._nameable(node),
+            "name": lambda: self.materializes(node) or self.renames(node),
             # The level names live in the definition: renamed from its area only.
             "rename": lambda: node.ref == _DEFINITION,
         }
@@ -2888,6 +3063,19 @@ class Tree:
         authority = (self.level_defs.get(level) or {}).get("authority") or {}
         return bool(authority.get(which))
 
+    def materializes(self, node: _N) -> bool:
+        """Whether "name it" makes *node* a stored feature or need (or files its work)."""
+        return node.implicit and self._nameable(node)
+
+    def renames(self, node: _N) -> bool:
+        """Whether a person may give *node* a short name of their own (:mod:`.node_names`)."""
+        return (
+            node.tree == PRODUCT_TREE
+            and node.parent is not None
+            and node.level in node_names.NAMED_LEVELS
+            and not node.ghost
+        )
+
     def _nameable(self, node: _N) -> bool:
         """An implicit feature, or an implicit need that comes from a proposal."""
         if node.level == "feature":
@@ -2902,12 +3090,18 @@ class Tree:
         )
 
     def thread(self, node: _N) -> dict[str, Any]:
-        """The node's thread key and who answers it (a run shows its task's thread)."""
+        """
+        The node's thread key and who answers it. A node with no thread of its own
+        shows its nearest ancestor's: a run its task's; a project the factory only
+        plans (a later wave's, a proposal's: no project row yet) its feature's.
+        """
         target = node
         if node.level == "run":
             target = next(
                 (a for a in reversed(self.ancestors(node.ref)) if a.level == "task"), node
             )
+        while not self._own_thread(target) and target.parent in self.nodes:
+            target = self.nodes[target.parent]
         key = node_refs.thread_key(target.ref)
         if target.level == "change" and target.kind == "pr":
             key = f"pr:{target.row_id}" if target.row_id else None
@@ -2916,6 +3110,13 @@ class Tree:
         if responder := self.responder(target):
             out["responder"] = responder
         return out
+
+    def _own_thread(self, node: _N) -> bool:
+        """Whether *node* has a Room thread (a project has one once its row exists)."""
+        if node.level != "project" or node.tree != PRODUCT_TREE:
+            return True
+        parsed = node_refs.parse(node.ref)
+        return parsed is not None and parsed.kind == "project" and parsed.id in self.slugs
 
     def node_full(self, node: _N) -> dict[str, Any]:
         out = self.summary(node)
@@ -3038,14 +3239,22 @@ class Tree:
         return out
 
     def page(
-        self, ref: str, *, cursor: str | None = None, can_edit: bool = True
+        self,
+        ref: str,
+        *,
+        cursor: str | None = None,
+        can_edit: bool = True,
+        viewer: your_move.Viewer | None = None,
     ) -> dict[str, Any] | None:
         """
         ``GET …/n/{ref}``: one node with its breadcrumb, state, roll-up and children.
 
-        A folded implicit node answers as its only child.
+        A folded implicit node answers as its only child. ``your_move`` opens it:
+        what *viewer* must do here (:mod:`.your_move`); every other place the page
+        carries one of those asks is marked ``in_your_move``.
 
         :param cursor: ``children.next`` of a previous page (the next 60 children).
+        :param viewer: Who reads it (``None``: an agent; every ask counts).
         :returns: The ``NodePage``, or ``None`` when no node has *ref*.
         :raises ValueError: On a cursor this tree never handed out.
         """
@@ -3055,9 +3264,11 @@ class Tree:
         node = self.fold(found)
         offset = _offset(cursor)
         chips = self.chips(node)
+        moves = your_move.your_move(self, node, viewer)
         out: dict[str, Any] = {
             "node": self.node_full(node),
             "breadcrumb": [self.crumb(a) for a in self.ancestors(node.ref)],
+            "your_move": moves,
             "status": self.status(node),
             "rollup": self.rollup(node),
             "chips": chips[:3],
@@ -3074,7 +3285,7 @@ class Tree:
             out["results"] = self.results(node)
         if node.parent is None:
             out["home"] = self.home.get(node.tree) or (self.ladder[node.tree][1:2] or [""])[0]
-        return out
+        return your_move.mark_repeats(out, (i["id"] for i in moves["items"]))
 
     def level_view(
         self,
@@ -3468,6 +3679,9 @@ async def tree_for(
         if len(_trees) >= _TREES_MAX:
             _trees.clear()
         _trees[key] = (time.monotonic(), tree)
+        # Raw asks, machine labels and long titles get the factory's short names
+        # in the background; the page shows their first words until then.
+        node_names.schedule(app_state, deps, root, tree.unnamed)
         return tree
 
 

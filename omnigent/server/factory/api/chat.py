@@ -8,7 +8,13 @@ People (user JWT; writes carry :data:`~omnigent.server.factory.origin.HUMAN_ORIG
   for ``#discovery``). ``nodes=1`` adds the node threads (``need:``,
   ``feature:``, ``study:``, ``task:``) that have messages, the newest 50. READ.
 - ``GET /v1/factory/factories/{fid}/chat?thread=&before_seq=&after_seq=&limit=``:
-  a page of messages, oldest first. READ.
+  a page of messages, oldest first. READ. ``feed=conversation`` (one thread;
+  cockpit v3's node chat): only people's and agents' words and the live cards
+  this reader acts on; ``feed=activity``: only the system's news (base moves,
+  spawns, incidents, closed or answered items); ``feed=all``: every row, each
+  marked with its ``lane``. Each with ``unread``,
+  ``activity_since`` (after the reader's read mark) and ``before_seq`` /
+  ``after_seq`` to read on (:mod:`.chat_feed`).
 
 Both leave out the threads of projects the caller's snapshot hides (a PL it
 cannot read), as the status digest does.
@@ -29,8 +35,9 @@ Agents (runner tunnel, ``from_session_id``):
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Annotated, Any, Final, TypeVar
+from typing import Annotated, Any, Final, Literal, TypeVar
 
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import JSONResponse
@@ -47,13 +54,23 @@ from omnigent.factory import (
     thread_kind,
 )
 from omnigent.server.auth import LEVEL_EDIT, RESERVED_USER_LOCAL, runner_origin
-from omnigent.server.factory import chat, chat_cards, chat_routing, control, live, node_refs
+from omnigent.server.factory import (
+    chat,
+    chat_cards,
+    chat_feed,
+    chat_routing,
+    control,
+    live,
+    node_refs,
+    people,
+)
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.factory.snapshot import filter_snapshot, get_snapshot, readable_for
 from omnigent.server.factory.start import parse_body
+from omnigent.server.factory.your_move import Viewer
 from omnigent.server.routes._auth_helpers import get_user_id
 from omnigent.stores.factory_store import norm_id
 
@@ -286,11 +303,14 @@ async def list_messages(
     before_seq: int | None = Query(None, ge=1),
     after_seq: int | None = Query(None, ge=0),
     limit: int = Query(50, ge=1, le=PAGE_MAX),
+    feed: Literal["conversation", "activity", "all"] | None = Query(None),
 ) -> dict[str, Any] | JSONResponse:
     """A page of messages, oldest first (the latest page unless ``after_seq``)."""
 
     async def run() -> dict[str, Any]:
         deps, user_id, root = await _root(request, factory_id)
+        if feed is not None and thread is None:
+            raise CockpitError(400, "invalid_query", "a feed reads one thread", field="thread")
         hidden = await _hidden_projects(request, deps, root, user_id)
         key = None
         if thread is not None:
@@ -298,6 +318,23 @@ async def list_messages(
             if resolved.project in hidden:
                 raise CockpitError(404, "unknown_project", "no such project in this factory")
             key = resolved.key
+        if feed is not None and key is not None:
+            level = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id)
+            return await asyncio.to_thread(
+                lambda: chat_feed.feed_page(
+                    deps,
+                    root.id,
+                    key,
+                    Viewer(user_id, level),
+                    feed,
+                    reader=_reader(user_id),
+                    views=lambda rows: chat.message_views(deps, rows),
+                    before_seq=before_seq,
+                    after_seq=after_seq,
+                    limit=limit,
+                    now=time.time(),
+                )
+            )
         rows = await asyncio.to_thread(
             lambda: deps.factory_store.list_chat(
                 root.id, key, before_seq=before_seq, after_seq=after_seq, limit=limit + 1

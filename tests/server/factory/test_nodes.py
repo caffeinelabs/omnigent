@@ -203,7 +203,9 @@ def test_the_shortlist_is_one_implicit_feature_with_four_projects(tree: Tree) ->
     page = _page(tree, "feature:from-C-13")
 
     assert page["node"]["implicit"] is True and page["node"]["kind"] == "proposal"
-    assert page["node"]["title"].startswith("From C-13")
+    # The machine label stays in its details; it shows under its first words until named.
+    assert page["node"]["full_title"].startswith("From C-13")
+    assert (page["node"]["title"], page["node"]["named"]) == ("Shortlist fixes", "words")
     assert [c["ref"] for c in page["breadcrumb"]] == ["product", PICK]
     assert _refs(page["children"]["items"]) == list(SHORTLIST)
     assert page["children"]["columns"] is None
@@ -310,7 +312,7 @@ def test_assistant_core(tree: Tree) -> None:
         {
             "kind": "needed by",
             "ref": "assistant-panel-ux",
-            "title": "assistant-panel-ux",
+            "title": "Assistant panel UX",
             "state": "waiting",
         }
     ]
@@ -363,6 +365,13 @@ def test_agent_assistant(tree: Tree) -> None:
     assert page["thread"]["key"] == "feature:I-1"
 
 
+@pytest.mark.parametrize("ref", ["live-search-fix", "ads-integration", "sales-skill"])
+def test_a_project_with_no_row_yet_shows_its_features_thread(tree: Tree, ref: str) -> None:
+    """A proposed or held project has no Room thread yet: its chat is its feature's."""
+    page = _page(tree, ref)
+    assert page["thread"] == {"key": "feature:I-1", "unread": 0, "responder": "Atlas"}
+
+
 def test_the_panel_waits_on_assistant_core(tree: Tree) -> None:
     page = _page(tree, "assistant-panel-ux")
 
@@ -377,7 +386,7 @@ def test_the_panel_waits_on_assistant_core(tree: Tree) -> None:
     assert first == {
         "kind": "depends on",
         "ref": "assistant-core",
-        "title": "assistant-core",
+        "title": "Assistant core",
         "state": "needs you",
         "reason": "needs the session API and per-turn debit",
     }
@@ -574,7 +583,7 @@ def test_a_pr_number_two_repos_share_keeps_one_home_each() -> None:
     assert theirs["node"]["tag"] == "sample-org/other-app#9876"
     assert theirs["thread"]["key"] == f"pr:{hex_id(19876)}"
     # A closed row never takes the number: PR-9882 is still the merged one.
-    assert _page(tree, "PR-9882")["node"]["title"] == "connectors-core"
+    assert _page(tree, "PR-9882")["node"]["title"] == "Connectors core"
     assert connectors["results"]["merged"] == 2
     assert _page(tree, "product")["results"]["merged"] == 8
 
@@ -600,8 +609,10 @@ def test_a_viewer_who_cannot_read_a_project_sees_nothing_of_it() -> None:
 def test_readers_see_the_verbs_but_cannot_use_them(tree: Tree) -> None:
     verbs = _page(tree, "assistant-core", can_edit=False)["verbs"]
 
-    assert [v["verb"] for v in verbs] == ["talk", "add", "team", "auto", "pause", "move"]
+    assert [v["verb"] for v in verbs] == ["talk", "add", "team", "auto", "pause", "move", "name"]
     assert all(not v["enabled"] and v["reason"] for v in verbs)
+    # A stored node is renamed (a short name); only an implicit one is "named" into a node.
+    assert verbs[-1]["label"] == "Rename"
 
 
 def test_renamed_levels_name_every_page() -> None:

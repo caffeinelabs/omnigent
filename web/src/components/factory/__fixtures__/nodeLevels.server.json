@@ -4,7 +4,7 @@
       "count": 2,
       "in_base_env": true,
       "noun": "projects all done",
-      "titles": ["connectors-core", "skill-discovery"]
+      "titles": ["Connectors core", "Skill discovery"]
     },
     "groups": [
       {
@@ -121,15 +121,12 @@
           }
         ],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
-            "Agent assistant (sample)"
-          ],
+          "ancestors": ["An assistant in the app", "Agent assistant (sample)"],
           "level": "project",
           "level_name": "Project",
           "ref": "assistant-core",
           "state": "needs",
-          "title": "assistant-core"
+          "title": "Assistant core"
         }
       },
       {
@@ -160,15 +157,12 @@
           }
         ],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
-            "Agent assistant (sample)"
-          ],
+          "ancestors": ["An assistant in the app", "Agent assistant (sample)"],
           "level": "project",
           "level_name": "Project",
           "ref": "connectors-core",
           "state": "done",
-          "title": "connectors-core"
+          "title": "Connectors core"
         }
       },
       {
@@ -199,15 +193,12 @@
           }
         ],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
-            "Agent assistant (sample)"
-          ],
+          "ancestors": ["An assistant in the app", "Agent assistant (sample)"],
           "level": "project",
           "level_name": "Project",
           "ref": "skill-discovery",
           "state": "done",
-          "title": "skill-discovery"
+          "title": "Skill discovery"
         }
       }
     ],
@@ -291,7 +282,7 @@
                 {
                   "ref": "assistant-core",
                   "sep": "›",
-                  "title": "assistant-core"
+                  "title": "Assistant core"
                 },
                 {
                   "ref": "T-16",
@@ -341,7 +332,7 @@
           "level_name": "Need",
           "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
           "state": "needs",
-          "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+          "title": "An assistant in the app"
         }
       },
       {
@@ -350,6 +341,7 @@
             "base": "main",
             "cost": 38.4,
             "folded_from": ["feature:from-C-12", "need:from-C-12"],
+            "full_title": "build-tier-drafts-3",
             "grandchildren": {
               "by_state": {
                 "waiting": 2
@@ -362,6 +354,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -420,7 +413,7 @@
                 }
               ]
             },
-            "title": "build-tier-drafts-3"
+            "title": "Build tier drafts 3"
           }
         ],
         "parent": {
@@ -431,7 +424,7 @@
           "level_name": "Need",
           "ref": "need:from-C-12",
           "state": "waiting",
-          "title": "From C-12"
+          "title": "Third round of build-tier drafts"
         }
       },
       {
@@ -439,6 +432,7 @@
         "items": [
           {
             "cost": 27.6,
+            "full_title": "From C-13: Shortlist fixes",
             "glyph": "C",
             "grandchildren": {
               "by_state": {
@@ -454,6 +448,7 @@
             "kind_name": "From a proposal",
             "level": "feature",
             "level_name": "Feature",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -476,7 +471,7 @@
               "label": "Done",
               "segments": []
             },
-            "title": "From C-13: Shortlist fixes"
+            "title": "Shortlist fixes"
           }
         ],
         "parent": {
@@ -486,7 +481,7 @@
           "level_name": "Need",
           "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
           "state": "done",
-          "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+          "title": "Your shortlist pick"
         }
       }
     ],
@@ -507,6 +502,7 @@
             "burn": 2.5,
             "col": 0,
             "cost": 25.13,
+            "full_title": "assistant-core",
             "grandchildren": {
               "by_state": {
                 "done": 1,
@@ -522,6 +518,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 1,
               "open": 1
@@ -604,17 +601,19 @@
                 }
               ]
             },
-            "title": "assistant-core",
+            "title": "Assistant core",
             "try_ready": true,
             "working": []
           },
           {
             "budget": 150.0,
             "col": 1,
+            "full_title": "assistant-panel-ux",
             "kind": "project",
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -666,7 +665,7 @@
                   "label": "",
                   "ref": "assistant-core",
                   "sep": "→",
-                  "title": "assistant-core"
+                  "title": "Assistant core"
                 },
                 {
                   "label": "held for C-16",
@@ -674,11 +673,12 @@
                 }
               ]
             },
-            "title": "assistant-panel-ux"
+            "title": "Assistant panel UX"
           },
           {
             "col": 1,
             "cost": 14.2,
+            "full_title": "connectors-core",
             "grandchildren": {
               "by_state": {
                 "done": 1
@@ -692,6 +692,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 1
@@ -710,11 +711,12 @@
               "label": "Done",
               "segments": []
             },
-            "title": "connectors-core"
+            "title": "Connectors core"
           },
           {
             "col": 1,
             "cost": 11.8,
+            "full_title": "skill-discovery",
             "grandchildren": {
               "by_state": {
                 "done": 1
@@ -728,6 +730,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 1
@@ -746,14 +749,12 @@
               "label": "Done",
               "segments": []
             },
-            "title": "skill-discovery"
+            "title": "Skill discovery"
           }
         ],
-        "later": ["ads-integration", "growth-seo", "sales-skill", "promotion-skill"],
+        "later": ["Ads integration", "Growth SEO", "Sales skill", "Promotion skill"],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too."
-          ],
+          "ancestors": ["An assistant in the app"],
           "level": "feature",
           "level_name": "Feature",
           "ref": "I-1",
@@ -767,6 +768,7 @@
             "base": "main",
             "cost": 38.4,
             "folded_from": ["feature:from-C-12", "need:from-C-12"],
+            "full_title": "build-tier-drafts-3",
             "grandchildren": {
               "by_state": {
                 "waiting": 2
@@ -779,6 +781,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -837,7 +840,7 @@
                 }
               ]
             },
-            "title": "build-tier-drafts-3"
+            "title": "Build tier drafts 3"
           }
         ],
         "parent": {
@@ -848,7 +851,7 @@
           "level_name": "Feature",
           "ref": "feature:from-C-12",
           "state": "waiting",
-          "title": "From C-12: Third round of build-tier drafts"
+          "title": "Third round of build-tier drafts"
         }
       },
       {
@@ -857,6 +860,7 @@
           {
             "col": 0,
             "cost": 6.4,
+            "full_title": "ux-env-badge-copy",
             "grandchildren": {
               "by_state": {
                 "done": 1
@@ -870,6 +874,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -888,11 +893,12 @@
               "label": "Done",
               "segments": []
             },
-            "title": "ux-env-badge-copy"
+            "title": "UX env badge copy"
           },
           {
             "col": 0,
             "cost": 5.1,
+            "full_title": "ux-slash-focus",
             "grandchildren": {
               "by_state": {
                 "done": 1
@@ -906,6 +912,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -924,11 +931,12 @@
               "label": "Done",
               "segments": []
             },
-            "title": "ux-slash-focus"
+            "title": "UX slash focus"
           },
           {
             "col": 0,
             "cost": 8.9,
+            "full_title": "ux-status-page",
             "grandchildren": {
               "by_state": {
                 "done": 1
@@ -942,6 +950,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -960,11 +969,12 @@
               "label": "Done",
               "segments": []
             },
-            "title": "ux-status-page"
+            "title": "UX status page"
           },
           {
             "col": 0,
             "cost": 7.2,
+            "full_title": "api-request-id",
             "grandchildren": {
               "by_state": {
                 "done": 1
@@ -978,6 +988,7 @@
             "kind_name": "Project",
             "level": "project",
             "level_name": "Project",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -996,17 +1007,17 @@
               "label": "Done",
               "segments": []
             },
-            "title": "api-request-id"
+            "title": "API request ID"
           }
         ],
         "parent": {
-          "ancestors": ["Your shortlist pick: env badge copy, / to chat, status page, request id."],
+          "ancestors": ["Your shortlist pick"],
           "implicit": true,
           "level": "feature",
           "level_name": "Feature",
           "ref": "feature:from-C-13",
           "state": "done",
-          "title": "From C-13: Shortlist fixes"
+          "title": "Shortlist fixes"
         }
       }
     ],
