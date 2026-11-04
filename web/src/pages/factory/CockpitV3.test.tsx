@@ -14,7 +14,8 @@ import serverPages from "@/components/factory/__fixtures__/nodePages.server.json
 import { sampleNodeSource } from "@/components/factory/v3/fixture/sampleNodeSource";
 import { type NodeSource, NodeSourceProvider } from "@/components/factory/v3/nodeSource";
 import type { LevelView, NodePage } from "@/components/factory/v3/nodeTypes";
-import type { CockpitChoice } from "@/lib/factoryApi";
+import { factoryQueryKey } from "@/hooks/useFactory";
+import type { CockpitChoice, FactorySnapshot } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
 import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 
@@ -59,11 +60,12 @@ function renderAt(path: string, source: NodeSource | null = sampleNodeSource()) 
       </Routes>
     </MemoryRouter>
   );
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       {source ? <NodeSourceProvider source={source}>{routes}</NodeSourceProvider> : routes}
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 const PAGES = serverPages as unknown as Record<string, NodePage>;
@@ -89,10 +91,11 @@ function serve({
   choice = "v2" as CockpitChoice | null,
   offered = true,
   extra = {} as Record<string, () => Response>,
+  snapshot = round3Snapshot as () => FactorySnapshot,
 } = {}) {
   saved = choice;
   server = serveFactory(authenticatedFetch, {
-    snapshot: () => json(round3Snapshot()),
+    snapshot: () => json(snapshot()),
     overrides: {
       ...extra,
       "GET /v1/factory/preflight": () => json({ ...preflightOk(), cockpit_v2: offered }),
@@ -274,6 +277,40 @@ describe("cockpit v3 · the switch and routes", () => {
     fireEvent.keyDown(window, { key: "?" });
     expect(await screen.findByTestId("cockpit-keys")).toHaveTextContent("a · s · t");
     expect(location).toBe(`${BASE}?peek=keys`);
+  });
+
+  it("raises the “need you” pill when a new ask opens, without any v3 write", async () => {
+    let snapshot = round3Snapshot();
+    serve({ snapshot: () => snapshot });
+    const sample = sampleNodeSource();
+    let asked = false;
+    const source: NodeSource = {
+      ...sample,
+      // The ranked list gains the new ask once it is open.
+      needsYou: async (fid, tree, signal) => {
+        const list = await sample.needsYou!(fid, tree, signal);
+        const first = list.items[0]!;
+        return asked
+          ? {
+              ...list,
+              items: [...list.items, { ...first, decision: { ...first.decision, id: "D-99" } }],
+            }
+          : list;
+      },
+    };
+    const { client } = renderAt("?cockpit=v3", source);
+    // The ranked count (every ask, also those that block nothing) once the list is read.
+    await waitFor(() =>
+      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("5 need you"),
+    );
+    // An agent asks: the next snapshot (a push frame re-reads it) holds one more open decision.
+    const open = snapshot.decisions.find((d) => d.status === "open")!;
+    asked = true;
+    snapshot = { ...snapshot, decisions: [...snapshot.decisions, { ...open, id: "D-99" }] };
+    await client.invalidateQueries({ queryKey: factoryQueryKey(LIVE_RUN_FACTORY_ID) });
+    await waitFor(() =>
+      expect(screen.getByTestId("cockpit-needs-you")).toHaveTextContent("6 need you"),
+    );
   });
 
   it("ignores ?cockpit=v3 while the server does not offer the new cockpit", async () => {

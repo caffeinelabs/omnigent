@@ -150,12 +150,15 @@ export function PreviewPanel({
 }: PreviewPanelProps) {
   const heading = useId();
   const root = useRef<HTMLElement>(null);
-  // Esc cancels, from anywhere but a dialog or menu (which close themselves first).
+  // Esc cancels, from anywhere but a dialog or menu (which close themselves
+  // first), and not while applying: the change lands anyway, so Cancel would lie.
   const cancel = useRef(onCancel);
   cancel.current = onCancel;
+  const busy = useRef(applying);
+  busy.current = applying;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.key !== "Escape" || event.defaultPrevented || busy.current) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest?.("[role=dialog],[role=menu],[role=listbox]")) return;
       // Esc in another field (the chat's box) is that field's, not the preview's.
@@ -231,11 +234,14 @@ export function PreviewPanel({
           type="button"
           data-testid="v3-preview-cancel"
           onClick={onCancel}
-          className="inline-flex items-center gap-1.5 rounded-[7px] border border-border-strong px-2.5 py-1 text-[13px] font-medium hover:border-status-blue"
+          disabled={applying}
+          className="inline-flex items-center gap-1.5 rounded-[7px] border border-border-strong px-2.5 py-1 text-[13px] font-medium hover:border-status-blue disabled:cursor-not-allowed disabled:opacity-45"
         >
           Cancel <Kbd>esc</Kbd>
         </button>
-        <span className="text-xs text-foreground-tertiary">{note}</span>
+        <span className="text-xs text-foreground-tertiary">
+          {applying ? "Applying: it cannot be cancelled now; Undo it once it lands." : note}
+        </span>
       </div>
     </section>
   );

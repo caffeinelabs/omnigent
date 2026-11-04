@@ -131,6 +131,20 @@ function fieldWords(key: string): string {
  * arrive as sentences, `rollup_delta` as api.md's open object
  * (`{progress: {before, after}, cost: "…"}`) or as lines.
  */
+/**
+ * The preview fields the web reads beyond api.md §4, each optional with a
+ * fallback (docs/FACTORY.md lists them for the S12 server; a test keeps the
+ * two lists the same).
+ */
+export const CLIENT_PREVIEW_FIELDS = [
+  "title",
+  "moved_from",
+  "approver_note",
+  "pulls_forward",
+  "parents",
+  "apply_label",
+] as const satisfies readonly (keyof VerbPreview)[];
+
 export function normalizePreview(preview: VerbPreview): VerbPreview {
   const wire = preview as unknown as Omit<VerbPreview, "effects" | "rollup_delta"> & {
     effects?: WirePreviewLine[];

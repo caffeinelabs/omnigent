@@ -12,7 +12,7 @@ import { type ReactNode, useCallback, useMemo } from "react";
 import { useFactoryNow } from "../../factoryClock";
 import { Peek } from "../../ui/Peek";
 import { useFactoryToast } from "../../ui/Toast";
-import { useSearchParams } from "@/lib/routing";
+import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { DecisionButtons } from "../DecisionButtons";
 import { type NodeActions, NodeContextProvider, type SheetKind } from "../NodeContext";
@@ -36,19 +36,43 @@ export const SHEET_PARAM = "peek";
 export const SHEET_AT_PARAM = "at";
 export const SHEET_TREE_PARAM = "tree";
 
-/** Open a sheet (or close it, with null); the address keeps it, so Back closes it. */
+/** The history state of an entry a sheet pushed (its close goes back over it). */
+const SHEET_PUSHED = "v3SheetPushed";
+
+/** This entry was pushed by opening a sheet from the page. */
+function pushedBySheet(state: unknown): boolean {
+  return Boolean(state && (state as Record<string, unknown>)[SHEET_PUSHED]);
+}
+
+/**
+ * Open a sheet (or close it, with null); the address keeps it. Opening from
+ * the page pushes an entry, so Back closes it; closing goes back over that
+ * entry (or replaces the address when the top bar opened it in place), so
+ * Back after Esc never reopens it.
+ */
 export function useOpenSheet(): (sheet: SheetKind | null, at?: string) => void {
   const [, setParams] = useSearchParams();
+  const { state } = useLocation();
+  const navigate = useNavigate();
+  const pushed = pushedBySheet(state);
   return useCallback(
-    (sheet, at) =>
-      setParams((prev) => {
-        const next = new URLSearchParams(prev);
-        for (const key of [SHEET_PARAM, SHEET_AT_PARAM, SHEET_TREE_PARAM]) next.delete(key);
-        if (sheet) next.set(SHEET_PARAM, sheet);
-        if (sheet && at) next.set(SHEET_AT_PARAM, at);
-        return next;
-      }),
-    [setParams],
+    (sheet, at) => {
+      if (!sheet && pushed) {
+        navigate(-1);
+        return;
+      }
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          for (const key of [SHEET_PARAM, SHEET_AT_PARAM, SHEET_TREE_PARAM]) next.delete(key);
+          if (sheet) next.set(SHEET_PARAM, sheet);
+          if (sheet && at) next.set(SHEET_AT_PARAM, at);
+          return next;
+        },
+        sheet ? { state: { [SHEET_PUSHED]: true } } : { replace: true },
+      );
+    },
+    [navigate, pushed, setParams],
   );
 }
 
@@ -65,6 +89,10 @@ function ago(at: string | undefined, now: Date): string | null {
   if (min < 60) return `${min} min ago`;
   const h = Math.round(min / 60);
   return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+}
+
+function errorWords(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function esc(s: string): string {
@@ -131,18 +159,38 @@ function Crumbs({ crumbs }: { crumbs: { ref: string; title: string }[] }) {
   );
 }
 
+/** "D-49 · 18 min" (a grouped item has no id of its own; nothing when neither is known). */
+function meta(d: DecisionRef): string {
+  return [d.grouped ? null : d.id, d.age].filter(Boolean).join(" · ");
+}
+
+/** The asks that block nothing can be answered at once when each one's first answer is the same one. */
+function oneAnswer(quiet: QuietAsk[]): DecisionAction | null {
+  const first = quiet[0]?.actions[0];
+  if (quiet.length < 2 || !first) return null;
+  const same = quiet.every((a) => {
+    const act = a.actions[0];
+    return act && !a.external_url && (act.id === first.id || act.label === first.label);
+  });
+  return same ? first : null;
+}
+
 function NeedsList({
   list,
   tree,
   onTree,
-  onAnswer,
+  onAnswerAll,
 }: {
   list: NeedsYouList;
   tree: string;
   onTree: (tree: string) => void;
-  onAnswer: (decision: DecisionRef, action: DecisionAction) => void;
+  /** Answer each ask with its own first answer (the same one for all: `oneAnswer`). */
+  onAnswerAll: (asks: QuietAsk[]) => void;
 }) {
   const quiet = list.blocks_nothing;
+  const all = oneAnswer(quiet);
+  const treeName = tree === "factory" ? "Factory" : "Product";
+  const nothing = !list.items.length && !quiet.length && !list.closed_alarms.length;
   // The asks that block nothing are one group: where they sit in common, and each node once.
   const common = useMemo(() => commonCrumb(quiet), [quiet]);
   const nodes = useMemo(() => {
@@ -152,50 +200,57 @@ function NeedsList({
   }, [quiet]);
   return (
     <div className="flex flex-col gap-3" data-testid="v3-needs-sheet">
-      <ol className="flex flex-col">
-        {list.items.map((item, i) => {
-          const d = item.decision;
-          const at = item.breadcrumb.at(-1);
-          return (
-            <li
-              key={d.id}
-              data-testid="v3-needs-item"
-              data-decision={d.id}
-              className="flex flex-col gap-1 border-t border-border py-3 first:border-t-0 first:pt-0"
-            >
-              <div className="flex min-w-0 items-baseline gap-1.5">
-                <span className="text-xs font-semibold text-foreground-tertiary">{i + 1}</span>
-                <Crumbs crumbs={item.breadcrumb} />
-              </div>
-              <div className="text-[14px] font-semibold [overflow-wrap:anywhere]">
-                {d.title ?? d.verb}{" "}
-                <span className="font-normal text-foreground-tertiary">
-                  · {[d.grouped ? null : d.id, d.age].filter(Boolean).join(" · ")}
-                </span>
-              </div>
-              <p className="text-[13px] text-muted-foreground">
-                {d.text}{" "}
-                {item.holds.length ? (
-                  <b className="font-semibold text-foreground">Holds {item.holds.join(", ")}.</b>
-                ) : (
-                  "Holds nothing else."
-                )}
-              </p>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                <DecisionButtons decision={d} variant="card" />
-                {at && (
-                  <NodeLink
-                    nodeRef={at.ref}
-                    className={cn(ACT, "border-dashed border-border-strong font-medium")}
-                  >
-                    Open {at.title}
-                  </NodeLink>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+      {nothing && (
+        <p data-testid="v3-needs-nothing" className="text-[13.5px] text-muted-foreground">
+          Nothing in {treeName} waits on you.
+        </p>
+      )}
+      {list.items.length > 0 && (
+        <ol className="flex flex-col">
+          {list.items.map((item, i) => {
+            const d = item.decision;
+            const at = item.breadcrumb.at(-1);
+            return (
+              <li
+                key={d.id}
+                data-testid="v3-needs-item"
+                data-decision={d.id}
+                className="flex flex-col gap-1 border-t border-border py-3 first:border-t-0 first:pt-0"
+              >
+                <div className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="text-xs font-semibold text-foreground-tertiary">{i + 1}</span>
+                  <Crumbs crumbs={item.breadcrumb} />
+                </div>
+                <div className="text-[14px] font-semibold [overflow-wrap:anywhere]">
+                  {d.title ?? d.verb}
+                  {meta(d) && (
+                    <span className="font-normal text-foreground-tertiary"> · {meta(d)}</span>
+                  )}
+                </div>
+                <p className="text-[13px] text-muted-foreground">
+                  {d.text}{" "}
+                  {item.holds.length ? (
+                    <b className="font-semibold text-foreground">Holds {item.holds.join(", ")}.</b>
+                  ) : (
+                    "Holds nothing else."
+                  )}
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <DecisionButtons decision={d} variant="card" />
+                  {at && (
+                    <NodeLink
+                      nodeRef={at.ref}
+                      className={cn(ACT, "border-dashed border-border-strong font-medium")}
+                    >
+                      Open {at.title}
+                    </NodeLink>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
       {quiet.length > 0 && (
         <section
           data-testid="v3-needs-quiet"
@@ -210,16 +265,14 @@ function NeedsList({
             These block nothing, so they never raise an alarm.
           </p>
           <div className="mt-1 flex flex-wrap gap-1.5">
-            {quiet.length > 1 && quiet.every((a) => a.actions[0] && !a.external_url) && (
+            {all && (
               <button
                 type="button"
                 data-testid="v3-needs-apply-all"
-                onClick={() => {
-                  for (const a of quiet) onAnswer(a, a.actions[0]!);
-                }}
+                onClick={() => onAnswerAll(quiet)}
                 className={cn(ACT, "border-border-strong hover:border-status-blue")}
               >
-                {quiet[0]!.actions[0]!.label} all {quiet.length}
+                {all.label} all {quiet.length}
               </button>
             )}
             {quiet.length === 1 && <DecisionButtons decision={quiet[0]!} variant="ghost" />}
@@ -302,11 +355,13 @@ interface SheetProps {
 
 function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
   const [params, setParams] = useSearchParams();
+  const { state } = useLocation();
   const tree = params.get(SHEET_TREE_PARAM) ?? "product";
   const query = useNeedsYou(tree, open, fid);
   const toast = useFactoryToast();
   const source = useNodeSource();
-  const { mutate } = useAnswerDecision(fid);
+  const { mutate, mutateAsync } = useAnswerDecision(fid);
+  const sample = source?.kind === "sample";
   const onAnswer = useCallback(
     (decision: DecisionRef, action: DecisionAction) =>
       mutate(
@@ -314,16 +369,36 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
         {
           onSuccess: () =>
             toast.show({
-              message:
-                source?.kind === "sample"
-                  ? `Sample data: ${decision.id} ${action.label} changes only the sample.`
-                  : `${decision.id}: ${action.label}`,
+              message: sample
+                ? `Sample data: ${decision.id} ${action.label} changes only the sample.`
+                : `${decision.id}: ${action.label}`,
             }),
           onError: (error) =>
-            toast.show({ message: `${decision.id} was not answered: ${String(error)}` }),
+            toast.show({ message: `${decision.id} was not answered: ${errorWords(error)}` }),
         },
       ),
-    [mutate, source?.kind, toast],
+    [mutate, sample, toast],
+  );
+  /** Every quiet ask with its own first answer, at once; one toast says how it went. */
+  const onAnswerAll = useCallback(
+    (asks: QuietAsk[]) => {
+      const label = asks[0]?.actions[0]?.label ?? "";
+      void Promise.allSettled(
+        asks.map((a) => mutateAsync({ decision: a, action: a.actions[0]! })),
+      ).then((results) => {
+        const done = asks.filter((_, i) => results[i]!.status === "fulfilled").map((a) => a.id);
+        const failed = results.flatMap((r, i) =>
+          r.status === "rejected"
+            ? [`${asks[i]!.id} was not answered: ${errorWords(r.reason)}`]
+            : [],
+        );
+        const said = done.length
+          ? `${label}: ${done.join(", ")}.${sample ? " Sample data: it changes only the sample." : ""}`
+          : null;
+        toast.show({ message: [said, ...failed].filter(Boolean).join(" ") });
+      });
+    },
+    [mutateAsync, sample, toast],
   );
   const list = query.data;
   const count = list ? list.items.length + list.blocks_nothing.length : null;
@@ -333,15 +408,23 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
       open={open}
       onOpenChange={(next) => !next && onClose()}
       wide
-      title={count == null ? "Needs you" : `${count} need${count === 1 ? "s" : ""} you`}
-      description={`in ${treeName} · ranked by what each one holds`}
+      title={
+        count == null
+          ? "Needs you"
+          : count === 0
+            ? "Nothing needs you"
+            : `${count} need${count === 1 ? "s" : ""} you`
+      }
+      description={
+        count === 0 ? `in ${treeName}` : `in ${treeName} · ranked by what each one holds`
+      }
     >
       {list ? (
         <NodeContextProvider value={{ factoryId: fid, onAnswer }}>
           <NeedsList
             list={list}
             tree={tree}
-            onAnswer={onAnswer}
+            onAnswerAll={onAnswerAll}
             onTree={(next) =>
               setParams(
                 (prev) => {
@@ -349,7 +432,8 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
                   p.set(SHEET_TREE_PARAM, next);
                   return p;
                 },
-                { replace: true },
+                // The entry stays the sheet's own: closing still goes back over it.
+                { replace: true, state },
               )
             }
           />
@@ -427,6 +511,10 @@ function BaseEnvSheet({ factoryId, open, onClose }: SheetProps) {
         </div>
       ) : root.isPending && open ? (
         <div aria-busy="true" className="h-32 animate-pulse rounded-xl bg-muted" />
+      ) : root.isError ? (
+        <p role="alert" className="text-sm text-status-red-fg">
+          The base env could not be read: {errorWords(root.error)}
+        </p>
       ) : (
         <p className="text-sm text-muted-foreground">This factory has no base env yet.</p>
       )}
@@ -460,13 +548,22 @@ function TryItSheet({ factoryId, open, at, onClose }: SheetProps & { at: string 
           : []),
       ]
     : [];
+  const inBase = Boolean(node?.in_base_env || page.data?.rollup.in_base_env);
   return (
     <Peek
       open={open}
       onOpenChange={(next) => !next && onClose()}
       title={node ? `Try ${node.title} on the base env` : "Try it"}
     >
-      {node ? (
+      {page.isError ? (
+        <p role="alert" className="text-sm text-status-red-fg">
+          This node could not be read: {errorWords(page.error)}
+        </p>
+      ) : open && page.data === null ? (
+        <p data-testid="v3-try-missing" className="text-sm text-muted-foreground">
+          No node has the ref <span className="font-mono">{at}</span> here.
+        </p>
+      ) : node ? (
         <div className="flex flex-col gap-3" data-testid="v3-try-sheet">
           {steps.length ? (
             <ul className="flex flex-col gap-1.5">
@@ -490,7 +587,9 @@ function TryItSheet({ factoryId, open, at, onClose }: SheetProps & { at: string 
             </ul>
           ) : (
             <p className="text-[13.5px] text-muted-foreground">
-              Everything merged here is in the base env; no acceptance step names it yet.
+              {inBase
+                ? "Everything merged here is in the base env; no acceptance step names it yet."
+                : "Nothing here can be tried in the base env yet."}
             </p>
           )}
           {lines.length > 0 && <PreviewLines lines={lines} />}

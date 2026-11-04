@@ -1,9 +1,49 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import { useLocation, useNavigate } from "@/lib/routing";
 import { cockpitKeyList } from "../../cmdk/KeyboardHelp";
 import { renderNode } from "../fixture/renderNode";
 import { sampleNodeSource } from "../fixture/sampleNodeSource";
+import type { NodeSource } from "../nodeSource";
+import type { NeedsYouList } from "../nodeTypes";
+import { useOpenSheet } from "./V3Sheets";
+
+/** The sample, with its Needs you list changed by `edit`. */
+function withNeeds(edit: (list: NeedsYouList) => NeedsYouList): NodeSource {
+  const sample = sampleNodeSource();
+  return {
+    ...sample,
+    needsYou: async (fid, tree, signal) => edit(await sample.needsYou!(fid, tree, signal)),
+  };
+}
+
+let where = "";
+/** Opens and closes the Needs you sheet as a page part (push) or the top bar (replace) would, and goes Back. */
+function SheetHistory() {
+  const open = useOpenSheet();
+  const navigate = useNavigate();
+  const location = useLocation();
+  where = location.search;
+  return (
+    <>
+      <button type="button" onClick={() => open("needs")}>
+        page opens
+      </button>
+      <button type="button" onClick={() => navigate("?peek=needs", { replace: true })}>
+        top bar opens
+      </button>
+      <button type="button" onClick={() => open(null)}>
+        close
+      </button>
+      <button type="button" onClick={() => navigate(-1)}>
+        back
+      </button>
+    </>
+  );
+}
 
 async function sheet(testId: string) {
   return screen.findByTestId(testId, {}, { timeout: 4000 });
@@ -62,6 +102,96 @@ describe("cockpit v3 · sheets", () => {
       ).toEqual(["D-50", "D-51"]),
     );
     expect(within(factory).queryByTestId("v3-needs-closed")).toBeNull();
+  });
+
+  it("“Apply all” says in one toast which asks were answered", async () => {
+    const source = sampleNodeSource();
+    const answer = vi.fn(source.answer);
+    renderNode("product", {
+      query: "?peek=needs",
+      source: {
+        ...source,
+        answer: async (fid, decision, action) => {
+          if (decision.id === "D-44") throw new Error("the proposal moved on");
+          return answer(fid, decision, action);
+        },
+      },
+    });
+    const list = await sheet("v3-needs-sheet");
+    await userEvent.click(within(list).getByTestId("v3-needs-apply-all"));
+    const toast = await screen.findByTestId("factory-toast");
+    await waitFor(() =>
+      expect(toast).toHaveTextContent("Apply: D-43. Sample data: it changes only the sample."),
+    );
+    expect(toast).toHaveTextContent("D-44 was not answered: the proposal moved on");
+    expect(answer.mock.calls.map(([, d, a]) => [d.id, a.label])).toEqual([["D-43", "Apply"]]);
+  });
+
+  it("offers no “Apply all” when the asks' first answers differ", async () => {
+    renderNode("product", {
+      query: "?peek=needs",
+      source: withNeeds((list) => ({
+        ...list,
+        blocks_nothing: list.blocks_nothing.map((a, i) =>
+          i === 1 ? { ...a, actions: [{ id: "start", label: "Start" }, ...a.actions] } : a,
+        ),
+      })),
+    });
+    const quiet = await within(await sheet("v3-needs-sheet")).findByTestId("v3-needs-quiet");
+    expect(within(quiet).queryByTestId("v3-needs-apply-all")).toBeNull();
+  });
+
+  it("with nothing open, Needs you says so, names the tree and keeps the other tree's link", async () => {
+    renderNode("product", {
+      query: "?peek=needs",
+      source: withNeeds((list) => ({ ...list, items: [], blocks_nothing: [], closed_alarms: [] })),
+    });
+    const list = await sheet("v3-needs-sheet");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Nothing needs you");
+    expect(within(list).getByTestId("v3-needs-nothing")).toHaveTextContent(
+      "Nothing in Product waits on you",
+    );
+    expect(list.querySelector("ol")).toBeNull();
+    expect(within(list).getByTestId("v3-needs-other-tree")).toHaveTextContent(
+      "2 more in Factory ›",
+    );
+  });
+
+  it("Try it claims the base env only when the node is in it, and names a ref that is not there", async () => {
+    const view = renderNode("product", { query: "?peek=try&at=assistant-panel-ux" });
+    const tried = await sheet("v3-try-sheet");
+    expect(view.engine.node("assistant-panel-ux")!.node.in_base_env).toBeFalsy();
+    expect(tried).toHaveTextContent("Nothing here can be tried in the base env yet.");
+    expect(tried).not.toHaveTextContent("Everything merged here is in the base env");
+    view.unmount();
+    renderNode("product", { query: "?peek=try&at=no-such-node" });
+    expect(await sheet("v3-try-missing")).toHaveTextContent(
+      "No node has the ref no-such-node here.",
+    );
+  });
+
+  it("closing a sheet never leaves an entry that Back reopens", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/"]}>
+          <SheetHistory />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    // Opened from the page: Back would close it; closing goes back over its entry.
+    await userEvent.click(screen.getByRole("button", { name: "page opens" }));
+    expect(where).toBe("?peek=needs");
+    await userEvent.click(screen.getByRole("button", { name: "close" }));
+    expect(where).toBe("");
+    await userEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(where).toBe("");
+    // Opened in place by the top bar: closing replaces it too.
+    await userEvent.click(screen.getByRole("button", { name: "top bar opens" }));
+    expect(where).toBe("?peek=needs");
+    await userEvent.click(screen.getByRole("button", { name: "close" }));
+    expect(where).toBe("");
+    await userEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(where).toBe("");
   });
 
   it("the base env names what it runs, its health and how to sign in", async () => {

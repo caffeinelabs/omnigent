@@ -15,7 +15,7 @@
  * Try it and the keys; ⌘K finds nodes.
  */
 
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AddProjectDialog } from "@/components/factory/controls/AddProjectDialog";
 import { CockpitPalette } from "@/components/factory/cmdk/CockpitPalette";
@@ -156,6 +156,36 @@ export function CockpitShell({
   // v3 with a ranked Needs you: its count is the sheet's (every ask, also those that block nothing).
   const ranked = useNeedsYou("product", v3 && Boolean(nodeSource?.needsYou), fid).data;
   const needsYou = ranked ? ranked.items.length + ranked.blocks_nothing.length : shellNeeds;
+  // The ranked list and the base env chip (the product's page) move with the
+  // factory: read them again whenever the snapshot's open asks change (a push
+  // frame re-read it) or the summary's poll answers, as the polled count did.
+  const liveMark = useMemo(
+    () =>
+      [
+        snapshot.decisions
+          .filter((d) => d.status === "open")
+          .map((d) => d.id)
+          .sort()
+          .join(","),
+        summary?.counts.needs_you ?? summary?.counts.waiting_for_you ?? "",
+        summary?.generated_at ?? "",
+      ].join("|"),
+    [snapshot.decisions, summary],
+  );
+  const sourceKind = nodeSource?.kind;
+  const markRead = useRef(liveMark);
+  useEffect(() => {
+    if (liveMark === markRead.current) return;
+    markRead.current = liveMark;
+    if (!v3 || !sourceKind) return;
+    void queryClient.invalidateQueries({
+      queryKey: [...nodeQueryKeys.all(fid), sourceKind, "needs-you"],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: nodeQueryKeys.node(fid, sourceKind, PRODUCT_REF),
+      exact: true,
+    });
+  }, [fid, liveMark, queryClient, sourceKind, v3]);
   /**
    * v3: the node page whose chat shows a thread, with its chat open (on
    * sample data, the product's: sample nodes have no threads). #discovery
@@ -210,7 +240,7 @@ export function CockpitShell({
       ),
     [setParams],
   );
-  // v3: the base env the top bar names (the product's node page, read once for every page).
+  // v3: the base env the top bar names (the product's node page, read again with the live mark above).
   const root = useNode(v3 ? PRODUCT_REF : "", fid).data;
   const env = root?.node.env;
   useCockpitKeys({

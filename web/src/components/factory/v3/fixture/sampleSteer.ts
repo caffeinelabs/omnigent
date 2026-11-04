@@ -694,7 +694,7 @@ export class SampleSteerEngine extends SampleEngine {
         break;
       case "move":
       case "name": {
-        const name = text(request.args.name);
+        const name = text(request.args.title) || text(request.args.name);
         const to = text(request.args.to);
         if (name) n.title = name;
         if (verb === "name") n.implicit = false;

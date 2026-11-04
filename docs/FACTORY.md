@@ -1099,7 +1099,41 @@ from `GET …/needs-you`), `?peek=env` (the base env), `?peek=try&at=<ref>`
 `?peek=keys`; ⌘K finds nodes by ref or title (`GET …/find`), and the
 search's projects, PRs and tasks open their node pages. Three seconds on a
 page marks this person's last look (`PUT …/n/{ref}/seen`); the "since" line
-and each child's changes it showed stay until the next visit.
+and each child's changes it showed stay for the whole visit (an apply or an
+answer reads the page again, counted from the new mark), and the next visit
+starts from the new mark. A refused apply (409 `stale`, 422, 403) reads the
+page and its preview again, so Apply works on what is there now. The Team
+Undo re-pins the version before only while the version it made is still the
+one in force (read again first); a later version says "undo from Versions".
+
+**What cockpit v3 reads from a preview beyond `api.md` §4 (the S12
+contract).** `POST …/n/{ref}/preview` answers `{preview_id, columns_after?,
+rollup_delta, effects, approver, warnings}`; the web also reads these
+optional fields, each with a fallback when absent (`CLIENT_PREVIEW_FIELDS`
+in `web/src/components/factory/v3/nodeWire.ts`, checked against this list
+by `nodeSteer.test.tsx`):
+
+- `title`: the panel's heading ("Start assistant-panel-ux now"); else the
+  verb's own words.
+- `moved_from` (`{ref, col}`): where the changed node sits now, struck
+  through in the mini columns.
+- `approver_note`: "Who approves" in words ("You, as owner. Applies now;
+  Undo for 10 min."); else words for `approver`.
+- `pulls_forward` (`{ref, title, held_for?, note?}`): the held child a new
+  child's title matched; Add child then says it pulls it forward.
+- `parents` (`[{ref, title}]`): the parents one level up a node may go
+  under. Move and Name it / file under ask the preview with no `to` (the
+  form's first read) and offer only these; a server that answers that read
+  with an error offers none and says so.
+- `apply_label`: Apply's words ("Pull forward and plan").
+
+`rollup_delta` and `effects` are read as `[{label, html}]` lines, as
+sentences, or (`rollup_delta`) as `{field: {before, after}}`. The arguments
+the web sends: add `{title, col, depends_on?, because?, held_for?}`, start,
+pause and resume `{}`, auto `{auto_merge}`, move `{to?}`, name
+`{title?, to?}`; a blocked form (Add child without a title, Team with
+nothing picked) asks no preview. The apply's one-line result is read from
+`message`.
 
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to

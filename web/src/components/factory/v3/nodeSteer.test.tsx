@@ -1,14 +1,17 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import nodePath from "node:path";
+import { fileURLToPath } from "node:url";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderNode } from "./fixture/renderNode";
 import { sampleEngine, sampleNodeSource } from "./fixture/sampleNodeSource";
 import { SERVED_STEER, liveNodeSource, steerRoutes } from "./nodeSource";
-import { SEEN_AFTER_MS } from "./nodeSteer";
+import { SEEN_AFTER_MS, resetNodeUndos } from "./nodeSteer";
 import { sinceWhen } from "./nodeParts";
 import { NodeRow } from "./NodeTile";
 import type { NodeSummary } from "./nodeTypes";
-import { normalizeFind, normalizePreview } from "./nodeWire";
+import { CLIENT_PREVIEW_FIELDS, normalizeFind, normalizePreview } from "./nodeWire";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -28,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetNodeUndos();
 });
 
 describe("cockpit v3 · since last look (W10)", () => {
@@ -50,6 +54,28 @@ describe("cockpit v3 · since last look (W10)", () => {
       .queryAllByTestId("v3-tile")
       .filter((t) => /merged 13:/.test(t.textContent ?? ""));
     expect(changed).toEqual([]);
+  });
+
+  it("keeps this visit's “since” line and changes while the page reads again after the mark", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const source = sampleNodeSource();
+    renderNode("I-1", { source });
+    await waitFor(() => expect(screen.getByTestId("v3-rollup")).toHaveTextContent("since 12:30:"));
+    const line = screen.getByTestId("v3-rollup").textContent;
+    expect(line).toContain("#9882 merged 13:25");
+    vi.advanceTimersByTime(SEEN_AFTER_MS + 100);
+    await waitFor(() => expect(source.engine.writes).toEqual(["seen I-1"]));
+    // An apply reads every node page again, now counted from the new mark.
+    fireEvent.click(
+      within(screen.getByTestId("v3-verbs")).getByRole("button", { name: /Autonomy/ }),
+    );
+    const apply = await screen.findByTestId("v3-preview-apply");
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.click(apply);
+    await waitFor(() => expect(source.engine.writes).toEqual(["seen I-1", "apply auto I-1"]));
+    await waitFor(() => expect(screen.queryByTestId("v3-preview")).toBeNull());
+    expect(source.engine.node("I-1")!.rollup.since).toBeUndefined();
+    expect(screen.getByTestId("v3-rollup").textContent).toBe(line);
   });
 
   it("a page left before three seconds is not marked", async () => {
@@ -213,6 +239,40 @@ describe("cockpit v3 · the steering routes (api.md §3.8, §4)", () => {
     await expect(
       steerRoutes.apply("f1", "x", { verb: "move", args: {}, based_on: "v1", preview_id: "p" }),
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("reads every client-only preview field as sent, and docs/FACTORY.md names each for S12", async () => {
+    const sent = {
+      preview_id: "pv-2",
+      title: "Move assistant-panel-ux",
+      moved_from: { ref: "assistant-panel-ux", col: 1 },
+      approver_note: "Atlas files the move.",
+      pulls_forward: { ref: "ads", title: "Ads network", held_for: "Q1" },
+      parents: [{ ref: "I-1", title: "Agent assistant (sample)" }],
+      apply_label: "Move",
+      rollup_delta: [],
+      effects: [],
+      approver: "atlas",
+      warnings: [],
+    };
+    expect(Object.keys(sent)).toEqual(expect.arrayContaining([...CLIENT_PREVIEW_FIELDS]));
+    authenticatedFetch.mockImplementation(async () => reply(sent));
+    const preview = await steerRoutes.preview("f1", "assistant-panel-ux", {
+      verb: "move",
+      args: {},
+      based_on: "v1",
+    });
+    for (const field of CLIENT_PREVIEW_FIELDS) expect(preview[field]).toEqual(sent[field]);
+    const docs = readFileSync(
+      nodePath.resolve(
+        nodePath.dirname(fileURLToPath(import.meta.url)),
+        "../../../../../docs/FACTORY.md",
+      ),
+      "utf8",
+    );
+    const contract = docs.slice(docs.indexOf("**What cockpit v3 reads from a preview"));
+    const listed = [...contract.slice(0, contract.indexOf("\n\n**", 10)).matchAll(/^- `(\w+)`/gm)];
+    expect(listed.map((m) => m[1])).toEqual([...CLIENT_PREVIEW_FIELDS]);
   });
 
   it("reads a preview's lines in every form api.md allows", () => {

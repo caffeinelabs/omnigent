@@ -24,7 +24,7 @@ import { Kbd, NodeLink, sinceWhen } from "./nodeParts";
 import { useLevel, useMoreChildren, useNode, usePrefetchNode } from "./nodeQueries";
 import { nodeHref } from "./nodeRoutes";
 import { useNodeSource } from "./nodeSource";
-import { useMarkSeen } from "./nodeSteer";
+import { useMarkSeen, useVisitSince } from "./nodeSteer";
 import { DEFAULT_OVERLAYS, type Overlays } from "./NodeTile";
 import type {
   ChildPage,
@@ -412,8 +412,10 @@ function LoadedNodePage({
   actions,
   notice,
   chat,
-  page,
+  page: read,
 }: NodePageProps & { page: Page }) {
+  // This visit's "since" stays while the page reads again (the mark moved, a verb applied).
+  const page = useVisitSince(read);
   const prefetch = usePrefetchNode(factoryId);
   const phone = useIsMobileViewport();
   const navigate = useNavigate();

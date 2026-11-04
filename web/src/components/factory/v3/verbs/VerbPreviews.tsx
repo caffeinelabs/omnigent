@@ -34,19 +34,23 @@ interface VerbProps {
 
 type Args = VerbRequest["args"];
 
-/** The preview of `verb` with `args`, and Apply (which closes the panel once it applied). */
-function useFlow(page: NodePage, verb: VerbAvail, args: Args, onClose: () => void) {
-  const preview = useVerbPreview(page, verb.verb, args);
+/**
+ * The preview of `verb` with `args`, and Apply (which closes the panel once it
+ * applied). `enabled: false` while the form is blocked: nothing is asked.
+ */
+function useFlow(page: NodePage, verb: VerbAvail, args: Args, onClose: () => void, enabled = true) {
+  const preview = useVerbPreview(page, verb.verb, args, { enabled });
   const apply = useApplyVerb(page);
-  const data = preview.data;
-  const stale = !preview.settled || preview.isPlaceholderData || preview.isFetching;
+  // A blocked form shows no earlier answer either: there is nothing to preview.
+  const data = enabled ? preview.data : undefined;
+  const stale = enabled && (!preview.settled || preview.isPlaceholderData || preview.isFetching);
   const panel: Pick<
     PreviewPanelProps,
     "preview" | "loading" | "error" | "applying" | "onApply" | "onCancel"
   > = {
     preview: data,
     loading: stale,
-    error: preview.error,
+    error: enabled ? preview.error : null,
     applying: apply.isPending,
     onCancel: onClose,
     onApply: () => {
@@ -79,7 +83,8 @@ function AddChildPreview({ page, verb, args, onClose }: VerbProps) {
     ...(dep && !later ? { depends_on: dep, because: because.trim() } : {}),
     ...(later && heldFor.trim() ? { held_for: heldFor.trim() } : {}),
   };
-  const { panel, data } = useFlow(page, verb, request, onClose);
+  // No title yet: no preview (the server would refuse an empty one).
+  const { panel, data } = useFlow(page, verb, request, onClose, Boolean(request.title));
   const order = [
     ...columns.map((c) => ({ value: c.col as number | "later", label: c.title })),
     ...(laterTitle ? [{ value: "later" as const, label: laterTitle }] : []),
@@ -236,27 +241,46 @@ function PausePreview({ page, verb, onClose }: VerbProps) {
   );
 }
 
-/** Move and Name it / file under: a parent one level up (only those are offered), and a name. */
+/**
+ * Move and Name it / file under: a parent one level up (only those the server
+ * lists are offered), and a name. With nothing picked yet the preview is read
+ * only for its `parents` (docs/FACTORY.md, the S12 contract); a server that
+ * answers it with an error offers no parent, and says so, instead of an error.
+ */
 function ParentPreview({ page, verb, onClose, naming }: VerbProps & { naming: boolean }) {
   const id = useId();
-  const current = [...page.breadcrumb].reverse().find((c) => !c.folded)?.ref ?? "";
+  // The node's own parent is the last crumb, folded or not (step-out skips a
+  // folded one; the parent is still that implicit node).
+  const parentCrumb = page.breadcrumb.at(-1);
+  const current = parentCrumb?.ref ?? "";
   const [to, setTo] = useState(current);
   const [name, setName] = useState("");
   const request: Args = {
     ...(to && to !== current ? { to } : {}),
-    ...(naming && name.trim() ? { name: name.trim() } : {}),
+    // The name goes as `title`, as a new child's does (the S12 server reads it so).
+    ...(naming && name.trim() ? { title: name.trim() } : {}),
   };
   const { panel, data } = useFlow(page, verb, request, onClose);
   const parents = data?.parents ?? [];
-  const parentLevel = page.breadcrumb.find((c) => c.ref === current);
   const changed = to !== current || Boolean(naming && name.trim());
+  const unlisted = !changed && Boolean(panel.error);
   return (
     <PreviewPanel
       {...panel}
+      error={unlisted ? null : panel.error}
+      loading={!unlisted && panel.loading}
       label={verb.label}
       title={naming ? `Name ${page.node.title}, or file it under` : `Move ${page.node.title}`}
       applyLabel={naming ? "Save" : "Move"}
-      blocked={changed ? null : naming ? "Give it a name or a parent." : "Pick another parent."}
+      blocked={
+        changed
+          ? null
+          : unlisted
+            ? `This server lists no parent to ${naming ? "file it under" : "move it under"} yet.`
+            : naming
+              ? "Give it a name or a parent."
+              : "Pick another parent."
+      }
     >
       {naming && (
         <PreviewField label="Name" htmlFor={`${id}-name`}>
@@ -273,7 +297,7 @@ function ParentPreview({ page, verb, onClose, naming }: VerbProps & { naming: bo
       )}
       {parents.length > 0 && (
         <PreviewField
-          label={`Parent${parentLevel ? ` (${levelName(parentLevel.level, parentLevel.level_name)})` : ""}`}
+          label={`Parent${parentCrumb ? ` (${levelName(parentCrumb.level, parentCrumb.level_name)})` : ""}`}
         >
           <PreviewOptions
             label="Parent"

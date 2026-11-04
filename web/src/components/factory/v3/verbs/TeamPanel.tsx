@@ -4,8 +4,9 @@
 // when, the team's $/h before and after, and who approves; Apply with Undo
 // for 10 minutes. On a live factory it is the team editor's own path (the
 // project's team spec and catalog, the definition's preview, a definition
-// version, Undo by re-pinning the version before); a sample source previews
-// and applies through its own verbs.
+// version, Undo by re-pinning the version before, offered only while the
+// version it made is in force); a sample source previews and applies through
+// its own verbs.
 
 import { useMemo, useState } from "react";
 import { useOptionalFactoryShell } from "../../shell/FactoryShellContext";
@@ -27,14 +28,27 @@ import {
 import { useTeamPreview } from "../../team/teamQueries";
 import { useProjectTeam } from "../../team/useProjectTeam";
 import { useFactoryToast } from "../../ui/Toast";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useNodeActions } from "../NodeContext";
 import { Avatar } from "../nodeParts";
 import { nodeQueryKeys } from "../nodeQueries";
 import { useNodeSource } from "../nodeSource";
-import { rememberUndo, useApplyVerb, useRefreshNodes, useVerbPreview } from "../nodeSteer";
+import { UNDO_WINDOW_S } from "../../steer/steerModel";
+import {
+  type NodeUndo,
+  forgetUndo,
+  readDefinitionVersions,
+  refusal,
+  rememberUndo,
+  serverNowS,
+  undoViewer,
+  useApplyVerb,
+  useRefreshNodes,
+  useVerbPreview,
+  versionUndoLeft,
+} from "../nodeSteer";
 import type {
   NodePage,
   PreviewLine,
@@ -225,7 +239,8 @@ function SourceTeamPanel({ page, verb, args, onClose }: PanelProps) {
   );
   const request: VerbRequest["args"] =
     changed && swap ? { member: swap.key, vendor: swap.vendor, model: swap.model } : {};
-  const preview = useVerbPreview(page, verb.verb, request);
+  // Nothing picked: nothing to preview (Apply says why).
+  const preview = useVerbPreview(page, verb.verb, request, { enabled: changed });
   const apply = useApplyVerb(page);
   const working = rows.filter((r) => /work|plan/.test(r.state ?? "")).length;
   return (
@@ -233,8 +248,8 @@ function SourceTeamPanel({ page, verb, args, onClose }: PanelProps) {
       label="Team editor"
       title={`Team of ${page.node.title}`}
       preview={preview.data}
-      loading={!preview.settled || preview.isFetching}
-      error={preview.error}
+      loading={changed && (!preview.settled || preview.isFetching)}
+      error={changed ? preview.error : null}
       applyLabel="Apply team change"
       applying={apply.isPending}
       blocked={changed ? null : "Pick a vendor and model for a member to preview the change."}
@@ -397,6 +412,52 @@ function LiveTeamEditor({ page, verb, args, onClose }: PanelProps) {
       : res?.blocked.length
         ? res.blocked.map((b) => b.message).join(" ")
         : null;
+  const client = useQueryClient();
+  const ref = page.node.ref;
+  /**
+   * Undo of the version this apply made: it re-pins `parent` only while
+   * `version` is still the version in force (read again now), so a version
+   * someone landed after it is never dropped with it.
+   */
+  const undoOf = (version: number, parent: number): NodeUndo => {
+    const entry: NodeUndo = {
+      label: verb.label,
+      expiresAt: Date.now() + UNDO_WINDOW_S * 1000,
+      version: { version, parent },
+      run: async () => {
+        const versions = await readDefinitionVersions(client, fid).catch(() => null);
+        if (!versions) {
+          toast.show({ message: "Could not undo: the definition's versions could not be read." });
+          return;
+        }
+        const left = versionUndoLeft(
+          versions.data,
+          entry.version!,
+          serverNowS(shell),
+          undoViewer(shell),
+        );
+        if (left == null) {
+          forgetUndo(fid, ref, entry);
+          toast.show({ message: `v${version} is no longer in force; undo from Versions.` });
+          return;
+        }
+        try {
+          await pin.mutateAsync(parent);
+        } catch (error) {
+          toast.show({
+            message: `Could not undo: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          return;
+        }
+        forgetUndo(fid, ref, entry);
+        void refresh();
+        toast.show({
+          message: `Undone. The team is back as in v${parent}; v${version} stays in history.`,
+        });
+      },
+    };
+    return entry;
+  };
   const applyNow = async () => {
     const baseVersion = res?.def_version ?? data.spec?.def_version ?? undefined;
     try {
@@ -408,32 +469,17 @@ function LiveTeamEditor({ page, verb, args, onClose }: PanelProps) {
       const version = out.def_version;
       void refresh();
       onClose();
-      const undo =
-        version != null && baseVersion != null
-          ? () =>
-              pin.mutateAsync(baseVersion).then(
-                () => {
-                  void refresh();
-                  toast.show({
-                    message: `Undone. The team is back as in v${baseVersion}; v${version} stays in history.`,
-                  });
-                },
-                (error: Error) => toast.show({ message: `Could not undo: ${error.message}` }),
-              )
-          : undefined;
-      if (undo) {
-        rememberUndo(fid, page.node.ref, {
-          label: verb.label,
-          expiresAt: Date.now() + 10 * 60_000,
-          run: undo,
-        });
-      }
+      const undo = version != null && baseVersion != null ? undoOf(version, baseVersion) : null;
+      if (undo) rememberUndo(fid, ref, undo);
       toast.show({
         message: `Applied as definition v${version ?? "?"}: the team of ${page.node.title} changes from the next task.`,
-        ...(undo ? { undo: () => void undo() } : {}),
+        ...(undo ? { undo: () => void undo.run() } : {}),
       });
     } catch (error) {
-      toast.show({ message: `Not applied: ${(error as Error).message}` });
+      // Refused (409: the definition moved on): the edit's own settle reads the
+      // team spec and the definition again; the node pages read again too.
+      void refresh();
+      toast.show({ message: refusal(error) });
     }
   };
   return (

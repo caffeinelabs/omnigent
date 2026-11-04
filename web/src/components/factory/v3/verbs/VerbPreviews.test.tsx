@@ -245,6 +245,76 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     );
   });
 
+  it("Move under a folded implicit parent names that parent and offers no no-op move", async () => {
+    const view = renderNode("build-tier-drafts-3");
+    await shown("build-tier-drafts-3");
+    const crumbs = view.engine.node("build-tier-drafts-3")!.breadcrumb;
+    // Step-out skips the folded crumb; the node's parent is still that implicit feature.
+    expect(crumbs.at(-1)).toMatchObject({ level: "feature", folded: true });
+    await userEvent.click(verbButton(/Move/));
+    const panel = await screen.findByTestId("v3-preview");
+    const group = await within(panel).findByRole("group", { name: "Parent" });
+    expect(within(panel).getByText("Parent (Feature)")).toBeInTheDocument();
+    const own = within(group).getByRole("button", { name: crumbs.at(-1)!.title });
+    expect(own).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(own);
+    expect(within(panel).getByTestId("v3-preview-apply")).toBeDisabled();
+    expect(within(panel).getByTestId("v3-preview-apply")).toHaveAttribute(
+      "title",
+      "Pick another parent.",
+    );
+  });
+
+  it("asks nothing while a form is blocked: Add child without a title reads no preview", async () => {
+    const source = sampleNodeSource();
+    const preview = vi.fn(source.preview!);
+    const view = renderNode("I-1", { source: { ...source, preview } });
+    await shown("I-1");
+    await userEvent.click(verbButton(/Add/));
+    const panel = await screen.findByTestId("v3-preview");
+    expect(within(panel).getByTestId("v3-preview-apply")).toHaveAttribute(
+      "title",
+      "Give it a title first.",
+    );
+    expect(within(panel).queryByRole("alert")).toBeNull();
+    // Past the preview's debounce: still nothing asked.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 400);
+    });
+    expect(preview).not.toHaveBeenCalled();
+    await userEvent.type(within(panel).getByRole("textbox", { name: "Title" }), "Ads network");
+    await waitFor(() => expect(preview).toHaveBeenCalled());
+    expect(preview.mock.calls.every(([, , req]) => Boolean(req.args.title))).toBe(true);
+    expect(view.engine.writes).toEqual([]);
+  });
+
+  it("Cancel and Esc wait while a change is applying (it lands anyway)", async () => {
+    const source = sampleNodeSource();
+    let land: () => void = () => undefined;
+    const apply: NodeSource["apply"] = (fid, ref, request) =>
+      new Promise((resolve, reject) => {
+        land = () => source.apply!(fid, ref, request).then(resolve, reject);
+      });
+    renderNode("assistant-panel-ux", { source: { ...source, apply } });
+    await shown("assistant-panel-ux");
+    await userEvent.click(verbButton(/Start now/));
+    await lines();
+    await applyIt();
+    const panel = screen.getByTestId("v3-preview");
+    await waitFor(() =>
+      expect(within(panel).getByTestId("v3-preview-apply")).toHaveTextContent("Applying…"),
+    );
+    expect(within(panel).getByTestId("v3-preview-cancel")).toBeDisabled();
+    act(() => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(screen.getByTestId("v3-preview")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("it cannot be cancelled now");
+    land();
+    await waitFor(() => expect(screen.queryByTestId("v3-preview")).toBeNull());
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent("Undo");
+  });
+
   it("Pause previews the burn dropping to $0/h, and Resume undoes it", async () => {
     const view = renderNode("T-16");
     await shown("T-16");
@@ -306,5 +376,9 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
       "Not applied: someone changed this first.",
     );
     expect(view.engine.writes).toEqual([]);
+    // The refusal reads the page and its preview again (no refetch on focus or
+    // on a timer would): once it settles, Apply applies what is there now.
+    await applyIt();
+    await waitFor(() => expect(view.engine.writes).toEqual(["apply start assistant-panel-ux"]));
   });
 });
