@@ -10,9 +10,9 @@ day, with neutral names (the web's v3 sample tells the same story):
   done locally; assistant-panel-ux waits on assistant-core;
 - a shortlist proposal (C-13) the person picked created four small projects
   that all merged at 13:25 (one implicit feature under the person's ask);
-- an Atlas proposal (C-12) created build-tier-drafts-3, whose two PRs wait
-  for a person to merge them into ``main`` (its implicit need and feature
-  each hold one child, so both fold);
+- an Atlas proposal (C-12) created build-tier-drafts-3, whose two PRs have
+  waited since 12:00 for a person to merge them into ``main`` (its implicit
+  need and feature each hold one child, so both fold);
 - the base env's setup project (``base-env``, an integration project) and
   two rule proposals belong to the factory tree; the base env runs the head
   the watcher saw at 13:25:30 (every merge so far is in it);
@@ -52,9 +52,11 @@ NOW: Final = 1793713200
 """13:40 UTC on the sample day."""
 AT_0555: Final = 1793685300
 AT_0601: Final = 1793685660
+AT_0612: Final = 1793686320
 AT_0655: Final = 1793688900
 AT_0746: Final = 1793691960
 AT_0847: Final = 1793695620
+AT_1200: Final = 1793707200
 AT_1303: Final = 1793710980
 AT_1322: Final = 1793712120
 AT_1325: Final = 1793712300
@@ -139,6 +141,7 @@ def _pr(
     merged_at: int | None = AT_1325,
     task_id: str | None = None,
     ready: bool = False,
+    ready_at: int | None = None,
     base: str = BASE,
     title: str | None = None,
 ) -> FactoryPr:
@@ -153,6 +156,7 @@ def _pr(
         state=state,
         project_slug=slug,
         ready=ready,
+        ready_at=ready_at,
         merged_at=merged_at if state == "merged" else None,
         merged_sha=f"{number:07x}" + "0" * 33 if state == "merged" else None,
         task_id=task_id,
@@ -391,6 +395,7 @@ def factory_1340() -> NodeFacts:
             "build-tier-drafts-3",
             state="open",
             ready=True,
+            ready_at=AT_1200,
             base="main",
             title="build-tier-drafts-3, part 1",
         ),
@@ -399,6 +404,7 @@ def factory_1340() -> NodeFacts:
             "build-tier-drafts-3",
             state="open",
             ready=True,
+            ready_at=AT_1200,
             base="main",
             title="build-tier-drafts-3, part 2",
         ),
@@ -697,10 +703,6 @@ def closed_alarms() -> list[ClosedAlarm]:
             project="assistant-core",
         ),
     ]
-
-
-AT_0612: Final = 1793686320
-AT_1200: Final = 1793707200
 
 
 def _span(

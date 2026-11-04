@@ -1005,21 +1005,28 @@ the web tests. `GET …/n/{ref}/level/{level}` lists one level under a node
 grouped under each item's parent (Home lists the features under the needs
 they came from), all-done groups folded, 60 a group with a cursor each;
 `state` and `q` keep only the nodes in one state or whose title or code
-holds the words.
+holds the words (`state=later` or `ghost` lists the held or proposed nodes
+as the items); a group with nothing to show is left out.
 
 **Lenses** (`node_lenses.py`) are the other ways to read one node.
 `GET …/n/{ref}/lineage` reads top to bottom: each ancestor with its one
 line (a need with its evidence, a feature with the proposal that approved
 it), the node, the levels below it with their counts and, in the product
-tree, its results. `GET …/n/{ref}/timeline?from=&to=` (epoch seconds or ISO,
-at most 7 days; by default the last day from the hour work began) draws one
-lane per child from the recorded spans: `stage` spans for projects, `task`
-spans for tasks, as work bars; queued and ready stages, PRs waiting for a
-merge, open asks and agents parked on a person as waits, amber (`you`) when
-a person is the cause and grey when the lane waits on another node or on the
-server. The wait a lane is in now is its status line, from when it began;
-gaps between bars are waits; the alarms the server closed never count, and
-lanes never join. `GET …/n/{ref}/money` lists the children's cost against
+tree, its results. `GET …/n/{ref}/timeline?from=&to=` (epoch seconds or ISO
+from 2000 to a week from now, at most 7 days apart; by default the last day
+from the hour work began) draws one lane per child from the recorded spans:
+`stage` spans for projects, `task` spans for tasks, as work bars; queued and
+ready stages, PRs waiting for a merge, open asks and agents parked on a
+person as waits, amber (`you`) when a person is the cause and grey when the
+lane waits on another node or on the server (a past queue names the project
+it waited on). An answered ask is amber only when it held work by the same
+rule as an open one (a proposal on a project since done held nothing). The
+wait a lane is in now is its status line, from when it began: never before
+the lane's first bar nor before its last recorded work ended, so work that
+ran after an ask was made stays visible; a merge is a person's from when its
+PRs became ready. Gaps between bars are waits; a lane over several projects
+works while any of them does (one bar); the alarms the server closed never
+count, and lanes never join. `GET …/n/{ref}/money` lists the children's cost against
 their budgets (the roll-ups' numbers), most first, the total, and `rest`:
 what the node spent that no child holds (its leads and agents).
 

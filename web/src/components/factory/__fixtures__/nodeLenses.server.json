@@ -1217,7 +1217,7 @@
               "label": "Review and merge"
             }
           ],
-          "age": "7h 39m",
+          "age": "1h 40m",
           "asker": "Nova",
           "external_url": "https://github.com/sample-org/sample-app/pull/9856",
           "grouped": true,
@@ -1226,7 +1226,7 @@
           "title": "Merge #9856 and #9857 into main",
           "verb": "Merge #9856 and #9857"
         },
-        "holds": [],
+        "holds": ["#9856", "#9857"],
         "weight": 120.0
       },
       {
@@ -1343,7 +1343,7 @@
           {
             "from": "2026-11-03T06:01:00Z",
             "kind": "wait",
-            "label": "queued",
+            "label": "waits on assistant-core",
             "to": "2026-11-03T06:55:00Z"
           },
           {
@@ -1362,7 +1362,7 @@
           {
             "from": "2026-11-03T06:01:00Z",
             "kind": "wait",
-            "label": "queued",
+            "label": "waits on assistant-core",
             "to": "2026-11-03T06:55:00Z"
           },
           {

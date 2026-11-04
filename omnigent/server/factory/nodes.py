@@ -1583,8 +1583,15 @@ class Tree:
 
     def _holds_work(self, decision: FactoryDecision) -> bool:
         proposal = node_status.decision_proposal(decision, self._proposals)
-        if proposal is None:
-            return False
+        return proposal is not None and self.proposal_holds_work(proposal)
+
+    def proposal_holds_work(self, proposal: FactoryProposal) -> bool:
+        """
+        Whether a proposal's decision holds work (:meth:`blocks`): every kind
+        but ``projects`` does; a ``projects`` proposal while it adds a project
+        or changes one that is still active. The timeline asks it of answered
+        proposals too (an ask on a finished project held nothing).
+        """
         if proposal.kind != "projects" or _planned(proposal):
             return True
         rows = self.wfacts.projects
@@ -2768,10 +2775,11 @@ class Tree:
         Groups whose work is all done fold; each group shows 60 items and hands
         out a cursor for its next 60 (with one, only that group comes back).
 
-        :param state: Only nodes in this state (``needs``, ``done``, ``later`` …).
+        :param state: Only nodes in this state (``needs``, ``done`` …); with
+            ``later`` or ``ghost`` the held or proposed nodes are the items.
         :param q: Only nodes whose title or code holds these words (any case).
-            With either filter, groups left with nothing are left out; a
-            cursor pages the filtered group.
+            A cursor pages the filtered group. A group with nothing to show
+            (no items, nothing later) is left out.
         :returns: The ``LevelView``, or ``None`` when *ref* names no node or
             *level* is not below it in its tree.
         :raises ValueError: On a cursor this tree never handed out.
@@ -2813,8 +2821,13 @@ class Tree:
         via = 0
         for parent_ref in order:
             members = grouped[parent_ref]
-            active = [k for k in members if not k.ghost and not k.later]
-            later = [k for k in members if k.later and not k.ghost]
+            if state in ("later", "ghost"):
+                active, later = members, []  # asked for by name: they are the items
+            else:
+                active = [k for k in members if not k.ghost and not k.later]
+                later = [k for k in members if k.later and not k.ghost]
+            if not active and not later:
+                continue  # only proposals: nothing this view shows
             shown_total += len(active)
             via += sum(1 for k in members if k.level != level)
             done = bool(active) and all(self.state(k.ref) == "done" for k in active)

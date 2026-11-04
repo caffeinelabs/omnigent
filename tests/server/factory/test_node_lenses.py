@@ -12,15 +12,17 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from typing import Any
+import time
+from typing import Any, get_args
 
 import pytest
 
 from omnigent.server.factory import node_lenses
-from omnigent.server.factory.node_lenses import line_words
+from omnigent.server.factory.node_lenses import SPANS_MAX, line_words
 from omnigent.server.factory.node_views import (
     LineageView,
     MoneyView,
+    NodeState,
     TimelineView,
     validate,
     validate_level,
@@ -28,7 +30,12 @@ from omnigent.server.factory.node_views import (
 from omnigent.server.factory.nodes import Tree, assert_levels
 from tests.server.factory.node_fixtures import (
     ASK_MESSAGE,
+    AT_0601,
+    AT_1200,
+    AT_1303,
+    AT_1325,
     NOW,
+    _span,
     factory_1340,
     hex_id,
     scale_factory,
@@ -100,6 +107,38 @@ def test_a_level_view_filters_by_state_and_words(tree: Tree) -> None:
         ("assistant-core", ["T-16"])
     ]
     assert nothing["groups"] == [] and nothing["total"] == 0
+
+
+def test_held_and_proposed_nodes_are_the_items_when_asked_for(tree: Tree) -> None:
+    later = validate_level(tree.level_view("product", "project", state="later") or {})
+    ghosts = validate_level(tree.level_view("product", "project", state="ghost") or {})
+
+    assert [(g["parent"]["ref"], [i["ref"] for i in g["items"]]) for g in later["groups"]] == [
+        ("I-1", ["ads-integration", "growth-seo", "sales-skill", "promotion-skill"])
+    ]
+    assert later["total"] == 4 and "later" not in later["groups"][0]
+    assert [[i["ref"] for i in g["items"]] for g in ghosts["groups"]] == [["live-search-fix"]]
+    assert ghosts["total"] == 1
+
+
+@pytest.mark.parametrize("which", ["sample", "scale"])
+def test_no_level_view_has_an_empty_group(which: str) -> None:
+    """Nothing empty: every group a level view returns shows an item or a later title."""
+    tree = assert_levels(Tree(factory_1340() if which == "sample" else scale_factory()))
+    states = (None, *get_args(NodeState))
+
+    for ref, node in tree.nodes.items():
+        for level in tree.ladder[node.tree]:
+            for state in states:
+                view = tree.level_view(ref, level, state=state)
+                if view is None:
+                    continue
+                validate_level(view)
+                assert all(g["items"] or g.get("later") for g in view["groups"]), (
+                    ref,
+                    level,
+                    state,
+                )
 
 
 # ── Lineage ────────────────────────────────────────────────────
@@ -178,9 +217,9 @@ def test_the_timeline_of_agent_assistant_shows_the_panel_waiting_all_day(tree: T
         ("06:55", "07:46", "work", "T-16"),
         ("07:46", "13:40", "you", "Needs you: Apply C-16 · via T-16"),
     ]
-    # Finished projects: queued, then worked (now done); merged closes the lane.
+    # Finished projects: queued behind core, then worked (now done); merged closes the lane.
     assert lanes["connectors-core"] == [
-        ("06:01", "06:55", "wait", "queued"),
+        ("06:01", "06:55", "wait", "waits on assistant-core"),
         ("06:55", "13:25", "done", "building"),
     ]
     # The proposed project waits on its ask; held later waves draw nothing.
@@ -203,6 +242,109 @@ def test_an_alarm_the_server_closed_is_never_a_persons_wait(tree: Tree) -> None:
         ("07:46", "13:40", "you", "Held for C-16: needs you: Apply C-16"),
     ]
     assert lanes["T-15"] == [("06:12", "06:55", "done", "T-15")]
+
+
+def test_an_answered_ask_that_held_nothing_never_colours_a_lane() -> None:
+    """D-43 asked to apply C-14 on connectors-core, which was done: it held nothing."""
+    facts = factory_1340()
+    facts.decisions = [d for d in facts.decisions if d.ref != "D-43"]
+    tree = assert_levels(Tree(facts))
+    answered = _span(
+        99,
+        "decision",
+        "D-43",
+        AT_1303,
+        AT_1325 + 300,
+        slug="connectors-core",
+        attrs={"source": "proposal", "blocking": False, "subject": "proposal:C-14"},
+    )
+
+    view = validate(TimelineView, node_lenses.timeline(tree, "I-1", [*spans_1340(), answered]))
+
+    assert _lanes(view)["connectors-core"] == [
+        ("06:01", "06:55", "wait", "waits on assistant-core"),
+        ("06:55", "13:25", "done", "building"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("attrs", "held"),
+    [
+        ({"source": "proposal", "subject": "proposal:C-16"}, True),  # on active assistant-core
+        ({"source": "proposal", "subject": "proposal:C-14"}, False),  # on done connectors-core
+        ({"source": "proposal", "subject": "proposal:C-17"}, True),  # a rule: a factory change
+        ({"source": "proposal", "subject": "proposal:C-99"}, False),  # no longer listed
+        ({"source": "lead", "blocking": True}, True),
+        ({"source": "lead", "blocking": False}, False),
+    ],
+)
+def test_an_answered_ask_held_work_by_the_trees_rule(
+    tree: Tree, attrs: dict[str, Any], held: bool
+) -> None:
+    assert node_lenses._answered_held(tree, {"blocking": False, **attrs}) is held
+
+
+def test_an_ask_made_while_work_ran_waits_from_when_that_work_stopped() -> None:
+    """D-45 asked at 06:31 while T-15 still ran: the lane is amber only once T-15 stopped."""
+    asked = AT_0601 + 1800
+    facts = factory_1340()
+    facts.decisions = [
+        dataclasses.replace(d, created_at=asked) if d.ref == "D-45" else d for d in facts.decisions
+    ]
+    tree = assert_levels(Tree(facts))
+    spans = [
+        dataclasses.replace(s, started_at=asked * 1000) if s.name == "D-45" else s
+        for s in spans_1340()
+    ]
+
+    feature = _lanes(validate(TimelineView, node_lenses.timeline(tree, "I-1", spans)))
+    project = _lanes(validate(TimelineView, node_lenses.timeline(tree, "assistant-core", spans)))
+
+    assert feature["assistant-core"] == [
+        ("06:01", "06:12", "work", "planning"),
+        ("06:12", "06:55", "work", "T-15"),
+        ("06:55", "13:40", "you", "Needs you: Apply C-16 · via T-16"),
+    ]
+    assert project["T-15"] == [("06:12", "06:55", "done", "T-15")]
+    # T-16 began at 06:55: it never waited on a person before it began.
+    assert project["T-16"] == [("06:55", "13:40", "you", "Held for C-16: needs you: Apply C-16")]
+
+
+def test_a_merge_groups_amber_starts_when_its_prs_became_ready(tree: Tree) -> None:
+    """The project was ready at 11:00, its PRs at 12:00: a person is the cause from 12:00."""
+    at_1100 = AT_1200 - 3600
+    spans = []
+    for span in spans_1340():
+        if span.kind == "ready_wait":
+            continue  # the PRs' own waits: without them the ask's start is ready_at
+        if span.project_slug == "build-tier-drafts-3" and span.name == "building":
+            span = dataclasses.replace(span, ended_at=at_1100 * 1000)
+        elif span.project_slug == "build-tier-drafts-3":
+            span = dataclasses.replace(span, started_at=at_1100 * 1000)
+        spans.append(span)
+
+    product = _lanes(validate(TimelineView, node_lenses.timeline(tree, "product", spans)))
+    own = _lanes(_timeline(tree, "build-tier-drafts-3"))
+
+    assert product["build-tier-drafts-3"] == [
+        ("06:01", "11:00", "work", "building"),
+        ("11:00", "12:00", "wait", "ready to merge"),
+        ("12:00", "13:40", "you", "Needs you: Merge #9856 and #9857"),
+    ]
+    assert own == {
+        "PR-9856": [("12:00", "13:40", "you", "Needs you: Merge #9856 and #9857")],
+        "PR-9857": [("12:00", "13:40", "you", "Needs you: Merge #9856 and #9857")],
+    }
+
+
+def test_a_roll_up_lane_works_while_any_of_it_does(tree: Tree) -> None:
+    lanes = _lanes(_timeline(tree, "product"))
+
+    # The ask's four projects worked from 06:01 to 13:25 without a gap: one bar.
+    assert lanes[ASK] == [
+        ("06:01", "13:25", "work", "skill-discovery: building +3"),
+        ("13:25", "13:40", "you", "Needs you: Apply C-16 · via Agent assistant (sample) › T-16"),
+    ]
 
 
 def test_a_merge_into_an_auto_merge_target_waits_on_the_server() -> None:
@@ -269,8 +411,6 @@ def test_money_lists_cost_against_budget_most_first(tree: Tree) -> None:
 
 
 def test_lenses_at_scale_are_fast() -> None:
-    import time
-
     tree = assert_levels(Tree(scale_factory()))
     spans = [
         dataclasses.replace(s, id=hex_id(90_000 + i), project_slug=f"proj-{i % 45:02d}")
@@ -285,3 +425,25 @@ def test_lenses_at_scale_are_fast() -> None:
     took = time.perf_counter() - started
 
     assert took < 0.9, took
+
+
+def test_a_timeline_at_the_span_cap_is_fast_and_small() -> None:
+    """SPANS_MAX overlapping task spans in one roll-up lane: one sweep, one work bar."""
+    tree = assert_levels(Tree(scale_factory()))
+    need = tree.kids["product"][0]
+    slugs = [n.order for n in tree.subtree(need) if n.level == "project" and n.order]
+    spans = [
+        _span(300_000 + i, "task", f"t{i}", NOW - 86400 + i * 17, NOW - 86400 + i * 17 + 600)
+        for i in range(SPANS_MAX)
+    ]
+    spans = [
+        dataclasses.replace(s, project_slug=slugs[i % len(slugs)]) for i, s in enumerate(spans)
+    ]
+
+    started = time.perf_counter()
+    view = validate(TimelineView, node_lenses.timeline(tree, "product", spans) or {})
+    took = time.perf_counter() - started
+
+    assert took < 0.5, took
+    lane = next(lane for lane in view["lanes"] if lane["ref"] == need)
+    assert [b["kind"] for b in lane["bars"]][:1] == ["work"] and len(lane["bars"]) <= 3

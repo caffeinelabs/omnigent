@@ -60,6 +60,9 @@ def test_merges_on_one_human_merged_base_are_one_item(tree: Tree) -> None:
 
     assert merges["decision"]["grouped"] is True
     assert merges["decision"]["verb"] == "Merge #9856 and #9857"
+    # The PRs no task owns are what the merge holds, by number.
+    assert merges["holds"] == ["#9856", "#9857"]
+    assert merges["decision"]["age"] == "1h 40m"  # ready since 12:00
     assert merges["decision"]["external_url"].endswith("/pull/9856")
     # The project sits under two folded implicit parents; the breadcrumb flags them.
     assert [(c["ref"], c.get("folded")) for c in merges["breadcrumb"]] == [

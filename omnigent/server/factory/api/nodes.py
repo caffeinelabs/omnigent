@@ -28,7 +28,8 @@ no node for; 400 ``bad_cursor`` for a cursor no page handed out.
   404 ``unknown_level`` when the level is not below the node.
 - ``GET …/n/{ref}/lineage``, ``…/timeline?from=&to=``, ``…/money``: the
   lenses (:mod:`.node_lenses`). ``from``/``to`` are epoch seconds or ISO
-  instants (at most 7 days apart; 400 ``bad_window``).
+  instants from 2000 to a week from now, at most 7 days apart (400
+  ``bad_window``); without ``from`` the timeline reads the last day.
 - ``GET /factories/{fid}/needs-you?tree=product|factory``: every ask a person
   owes in one tree, ranked by what it holds (:mod:`.node_sheets`).
 - ``GET /factories/{fid}/find?q=&limit=``: nodes by ref or title, with
@@ -40,7 +41,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
-from typing import Any, get_args
+from typing import Any, Final, get_args
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -177,8 +178,8 @@ async def get_timeline(
     """One lane per child over a window: work bars, waits (amber when a person is the cause)."""
     params = request.query_params
     try:
-        start = _instant(params.get("from"))
-        end = _instant(params.get("to"))
+        start = _instant(params.get("from"), now=time.time())
+        end = _instant(params.get("to"), now=time.time())
     except ValueError as exc:
         return _error(400, "bad_window", str(exc))
     if start is not None and end is not None and not 0 < end - start <= node_lenses.TIMELINE_MAX_S:
@@ -190,7 +191,7 @@ async def get_timeline(
         return _error(404, "unknown_node", f"no node {ref!r} in this factory")
     node = tree.fold(found)
     stop = end if end is not None else int(tree.facts.now)
-    begin = start if start is not None else stop - node_lenses.TIMELINE_MAX_S
+    begin = start if start is not None else stop - node_lenses.TIMELINE_DEFAULT_S
     if end is None and start is not None and not 0 < stop - begin <= node_lenses.TIMELINE_MAX_S:
         return _error(400, "bad_window", "from must be in the last 7 days")
     spans = await asyncio.to_thread(
@@ -229,20 +230,36 @@ async def get_find(
 # ── Helpers ────────────────────────────────────────────────────
 
 
-def _instant(value: str | None) -> int | None:
-    """Epoch seconds from ``1793713200`` or ``2026-11-03T13:40:00Z``."""
+_EARLIEST: Final = 946684800
+"""2000-01-01: no factory recorded anything before it."""
+
+
+def _instant(value: str | None, *, now: float) -> int | None:
+    """
+    Epoch seconds from ``1793713200`` or ``2026-11-03T13:40:00Z``.
+
+    :raises ValueError: On text that is no time, or one before 2000 or more
+        than :data:`~.node_lenses.TIMELINE_MAX_S` after *now*.
+    """
     if value is None or not value.strip():
         return None
     text = value.strip()
-    if text.isdigit():
-        return int(text)
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"not a time: {value!r}") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return int(parsed.timestamp())
+    outside = f"out of range: {value!r} (from 2000 to a week from now)"
+    if text.isascii() and text.isdigit():
+        if len(text) > 12:
+            raise ValueError(outside)
+        found = int(text)
+    else:
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"not a time: {value!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        found = int(parsed.timestamp())
+    if not _EARLIEST <= found <= now + node_lenses.TIMELINE_MAX_S:
+        raise ValueError(outside)
+    return found
 
 
 def _last_look(ctx: FleetContext, tree: nodes.Tree, node: Any, reader: str) -> int | None:

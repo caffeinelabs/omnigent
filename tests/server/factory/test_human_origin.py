@@ -26,6 +26,7 @@ from omnigent.server.accounts_config import AccountsConfig
 from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
 from omnigent.server.factory import nudge
 from omnigent.server.factory.api import cockpit_write
+from omnigent.server.factory.api import nodes as node_routes
 from omnigent.server.factory.origin import require_human_origin
 from omnigent.server.oidc import mint_session_token
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
@@ -188,6 +189,8 @@ _ROUTES: dict[str, Callable[[Cockpit], _Call]] = {
         f"/v1/factory/factories/{c.fid}/projects/{_unstaffed_project(c)}/start",
         None,
     ),
+    # A last look is a person's: a runner reading the page never marks it.
+    "seen": lambda c: ("PUT", f"/v1/factory/factories/{c.fid}/n/product/seen", None),
 }
 
 
@@ -265,14 +268,43 @@ async def test_agent_routes_keep_accepting_the_runner_token(
     assert resp.status_code == 200, resp.text
 
 
+@pytest.mark.parametrize("who", ["runner", "tunnel"])
+async def test_a_runner_reading_a_node_page_never_marks_a_last_look(
+    cockpit: Cockpit, provider: UnifiedAuthProvider, who: str
+) -> None:
+    """``seen=1`` from a runner (its bearer, or a person's relayed by it) answers, unmarked."""
+    headers = (
+        runner_bearer(provider)
+        if who == "runner"
+        else {**cli(), RUNNER_TUNNEL_TOKEN_HEADER: "rt_abc.def"}
+    )
+
+    resp = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/n/product", params={"seen": 1}, headers=headers
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert cockpit.store.list_node_reads(cockpit.fid, "alice") == []
+
+
+async def test_a_person_reading_a_node_page_with_seen_marks_it(cockpit: Cockpit) -> None:
+    resp = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/n/product", params={"seen": 1}, headers=cli()
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [r.node_ref for r in cockpit.store.list_node_reads(cockpit.fid, "alice")] == ["product"]
+
+
 def test_every_cockpit_write_route_requires_human_origin() -> None:
     """A write route added without the dependency fails here, not in production."""
     writes = [
         route
-        for route in cockpit_write.router.routes
+        for router in (cockpit_write.router, node_routes.router)
+        for route in router.routes
         if isinstance(route, APIRoute) and route.methods & {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    assert len(writes) == 8
+    assert len(writes) == 9
     for route in writes:
         calls = [dep.call for dep in route.dependant.dependencies]
         assert require_human_origin in calls, route.path

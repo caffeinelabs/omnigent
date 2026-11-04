@@ -10,6 +10,7 @@ factory answers under 300 ms at p95. Every name is sample data.
 
 from __future__ import annotations
 
+import calendar
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -472,9 +473,35 @@ async def test_the_lenses_of_a_planned_ask(cockpit: Cockpit) -> None:
     assert [r["ref"] for r in validate(MoneyView, money.json())["rows"]] == []
     assert (timeline.status_code, error_code(timeline)) == (400, "bad_window")
     assert window.status_code == 200, window.text
-    validate(TimelineView, window.json())
+    axis = validate(TimelineView, window.json())["axis"]
+    # Without `from` the timeline reads the last day.
+    assert _epoch(axis[1]) - _epoch(axis[0]) <= 24 * 3600
     assert (missing.status_code, error_code(missing)) == (404, "unknown_node")
     assert stranger.status_code == 404
+
+
+def _epoch(iso: str) -> int:
+    return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"to": "100000000000000000"},  # past int64 milliseconds
+        {"to": "9999-01-01T00:00:00Z"},
+        {"from": "1", "to": "3600"},  # 1970
+        {"from": "1999-12-31T00:00:00Z", "to": "1999-12-31T12:00:00Z"},
+        {"from": "yesterday"},
+    ],
+)
+async def test_a_timeline_window_outside_2000_to_next_week_is_refused(
+    cockpit: Cockpit, window: dict[str, str]
+) -> None:
+    await _plan(cockpit)
+
+    resp = await _read(cockpit, "n/I-1/timeline", **window)
+
+    assert (resp.status_code, error_code(resp)) == (400, "bad_window"), resp.text
 
 
 async def test_needs_you_and_find_over_a_real_store(cockpit: Cockpit) -> None:

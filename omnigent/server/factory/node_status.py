@@ -576,8 +576,8 @@ class Paths:
     def holds(self, ask: Ask) -> list[str]:
         """
         :returns: What *ask* holds, by name: the tasks whose own wait ends at
-            it (by code; implicit ones are the ask itself), then the projects
-            that wait on where it sits.
+            it (by code; a PR no task owns by its number, ``#9856``), then the
+            projects that wait on where it sits.
         """
         if self._weights is None:
             self._weights = self._held_weights()
@@ -595,8 +595,7 @@ class Paths:
             if ask is None:
                 continue
             out[ask.id] = out.get(ask.id, 0.0) + t.task_weight(node)
-            if not node.implicit:
-                names.setdefault(ask.id, {})[self.name(node.ref)] = None
+            names.setdefault(ask.id, {})[self.name(node.ref)] = None
             project = t.nodes.get(node.parent or "")
             if project is not None:
                 holders.setdefault(ask.id, set()).add(project.ref)
@@ -1016,7 +1015,14 @@ def decision_proposal(
     decision: FactoryDecision, proposals: Mapping[str, FactoryProposal]
 ) -> FactoryProposal | None:
     """:returns: The proposal a decision's subject names (``proposal:C-16``), if listed."""
-    parsed = node_refs.parse(node_refs.normalize((decision.subject or "").strip()) or "")
+    return subject_proposal(decision.subject, proposals)
+
+
+def subject_proposal(
+    subject: str | None, proposals: Mapping[str, FactoryProposal]
+) -> FactoryProposal | None:
+    """:returns: The proposal a decision subject (``proposal:C-16``) names, if listed."""
+    parsed = node_refs.parse(node_refs.normalize((subject or "").strip()) or "")
     return proposals.get(parsed.text) if parsed is not None else None
 
 
@@ -1040,4 +1046,5 @@ __all__ = [
     "ask_verb",
     "decision_proposal",
     "duration",
+    "subject_proposal",
 ]
