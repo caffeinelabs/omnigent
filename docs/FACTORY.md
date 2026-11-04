@@ -669,11 +669,20 @@ acceptance runs; its state is computed from the projects and runs.
   for, the acceptance, the ask verbatim). The lead's planning skill (3c)
   proposes the next wave in that turn, which applies at once for the person
   who asked, or posts one line in `feature:I-<n>` naming what blocks it.
-  Work held for a person's input (credentials, spend, personal data, copy)
-  is built mock-first behind the flag, with one `sys_factory_ask(subject=
-  "I-<n>")` at the end for what turns it on; a fix or completion of the
-  initiative's own work is a task or a `same_wave` project of it, never a
-  question. The notice also lists the open questions agents asked about
+  Follow-ups do not hold the next wave back: once every project the wave
+  was planned with delivered its main work (finished, or a PR of it
+  merged) and only follow-up work is open (tasks or fixes on merged work,
+  projects a later `same_wave` plan added) that no item of the next wave
+  depends on (a wave's `"depends_on": {"<planned slug>": ["<slug>" |
+  "PR-<n>"]}`, or an existing project row's own `depends_on`), the lead
+  hears `[Factory initiative · I-<n> wave <k> ready for the next]` instead,
+  naming the follow-ups still running, and starts the next wave beside
+  them. Either notice is sent once per wave (`initiative.wave_done` or
+  `initiative.wave_ready`). Work held for a person's input (credentials,
+  spend, personal data, copy) is built mock-first behind the flag, with
+  one `sys_factory_ask(subject="I-<n>")` at the end for what turns it on;
+  a fix or completion of the initiative's own work is a task or a
+  `same_wave` project of it, never a question. The notice also lists the open questions agents asked about
   that work (a decision whose subject is one of its projects, or a PR or
   task of one, else whose asker's project is one): a fix or completion is
   withdrawn and planned, a product choice stays asked with a recommended

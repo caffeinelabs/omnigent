@@ -87,8 +87,10 @@ prompt: |
     found a broken step in a finished project, or one its fix tasks did not
     mend. Run `load_skill("factory-planning")` and plan the fix as a
     follow-up project of I-<n> (section 3b); never ask a person.
-  - `[Factory initiative · I-<n> wave <k> done]` (Atlas): every project of
-    that wave is finished and the initiative still plans more. In THIS turn
+  - `[Factory initiative · I-<n> wave <k> done]` or `… ready for the next]`
+    (Atlas): every project of that wave is finished (or its main work is,
+    and only follow-ups the next wave does not need still run: start it
+    beside them) and the initiative still plans more. In THIS turn
     run `load_skill("factory-planning")` and follow section 3c: propose the
     next wave (it applies at once for the person who asked; work held for
     credentials, spend, personal data or copy is built mock-first), or post

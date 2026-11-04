@@ -29,7 +29,14 @@ things keep one moving once its first wave lands:
    for them, :func:`.initiatives.carried_request`; ``"waves": []`` says
    nothing is left) or posts one line naming what blocks it. Scope held for a
    person's input is built mock-first, behind a flag the notice asks for when
-   the initiative has none.
+   the initiative has none. Follow-ups do not hold the next wave back: once
+   every project the wave was planned with delivered its main work (finished,
+   or a PR of it merged), and what is still open is follow-up work (tasks or
+   fixes on merged work, the wave's later small adds) that no item of the
+   next wave depends on (:func:`ready_for_next`), the lead is told instead,
+   ``[Factory initiative · I-n wave k ready for the next]``, naming the
+   follow-ups still running, and starts the next wave beside them. Either
+   notice is the wave's only one.
 
 How far the waves are, in words ("wave 1 done · wave 2 started"), is pure and
 lives in :mod:`.initiative_view` (:func:`.initiative_view.wave_phrase`).
@@ -50,7 +57,11 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import PROJECT_SLUG_RE
 from omnigent.server.factory import events
-from omnigent.server.factory.charter import normalize_charter
+from omnigent.server.factory.charter import (
+    change_dependency,
+    normalize_charter,
+    project_depends_on,
+)
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.initiative_view import (
     ACCEPTANCE_DRAFTED,
@@ -62,6 +73,7 @@ from omnigent.server.factory.initiative_view import (
     project_finished,
     wave_state,
 )
+from omnigent.server.factory.stage import OPEN_TASK_STATES
 from omnigent.stores.factory_store import norm_id, now_s
 
 if TYPE_CHECKING:
@@ -69,6 +81,7 @@ if TYPE_CHECKING:
         FactoryChatMessage,
         FactoryDecision,
         FactoryInitiative,
+        FactoryPr,
         FactoryProject,
         FactoryProposal,
     )
@@ -751,25 +764,157 @@ async def announce_backfill(app_state: Any, factory_id: str, made: Sequence[Back
 # ── The next wave ──────────────────────────────────────────────
 
 
+def primary(plan: Mapping[str, Any], wave: int) -> list[str]:
+    """
+    The projects wave *wave* was planned with: its first plan's (and every
+    backfilled one's). A project a later plan added to it (``same_wave``: a
+    fix, a completion, a person's small add) is follow-up work.
+    """
+    out: list[str] = []
+    entries = [
+        h
+        for h in plan.get("history") or []
+        if isinstance(h, Mapping) and int(h.get("wave") or 1) == wave
+    ]
+    for i, entry in enumerate(entries):
+        if i == 0 or entry.get("backfilled"):
+            out += [str(s) for s in entry.get("added") or []]
+    return list(dict.fromkeys(out))
+
+
+def waits_on(
+    nxt: Mapping[str, Any],
+    stages: Mapping[str, Mapping[str, Any]],
+    rows: Mapping[str, FactoryProject],
+    open_prs: Iterable[int] = (),
+) -> list[str]:
+    """
+    The open work the next wave's items depend on: a project still being
+    built, or an open ``PR-<n>``, that the wave names for an item
+    (``depends_on``) or that an item's own project row depends on.
+
+    :param stages: Slug -> ``{stage, status}``.
+    :param rows: Slug -> project row (a planned item may exist already).
+    :param open_prs: Numbers of the factory's open PRs.
+    """
+    named = nxt.get("depends_on") or {}
+    still_open = set(open_prs)
+    out: list[str] = []
+    for slug in nxt.get("projects") or []:
+        needs = [str(d) for d in named.get(slug) or []]
+        if (row := rows.get(slug)) is not None:
+            needs += project_depends_on(row)[0]
+        for dep in needs:
+            number = change_dependency(dep)
+            if number is not None:
+                if number in still_open:
+                    out.append(dep)
+            elif project_finished(stages.get(dep)) is False:
+                out.append(dep)
+    return list(dict.fromkeys(out))
+
+
+def ready_for_next(
+    plan: Mapping[str, Any],
+    state: WaveState,
+    stages: Mapping[str, Mapping[str, Any]],
+    rows: Mapping[str, FactoryProject],
+    prs: Sequence[FactoryPr],
+) -> tuple[str, ...]:
+    """
+    The follow-ups still running when the current wave is ready for the next
+    one; ``()`` when it is not (or is done). Ready: every project the wave was
+    planned with delivered its main work (finished, or a PR of it merged),
+    what is still open is follow-up work (tasks or fixes on merged work, the
+    wave's later small adds), and no item of the next wave depends on any of
+    that open work. Pure.
+    """
+    if state.done or state.next is None or not state.live:
+        return ()
+    merged = {p.project_slug for p in prs if p.state == "merged" and p.project_slug}
+    seen = [
+        bool(finished) or slug in merged
+        for slug in primary(plan, state.current)
+        if (finished := project_finished(stages.get(slug))) is not None
+    ]
+    if not seen or not all(seen):
+        return ()
+    open_prs = [p.number for p in prs if p.state == "open"]
+    if waits_on(state.next, stages, rows, open_prs):
+        return ()
+    return state.live
+
+
+@dataclass(frozen=True)
+class FollowUp:
+    """
+    Work still running on a project of a wave that is ready for the next.
+
+    :param stage: Its stage now (``building``, ``review`` …).
+    :param open: What is open on it, e.g. ``("!101", "T-12 Cover the billing edge cases")``.
+    """
+
+    slug: str
+    stage: str | None = None
+    open: tuple[str, ...] = ()
+
+    def line(self) -> str:
+        """``assistant-core (building): !101 · T-12 Cover the billing edge cases``."""
+        stage = f" ({self.stage})" if self.stage else ""
+        what = f": {' · '.join(self.open)}" if self.open else ""
+        return f"{self.slug}{stage}{what}"
+
+
+FOLLOW_UP_ITEMS: Final = 3
+"""Open PRs and tasks a follow-up line names."""
+
+
+def follow_ups(
+    store: Any,
+    factory_id: str,
+    slugs: Sequence[str],
+    projects: Sequence[FactoryProject],
+    prs: Sequence[FactoryPr],
+) -> list[FollowUp]:
+    """What each of *slugs* still has open: its open PRs, then its open tasks (sync)."""
+    stages = {p.slug: p.stage for p in projects}
+    out: list[FollowUp] = []
+    for slug in slugs:
+        items = [f"!{p.number}" for p in prs if p.project_slug == slug and p.state == "open"]
+        try:
+            tasks = store.list_tasks(factory_id, project_slug=slug, states=OPEN_TASK_STATES)
+        except Exception:  # noqa: BLE001 - the notice matters more than its detail
+            _logger.warning("factory: could not read %s's open tasks", slug, exc_info=True)
+            tasks = []
+        items += [f"{t.ref} {_one_line(t.title, 80)}" for t in tasks]
+        out.append(FollowUp(slug, stages.get(slug), tuple(items[:FOLLOW_UP_ITEMS])))
+    return out
+
+
 def notice_text(
     row: FactoryInitiative,
     state: WaveState,
     ask: str | None = None,
     questions: Sequence[Mapping[str, Any]] = (),
+    running: Sequence[FollowUp] = (),
 ) -> str:
     """
-    ``[Factory initiative · I-3 wave 1 done]``: what remains and what the lead
+    ``[Factory initiative · I-3 wave 1 done]`` (or ``… wave 1 ready for the
+    next]`` while follow-ups of its work run): what remains and what the lead
     does now (propose the next wave in this turn, or one line on what blocks it).
 
     :param ask: The open ask whose subject is the initiative, in words.
     :param questions: Open questions agents asked about the initiative's own
         work (``{ref, question, who}``, :func:`work_questions`): each fix or
         completion becomes planned work, each product choice stays asked.
+    :param running: The follow-ups still running (:func:`ready_for_next`):
+        the next wave starts beside them.
     """
     plan = plan_of(row)
     nxt = dict(state.next or {})
     n = int(nxt.get("n") or state.current + 1)
     held = nxt.get("held") or {}
+    needs = nxt.get("depends_on") or {}
     titles = {
         s: t
         for w in plan["waves"]
@@ -780,20 +925,36 @@ def notice_text(
     steps = plan["acceptance"]
     guess = bool(nxt.get("if_any"))
     ref = row.ref
-    head = (
-        f"{NOTICE_HEAD} {ref} wave {state.current} done] {row.title}: every project of "
-        f"wave {state.current} is finished ({', '.join(state.projects)}), and the ask is not "
-        "all built yet."
-    )
+    k = state.current
+    lines: list[str] = []
+    if running:
+        head = (
+            f"{NOTICE_HEAD} {ref} wave {k} ready for the next] {row.title}: the main work of "
+            f"wave {k} is delivered ({', '.join(primary(plan, k) or state.projects)}: each "
+            f"finished or merged); what is still open is follow-up work, and wave {n} depends "
+            f"on none of it, so wave {n} starts now, in parallel with the follow-ups."
+        )
+        lines.append(
+            "Follow-ups still running (their PLs finish them; do not wait for them or plan "
+            "them again):"
+        )
+        lines += [f"- {f.line()}" for f in running]
+    else:
+        head = (
+            f"{NOTICE_HEAD} {ref} wave {k} done] {row.title}: every project of "
+            f"wave {k} is finished ({', '.join(state.projects)}), and the ask is not "
+            "all built yet."
+        )
     goal = _one_line(nxt.get("goal"), _GOAL_MAX)
-    lines = [
+    lines += [
         "What remains:",
         f"- wave {n}: {goal}" + (" (the server's guess, not a plan)" if guess else ""),
     ]
     for slug in nxt.get("projects") or []:
         name = titles.get(slug)
         why = f" · held for {held[slug]}" if held.get(slug) else ""
-        lines.append(f"  - {slug}{f' ({name})' if name else ''}{why}")
+        after = f" · after {', '.join(needs[slug])}" if needs.get(slug) else ""
+        lines.append(f"  - {slug}{f' ({name})' if name else ''}{why}{after}")
     later = [w for w in plan["waves"] if isinstance(w, Mapping) and int(w.get("n") or 0) > n]
     for wave in later:
         lines.append(f"- wave {wave.get('n')}: {_one_line(wave.get('goal'), 160)}")
@@ -830,6 +991,11 @@ def notice_text(
         f'wave": propose wave {n} with sys_factory_project and the analysis initiative '
         f'{{"id": "{ref}", "waves": [<what still waits for a later wave>]}} ("waves": [] '
         f"when wave {n} builds everything that is left); it applies at once for {asker}."
+        + (
+            f" This is wave {k}'s only notice: none follows when its follow-ups finish."
+            if running
+            else ""
+        )
     ]
     if guess:
         lines.append(
@@ -869,22 +1035,65 @@ def _claim(wave: int, won: dict[str, bool]) -> Any:
 
 
 def told(row: FactoryInitiative) -> list[int]:
-    """The waves whose "done" the lead was told."""
+    """The waves whose "done" (or "ready for the next") the lead was told: once each."""
     return [int(w) for w in plan_of(row).get(TOLD_KEY) or [] if isinstance(w, int)]
 
 
-def due(
+@dataclass(frozen=True)
+class Due:
+    """
+    An initiative whose lead is told now about its current wave.
+
+    :param follow_ups: The wave's projects still running follow-up work, when it
+        is ready for the next wave beside them (:func:`ready_for_next`); ``()``
+        when the wave is done.
+    """
+
+    row: FactoryInitiative
+    state: WaveState
+    follow_ups: tuple[str, ...] = ()
+
+
+def _stages(projects: Sequence[FactoryProject]) -> dict[str, dict[str, Any]]:
+    return {p.slug: {"stage": p.stage, "status": p.status} for p in projects}
+
+
+def untold(
     rows: Sequence[FactoryInitiative], projects: Sequence[FactoryProject]
 ) -> list[tuple[FactoryInitiative, WaveState]]:
-    """The open initiatives whose current wave is finished with a later wave planned, untold."""
-    by_slug = {p.slug: {"stage": p.stage, "status": p.status} for p in projects}
+    """The open initiatives with a later wave planned and their current wave untold."""
+    stages = _stages(projects)
     out: list[tuple[FactoryInitiative, WaveState]] = []
     for row in rows:
         if row.status != "open":
             continue
-        state = wave_state(plan_of(row), by_slug)
-        if state.done and state.next is not None and state.current not in told(row):
+        state = wave_state(plan_of(row), stages)
+        if state.current and state.next is not None and state.current not in told(row):
             out.append((row, state))
+    return out
+
+
+def due(
+    rows: Sequence[FactoryInitiative],
+    projects: Sequence[FactoryProject],
+    prs: Sequence[FactoryPr] = (),
+) -> list[Due]:
+    """
+    The open initiatives whose lead is told now, once per wave: the current
+    wave is finished, or ready for the next while independent follow-ups run
+    (:func:`ready_for_next`), with a later wave planned.
+
+    :param prs: The factory's open and merged PRs (a merged one is a project's
+        delivered main work).
+    """
+    stages = _stages(projects)
+    by_slug = {p.slug: p for p in projects}
+    out: list[Due] = []
+    for row, state in untold(rows, projects):
+        if state.done:
+            out.append(Due(row, state))
+        elif running := ready_for_next(plan_of(row), state, stages, by_slug, prs):
+            out.append(Due(row, state, running))
     return out
 
 
@@ -954,11 +1163,12 @@ def work_questions(
 
 async def sweep(app_state: Any, factory_id: str) -> list[str]:
     """
-    Tell the lead, once per wave, that an initiative's current wave is done and
-    what remains (:func:`notice_text`), with the open questions agents asked
-    about its work (:func:`work_questions`).
+    Tell the lead, once per wave, that an initiative's current wave is done, or
+    ready for the next while independent follow-ups of its work run, and what
+    remains (:func:`notice_text`), with the open questions agents asked about
+    its work (:func:`work_questions`).
 
-    :returns: ``"I-3 wave 1 done"`` lines (for logs and tests).
+    :returns: ``"I-3 wave 1 done"`` or ``"I-3 wave 1 ready"`` lines (for logs and tests).
     """
     from omnigent.server.factory import control
     from omnigent.server.factory.context import factory_deps
@@ -970,7 +1180,10 @@ async def sweep(app_state: Any, factory_id: str) -> list[str]:
     if not rows:
         return []
     projects = await asyncio.to_thread(store.list_projects, factory_id)
-    found = due(rows, projects)
+    if not untold(rows, projects):
+        return []
+    prs = await asyncio.to_thread(store.list_prs, factory_id, ["open", "merged"])
+    found = due(rows, projects, prs)
     if not found:
         return []
     open_rows = await asyncio.to_thread(
@@ -988,7 +1201,8 @@ async def sweep(app_state: Any, factory_id: str) -> list[str]:
         for d in open_rows
     ]
     out: list[str] = []
-    for row, state in found:
+    for item in found:
+        row, state = item.row, item.state
         won: dict[str, bool] = {}
         stored = await asyncio.to_thread(mutate, deps, row.id, _claim(state.current, won))
         if stored is None or not won.get("it"):
@@ -1001,18 +1215,29 @@ async def sweep(app_state: Any, factory_id: str) -> list[str]:
         except Exception:  # noqa: BLE001 - the notice matters more than its questions
             _logger.warning("factory: could not read %s's open questions", row.ref, exc_info=True)
             questions = []
-        text = notice_text(stored, state, asked.words if asked else None, questions)
+        running = (
+            await asyncio.to_thread(follow_ups, store, factory_id, item.follow_ups, projects, prs)
+            if item.follow_ups
+            else []
+        )
+        text = notice_text(stored, state, asked.words if asked else None, questions, running)
         control.send_text(app_state, factory_id, text, kind="request")
         nxt = state.next or {}
+        word = "ready" if item.follow_ups else "done"
         await events.emit(
             app_state,
             factory_id,
-            "initiative.wave_done",
+            f"initiative.wave_{word}",
             severity="notice",
             subject=f"initiative:{row.ref}",
             summary=(
-                f"{row.ref} {row.title}: wave {state.current} done; wave {nxt.get('n')} "
-                "is next (the lead was told)"
+                f"{row.ref} {row.title}: wave {state.current} {word}; wave {nxt.get('n')} "
+                + (
+                    f"starts beside its follow-ups ({', '.join(item.follow_ups)}; "
+                    "the lead was told)"
+                    if item.follow_ups
+                    else "is next (the lead was told)"
+                )
             ),
             data={
                 "initiative_id": row.id,
@@ -1021,35 +1246,44 @@ async def sweep(app_state: Any, factory_id: str) -> list[str]:
                 "next": nxt.get("n"),
                 "held": list(nxt.get("projects") or []),
                 "questions": [q["ref"] for q in questions],
+                "follow_ups": list(item.follow_ups),
             },
         )
-        out.append(f"{row.ref} wave {state.current} done")
+        out.append(f"{row.ref} wave {state.current} {word}")
     return out
 
 
 __all__ = [
     "BEYOND_GOAL",
     "DRAFTED",
+    "FOLLOW_UP_ITEMS",
     "NOTICE_HEAD",
     "QUESTIONS_MAX",
     "REST_GOAL",
     "STEPS_PER_PROJECT",
     "TOLD_KEY",
     "Backfilled",
+    "Due",
+    "FollowUp",
     "Parked",
     "analysis_texts",
     "announce_backfill",
     "backfill",
     "drafted_steps",
     "due",
+    "follow_ups",
     "held_wave",
     "notice_text",
     "owners",
     "parked_in",
     "parked_scope",
+    "primary",
+    "ready_for_next",
     "slug_of",
     "sweep",
     "title_for",
     "told",
+    "untold",
+    "waits_on",
     "work_questions",
 ]

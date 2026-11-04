@@ -16,12 +16,13 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
 import pytest_asyncio
 
-from omnigent.entities.factory import FactoryProject
+from omnigent.entities.factory import FactoryPr, FactoryProject
 from omnigent.server.factory import initiative_waves, initiatives, snapshot
 from omnigent.server.factory.background import reconcile
 from omnigent.server.factory.initiative_view import (
@@ -875,3 +876,187 @@ async def test_drafted_steps_wait_for_the_lead_to_restate_them(cockpit: Cockpit)
 
     [run] = only(cockpit).runs  # due, then blocked: this sample has no base env
     assert (run["n"], run["sha"]) == (1, new)
+
+
+# ── Follow-ups do not hold the next wave ───────────────────────
+
+
+def _reopen(cockpit: Cockpit, slug: str, stage: str = "building") -> None:
+    """Its merged work gets a follow-up: the project is active and building again."""
+    stored = cockpit.store.get_project(cockpit.fid, slug)
+    assert stored is not None, slug
+    cockpit.store.update_project(stored.id, stage=stage, status="active")
+
+
+def _task(cockpit: Cockpit, slug: str, key: str, title: str) -> str:
+    row, _ = cockpit.store.upsert_task(cockpit.fid, slug, key, title=title, state="running")
+    return row.ref
+
+
+async def _sweep(cockpit: Cockpit) -> list[str]:
+    return await initiative_waves.sweep(cockpit.app.state, cockpit.fid)
+
+
+async def test_the_next_wave_starts_beside_independent_follow_ups(cockpit: Cockpit) -> None:
+    """
+    The live case: wave 1 delivered its main work, then the core reopened for a
+    billing edge-case fix on its merged PR and the panel builds a flagged header
+    tab. Wave 2 depends on neither, so the lead hears "ready for the next" once.
+    """
+    history(cockpit)
+    await backfill(cockpit)
+    _reopen(cockpit, "helper-core")
+    cockpit.store.upsert_pr(
+        cockpit.fid, REPO, 110, project_slug="helper-core", state="open", base_ref=BASE
+    )
+    fix = _task(cockpit, "helper-core", "billing-edges", "Cover the four billing edge cases")
+    _reopen(cockpit, "helper-panel")
+    tab = _task(cockpit, "helper-panel", "header-tab", "Add the flagged header tab")
+
+    sent = await _sweep(cockpit)
+    again = await _sweep(cockpit)
+
+    assert (sent, again) == (["I-1 wave 1 ready"], [])
+    [text] = notices(cockpit)
+    assert text.startswith(
+        "[Factory initiative · I-1 wave 1 ready for the next] Sample helper: the main work of "
+        "wave 1 is delivered (helper-core, helper-panel, connectors-core, skill-discovery: each "
+        "finished or merged); what is still open is follow-up work, and wave 2 depends on none "
+        "of it, so wave 2 starts now, in parallel with the follow-ups."
+    )
+    assert f"- helper-core (building): !110 · {fix} Cover the four billing edge cases" in text
+    assert f"- helper-panel (building): {tab} Add the flagged header tab" in text
+    assert "- connectors-core" not in text, "a finished project is no follow-up"
+    assert (
+        "  - ads-provider (Ads provider) · held for credentials, ad spend, personal data, "
+        "product copy"
+    ) in text
+    assert 'propose wave 2 with sys_factory_project and the analysis initiative {"id": "I-1"' in (
+        text
+    )
+    assert "This is wave 1's only notice: none follows when its follow-ups finish." in text
+    [event] = cockpit.events("initiative.wave_ready")
+    assert event.data["follow_ups"] == ["helper-core", "helper-panel"]
+    assert (event.data["wave"], event.data["next"]) == (1, 2)
+    assert cockpit.events("initiative.wave_done") == []
+
+    # The follow-ups finish: wave 1 was told already, so no second notice.
+    _finish(cockpit, "helper-core", "helper-panel")
+    assert await _sweep(cockpit) == []
+    assert len(notices(cockpit)) == 1
+    assert cockpit.events("initiative.wave_done") == []
+
+
+async def test_a_next_wave_item_waits_for_the_open_work_it_depends_on(cockpit: Cockpit) -> None:
+    """The plan names ads-provider after helper-core: no notice until the core's fix is done."""
+    history(cockpit)
+    await backfill(cockpit)
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("helper-docs")},
+        analysis={
+            "initiative": {
+                "id": "I-1",
+                "same_wave": True,
+                "waves": [
+                    {
+                        "n": 2,
+                        "goal": "the ads provider and growth",
+                        "projects": ["ads-provider", "growth-seo"],
+                        "held": {"ads-provider": "credentials"},
+                        "depends_on": {"ads-provider": ["helper-core", " "]},
+                    }
+                ],
+            }
+        },
+        rationale="I-1: the helper docs, a small add",
+    )
+    assert resp.json()["status"] == "applied", resp.text
+    [wave] = plan_of(only(cockpit))["waves"]
+    assert wave["depends_on"] == {"ads-provider": ["helper-core"]}
+    _reopen(cockpit, "helper-core")
+    _reopen(cockpit, "helper-panel")
+
+    assert await _sweep(cockpit) == [], "ads-provider needs helper-core's open fix"
+
+    _finish(cockpit, "helper-core")
+    assert await _sweep(cockpit) == ["I-1 wave 1 ready"]
+    [text] = notices(cockpit)
+    assert "is delivered (helper-core, helper-panel, connectors-core, skill-discovery: " in text
+    assert "- helper-panel (building)" in text
+    assert "- helper-docs (" in text, "a small add to the wave is a follow-up"
+    assert "- helper-core (" not in text
+    assert "  - ads-provider · held for credentials · after helper-core" in text
+    _finish(cockpit, "helper-panel", "helper-docs")
+    assert await _sweep(cockpit) == []
+    assert len(notices(cockpit)) == 1
+
+
+async def test_main_work_not_merged_holds_the_next_wave(cockpit: Cockpit) -> None:
+    """A project the wave was planned with and no merged PR yet: not ready; its merge is."""
+    history(cockpit, merged=False)
+    await backfill(cockpit)
+    _finish(cockpit, "helper-core", "connectors-core", "skill-discovery")
+    _reopen(cockpit, "helper-panel")
+    cockpit.store.upsert_pr(
+        cockpit.fid, REPO, 120, project_slug="helper-panel", state="open", base_ref=BASE
+    )
+
+    assert await _sweep(cockpit) == []
+
+    cockpit.store.upsert_pr(
+        cockpit.fid,
+        REPO,
+        120,
+        project_slug="helper-panel",
+        state="merged",
+        base_ref=BASE,
+        merged_sha="c" * 40,
+        merged_at=int(time.time()),
+    )
+    tab = _task(cockpit, "helper-panel", "header-tab", "Add the flagged header tab")
+
+    assert await _sweep(cockpit) == ["I-1 wave 1 ready"]
+    [text] = notices(cockpit)
+    assert f"- helper-panel (building): {tab} Add the flagged header tab" in text
+
+
+async def test_a_finished_wave_is_still_done_not_ready(cockpit: Cockpit) -> None:
+    """Nothing open: the notice is "done", once, and no "ready" one follows."""
+    history(cockpit)
+    await backfill(cockpit)
+
+    assert await _sweep(cockpit) == ["I-1 wave 1 done"]
+    _reopen(cockpit, "helper-core")
+    assert await _sweep(cockpit) == []
+
+    [text] = notices(cockpit)
+    assert text.startswith("[Factory initiative · I-1 wave 1 done]")
+    assert "Follow-ups still running" not in text and "only notice" not in text
+    assert cockpit.events("initiative.wave_ready") == []
+
+
+def test_what_the_next_wave_waits_on() -> None:
+    """A dependency the plan names, the item's own project row, or an open change."""
+    building = {"stage": "building", "status": "active"}
+    merged = {"stage": "merged", "status": "done"}
+    stages = {"core": building, "panel": merged, "seo": {"stage": "queued", "status": "active"}}
+    seo = FactoryProject(
+        id="p1", factory_id="f", slug="seo", title="seo", charter={"depends_on": ["core"]}
+    )
+    nxt = {"n": 2, "projects": ["ads", "seo"], "depends_on": {"ads": ["panel", "PR-7", "later"]}}
+
+    assert initiative_waves.waits_on(nxt, stages, {}, open_prs=[7]) == ["PR-7"]
+    assert initiative_waves.waits_on(nxt, stages, {"seo": seo}) == ["core"]
+    assert initiative_waves.waits_on({"n": 2, "projects": ["ads"]}, stages, {}) == []
+
+    plan = _plan([nxt], [(1, ["core", "panel"]), (1, ["fix"])])
+    state = wave_state(plan, {**stages, "fix": building})
+    assert initiative_waves.primary(plan, 1) == ["core", "panel"]
+    assert state.live == ("core", "fix") and not state.done
+    assert initiative_waves.ready_for_next(plan, state, stages, {}, []) == (), "core not merged"
+    pr = FactoryPr(id="r1", factory_id="f", repo=REPO, number=5, url="u", project_slug="core")
+    shipped = [replace(pr, state="merged")]
+    assert initiative_waves.ready_for_next(plan, state, stages, {}, shipped) == ("core", "fix")
+    held = [*shipped, replace(pr, id="r2", number=7, state="open")]
+    assert initiative_waves.ready_for_next(plan, state, stages, {}, held) == (), "PR-7 is open"
