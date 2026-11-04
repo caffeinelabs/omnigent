@@ -12,6 +12,7 @@ screenshot. Every name is sample data.
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -36,6 +37,11 @@ from tests.server.factory.node_fixtures import (
 from tests.server.factory.projects_helpers import header_cockpit
 
 OWNER = Viewer("ana", LEVEL_OWNER)
+DRAFTS = "build-tier-drafts-3"
+SLUG = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b")
+"""A kebab-case slug ("assistant-panel-ux") in a row's words."""
+CODE = re.compile(r"\b(?:T|I|PR|C|D)-\d+\b|#\d+")
+"""A bare code ("T-16", "PR-9856") in a row's words."""
 LIVE_NAMES = {
     f"ask:{ASK_MESSAGE}": "Chat agent for every team",
     f"ask:{DRAFTS_MESSAGE}": "Third drafts round",
@@ -105,7 +111,10 @@ def test_the_live_product_page_opens_with_three_moves() -> None:
     assert apply["decision"]["row_id"] and apply["weight"] > merge["weight"] > 0
     assert merge["id"] == "merge:main" and merge["action"]["url"].endswith("/pull/9856")
     assert question["action"] == {"label": "Follow-up project now", "option": "follow-up"}
-    assert question["about"] == "Start a follow-up project to fix"
+    assert question["about"] == "Start a follow-up project"
+    # What applying C-16 changes, in a few words; a merge and a question need none.
+    assert apply["object_name"] == "Update assistant core"
+    assert "object_name" not in merge and "object_name" not in question
     # C-14 and C-15 hold nothing: behind "+2 more".
     assert page["your_move"]["more"] == 2
 
@@ -142,16 +151,82 @@ def test_a_page_asks_what_its_subtree_holds_and_what_holds_it() -> None:
     core = _page(tree, "assistant-core")
     panel = _page(tree, "assistant-panel-ux")
     task = _page(tree, "T-16")
-    drafts = _page(tree, "build-tier-drafts-3")
     done = _page(tree, "ux-status-page")
 
-    assert _rows(core) == [("Apply", "C-16", "T-16 and assistant-panel-ux", "Apply")]
+    # Named as the rows below name them: the task by its title, the project by its words.
+    assert _rows(core) == [("Apply", "C-16", "Debit each turn and Assistant panel UX", "Apply")]
     # The panel's own path ends at C-16, which sits on assistant-core: still its move.
     assert [i["id"] for i in panel["your_move"]["items"]] == ["D-45"]
     assert task["your_move"]["items"][0]["ref"] == "assistant-core"
-    # What the merge acts on is no news: it unblocks nothing else here.
-    assert _rows(drafts) == [("Merge", "#9856 and #9857", None, "Review and merge")]
     assert done["your_move"] == {"items": [], "more": 0}
+
+
+def test_a_page_names_itself_this_task_and_never_by_a_slug_or_a_code() -> None:
+    tree = assert_levels(Tree(factory_1340()))
+
+    def row(ref: str) -> dict[str, Any]:
+        return _page(tree, ref)["your_move"]["items"][0]
+
+    task, panel = row("T-16"), row("assistant-panel-ux")
+    assert task["unblocks"] == "this task and Assistant panel UX"
+    assert panel["unblocks"] == "this project and Debit each turn"
+    # The row links to what else moves, not to the page it is on.
+    assert (task["unblocks_ref"], panel["unblocks_ref"]) == ("assistant-panel-ux", "T-16")
+    for ref in ("product", "I-1", "assistant-core", "assistant-panel-ux", "T-16", DRAFTS):
+        for item in _page(tree, ref)["your_move"]["items"]:
+            words = item.get("unblocks") or ""
+            assert not SLUG.search(words) and not CODE.search(words), (ref, words)
+
+
+def test_the_merges_a_project_waits_on_unblock_that_project() -> None:
+    tree = assert_levels(Tree(factory_1340()))
+
+    drafts = _page(tree, DRAFTS)["your_move"]["items"]
+    change = _page(tree, "PR-9856")["your_move"]["items"]
+    home = _page(tree, "product")["your_move"]["items"]
+
+    # What the merge acts on (#9856, #9857) is no news: it holds the project they build.
+    assert _rows({"your_move": {"items": drafts}}) == [
+        ("Merge", "#9856 and #9857", "this project", "Review and merge")
+    ]
+    assert drafts[0]["weight"] > 0 and "blocks_nothing" not in drafts[0]
+    assert change[0]["unblocks"] == "Build tier drafts 3"
+    assert next(i for i in home if i["id"] == "merge:main")["unblocks"] == "Build tier drafts 3"
+
+
+def test_an_ask_the_factory_itself_made_is_asked_by_its_lead() -> None:
+    facts = factory_1340()
+    # The root session (the factory's own id) wrote C-19, a member's session C-14.
+    member = next(m for m in facts.members if m.get("session_id") and m.get("title"))
+    facts.proposals = [
+        dataclasses.replace(p, author=FID, author_kind="agent")
+        if p.number == 19
+        else dataclasses.replace(p, author=str(member["session_id"]), author_kind="agent")
+        if p.number == 14
+        else p
+        for p in facts.proposals
+    ]
+    tree = assert_levels(Tree(facts))
+
+    askers = {i["id"]: i["decision"]["asker"] for i in _page(tree, "I-1")["your_move"]["items"]}
+
+    assert askers["D-49"] == tree.responder(tree.nodes["product"]) == "Atlas"
+    assert askers["D-43"] == member["title"]
+    assert not any(re.fullmatch(r"[0-9a-f]{32}", a) for a in askers.values())
+
+
+def test_the_strip_counts_the_rows_that_say_needs_you() -> None:
+    tree = assert_levels(Tree(factory_1340()))
+    home = _page(tree, "product")
+    level = tree.level_view("product", "feature") or {}
+
+    tiles = [i for g in level["groups"] for i in g["items"]]
+    rows = [i["ref"] for i in tiles if i["status_compact"]["kind"] == "needs"]
+    features = next(c for c in home["levels_below"] if c["level"] == "feature")
+    # The drafts project (shown as a feature) waits on its merges: its row says
+    # "Needs you", and so does the strip.
+    assert rows == ["I-1", DRAFTS]
+    assert features["needs"] == len(rows) == features["by_state"]["needs"]
 
 
 def test_asks_that_block_nothing_come_last() -> None:

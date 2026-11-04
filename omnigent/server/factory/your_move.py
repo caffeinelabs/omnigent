@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import decision_routing, node_names
+from omnigent.server.factory.node_status import decision_proposal
 
 if TYPE_CHECKING:
     from omnigent.entities.factory import FactoryDecision
@@ -199,8 +200,39 @@ def unblocks(tree: Tree, node: _N, ask: Ask) -> list[str]:
     return list(out)
 
 
-def _names(tree: Tree, refs: Iterable[str]) -> str | None:
-    named = [tree.paths.name(r) for r in refs]
+def _named_in(tree: Tree, ref: str, obj: str) -> bool:
+    """Whether the row's object already names *ref* ("Merge #1 and #2" names #1)."""
+    return tree.paths.name(ref) in obj.split()
+
+
+def _held(tree: Tree, node: _N, ask: Ask, at: str, obj: str) -> list[str]:
+    """
+    What a blocking *ask* lets move, by the refs *node*'s page shows, this
+    page's own node first. What the row's object names is no news ("Merge #1
+    and #2 · unblocks #1 and #2"): when that is all it holds, it holds the
+    node the ask sits on (a project waiting on its merges: "this project").
+    """
+    shown = unblocks(tree, node, ask)
+    refs = [r for r in shown if not _named_in(tree, r, obj)]
+    if shown and not refs:
+        found = tree.nodes.get(at)
+        while found is not None and _named_in(tree, found.ref, obj) and found.parent:
+            found = tree.nodes.get(found.parent)
+        if found is not None and found.parent is not None:
+            refs = [_shown_as(tree, node, found.ref)]
+    return sorted(refs, key=lambda r: r != node.ref)
+
+
+def _name(tree: Tree, node: _N, ref: str) -> str:
+    """How a row names *ref*: by its short title, or "this task" on its own page."""
+    if ref == node.ref:
+        return f"this {tree.level_name(node.level).lower()}"
+    found = tree.nodes.get(ref)
+    return found.title if found is not None else ref
+
+
+def _names(tree: Tree, node: _N, refs: Iterable[str]) -> str | None:
+    named = [_name(tree, node, r) for r in refs]
     if not named:
         return None
     if len(named) <= NAMED_MAX:
@@ -209,12 +241,10 @@ def _names(tree: Tree, refs: Iterable[str]) -> str | None:
 
 
 def item(tree: Tree, node: _N, ask: Ask, at: str) -> dict[str, Any]:
-    """One row: ``{id, ref, verb, object, unblocks, action, decision, weight}``."""
+    """One row: ``{id, ref, verb, object, object_name, unblocks, action, decision, weight}``."""
     decision = _decisions(tree).get(ask.id)
     verb, obj = split_verb(ask.verb)
-    refs = unblocks(tree, node, ask) if ask.blocking else []
-    # What the ask acts on is no news ("Merge #1 and #2 · unblocks #1 and #2").
-    refs = [r for r in refs if tree.paths.name(r) not in obj.split()]
+    refs = _held(tree, node, ask, at, obj) if ask.blocking else []
     out: dict[str, Any] = {
         "id": ask.id,
         "ref": tree.fold(tree.nodes[at]).ref if at in tree.nodes else at,
@@ -224,9 +254,13 @@ def item(tree: Tree, node: _N, ask: Ask, at: str) -> dict[str, Any]:
         "decision": ask.to_json(),
         "weight": round(tree.paths.weight(ask), 1) if ask.blocking else 0.0,
     }
-    if (words := _names(tree, refs)) is not None:
+    if decision is not None and decision.source == "proposal":
+        proposal = decision_proposal(decision, tree.proposals_by_ref)
+        if proposal is not None and (name := tree.proposal_name(proposal)):
+            out["object_name"] = name
+    if (words := _names(tree, node, refs)) is not None:
         out["unblocks"] = words
-        out["unblocks_ref"] = refs[0]
+        out["unblocks_ref"] = next((r for r in refs if r != node.ref), refs[0])
         out["unblocks_refs"] = refs
     if decision is not None and decision.source != "proposal" and decision.question:
         out["about"] = node_names.question_words(decision.question)

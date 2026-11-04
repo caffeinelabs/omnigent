@@ -1084,13 +1084,18 @@ a project that is still active, so "needs you" follows what really waits.
 and shows every node under a short name; the chat is a conversation.
 
 - *Short names* (`node_names.py`, `factory_node_names`). Every node of the
-  product tree shows a `title` of two to six words. A person's raw ask, a
-  machine label (`From C-11: create … · create …`, pieces joined with ` · `)
-  or a title longer than six words shows its first words at once (`named:
-  "words"`) and the factory names it in the background with the server's
-  cheap title path: the runner bound to the factory's root session runs the
-  economy title model (the one that names new sessions), a few nodes at a time,
-  higher levels first (`named: "factory"`). The full text stays in
+  product tree shows a `title` of two to six words. A slug is read as words
+  (`assistant-panel-ux` -> "Assistant panel UX", `named: "words"`, never sent
+  to the model). A person's raw ask, a machine label (`From C-11: create … ·
+  create …`, pieces joined with ` · `, a title holding a slug, a project's
+  slug, a code such as `T-16`, `PR-9856` or `#9856`, or a path) or a title
+  longer than six words shows its first words at once (`named: "words"`:
+  codes, paths, measurements such as `300 s` and lists of picks dropped, a
+  slug that opens it dropped, "build-tier-drafts-3, part 1" -> "Part 1", cut
+  at a clause boundary) and the factory names it in the background with the
+  server's cheap title path: the runner bound to the factory's root session
+  runs the economy title model (the one that names new sessions), a few
+  nodes at a time, higher levels first (`named: "factory"`). The full text stays in
   `full_title` (Details). A name is made again only when the text it was made
   from changes (`source_hash`); a runner that cannot answer three times in a
   row makes the factory wait ten minutes. A person renames a node with the
@@ -1103,14 +1108,27 @@ and shows every node under a short name; the chat is a conversation.
   role they hold; merges for editors): the asks in the node's subtree and the
   ones its blocker path and its children's end at, ranked like Needs you
   (held work first, then the oldest; asks that block nothing last). Each item
-  is `{id, ref, verb, object, action: {label, option?, url?}, unblocks?,
-  unblocks_ref?, unblocks_refs?, about?, decision, weight}`: "Apply C-16 ·
-  unblocks Agent assistant · [Apply]", where `unblocks` names, by short name,
-  the children (at a root, the home level's nodes) that hold the work the ask
-  holds, and `action` is the recommended or applying answer, the merge link,
-  or "Answer" (open the ask). Every other place the page carries one of these
-  asks (the status line, a child's line, a segment) is marked `in_your_move`,
-  so the cockpit asks once. An empty `items` reads "Nothing needs you".
+  is `{id, ref, verb, object, object_name?, action: {label, option?, url?},
+  unblocks?, unblocks_ref?, unblocks_refs?, about?, blocks_nothing?,
+  decision, weight}`: "Apply C-16 · Update assistant core · unblocks Agent
+  assistant · [Apply]", where `object_name` is what a proposal changes in at
+  most four words (the factory names a machine or long proposal title too,
+  stored under its code), `unblocks` names, by the short names the rows
+  carry, the children (at a root, the home level's nodes) that hold the work
+  the ask holds, with the page's own node as "this task" / "this project"
+  ("unblocks this task and Assistant panel UX"); when the object already
+  names all it holds (a project's merges), it unblocks the node the ask sits
+  on ("Merge #9856 and #9857 · unblocks this project"). `blocks_nothing`
+  alone marks an ask that holds nothing. `action` is the recommended or
+  applying answer, the merge link, or "Answer" (open the ask). Every other
+  place the page carries one of these asks (the status line, a child's line,
+  a segment) is marked `in_your_move`, so the cockpit asks once. An empty
+  `items` reads "Nothing needs you". Each Needs you item carries the same
+  row as `move` (as the tree's root page words it), and a level's "n you" in
+  the strip (`levels_below[].needs`) counts the nodes whose own row says
+  "Needs you" (a project waiting on its merges included). A decision asked by
+  the factory's own session reads as asked by whoever answers its root
+  (Atlas), never by an id.
 - *Conversation and activity* (`chat_feed.py`). `GET …/chat?thread=&feed=
   conversation` reads only what people and agents said plus the live cards
   this reader acts on (an open ask they answer, a ready PR to merge, an offer,

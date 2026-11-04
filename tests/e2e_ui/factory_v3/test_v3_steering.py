@@ -222,7 +222,7 @@ def test_start_now_on_a_waiting_project_previews_applies_and_undoes(
     cockpit.open(PANEL)
     status = _status(page, PANEL)
     before = status.get_attribute("aria-label") or ""
-    assert before.startswith("Not started for 7 h: waits on assistant-core"), before
+    assert before.startswith("Not started for 7 h: waits on Assistant core"), before
 
     # `s` is Start now's key: its preview opens under the header.
     page.keyboard.press("s")
@@ -241,7 +241,7 @@ def test_start_now_on_a_waiting_project_previews_applies_and_undoes(
 
     _apply(page, preview, "Start now")
     expect(status).not_to_have_attribute("aria-label", before, timeout=LOAD_MS)
-    expect(status).not_to_contain_text("waits on assistant-core")
+    expect(status).not_to_contain_text("waits on Assistant core")
     expect(_chip(page, PANEL, "depends on")).to_contain_text("PR-9876")
     expect(_chip(page, PANEL, "depends on")).to_contain_text("met")
     page_after = api(v3_server.base_url, factory.fid, f"/n/{PANEL}")

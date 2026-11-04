@@ -24,7 +24,7 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from omnigent.server.factory import node_refs
+from omnigent.server.factory import node_refs, your_move
 from omnigent.server.factory.definition_blocks import FACTORY_TREE, PRODUCT_TREE
 
 if TYPE_CHECKING:
@@ -71,13 +71,15 @@ def _asks(tree: Tree) -> list[tuple[Ask, str, int]]:
     return out
 
 
-def _item(tree: Tree, ask: Ask, at: str) -> dict[str, Any]:
+def _item(tree: Tree, ask: Ask, at: str, root: _N) -> dict[str, Any]:
     node = tree.nodes[at]
     return {
         "decision": ask.to_json(),
         "breadcrumb": _crumbs(tree, node),
         "holds": tree.paths.holds(ask) if ask.blocking else [],
         "weight": round(tree.paths.weight(ask), 1) if ask.blocking else 0.0,
+        # The row Your move shows for it on the tree's root page (short names, one action).
+        "move": your_move.item(tree, root, ask, at),
     }
 
 
@@ -87,11 +89,13 @@ def needs_you(tree: Tree, which: TreeName = "product") -> dict[str, Any]:
 
     ``items`` are the asks that hold work, most weight first (then oldest);
     ``blocks_nothing`` the asks that hold nothing, oldest first, in the same
-    shape (their ``holds`` empty); ``closed_alarms`` (product tree) the alarms
+    shape (their ``holds`` empty); each with ``move``, the row Your move shows
+    for it on the tree's root page; ``closed_alarms`` (product tree) the alarms
     the server closed today with their causes; ``other_tree`` how many asks
     wait in the other tree.
     """
     key = TREE_KEYS[which]
+    root = tree.nodes[node_refs.FX if which == "factory" else node_refs.PRODUCT]
     held: list[tuple[float, int, str, dict[str, Any]]] = []
     idle: list[tuple[int, str, dict[str, Any]]] = []
     other = 0
@@ -99,7 +103,7 @@ def needs_you(tree: Tree, which: TreeName = "product") -> dict[str, Any]:
         if _tree_of(tree, at) != key:
             other += 1
             continue
-        item = _item(tree, ask, at)
+        item = _item(tree, ask, at, root)
         if ask.blocking:
             held.append((-item["weight"], asked, ask.id, item))
         else:

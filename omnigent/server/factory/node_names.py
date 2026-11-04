@@ -34,7 +34,7 @@ import hashlib
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -137,6 +137,86 @@ _STOP_TAIL: Final = frozenset(
 _SLUG_RE: Final = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)+$")
 _SENTENCE_RE: Final = re.compile(r"(?<=[.!?;])\s+|\n+")
 _QUOTES: Final = "'\"`“”‘’«»"
+_REF_RE: Final = re.compile(r"(?<![\w#/-])(?:(?:PR|INC|[CDFGIORT])-\d+|#\d+)(?![\w-])")
+"""A record's code in running text: ``T-16``, ``C-16``, ``PR-9856``, ``INC-4``, ``#9856``."""
+_PATH_RE: Final = re.compile(r"^[\w.-]+(?:[/#][\w.-]+)+$")
+"""A repo, branch or file path (``sample-org/sample-app#main``, ``web/src/x.ts``)."""
+_JOINERS: Final = frozenset(
+    {"a", "an", "the", "to", "of", "by", "on", "in", "and", "or", "for", "at", "per", "with"}
+)
+"""Words that make a hyphenated phrase English ("end-to-end"), not a slug."""
+_EDGE_PUNCT: Final = ",.;:!?()[]{}\"'`“”‘’"
+_UNIT_RE: Final = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s?(?:%|(?:ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?|"
+    r"days?|kb|mb|gb|tb)\b)",
+    re.IGNORECASE,
+)
+"""A number with its unit (``300 s``, ``5 min``, ``10%``): a measurement, never a name."""
+_NUMBER_LIST_RE: Final = re.compile(
+    r"\b\d+(?:,\s+\d+)*,?\s+(?:and|or|&)\s+\d+\b(?:\s+as\b)?|\b\d+(?:,\s+\d+)+\b"
+)
+"""A list of numbers (``2, 3, 4 and 6``, with an ``as`` after it): picks from a list, no name."""
+_BOUNDARY: Final = frozenset(
+    {
+        "on",
+        "in",
+        "at",
+        "of",
+        "for",
+        "with",
+        "to",
+        "from",
+        "by",
+        "as",
+        "and",
+        "or",
+        "but",
+        "so",
+        "because",
+        "which",
+        "that",
+        "when",
+        "while",
+        "into",
+        "after",
+        "before",
+        "since",
+        "until",
+        "via",
+        "than",
+    }
+)
+"""Where a cut phrase may end: before a preposition or a conjunction (a clause boundary)."""
+_ACRONYMS: Final = frozenset(
+    {
+        "ai",
+        "api",
+        "cd",
+        "ci",
+        "cli",
+        "css",
+        "csv",
+        "db",
+        "html",
+        "http",
+        "id",
+        "ios",
+        "json",
+        "llm",
+        "mcp",
+        "ml",
+        "pdf",
+        "qa",
+        "sdk",
+        "seo",
+        "sql",
+        "ui",
+        "url",
+        "ux",
+        "yaml",
+    }
+)
+"""Slug words that read in capitals (``assistant-panel-ux`` -> ``Assistant panel UX``)."""
 
 
 # ── Which titles need a name ───────────────────────────────────
@@ -152,22 +232,59 @@ def word_count(text: str) -> int:
     return len(words(text))
 
 
-def machine_label(title: str) -> bool:
-    """A label the factory made: ``From C-11: …``, or pieces joined with `` · ``."""
-    text = str(title or "")
-    return bool(_CODED_LABEL_RE.match(text.strip())) or " · " in text
+def _bare_token(token: str) -> str:
+    return token.strip(_EDGE_PUNCT)
 
 
-def wants_name(title: str, *, kind: str = "") -> bool:
+def slug_token(token: str, slugs: Collection[str] = ()) -> bool:
     """
-    Whether *title* may not show as a title: a person's ask, a machine label,
-    or more than :data:`WORDS_MAX` words.
+    Whether *token* is a machine name, not a word: one of *slugs* (the
+    factory's project slugs), a snake_case name, a kebab-case name of three
+    parts or more ("build-tier-drafts", but not "end-to-end"), or one ending in
+    a number ("drafts-3", "build-tier-drafts-2"). Two plain parts ("follow-up",
+    "live-search") read as an English word unless *slugs* knows them.
+    """
+    bare = _bare_token(token)
+    if not bare or not _SLUG_RE.match(bare):
+        return False
+    if bare in slugs or "_" in bare:
+        return True
+    parts = bare.split("-")
+    if parts[-1].isdigit() and any(not p.isdigit() for p in parts):
+        return len(parts) >= 3 or len(parts[0]) >= 4
+    return len(parts) >= 3 and not any(p in _JOINERS for p in parts)
+
+
+def is_slug(title: str) -> bool:
+    """Whether the whole of *title* is one slug (``assistant-core``): its words are its name."""
+    return bool(_SLUG_RE.match(str(title or "").strip()))
+
+
+def machine_label(title: str, slugs: Collection[str] = ()) -> bool:
+    """
+    A label a machine made: ``From C-11: …``, pieces joined with `` · ``, a
+    slug (the whole title or a word of it, :func:`slug_token`), a record's
+    code (``T-16``, ``PR-9856``, ``#9856``) or a path.
+    """
+    text = str(title or "").strip()
+    if _CODED_LABEL_RE.match(text) or " · " in text or is_slug(text):
+        return True
+    if _REF_RE.search(text):
+        return True
+    return any(slug_token(t, slugs) or _PATH_RE.match(_bare_token(t)) for t in text.split())
+
+
+def wants_name(title: str, *, kind: str = "", slugs: Collection[str] = ()) -> bool:
+    """
+    Whether *title* may not show as a title: a person's ask, a machine label
+    (:func:`machine_label`), or more than :data:`WORDS_MAX` words.
 
     :param kind: The node's kind (``ask`` is always a person's raw text).
+    :param slugs: The factory's project slugs (a title naming one is a label).
     """
     if kind == "ask":
         return True
-    if machine_label(title):
+    if machine_label(title, slugs):
         return True
     return word_count(title) > WORDS_MAX
 
@@ -182,8 +299,42 @@ def digest(text: str) -> str:
 
 
 def _humanize(phrase: str) -> str:
-    """``assistant-core`` -> ``assistant core`` (a slug read as words)."""
-    return phrase.replace("-", " ").replace("_", " ") if _SLUG_RE.match(phrase) else phrase
+    """``assistant-panel-ux`` -> ``assistant panel UX`` (a slug read as words)."""
+    if not _SLUG_RE.match(phrase):
+        return phrase
+    parts = re.split(r"[-_]", phrase)
+    return " ".join(p.upper() if p in _ACRONYMS else p for p in parts)
+
+
+def slug_words(title: str) -> str:
+    """A slug as a title shows it (``build-tier-drafts-3`` -> ``Build tier drafts 3``)."""
+    return _cap(_humanize(str(title or "").strip()))
+
+
+def _demachine(text: str, slugs: Collection[str]) -> str:
+    """
+    *text* without what a machine wrote into it: codes and paths dropped, a
+    slug that opens it dropped (it names the subject the page already shows:
+    "build-tier-drafts-3, part 1" -> "part 1") and any other read as words,
+    measurements (``300 s``) and lists of picks (``2, 3, 4 and 6``) dropped.
+    """
+    out = _REF_RE.sub(" ", text)
+    out = _UNIT_RE.sub(" ", out)
+    out = _NUMBER_LIST_RE.sub(" ", out)
+    tokens = [t for t in out.split() if not _PATH_RE.match(_bare_token(t))]
+    lead = 0
+    while lead < len(tokens) and slug_token(tokens[lead], slugs):
+        lead += 1
+    if lead and word_count(" ".join(tokens[lead:])) >= 2:
+        tokens = tokens[lead:]
+    kept = [
+        t.replace(_bare_token(t), _humanize(_bare_token(t))) if slug_token(t, slugs) else t
+        for t in tokens
+    ]
+    # Drop what a removed code leaves dangling ("(, )", a leading comma).
+    joined = re.sub(r"\(\s*[,;]?\s*\)", " ", " ".join(kept))
+    joined = re.sub(r"\s+([,;:.!?)])", r"\1", joined)
+    return " ".join(joined.split()).lstrip(" ,;:.-·/")
 
 
 def _cap(text: str) -> str:
@@ -201,25 +352,44 @@ def _strip_fillers(text: str) -> str:
     return out
 
 
-def _clause(text: str) -> str:
-    """The first sentence of *text* that says something (two words or more, fillers dropped)."""
+def _clause(text: str, slugs: Collection[str] = ()) -> str:
+    """
+    The first sentence of *text* that says something (two words or more,
+    fillers and what a machine wrote dropped, :func:`_demachine`).
+    """
     for sentence in _SENTENCE_RE.split(text):
-        found = _strip_fillers(sentence.strip(" .!?;"))
+        found = _demachine(_strip_fillers(sentence.strip(" .!?;")), slugs)
+        found = _strip_fillers(found)
         if word_count(found) >= 2:
             return found
-    return _strip_fillers(text)
+    return _demachine(_strip_fillers(text), slugs)
 
 
 def _cut(text: str, limit: int) -> str:
-    """The first *limit* words of *text*, cut before a natural break and never on a stopword."""
+    """
+    The first *limit* words of *text*, cut before a natural break: a dash, a
+    colon, a bracket or a comma, else (when it is longer) the last clause
+    boundary that fits ("Fix live search on the base env" -> "Fix live
+    search"); never on a stopword.
+    """
     for mark in (" — ", " - ", ": ", " (", ", "):
         head = text.split(mark, 1)[0]
         if mark in text and word_count(head) >= 2:
             text = head
             break
+    tokens = text.split()
+    counted = [i for i, t in enumerate(tokens) if _WORD_RE.search(t)]
+    if len(counted) > limit:
+        ends = [
+            n
+            for n in range(2, limit + 1)
+            if tokens[counted[n]].lower().strip(_EDGE_PUNCT) in _BOUNDARY
+        ]
+        if ends:
+            tokens = tokens[: counted[ends[-1]]]
     kept: list[str] = []
     count = 0
-    for token in text.split():
+    for token in tokens:
         if _WORD_RE.search(token):
             if count == limit:
                 break
@@ -232,12 +402,18 @@ def _cut(text: str, limit: int) -> str:
     return " ".join(kept).strip(" ,.;:!?-·/")
 
 
-def fallback(text: str) -> str:
+def fallback(text: str, *, limit: int = WORDS_MAX, slugs: Collection[str] = ()) -> str:
     """
     A short name from the first words of *text*, for a page that cannot wait.
 
     ``From C-11: create assistant-core · create panel`` -> ``Assistant core and 1 more``;
-    ``@lead thanks. Please start the four fixes …`` -> ``Start the four fixes``.
+    ``@lead thanks. Please start the four fixes …`` -> ``Start the four fixes``;
+    ``build-tier-drafts-3, part 1`` -> ``Part 1``;
+    ``@lead build-tier-drafts-2 hit the same 300 s sandbox launch timeout: …``
+    -> ``Hit the same sandbox launch timeout``.
+
+    :param limit: The most words it keeps.
+    :param slugs: The factory's project slugs (:func:`slug_token`).
     """
     first = next((line for line in str(text or "").splitlines() if line.strip()), "").strip()
     first = _CODE_PREFIX_RE.sub("", first).strip()
@@ -246,7 +422,7 @@ def fallback(text: str) -> str:
     if len(listed) > 1:
         # A machine list ("create a · create b"): its first item and how many more.
         head = _humanize(_MACHINE_VERBS_RE.sub("", listed[0]).strip())
-        name = _cut(head, WORDS_MAX - 3)
+        name = _cut(head, max(1, limit - 3))
         if name:
             return f"{_cap(name)} and {len(listed) - 1} more"
     # Otherwise the pieces after the first qualify it (a base, a version): dropped.
@@ -255,7 +431,7 @@ def fallback(text: str) -> str:
     bare = _MACHINE_VERBS_RE.sub("", body).strip()
     if _SLUG_RE.match(bare):
         body = _humanize(bare)
-    name = _cut(_clause(body), WORDS_MAX) or _cut(first, WORDS_MAX)
+    name = _cut(_clause(body, slugs), limit) or _cut(first, limit)
     if not name:
         # Nothing but a code ("From C-12"): it stays as it is.
         return " ".join(str(text or "").split())[:NAME_CHARS_MAX]
@@ -443,9 +619,12 @@ __all__ = [
     "digest",
     "fallback",
     "generate",
+    "is_slug",
     "machine_label",
     "reset",
     "schedule",
+    "slug_token",
+    "slug_words",
     "wants_name",
     "word_count",
     "words",

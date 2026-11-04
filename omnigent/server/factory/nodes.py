@@ -245,6 +245,8 @@ _AREA_WHY: Final[dict[str, str]] = {
 _WHO_RE: Final = re.compile(r"[^a-z0-9]+")
 _TITLE_MAX: Final = 120
 _SOURCE_MAX: Final = 2000
+OBJECT_WORDS: Final = 4
+"""A proposal's few words in a Your move row ("Apply C-16 · Update assistant core")."""
 _SHORT_MAX: Final = 140
 _WHY_MAX: Final = 600
 
@@ -538,6 +540,13 @@ class _N:
     """Where its short name came from: ``person``, ``factory`` or ``words`` (its first words)."""
 
 
+def _proposal_text(proposal: FactoryProposal) -> str:
+    """What a proposal's short name is made from: its title, then why."""
+    title = " ".join(str(proposal.title or "").split())
+    why = " ".join(str(proposal.rationale or "").split())
+    return (f"{title}\n{why}" if why else title)[:_SOURCE_MAX]
+
+
 def _esc(text: Any) -> str:
     return html.escape(str(text or ""), quote=False)
 
@@ -604,6 +613,8 @@ class Tree:
             t.ref: t for t in facts.tasks if t.project_slug not in self.hidden
         }
         self.pr_rows: dict[str, FactoryPr] = {norm_id(p.id): p for p in facts.prs}
+        self.slugs: frozenset[str] = frozenset(p.slug for p in facts.projects)
+        """Every project slug: a title holding one is a machine label (:mod:`.node_names`)."""
         self.lineage = (
             facts.lineage
             if facts.lineage is not None
@@ -636,6 +647,7 @@ class Tree:
         self._index()
         self._apply_names()
         self._place_decisions()
+        self._name_proposals()
         self._order_columns()
         self.paths = node_status.Paths(self)
 
@@ -677,6 +689,7 @@ class Tree:
         changes keep their first words). The full title stays in ``full_title``.
         """
         stored = self.facts.names
+        slugs = self.slugs
         wants: list[node_names.Want] = []
         for node in self.nodes.values():
             # The factory tree keeps its own words (rules read as they are written).
@@ -691,8 +704,11 @@ class Tree:
                 if not found.named_by and asks_model:
                     if found.source_hash != node_names.digest(text):
                         wants.append(self._want(node, text))
-            elif node_names.wants_name(node.title, kind=node.kind):
-                short, how = node_names.fallback(text), "words"
+            elif not node.source and node_names.is_slug(node.title):
+                # A slug's words are the name people already use ("Assistant core").
+                short, how = node_names.slug_words(node.title), "words"
+            elif node_names.wants_name(node.title, kind=node.kind, slugs=slugs):
+                short, how = node_names.fallback(text, slugs=slugs), "words"
                 if asks_model:
                     wants.append(self._want(node, text))
             else:
@@ -707,6 +723,56 @@ class Tree:
     @staticmethod
     def _want(node: _N, text: str) -> node_names.Want:
         return node_names.Want(node.ref, text, node_names.digest(text), node.level)
+
+    def _name_proposals(self) -> None:
+        """
+        The open proposals a person is asked to apply, by a few words too (Your
+        move's "Apply C-16 · Update assistant core"): a machine title or a long
+        one is named by the factory (stored under the proposal's ref), after
+        the nodes.
+        """
+        wants: list[node_names.Want] = []
+        seen: set[str] = set()
+        for decisions in self.decisions_at.values():
+            for decision in decisions:
+                if decision.source != "proposal":
+                    continue
+                proposal = node_status.decision_proposal(decision, self._proposals)
+                if proposal is None or proposal.ref in seen:
+                    continue
+                seen.add(proposal.ref)
+                text = _proposal_text(proposal)
+                want = node_names.Want(proposal.ref, text, node_names.digest(text), "proposal")
+                found = self.facts.names.get(proposal.ref)
+                if found is not None:
+                    if not found.named_by and found.source_hash != want.hash:
+                        wants.append(want)
+                elif node_names.wants_name(proposal.title, slugs=self.slugs):
+                    wants.append(want)
+        self.unnamed.extend(wants)
+
+    def proposal_name(self, proposal: FactoryProposal) -> str | None:
+        """
+        What *proposal* changes in a few words (at most :data:`OBJECT_WORDS`):
+        the factory's name for it, else its title when that is short and no
+        machine label, else the title's first words; ``None`` when nothing
+        but a code is left.
+        """
+        found = self.facts.names.get(proposal.ref)
+        if found is not None:
+            return found.name
+        title = " ".join(str(proposal.title or "").split())
+        if not title:
+            return None
+        if (
+            not node_names.wants_name(title, slugs=self.slugs)
+            and node_names.word_count(title) <= OBJECT_WORDS
+        ):
+            return title[:1].upper() + title[1:]
+        name = node_names.fallback(title, limit=OBJECT_WORDS, slugs=self.slugs)
+        if not name or node_names.machine_label(name, self.slugs):
+            return None
+        return name
 
     def _roots(self) -> None:
         facts = self.facts
@@ -1731,6 +1797,21 @@ class Tree:
             state = "needs"
         return state
 
+    def shown_state(self, node: _N) -> str:
+        """
+        The state a count shows *node* in: ``needs`` when its own row says
+        "Needs you" (the end of its path is a person's ask on it, such as its
+        ready PRs' merge), else :meth:`state`. The strip's "n you" then counts
+        the rows that say so.
+        """
+        state = self.state(node.ref)
+        if (
+            state in ("waiting", "notstarted")
+            and self.status(node, compact=True)["kind"] == "needs"
+        ):
+            return "needs"
+        return state
+
     def blocks(self, decision: FactoryDecision) -> bool:
         """
         Whether an open decision holds work. An ask says so itself; a proposal's
@@ -2202,7 +2283,7 @@ class Tree:
             active = [n for n in items if not n.later]
             by_state: dict[str, int] = {}
             for item in active:
-                state = self.state(item.ref)
+                state = self.shown_state(item)
                 by_state[state] = by_state.get(state, 0) + 1
             row: dict[str, Any] = {
                 "level": key,
@@ -2841,11 +2922,18 @@ class Tree:
         return list(self._cached("dependents", ref, make))
 
     def asker_of(self, decision: FactoryDecision, proposal: FactoryProposal | None = None) -> str:
-        """Who asked a decision, by name: the asking member, the proposal's author, the server."""
-        member = self._members.get(_bare(decision.asked_by_session_id) or "")
-        if member is not None and member.get("title"):
-            return str(member["title"])
+        """
+        Who asked a decision, by name: the asking member, the proposal's author,
+        the server. A session id is never a name: the factory's own session is
+        whoever answers its root (its lead), another one the member it is.
+        """
+        if (named := self._session_name(decision.asked_by_session_id)) is not None:
+            return named
         if proposal is not None and proposal.author:
+            if _bare(proposal.author) is not None:
+                return self._session_name(proposal.author) or (
+                    "a person" if proposal.author_kind == "human" else "an agent"
+                )
             author = str(proposal.author).split("@", 1)[0]
             named = next(
                 (
@@ -2857,6 +2945,19 @@ class Tree:
             )
             return named or author[:1].upper() + author[1:]
         return "an agent" if decision.source == "agent" else "the server"
+
+    def _session_name(self, session_id: str | None) -> str | None:
+        """The name a session goes by: its member's, or the factory's own: its root's responder."""
+        sid = _bare(session_id)
+        if sid is None:
+            return None
+        member = self._members.get(sid)
+        if member is not None and member.get("title"):
+            return str(member["title"])
+        if sid == _bare(self.facts.factory_id):
+            root = self.nodes.get(node_refs.PRODUCT)
+            return (self.responder(root) if root is not None else None) or "the factory"
+        return None
 
     def lead_name(self, slug: str | None) -> str | None:
         """The name of project *slug*'s lead, when the viewer may see it."""

@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from omnigent.entities.factory import FactoryDecision, FactoryLoop, FactoryTask
-from omnigent.server.factory import alarms, node_status
+from omnigent.server.factory import alarms, node_names, node_status
 from omnigent.server.factory.node_views import validate_page
 from omnigent.server.factory.nodes import Tree, assert_levels
 from tests.server.factory.node_fixtures import (
@@ -131,7 +131,7 @@ def test_assistant_core_is_held_for_c16(tree: Tree) -> None:
     assert line["decision"]["asker"] == "Atlas"
     assert line["decision"]["expires"] == "2d 16h"
     assert line["why"][-1]["tone"] == "you"
-    assert line["why_title"] == "Why assistant-core is not moving"
+    assert line["why_title"] == "Why Assistant core is not moving"
     # The stall alarm on T-16 is not this page's business: it is closed, with a cause.
     assert '"D-48"' not in json.dumps(page)
     assert "also_holds" not in line  # the panel is the "needed by" chip instead
@@ -143,20 +143,20 @@ def test_assistant_core_is_held_for_c16(tree: Tree) -> None:
 def test_the_panel_has_not_started_for_7_hours(tree: Tree) -> None:
     line = _page(tree, "assistant-panel-ux")["status"]
 
-    assert full(line) == f"Not started for 7 h: waits on assistant-core › {HELD}"
+    assert full(line) == f"Not started for 7 h: waits on Assistant core › {HELD}"
     assert line["segments"][0] == {
         "sep": "→",
         "label": "waits on",
         "ref": "assistant-core",
-        "title": "assistant-core",
+        "title": "Assistant core",
         "reason": "needs the session API and per-turn debit",
     }
-    assert line["why_title"] == "Why assistant-panel-ux has not started"
+    assert line["why_title"] == "Why Assistant panel UX has not started"
     assert [w.get("tone") for w in line["why"]] == [None, None, None, None, "you"]
     assert "because it needs the session API and per-turn debit" in line["why"][1]["html"]
     # The three met links Atlas added without a reason are named once.
     assert line["note"].startswith("It also waited on 3 projects linked without a reason")
-    assert all(slug in line["note"] for slug in SHORTLIST[:3])
+    assert all(node_names.slug_words(slug) in line["note"] for slug in SHORTLIST[:3])
 
 
 def test_the_product_names_its_top_blocker_and_what_else_it_holds(tree: Tree) -> None:
@@ -164,10 +164,10 @@ def test_the_product_names_its_top_blocker_and_what_else_it_holds(tree: Tree) ->
 
     # The need above the home level (features) is a step the line leaves out.
     assert full(line) == (
-        f"Not moving: Agent assistant (sample) › assistant-core › {HELD}"
-        " · also holds assistant-panel-ux"
+        f"Not moving: Agent assistant (sample) › Assistant core › {HELD}"
+        " · also holds Assistant panel UX"
     )
-    assert line["also_holds"] == [{"ref": "assistant-panel-ux", "title": "assistant-panel-ux"}]
+    assert line["also_holds"] == [{"ref": "assistant-panel-ux", "title": "Assistant panel UX"}]
     assert line["why"][0]["html"] == "Sample app (sample) is not moving."
 
 
@@ -177,10 +177,10 @@ def test_tiles_show_only_the_end_of_the_path(tree: Tree) -> None:
     panel = _kid(feature, "assistant-panel-ux")["status_compact"]
 
     assert full(feature["status"]) == (
-        f"Not moving: assistant-core › {HELD} · also holds assistant-panel-ux"
+        f"Not moving: Assistant core › {HELD} · also holds Assistant panel UX"
     )
     assert compact(core, above="D-45") == "Needs you: Apply C-16 · via T-16 · the ask above"
-    assert compact(panel, above="D-45") == "Waits on assistant-core · held for C-16"
+    assert compact(panel, above="D-45") == "Waits on Assistant core · held for C-16"
     # The panel's tile ends at the header's ask too, so it carries no second button.
     assert panel["decision"]["id"] == "D-45" and "why" not in panel
     assert compact(_kid(_page(tree, "product"), f"ask:{'a' * 31}1")["status_compact"]) == (
@@ -266,7 +266,7 @@ def test_a_task_nothing_holds_ends_at_the_lead_who_starts_it() -> None:
     assert full(core) == "Not started: T-16 → waits for Juno to start it"
     assert core["ends"] == "other" and "detail" not in core
     assert full(panel) == (
-        "Waiting: waits on assistant-core › T-16 → waits for Juno to start it · not started"
+        "Waiting: waits on Assistant core › T-16 → waits for Juno to start it · not started"
     )
     assert panel["ends"] == "other"
     tile = _kid(_page(tree, "I-1"), "assistant-core")["status_compact"]
@@ -306,7 +306,7 @@ def test_a_task_in_a_project_nobody_started_ends_at_who_starts_the_project() -> 
 
     starts = project["segments"][-1]["label"]
     assert starts.startswith("waits for") and "its lead" not in full(task)
-    assert full(task) == f"Not started: waits on build-tier-drafts-3 → {starts}"
+    assert full(task) == f"Not started: waits on Build tier drafts 3 → {starts}"
     assert task["ends"] == project["ends"]
 
 
@@ -345,11 +345,11 @@ def test_after_d45_the_feature_ends_at_d49_and_the_root_at_the_merges() -> None:
     feature = _page(tree, "I-1")["status"]
     root = _page(tree, "product")["status"]
 
-    assert full(panel) == "Waiting: waits on assistant-core · moving (T-16: Luz building)"
+    assert full(panel) == "Waiting: waits on Assistant core · moving (T-16: Luz building)"
     assert panel["ends"] == "moving"
     assert feature["decision"]["id"] == "D-49" and feature["label"] == "Needs you:"
     # Work moves again (T-16), so the root's line is its top blocker: the merges on main.
-    assert full(root) == "Top blocker: build-tier-drafts-3 → needs you: Merge #9856 and #9857"
+    assert full(root) == "Top blocker: Build tier drafts 3 → needs you: Merge #9856 and #9857"
     core = _page(tree, "assistant-core")["status"]
     assert core["kind"] == "moving" and core["moving"]["ref"] == "T-16"
     assert core["why"] == [
@@ -489,7 +489,7 @@ def test_a_long_path_keeps_its_first_steps_and_the_person() -> None:
     assert "more steps along the same chain" in line["why"][5]["html"]
     tile = tree.status(tree.nodes["chain-1"], compact=True)
     assert (tile["ends"], tile["decision"]["id"]) == ("person", "D-45")
-    assert compact(tile) == "Waits on chain-2 · held for C-16"
+    assert compact(tile) == "Waits on Chain 2 · held for C-16"
 
 
 def _task_ask(number: int, task: str) -> FactoryDecision:
@@ -702,13 +702,13 @@ def test_feature_progress_is_acceptance_on_the_base_env_then_build(tree: Tree) -
         {
             "text": "Ask how the app is doing: the answer uses analytics",
             "acceptance_step": 2,
-            "how": "API only: assistant-panel-ux not built yet",
+            "how": "API only: Assistant panel UX not built yet",
             "api": True,
         },
         {
             "text": "A flag-off user gets no assistant",
             "acceptance_step": 3,
-            "how": "API only: assistant-panel-ux not built yet",
+            "how": "API only: Assistant panel UX not built yet",
             "api": True,
         },
     ]

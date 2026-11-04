@@ -30,9 +30,11 @@ from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.node_fixtures import (
     ASK_MESSAGE,
+    DRAFTS_ASK,
     DRAFTS_MESSAGE,
     FID,
     LIVE_ASK,
+    SHORTLIST_ASK,
     SHORTLIST_MESSAGE,
     factory_live,
 )
@@ -49,6 +51,8 @@ FACTORY_NAMES = {
     f"ask:{SHORTLIST_MESSAGE}": "Shortlist fixes",
     "feature:from-C-13": "Shortlist fixes",
     "assistant-core": "Assistant core",
+    "C-16": "Per-turn debit",
+    "C-18": "Scope notes in READY posts",
 }
 
 
@@ -75,8 +79,10 @@ def _tree(**names: str) -> Tree:
 
 
 def _text(ref: str) -> str:
-    """The text the live projection names *ref* from."""
+    """The text the live projection names *ref* from (a node, or a proposal by its code)."""
     tree = Tree(factory_live())
+    if ref in tree.proposals_by_ref:
+        return nodes._proposal_text(tree.proposals_by_ref[ref])
     node = tree.nodes[ref]
     return node.source or node.full_title or node.title
 
@@ -95,11 +101,18 @@ def _text(ref: str) -> str:
         pytest.param("Sessions, tool registry, flagged chat API for all", "task", True, id="long"),
         pytest.param("Sessions, tool registry, flagged chat API", "task", False, id="six-words"),
         pytest.param("Debit each turn", "task", False, id="short"),
-        pytest.param("assistant-core", "project", False, id="slug"),
+        pytest.param("assistant-core", "project", True, id="slug"),
+        pytest.param("build-tier-drafts-3, part 1", "change", True, id="holds-a-slug"),
+        pytest.param("Wire a-core into the panel", "task", True, id="holds-a-known-slug"),
+        pytest.param("Fix #123 crash", "task", True, id="holds-a-pr"),
+        pytest.param("T-16: debit each turn", "task", True, id="holds-a-task-code"),
+        pytest.param("Ship on sample-org/sample-app#main", "task", True, id="holds-a-path"),
+        pytest.param("Run end-to-end tests", "task", False, id="english-hyphens"),
+        pytest.param("Start the follow-up", "task", False, id="two-part-word"),
     ],
 )
 def test_which_titles_need_a_short_name(title: str, kind: str, wanted: bool) -> None:
-    assert node_names.wants_name(title, kind=kind) is wanted
+    assert node_names.wants_name(title, kind=kind, slugs={"a-core"}) is wanted
 
 
 @pytest.mark.parametrize(
@@ -130,10 +143,17 @@ def test_which_titles_need_a_short_name(title: str, kind: str, wanted: bool) -> 
             id="commit-style",
         ),
         pytest.param("From C-12", "From C-12", id="nothing-but-a-code"),
+        pytest.param("build-tier-drafts-3, part 1", "Part 1", id="slug-subject-dropped"),
+        pytest.param("assistant-panel-ux", "Assistant panel UX", id="slug-words"),
+        pytest.param(DRAFTS_ASK, "Hit the same sandbox launch timeout", id="slug-and-unit"),
+        pytest.param(SHORTLIST_ASK, "Start four projects", id="picks-and-path"),
+        pytest.param("Fix live search on the base env", "Fix live search", id="clause-boundary"),
+        pytest.param("Update a-core (constraints, DoD)", "Update a core", id="known-slug-words"),
+        pytest.param("Fix #123 crash in the panel", "Fix crash in the panel", id="code-dropped"),
     ],
 )
 def test_the_first_words_are_trimmed_sensibly(text: str, short: str) -> None:
-    found = node_names.fallback(text)
+    found = node_names.fallback(text, slugs={"a-core"})
 
     assert found == short
     assert node_names.word_count(found) <= node_names.WORDS_MAX
@@ -150,7 +170,7 @@ def test_a_name_is_cleaned_or_refused() -> None:
             "Discovery is on the base env but live search does not work. "
             "Start a follow-up project to fix it?"
         )
-        == "Start a follow-up project to fix"
+        == "Start a follow-up project"
     )
 
 
@@ -181,8 +201,19 @@ def test_the_live_page_shows_first_words_until_the_factory_names_them() -> None:
         "feature:from-C-13",
         "assistant-core",
         DRAFTS,
+        # Then the proposals a person is asked to apply (Your move's few words).
+        "C-16",
+        "C-18",
     ]
     assert "feature:from-C-12" not in [w.ref for w in tree.unnamed]
+    # A slug's words are its name: shown at once, never sent to the model.
+    panel = tree.nodes["assistant-panel-ux"]
+    assert (panel.title, panel.full_title, panel.named) == (
+        "Assistant panel UX",
+        "assistant-panel-ux",
+        "words",
+    )
+    assert (tree.nodes["PR-9856"].title, tree.nodes["PR-9856"].named) == ("Part 1", "words")
     # Short titles and the factory tree keep their own words.
     assert tree.nodes["T-16"].title == "Debit each turn" and tree.nodes["T-16"].named is None
     assert tree.nodes["C-18"].title == "Name pending scope decisions in READY posts"
@@ -199,6 +230,25 @@ def test_every_title_a_live_page_shows_is_six_words_at_most() -> None:
             *(i["title"] for i in page["children"]["later"]),
         ]
         assert all(node_names.word_count(t) <= node_names.WORDS_MAX for t in shown), (ref, shown)
+
+
+def test_a_proposal_reads_by_a_few_words_in_your_move() -> None:
+    first = assert_levels(Tree(factory_live()))
+    named = _tree(**FACTORY_NAMES)
+
+    def objects(tree: Tree) -> dict[str, str | None]:
+        page = validate_page(tree.page("product") or {})
+        return {i["id"]: i.get("object_name") for i in page["your_move"]["items"]}
+
+    # Its first words at once ("Update assistant-core (constraints, DoD)"), the factory's later.
+    assert objects(first)["D-45"] == "Update assistant core"
+    assert objects(named)["D-45"] == "Per-turn debit"
+    texts = {w.ref: w.text for w in first.unnamed}
+    assert texts["C-16"].startswith("Update assistant-core (constraints, DoD)")
+    # A title of six words or fewer is never sent to the model: its first four words show.
+    assert "C-17" not in texts and first.proposal_name(first.proposals_by_ref["C-17"]) == (
+        "Spike unproven external capabilities"
+    )
 
 
 def test_stored_names_win_and_only_a_changed_text_is_named_again() -> None:

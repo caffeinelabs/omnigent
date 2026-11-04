@@ -312,7 +312,7 @@ def test_assistant_core(tree: Tree) -> None:
         {
             "kind": "needed by",
             "ref": "assistant-panel-ux",
-            "title": "assistant-panel-ux",
+            "title": "Assistant panel UX",
             "state": "waiting",
         }
     ]
@@ -379,7 +379,7 @@ def test_the_panel_waits_on_assistant_core(tree: Tree) -> None:
     assert first == {
         "kind": "depends on",
         "ref": "assistant-core",
-        "title": "assistant-core",
+        "title": "Assistant core",
         "state": "needs you",
         "reason": "needs the session API and per-turn debit",
     }
@@ -576,7 +576,7 @@ def test_a_pr_number_two_repos_share_keeps_one_home_each() -> None:
     assert theirs["node"]["tag"] == "sample-org/other-app#9876"
     assert theirs["thread"]["key"] == f"pr:{hex_id(19876)}"
     # A closed row never takes the number: PR-9882 is still the merged one.
-    assert _page(tree, "PR-9882")["node"]["title"] == "connectors-core"
+    assert _page(tree, "PR-9882")["node"]["title"] == "Connectors core"
     assert connectors["results"]["merged"] == 2
     assert _page(tree, "product")["results"]["merged"] == 8
 

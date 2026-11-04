@@ -409,10 +409,15 @@ class YourMoveItemView(_View):
     decision: DecisionRefView
     weight: float
     unblocks: str | None = None
-    """What answering it lets move, by short name ("Agent assistant", "T-16 and panel")."""
+    """
+    What answering it lets move, by short name ("Agent assistant"); the page's
+    own node is "this task" ("this task and Assistant panel UX").
+    """
     unblocks_ref: str | None = None
-    """The first of ``unblocks_refs`` (the node a row links to)."""
+    """The first of ``unblocks_refs`` that is not the page's own node (where a row links)."""
     unblocks_refs: list[str] | None = None
+    object_name: str | None = None
+    """What a proposal changes in a few words ("Update assistant core"), after its code."""
     about: str | None = None
     """A question's few words (``Start a follow-up project``), for an ask that is no apply."""
     blocks_nothing: bool | None = None
@@ -566,6 +571,8 @@ class NeedsItemView(_View):
     breadcrumb: list[CrumbView] = Field(min_length=1)
     holds: list[str]
     weight: float
+    move: YourMoveItemView | None = None
+    """The row Your move shows for this ask on the tree's root page (short names, one action)."""
 
 
 class NeedsYouView(_View):

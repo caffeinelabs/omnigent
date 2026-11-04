@@ -118,7 +118,7 @@ def test_since_items_are_the_changes_in_the_subtree(tree: Tree) -> None:
     ]
     assert feature["rollup"]["since"]["more"] == 2
     assert _changed(feature) == {
-        "connectors-core": ["#9882 merged 13:25", "T-17 done", "connectors-core: merged"],
+        "connectors-core": ["#9882 merged 13:25", "T-17 done", "Connectors core: merged"],
         "skill-discovery": ["#9881 merged 13:03"],
         "live-search-fix": ["D-49 new"],
     }

@@ -208,7 +208,7 @@ def test_the_timeline_of_agent_assistant_shows_the_panel_waiting_all_day(tree: T
     assert view["last_look"] == "2026-11-03T12:30:00Z" and view["now"] == view["axis"][1]
     # The panel was queued all day, waiting on another node: grey, never amber.
     assert lanes["assistant-panel-ux"] == [
-        ("06:01", "13:40", "wait", "Waits on assistant-core · held for C-16")
+        ("06:01", "13:40", "wait", "Waits on Assistant core · held for C-16")
     ]
     # assistant-core worked until T-16 was held for C-16; since then it waits on a person.
     assert lanes["assistant-core"] == [
@@ -219,7 +219,7 @@ def test_the_timeline_of_agent_assistant_shows_the_panel_waiting_all_day(tree: T
     ]
     # Finished projects: queued behind core, then worked (now done); merged closes the lane.
     assert lanes["connectors-core"] == [
-        ("06:01", "06:55", "wait", "waits on assistant-core"),
+        ("06:01", "06:55", "wait", "waits on Assistant core"),
         ("06:55", "13:25", "done", "building"),
     ]
     # The proposed project waits on its ask; held later waves draw nothing.
@@ -262,7 +262,7 @@ def test_an_answered_ask_that_held_nothing_never_colours_a_lane() -> None:
     view = validate(TimelineView, node_lenses.timeline(tree, "I-1", [*spans_1340(), answered]))
 
     assert _lanes(view)["connectors-core"] == [
-        ("06:01", "06:55", "wait", "waits on assistant-core"),
+        ("06:01", "06:55", "wait", "waits on Assistant core"),
         ("06:55", "13:25", "done", "building"),
     ]
 
