@@ -952,7 +952,9 @@ and the kind named after it, with one change
 (`structure.levels.feature.name`); the block is owner-only, never a trial,
 and no agent proposes it (403 `path_not_allowed`). Cockpit v3 renames them
 from the factory tree's Definition area: its `rename` verb (Rename levels,
-`r`) is offered there and on no other node.
+`r`) is offered there and on no other node, and that page carries
+`levels: true` (it shows the levels to every viewer). A structure stored when
+items offered `rename` has it moved to `verbs.area` on read (`upgrade`).
 `GET …/factories/{fid}/levels` returns both trees with `hidden` computed for
 this factory (a level counts the implicit parents its nodes get), the maps
 above and the definition `version`.
@@ -1261,12 +1263,15 @@ look shaded, nothing drawn between lanes) and Money (each child's cost
 against its budget from `…/money`, most first, the total and what no child
 holds). The bar offers a lens only when it has something to show: Timeline
 once the server drew a lane, Money when two or more children have a cost or
-a budget, neither on a level grouped under parents (Home). No lens draws an
+a budget, neither on a level grouped under parents (Home). Every page asks
+`…/timeline` whether it has lanes, so the route reads the spans once per
+projection (the memoized tree) and the client never asks again on a refocus. No lens draws an
 SVG line or path. The top bar's Product | Factory switch (with the asks
 waiting in the factory tree) takes the place of v2's places; the factory
 tree's Health lists the alarms the server closed with their causes and the
 real ask, Environments shows the base env (what it runs, its health, its
-sign-in, a way to try it) and Definition the levels with Rename levels: the
+sign-in, a way to try it; the env's `area` names it, so the env sheet opens
+it, and `ref` the project that sets it up) and Definition the levels with Rename levels: the
 product's levels with their names and plurals, previewed through
 `POST …/definition/preview` and saved by `PUT …/definition` on the version
 read, with Undo by re-pinning the version before.

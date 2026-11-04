@@ -247,6 +247,8 @@ export interface BaseEnv {
   follows?: string;
   /** The project that keeps it, in the factory tree. */
   ref?: string;
+  /** The factory area that shows it (`fx:environments`). */
+  area?: string;
 }
 
 /** An alarm the server closed by itself: what it asked, why it closed, the real ask. */
@@ -272,6 +274,8 @@ export interface NodeFull extends NodeSummary {
   env?: BaseEnv;
   /** On the factory tree's Health area: today's alarms the server closed. */
   closed_alarms?: ClosedAlarm[];
+  /** On the factory tree's Definition area: the page shows the levels (`GET …/levels`). */
+  levels?: boolean;
   acceptance?: { steps: AcceptanceStep[]; note?: string; run_at?: string };
   evidence?: {
     summary: string;

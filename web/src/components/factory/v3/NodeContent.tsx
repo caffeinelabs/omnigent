@@ -107,7 +107,7 @@ export function NodeContent({ page }: { page: NodePage }) {
   const node: NodeFull = page.node;
   // A root carries the base env as a fact for the top bar; an area shows it as its content.
   const env = page.breadcrumb.length > 0 ? node.env : undefined;
-  const levels = page.verbs.some((v) => v.verb === "rename");
+  const levels = Boolean(node.levels);
   const alarms = node.closed_alarms?.length ? node.closed_alarms : null;
   if (!node.acceptance?.steps.length && !node.evidence?.items.length && !env && !levels && !alarms)
     return null;

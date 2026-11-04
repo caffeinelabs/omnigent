@@ -202,6 +202,13 @@ describe("cockpit v3 · the Lineage lens", () => {
     expect(within(lineage).getByTestId("v3-lineage-results")).toHaveTextContent(
       "nothing merged yet",
     );
+    // An open change reads as people name it (its short sha), never as its ref.
+    const open = within(lineage).getByTestId("v3-lineage-open");
+    expect(open).toHaveTextContent(/^1 open: a097437$/);
+    expect(within(open).getByRole("link", { name: "a097437" })).toHaveAttribute(
+      "href",
+      "/factory/f-sample/n/commit%3Aa097437",
+    );
     // Each ancestor opens its own page; a count opens that level under this node.
     expect(within(rows[3]!).getByRole("link", { name: "assistant-core" })).toHaveAttribute(
       "href",

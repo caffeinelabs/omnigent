@@ -44,16 +44,30 @@ export type RenameDraft = Record<string, { name?: string; plural?: string }>;
 const WHAT_CHANGES =
   "Every page, the level strip, previews and agent prompts use the new names. Keys, refs, URLs and data stay the same.";
 
-/** The renames as `<level>.name` / `<level>.plural` arguments (the sample's verb reads these). */
+/**
+ * The plural a level's draft says: the typed one, else the new name's
+ * ("Outcome" → "Outcomes") while the plural was not typed itself. A name put
+ * back as it was brings no plural along (an irregular one stays).
+ */
+function draftPlural(d: { name?: string; plural?: string }, level: LevelInfo): string | undefined {
+  if (d.plural != null) return d.plural;
+  const name = d.name?.trim();
+  return name != null && name !== level.name ? `${name}s` : undefined;
+}
+
+/**
+ * The renames as `<level>.name` / `<level>.plural` arguments (the sample's
+ * verb reads these): only what differs from the level as it is named now.
+ */
 export function renameArgs(draft: RenameDraft, levels: LevelInfo[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const level of levels) {
     const d = draft[level.key];
     if (!d) continue;
-    if (d.name != null && d.name.trim() !== level.name) out[`${level.key}.name`] = d.name.trim();
-    if (d.plural != null && d.plural.trim() !== level.plural) {
-      out[`${level.key}.plural`] = d.plural.trim();
-    }
+    const name = d.name?.trim();
+    if (name != null && name !== level.name) out[`${level.key}.name`] = name;
+    const plural = draftPlural(d, level)?.trim();
+    if (plural != null && plural !== level.plural) out[`${level.key}.plural`] = plural;
   }
   return out;
 }
@@ -96,7 +110,7 @@ function RenameFields({
       {levels.map((level) => {
         const d = draft[level.key] ?? {};
         const name = d.name ?? level.name;
-        const plural = d.plural ?? (d.name != null ? `${d.name.trim()}s` : level.plural);
+        const plural = draftPlural(d, level) ?? level.plural;
         return (
           <div key={level.key} className="contents">
             <span className="font-mono text-xs text-foreground-tertiary max-md:col-span-2 max-md:mt-1">
@@ -125,18 +139,6 @@ function RenameFields({
   );
 }
 
-/** The draft with plurals that follow a typed name filled in (what is sent). */
-function withPlurals(draft: RenameDraft): RenameDraft {
-  const out: RenameDraft = {};
-  for (const [key, d] of Object.entries(draft)) {
-    out[key] = {
-      ...d,
-      ...(d.name != null && d.plural == null ? { plural: `${d.name.trim()}s` } : {}),
-    };
-  }
-  return out;
-}
-
 function productLevels(levels: { trees: Record<string, { levels: LevelInfo[] }> } | undefined) {
   return levels?.trees.product?.levels ?? [];
 }
@@ -146,7 +148,7 @@ function SourceRename({ page, verb, onClose }: PanelProps) {
   const info = useLevelsInfo();
   const levels = productLevels(info.data);
   const [draft, setDraft] = useState<RenameDraft>({});
-  const args = useMemo(() => renameArgs(withPlurals(draft), levels), [draft, levels]);
+  const args = useMemo(() => renameArgs(draft, levels), [draft, levels]);
   const changed = Object.keys(args).length > 0;
   const preview = useVerbPreview(page, verb.verb, args, { enabled: changed });
   const apply = useApplyVerb(page);
@@ -188,7 +190,7 @@ function LiveRename({ page, verb, onClose }: PanelProps) {
   const levels = productLevels(info.data);
   const version = info.data?.version ?? null;
   const [draft, setDraft] = useState<RenameDraft>({});
-  const args = useMemo(() => renameArgs(withPlurals(draft), levels), [draft, levels]);
+  const args = useMemo(() => renameArgs(draft, levels), [draft, levels]);
   const changes = useMemo(() => renameChanges(args), [args]);
   const body = useDebounced(
     JSON.stringify({ changes, base_version: version ?? undefined }),
@@ -198,7 +200,8 @@ function LiveRename({ page, verb, onClose }: PanelProps) {
   // Asked only once the typing paused on something to rename (never with no change).
   const asks = (JSON.parse(body) as { changes: DefinitionChange[] }).changes.length > 0;
   const preview = useQuery<DefinitionPreviewResponse>({
-    queryKey: ["factory-node", fid, "rename-preview", body],
+    // Outside the node keys: refreshing the pages after Apply never asks it again.
+    queryKey: ["factory-v3-rename-preview", fid, body],
     queryFn: () => previewFactoryDefinition(fid, JSON.parse(body)),
     enabled: Boolean(fid) && asks && changes.length > 0 && version != null,
     placeholderData: keepPreviousData,
@@ -232,8 +235,9 @@ function LiveRename({ page, verb, onClose }: PanelProps) {
         note: "Rename levels",
         ...(base != null ? { base_version: base } : {}),
       });
-      void refresh();
+      // Closed first: nothing of the panel reads again once the pages refresh.
       onClose();
+      void refresh();
       const made = out.def_version;
       const undo =
         made != null && base != null

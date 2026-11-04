@@ -120,6 +120,26 @@ def test_an_untouched_structure_is_not_stored() -> None:
     assert definition.stored_form(doc)["structure"]["levels"]["feature"]["name"] == "Outcome"
 
 
+def test_a_rename_stored_on_items_moves_to_the_areas() -> None:
+    # A structure stored while levels were renamed from every factory item (lists replace).
+    old = definition.default_doc()["structure"]
+    old["levels"]["feature"]["name"] = "Outcome"
+    old["verbs"].update(area=["talk"], item=["talk", "rename"])
+
+    verbs = definition.effective({"structure": old})["structure"]["verbs"]
+
+    assert (verbs["area"], verbs["item"]) == (["talk", "rename"], ["talk"])
+    assert definition.effective({"structure": old})["structure"]["levels"]["feature"]["name"] == (
+        "Outcome"
+    )
+    # Areas not stored keep their default (which renames); a structure without it stays.
+    assert blocks.upgrade({"structure": {"verbs": {"item": ["rename", "talk"]}}}) == {
+        "structure": {"verbs": {"item": ["talk"]}}
+    }
+    kept = {"structure": {"verbs": {"area": ["talk"], "item": ["talk"]}}}
+    assert blocks.upgrade(kept) == kept
+
+
 async def test_get_levels_returns_both_trees_with_defaults(cockpit: Cockpit) -> None:
     resp = await _levels(cockpit)
 

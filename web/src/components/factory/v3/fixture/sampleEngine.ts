@@ -1325,6 +1325,7 @@ export class SampleEngine {
       note: e.signin,
       follows: e.follows,
       ref: "env:base-env",
+      area: "fx:environments",
     };
   }
 
@@ -1385,6 +1386,7 @@ export class SampleEngine {
         ? { env: this.envOf() }
         : {}),
       ...(this.closedAlarms(n.id).length ? { closed_alarms: this.closedAlarms(n.id) } : {}),
+      ...(n.id === "fx:definition" ? { levels: true } : {}),
       ...(n.evidenceItems && n.evidence
         ? {
             evidence: {

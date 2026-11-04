@@ -139,7 +139,7 @@ export function TimelineLens({ view }: { view: TimelineView }) {
               <NodeLink
                 nodeRef={lane.ref}
                 roving
-                className="min-w-0 overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap text-foreground hover:text-status-blue-fg"
+                className="max-w-full min-w-0 overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap text-foreground hover:text-status-blue-fg"
               >
                 {lane.title}
               </NodeLink>

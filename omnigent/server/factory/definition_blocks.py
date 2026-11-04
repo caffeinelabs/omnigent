@@ -1193,10 +1193,30 @@ def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
     """
     :returns: *stored* with legacy blocks moved: an owner-set ``models.<kind>``
         becomes ``role_defaults.<kind>.model`` unless that is already set, the
-        stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery`` and
-        :data:`LEVEL_KEY` back into ``autonomy.level``.
+        stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery``,
+        :data:`LEVEL_KEY` back into ``autonomy.level`` and a stored
+        ``structure.verbs.item`` ``rename`` moves to ``structure.verbs.area``.
     """
-    return _upgrade_models(_lower_level(_lower_targets(stored)))
+    return _rename_on_areas(_upgrade_models(_lower_level(_lower_targets(stored))))
+
+
+def _rename_on_areas(stored: dict[str, Any]) -> dict[str, Any]:
+    """
+    Levels were renamed from every factory item; they are renamed from the
+    Definition area now. A structure block stored before keeps its verbs as a
+    whole (lists replace the defaults), so its ``rename`` moves to the areas.
+    """
+    structure = stored.get("structure")
+    verbs = structure.get("verbs") if isinstance(structure, Mapping) else None
+    item = verbs.get("item") if isinstance(verbs, Mapping) else None
+    if not isinstance(item, list) or "rename" not in item:
+        return stored
+    assert isinstance(structure, Mapping) and isinstance(verbs, Mapping)
+    moved: dict[str, Any] = {**verbs, "item": [v for v in item if v != "rename"]}
+    area = verbs.get("area")
+    if isinstance(area, list) and "rename" not in area:
+        moved["area"] = [*area, "rename"]
+    return {**stored, "structure": {**structure, "verbs": moved}}
 
 
 def _lower_level(stored: dict[str, Any]) -> dict[str, Any]:

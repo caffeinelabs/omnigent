@@ -20,7 +20,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.server.auth import LEVEL_READ
-from omnigent.server.factory import events, initiatives, nodes, snapshot
+from omnigent.server.factory import events, initiatives, node_lenses, nodes, snapshot
 from omnigent.server.factory.node_views import (
     FindView,
     LineageView,
@@ -478,6 +478,29 @@ async def test_the_lenses_of_a_planned_ask(cockpit: Cockpit) -> None:
     assert _epoch(axis[1]) - _epoch(axis[0]) <= 24 * 3600
     assert (missing.status_code, error_code(missing)) == (404, "unknown_node")
     assert stranger.status_code == 404
+
+
+async def test_timelines_of_one_projection_read_the_spans_once(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _plan(cockpit)
+    read = node_lenses.timeline_spans
+    calls: list[tuple[Any, ...]] = []
+
+    def counted(*args: Any) -> Any:
+        calls.append(args)
+        return read(*args)
+
+    monkeypatch.setattr(node_lenses, "timeline_spans", counted)
+    # Each page asks whether it has lanes: navigating (and coming back) reads the store once.
+    for ref in ("I-1", "product", "I-1", "core"):
+        resp = await _read(cockpit, f"n/{ref}/timeline")
+        assert resp.status_code == 200, resp.text
+    assert len(calls) == 1
+    # A write drops the projection, and the spans with it.
+    nodes.invalidate(cockpit.fid)
+    assert (await _read(cockpit, "n/I-1/timeline")).status_code == 200
+    assert len(calls) == 2
 
 
 def _epoch(iso: str) -> int:

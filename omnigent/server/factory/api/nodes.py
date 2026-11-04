@@ -195,7 +195,7 @@ async def get_timeline(
     if end is None and start is not None and not 0 < stop - begin <= node_lenses.TIMELINE_MAX_S:
         return _error(400, "bad_window", "from must be in the last 7 days")
     spans = await asyncio.to_thread(
-        node_lenses.timeline_spans, ctx.deps.factory_store, ctx.root.id, begin, stop
+        node_lenses.projection_spans, tree, ctx.deps.factory_store, ctx.root.id, begin, stop
     )
     look = await asyncio.to_thread(_last_look, ctx, tree, node, _reader(ctx.user_id))
     view = node_lenses.timeline(tree, ref, spans, start=start, end=end, last_look=look)

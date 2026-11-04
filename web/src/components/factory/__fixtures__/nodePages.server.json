@@ -3684,6 +3684,7 @@
       "kind_name": "Area",
       "level": "area",
       "level_name": "Area",
+      "levels": true,
       "needs": {
         "blocking": 0,
         "open": 0
@@ -3799,6 +3800,7 @@
       "env": {
         "api_url": "https://api.sample.test",
         "app_url": "https://app.sample.test",
+        "area": "fx:environments",
         "branch": "sample-main",
         "deployed_at": "2026-11-03T13:27:00Z",
         "name": "Base env",
@@ -4758,6 +4760,7 @@
       "env": {
         "api_url": "https://api.sample.test",
         "app_url": "https://app.sample.test",
+        "area": "fx:environments",
         "branch": "sample-main",
         "deployed_at": "2026-11-03T13:27:00Z",
         "name": "Base env",

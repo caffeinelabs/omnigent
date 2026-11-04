@@ -172,6 +172,49 @@ describe("cockpit v3 · Rename levels", () => {
       { op: "replace", path: "structure.levels.feature.name", value: "Outcome" },
       { op: "replace", path: "structure.levels.feature.plural", value: "Outcomes" },
     ]);
+    // A typed name brings its plural along; a name put back as it was brings
+    // nothing (an irregular plural is never rewritten as name + "s").
+    const irregular = levels.map((l) =>
+      l.key === "feature" ? { ...l, name: "Opportunity", plural: "Opportunities" } : l,
+    );
+    expect(renameArgs({ feature: { name: "Opportunity " } }, irregular)).toEqual({});
+    expect(renameArgs({ feature: { name: "Outcome" } }, irregular)).toEqual({
+      "feature.name": "Outcome",
+      "feature.plural": "Outcomes",
+    });
+  });
+
+  it("a name typed back as it was keeps its irregular plural in the field", async () => {
+    const definition = sampleEngine().node("fx:definition")!;
+    const product = LEVELS.trees.product!;
+    const levels: LevelsInfo = {
+      ...LEVELS,
+      trees: {
+        ...LEVELS.trees,
+        product: {
+          ...product,
+          levels: product.levels.map((l) =>
+            l.key === "feature" ? { ...l, name: "Opportunity", plural: "Opportunities" } : l,
+          ),
+        },
+      },
+    };
+    const source: NodeSource = {
+      kind: "live",
+      node: async () => definition,
+      level: async () => null,
+      answer: async () => undefined,
+      levels: async () => levels,
+    };
+    authenticatedFetch.mockImplementation(async () => new Response("{}", { status: 404 }));
+    await page("fx:definition", { source, query: "?verb=rename" });
+    const panel = await screen.findByTestId("v3-preview");
+    const name = within(panel).getByLabelText("Opportunity level: name");
+    fireEvent.change(name, { target: { value: "Opportunit" } });
+    expect(within(panel).getByLabelText("Opportunity level: plural")).toHaveValue("Opportunits");
+    fireEvent.change(name, { target: { value: "Opportunity" } });
+    expect(within(panel).getByLabelText("Opportunity level: plural")).toHaveValue("Opportunities");
+    expect(within(panel).getByTestId("v3-preview-apply")).toBeDisabled();
   });
 
   it("on a live factory: the definition's preview, then PUT on the version read", async () => {

@@ -436,9 +436,9 @@ function BaseEnvSheet({ factoryId, open, onClose }: SheetProps) {
               </OutLink>
             )}
             {env.api_url && <OutLink href={env.api_url}>API</OutLink>}
-            {env.ref && (
+            {env.area && (
               <NodeLink
-                nodeRef={env.ref}
+                nodeRef={env.area}
                 className={cn(ACT, "border-dashed border-border-strong font-medium")}
               >
                 Factory › Environments

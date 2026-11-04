@@ -214,6 +214,9 @@ class BaseEnvView(_View):
     api_url: str | None = None
     note: str | None = None
     ref: str | None = None
+    """The project that sets the base env up."""
+    area: str | None = None
+    """The factory area that shows it (``fx:environments``)."""
 
 
 class ClosedAlarmView(_View):
@@ -234,6 +237,8 @@ class NodeFullView(NodeSummaryView):
     evidence: EvidenceView | None = None
     env: BaseEnvView | None = None
     closed_alarms: list[ClosedAlarmView] | None = None
+    levels: bool | None = None
+    """``fx:definition`` only: the page shows the levels (``GET …/levels``)."""
 
 
 class CrumbView(_View):

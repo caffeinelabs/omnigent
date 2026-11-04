@@ -193,6 +193,27 @@ describe("cockpit v3 · the server's node pages", () => {
     expect(screen.getByRole("button", { name: /Rename levels/ })).toBeInTheDocument();
   });
 
+  it("Definition shows the levels because the server says so, with or without Rename levels", async () => {
+    serve();
+    const served = authenticatedFetch.getMockImplementation()!;
+    const page = PAGES["fx:definition"]!;
+    expect(page.node.levels).toBe(true);
+    // A definition that offers no rename (its verbs set so) still names its levels here.
+    authenticatedFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (!decodeURIComponent(new URL(url, "http://x").pathname).endsWith("/n/fx:definition")) {
+        return served(url, init);
+      }
+      const verbs = page.verbs.filter((v) => v.verb !== "rename");
+      return new Response(JSON.stringify({ ...page, verbs }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    renderNode("fx:definition", { source: liveNodeSource });
+    expect(await screen.findByTestId("v3-levels-block")).toHaveTextContent("definition version 14");
+    expect(screen.queryByRole("button", { name: /Rename levels/ })).toBeNull();
+  });
+
   it("the product page shows the server's strip and results", async () => {
     serve();
     renderNode("product", { source: liveNodeSource });

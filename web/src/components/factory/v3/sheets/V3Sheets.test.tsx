@@ -194,6 +194,14 @@ describe("cockpit v3 · sheets", () => {
     expect(where).toBe("");
   });
 
+  it("the base env sheet opens Factory › Environments, where the base env shows", async () => {
+    const view = renderNode("product", { query: "?peek=env" });
+    const env = await sheet("v3-env-sheet");
+    await userEvent.click(within(env).getByRole("link", { name: "Factory › Environments" }));
+    await waitFor(() => expect(view.path()).toBe("/factory/f-sample/n/fx%3Aenvironments"));
+    expect(await screen.findByTestId("v3-base-env")).toHaveTextContent("Base env · sample-main");
+  });
+
   it("the base env names what it runs, its health and how to sign in", async () => {
     renderNode("product", { query: "?peek=env" });
     const env = await sheet("v3-env-sheet");

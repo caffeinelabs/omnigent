@@ -54,7 +54,8 @@ export function TimelineBody({
 
 /** Where a node came from, folded into one line on a page with nothing below it. */
 export function LineageFold({ page, onOpen }: { page: NodePage; onOpen: () => void }) {
-  const need = page.breadcrumb.find((c) => c.level === "need") ?? page.breadcrumb[1];
+  // The first ancestor below the root, whatever its level is called.
+  const first = page.breadcrumb[1];
   return (
     <button
       type="button"
@@ -64,7 +65,8 @@ export function LineageFold({ page, onOpen }: { page: NodePage; onOpen: () => vo
     >
       <b className="font-semibold text-foreground">Lineage</b>
       <span className="min-w-0">
-        where {page.node.title} came from{need ? `, up to ${need.title}` : ""}, and where it landed
+        where {page.node.title} came from{first ? `, up to ${first.title}` : ""}, and where it
+        landed
       </span>
       <span className="flex-1" />
       <span className="text-foreground-tertiary">show</span>

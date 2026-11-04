@@ -48,6 +48,8 @@ export function useTimeline(ref: string, enabled = true, factoryId?: string) {
     queryFn: ({ signal }) => source!.timeline!(fid, ref, signal),
     enabled: Boolean(enabled && source?.timeline && fid && ref),
     staleTime: LENS_STALE_MS,
+    // Every page reads it to decide whether Timeline is offered: never again on a refocus.
+    refetchOnWindowFocus: false,
     retry: false,
   });
 }

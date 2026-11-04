@@ -17,6 +17,13 @@ const KEY =
   "pt-0.5 text-[10.5px] font-medium tracking-[0.07em] uppercase text-foreground-tertiary [overflow-wrap:anywhere]";
 const SUB = "text-[12.8px] leading-[1.5] text-muted-foreground";
 
+/** A change as people name it: `a097437` for a local commit, `#9876` for a PR. */
+export function changeLabel(ref: string): string {
+  if (ref.startsWith("commit:")) return ref.slice("commit:".length).slice(0, 7);
+  const pr = /^PR-(\d+)$/i.exec(ref);
+  return pr ? `#${pr[1]}` : ref;
+}
+
 function linkWords(link: LineageLink): ReactNode {
   return (
     <span>
@@ -163,8 +170,16 @@ export function LineageLens({ view }: { view: LineageView }) {
             <span className="text-foreground-tertiary">{readoutWords(results)}</span>
           </span>
           {results.open.length > 0 && (
-            <span className={SUB}>
-              {results.open.length} open: {results.open.join(", ")}
+            <span className={SUB} data-testid="v3-lineage-open">
+              {results.open.length} open:{" "}
+              {results.open.map((ref, i) => (
+                <span key={ref}>
+                  {i > 0 && ", "}
+                  <NodeLink nodeRef={ref} className="text-foreground hover:text-status-blue-fg">
+                    {changeLabel(ref)}
+                  </NodeLink>
+                </span>
+              ))}
             </span>
           )}
         </Row>

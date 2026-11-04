@@ -1511,6 +1511,10 @@ class Tree:
             self._memo[key] = make()
         return self._memo[key]
 
+    def memo(self, kind: str, key: str, make: Callable[[], Any]) -> Any:
+        """*make*'s value, made once while this projection is reused (a read beside it)."""
+        return self._cached(kind, key, make)
+
     def pr_refs_by_id(self) -> dict[str, str]:
         """:returns: PR row id (bare hex) -> its change's ref, for the PRs that are changes."""
         return dict(self._pr_ref)
@@ -2738,6 +2742,9 @@ class Tree:
             out["env"] = env
         if node.ref == _HEALTH and self.closed_alarms:
             out["closed_alarms"] = [a.to_json() for a in self.closed_alarms]
+        if node.ref == _DEFINITION:
+            # The levels every view names (GET …/levels), whether or not this viewer renames them.
+            out["levels"] = True
         return out
 
     def _smoke(self) -> dict[str, Any] | None:
@@ -2781,6 +2788,8 @@ class Tree:
             out["note"] = _clip(env["note"], _SHORT_MAX)
         if base.get("env_project") and _project_ref(base["env_project"]) in self.nodes:
             out["ref"] = _project_ref(base["env_project"])
+        # Where the factory shows it (``ref`` is the project that sets it up).
+        out["area"] = _ENVIRONMENTS
         return out
 
     def child_page(self, node: _N, offset: int = 0) -> dict[str, Any]:
