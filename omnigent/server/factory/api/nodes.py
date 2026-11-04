@@ -48,15 +48,17 @@ from fastapi.responses import JSONResponse
 
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import (
+    chat_feed,
     last_look,
     node_lenses,
     node_sheets,
     node_views,
     nodes,
     people,
+    your_move,
 )
 from omnigent.server.factory.api.agents import FleetContext, fleet_context
-from omnigent.server.factory.api.chat import UNREAD_CAP, _reader
+from omnigent.server.factory.api.chat import _reader
 from omnigent.server.factory.origin import HUMAN_ORIGIN, runner_origin_reason
 
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
@@ -87,16 +89,30 @@ async def get_node(
     tree = await _tree(request, ctx)
     level = await asyncio.to_thread(people.viewer_level, ctx.deps, ctx.root.id, ctx.user_id)
     try:
-        page = tree.page(ref, cursor=children_page, can_edit=level >= LEVEL_EDIT)
+        page = tree.page(
+            ref,
+            cursor=children_page,
+            can_edit=level >= LEVEL_EDIT,
+            viewer=your_move.Viewer(ctx.user_id, level),
+        )
     except ValueError as exc:
         return _error(400, "bad_cursor", str(exc))
     if page is None:
         return _error(404, "unknown_node", f"no node {ref!r} in this factory")
     node = tree.nodes[page["node"]["ref"]]
     reader = _reader(ctx.user_id)
-    page["thread"]["unread"] = await asyncio.to_thread(
-        _thread_unread, ctx.deps, ctx.root.id, page["thread"]["key"], ctx.user_id
+    _last, unread, activity = await asyncio.to_thread(
+        chat_feed.since,
+        ctx.deps,
+        ctx.root.id,
+        page["thread"]["key"],
+        reader,
+        your_move.Viewer(ctx.user_id, level),
     )
+    # The chat is a conversation: what the system did since is one "Activity · n" line.
+    page["thread"]["unread"] = unread
+    if activity:
+        page["thread"]["activity"] = activity
     await asyncio.to_thread(_since, ctx, tree, node, page, reader)
     if seen and runner_origin_reason(request) is None:
         await asyncio.to_thread(
@@ -280,13 +296,3 @@ def _since(
         return
     events = last_look.read_events(ctx.deps.factory_store, ctx.root.id, seen_at)
     last_look.annotate(tree, page, events, seen_at)
-
-
-def _thread_unread(deps: Any, factory_id: str, thread: str, user_id: str | None) -> int:
-    """This viewer's unread messages in the node's one thread (others' messages, capped)."""
-    store = deps.factory_store
-    reader = _reader(user_id)
-    marks = store.list_chat_reads(factory_id, reader)
-    last = next((r.last_seq for r in marks if r.thread == thread), 0)
-    rows = store.list_chat(factory_id, thread, after_seq=last, limit=UNREAD_CAP + 1)
-    return min(UNREAD_CAP, sum(1 for r in rows if r.author != user_id))

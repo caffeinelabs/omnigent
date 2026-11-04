@@ -1080,6 +1080,51 @@ A proposal's decision is stored as blocking nothing; the projection counts
 it as holding work while the proposal adds a project or a rule, or changes
 a project that is still active, so "needs you" follows what really waits.
 
+**Calm pages** (cockpit v3). A node page opens with what the viewer must do
+and shows every node under a short name; the chat is a conversation.
+
+- *Short names* (`node_names.py`, `factory_node_names`). Every node of the
+  product tree shows a `title` of two to six words. A person's raw ask, a
+  machine label (`From C-11: create … · create …`, pieces joined with ` · `)
+  or a title longer than six words shows its first words at once (`named:
+  "words"`) and the factory names it in the background with the server's
+  cheap title path: the runner bound to the factory's root session runs the
+  economy title model (the one that names new sessions), a few nodes at a time,
+  higher levels first (`named: "factory"`). The full text stays in
+  `full_title` (Details). A name is made again only when the text it was made
+  from changes (`source_hash`); a runner that cannot answer three times in a
+  row makes the factory wait ten minutes. A person renames a node with the
+  `name` verb (`args.title`, 1–6 words, labelled "Rename" on a stored node;
+  an implicit feature or need is still made a stored node by it), with Undo,
+  and the factory never renames what a person named (`named: "person"`).
+  The factory tree keeps its own words.
+- *Your move* (`your_move.py`): `your_move: {items, more}` on every node page,
+  at most three asks this viewer answers (a decision assigned to them or a
+  role they hold; merges for editors): the asks in the node's subtree and the
+  ones its blocker path and its children's end at, ranked like Needs you
+  (held work first, then the oldest; asks that block nothing last). Each item
+  is `{id, ref, verb, object, action: {label, option?, url?}, unblocks?,
+  unblocks_ref?, unblocks_refs?, about?, decision, weight}`: "Apply C-16 ·
+  unblocks Agent assistant · [Apply]", where `unblocks` names, by short name,
+  the children (at a root, the home level's nodes) that hold the work the ask
+  holds, and `action` is the recommended or applying answer, the merge link,
+  or "Answer" (open the ask). Every other place the page carries one of these
+  asks (the status line, a child's line, a segment) is marked `in_your_move`,
+  so the cockpit asks once. An empty `items` reads "Nothing needs you".
+- *Conversation and activity* (`chat_feed.py`). `GET …/chat?thread=&feed=
+  conversation` reads only what people and agents said plus the live cards
+  this reader acts on (an open ask they answer, a ready PR to merge, an offer,
+  a `why`, a verb they can still undo); `feed=activity` reads the rest (base
+  moves, spawns, incidents, loops, controls, closed alarms, and decisions or
+  proposals that are answered, applied, closed or someone else's), each with
+  `activity: {kind, closed}`; `feed=all` reads every row with its `lane`. Each
+  page carries `limit` rows of its feed (reading past the other feed, at most
+  1000 rows a call), `before_seq` / `after_seq` to read on, `unread`
+  (conversation from others) and `activity_since` after the reader's read
+  mark (capped at 99). Resolved incidents and closed or applied proposals are
+  never conversation. The node page's `thread.unread` counts only the
+  conversation and `thread.activity` the activity since the read mark.
+
 **Status lines** (`node_status.py`) say in one line why a node is or isn't
 moving, ending at the person who must act. The blocker path reads the
 node's own waits first (`waits.py`: the snapshot's `waiting_on` for a

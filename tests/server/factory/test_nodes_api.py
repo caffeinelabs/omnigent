@@ -129,7 +129,10 @@ async def test_the_pages_of_a_planned_ask(cockpit: Cockpit) -> None:
     seeded = await _page(cockpit, "api-version")
 
     ask = next(i for i in product["children"]["items"] if i["kind"] == "ask")
-    assert ask["ref"] == f"ask:{message}" and ask["title"] == ASK
+    # A person's ask shows under a short name (its first words until the factory names
+    # it); its full text stays in its details.
+    assert ask["ref"] == f"ask:{message}" and ask["full_title"] == ASK
+    assert (ask["title"], ask["named"]) == ("Build an in-app helper (sample)", "words")
     assert [c["ref"] for c in feature["breadcrumb"]] == ["product", ask["ref"]]
     assert [i["ref"] for i in feature["children"]["items"]] == ["core", "panel"]
     assert feature["node"]["acceptance"]["steps"][0]["result"] == "none"

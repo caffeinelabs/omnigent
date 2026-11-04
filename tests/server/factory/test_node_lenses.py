@@ -79,9 +79,9 @@ def test_tasks_under_the_product_are_grouped_by_project(tree: Tree) -> None:
     assert groups["assistant-core"] == ["T-16", "T-15"]
     assert groups["connectors-core"] == ["T-17"]
     assert view["groups"][0]["parent"]["ref"] == "assistant-core"
+    # The person's ask is a section title by its short name (its words stay in its details).
     assert view["groups"][0]["parent"]["ancestors"] == [
-        "I want an assistant in the app that helps with building, and later with "
-        "discovery and sales too.",
+        "An assistant in the app",
         "Agent assistant (sample)",
     ]
     assert view["parent_level_name"] == "projects" and view["tiles"] is False

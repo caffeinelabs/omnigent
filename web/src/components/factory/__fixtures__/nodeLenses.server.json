@@ -15,7 +15,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -53,7 +53,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -246,10 +246,10 @@
       "item": ["talk"],
       "need": ["talk", "add", "research", "name"],
       "product": ["talk", "add"],
-      "project": ["talk", "add", "start", "team", "auto", "pause", "move"],
+      "project": ["talk", "add", "start", "team", "auto", "pause", "move", "name"],
       "run": [],
       "study": ["talk", "research"],
-      "task": ["talk", "pause", "move"]
+      "task": ["talk", "pause", "move", "name"]
     },
     "version": 14
   },
@@ -411,7 +411,7 @@
         },
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       }
     ],
     "below": [
@@ -719,7 +719,7 @@
         },
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "level": "feature",
@@ -1120,7 +1120,7 @@
         "cost": 51.13,
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
         "state": "needs",
-        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        "title": "An assistant in the app"
       },
       {
         "cost": 38.4,
@@ -1132,7 +1132,7 @@
         "cost": 27.6,
         "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
         "state": "done",
-        "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+        "title": "Your shortlist pick"
       }
     ],
     "scope": "product",
@@ -1301,7 +1301,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1360,7 +1360,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1443,7 +1443,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",
@@ -1504,7 +1504,7 @@
             "level_name": "Need",
             "ref": "need:from-C-12",
             "state": "waiting",
-            "title": "From C-12"
+            "title": "Third round of build-tier drafts"
           },
           {
             "folded": true,
@@ -1513,7 +1513,7 @@
             "level_name": "Feature",
             "ref": "feature:from-C-12",
             "state": "waiting",
-            "title": "From C-12: Third round of build-tier drafts"
+            "title": "Third round of build-tier drafts"
           },
           {
             "level": "project",
@@ -1556,7 +1556,7 @@
             "level_name": "Need",
             "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
             "state": "needs",
-            "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+            "title": "An assistant in the app"
           },
           {
             "level": "feature",

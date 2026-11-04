@@ -235,6 +235,7 @@ class Paths:
     _busy: set[str] = field(default_factory=set)
     _weights: dict[str, float] | None = None
     _held: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    _held_refs: dict[str, tuple[str, ...]] = field(default_factory=dict)
     _asks: dict[str, Ask] = field(default_factory=dict)
     _groups: dict[tuple[str, str], list[FactoryPr]] | None = None
 
@@ -583,10 +584,17 @@ class Paths:
             self._weights = self._held_weights()
         return list(self._held.get(ask.id, ()))
 
+    def held_refs(self, ask: Ask) -> list[str]:
+        """:returns: What *ask* holds, by ref, in the order of :meth:`holds`."""
+        if self._weights is None:
+            self._weights = self._held_weights()
+        return list(self._held_refs.get(ask.id, ()))
+
     def _held_weights(self) -> dict[str, float]:
         t = self.tree
         out: dict[str, float] = {}
         names: dict[str, dict[str, None]] = {}
+        held: dict[str, dict[str, None]] = {}
         holders: dict[str, set[str]] = {}
         for node in t.nodes.values():
             if node.level != "task" or node.history or node.ghost or t.state(node.ref) == "done":
@@ -596,6 +604,7 @@ class Paths:
                 continue
             out[ask.id] = out.get(ask.id, 0.0) + t.task_weight(node)
             names.setdefault(ask.id, {})[self.name(node.ref)] = None
+            held.setdefault(ask.id, {})[node.ref] = None
             project = t.nodes.get(node.parent or "")
             if project is not None:
                 holders.setdefault(ask.id, set()).add(project.ref)
@@ -609,7 +618,9 @@ class Paths:
             )
             for dependent in dependents.values():
                 names.setdefault(ask_id, {})[self.name(dependent.ref)] = None
+                held.setdefault(ask_id, {})[dependent.ref] = None
         self._held = {ask_id: tuple(found) for ask_id, found in names.items()}
+        self._held_refs = {ask_id: tuple(found) for ask_id, found in held.items()}
         return out
 
     def _first_ask(self, task: _N) -> Ask | None:

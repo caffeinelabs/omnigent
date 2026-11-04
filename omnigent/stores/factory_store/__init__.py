@@ -71,6 +71,7 @@ from omnigent.entities.factory import (
     FactoryFeedback,
     FactoryIssue,
     FactoryLoop,
+    FactoryNodeName,
     FactoryNodeRead,
     FactoryPerson,
     FactoryPr,
@@ -1191,6 +1192,46 @@ class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
         :returns: The person's last looks in the factory, by node ref.
         """
 
+    # ── Short names of nodes (cockpit v3) ───────────────────────
+
+    @abstractmethod
+    def list_node_names(self, factory_id: str) -> builtins.list[FactoryNodeName]:
+        """
+        Consumer: the level projection (every node shows its short name).
+
+        :returns: The factory's stored short names, by node ref.
+        """
+
+    @abstractmethod
+    def set_node_name(
+        self,
+        factory_id: str,
+        node_ref: str,
+        name: str,
+        *,
+        source_hash: str,
+        named_by: str | None = None,
+    ) -> FactoryNodeName:
+        """
+        Store a node's short name.
+
+        Consumers: the factory's namer (``named_by=None``) and a person's
+        "name it" verb.
+
+        :param source_hash: Digest of the full text the name was made from.
+        :param named_by: The person naming it; ``None``: the factory. The
+            factory never replaces a name a person gave: it gets that row back.
+        :returns: The stored row.
+        """
+
+    @abstractmethod
+    def delete_node_name(self, factory_id: str, node_ref: str) -> bool:
+        """
+        Forget a node's short name (the Undo of a person's first naming).
+
+        :returns: Whether a row was removed.
+        """
+
     # ── Proposals (R3-07, R3-12) ────────────────────────────────
 
     @abstractmethod
@@ -1791,6 +1832,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
         self._chat: dict[tuple[int, str], FactoryChatMessage] = {}
         self._chat_reads: dict[tuple[int, str, str, str], FactoryChatRead] = {}
         self._node_reads: dict[tuple[int, str, str, str], FactoryNodeRead] = {}
+        self._node_names: dict[tuple[int, str, str], FactoryNodeName] = {}
         self._proposals: dict[tuple[int, str], FactoryProposal] = {}
         self._tasks: dict[tuple[int, str], FactoryTask] = {}
         self._loops: dict[tuple[int, str], FactoryLoop] = {}
@@ -2523,6 +2565,45 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
                 and (wanted is None or r.node_ref in wanted)
             ]
         return sorted(rows, key=lambda r: r.node_ref)
+
+    # ── Short names of nodes ────────────────────────────────────
+
+    def list_node_names(self, factory_id: str) -> builtins.list[FactoryNodeName]:
+        fid = norm_id(factory_id)
+        with self._lock:
+            rows = [r for r in self._rows(self._node_names) if r.factory_id == fid]
+        return sorted(rows, key=lambda r: r.node_ref)
+
+    def set_node_name(
+        self,
+        factory_id: str,
+        node_ref: str,
+        name: str,
+        *,
+        source_hash: str,
+        named_by: str | None = None,
+    ) -> FactoryNodeName:
+        key = (self._ws(), norm_id(factory_id), node_ref)
+        with self._lock:
+            current = self._node_names.get(key)
+            if named_by is None and current is not None and current.named_by is not None:
+                return current
+            row = FactoryNodeName(
+                factory_id=key[1],
+                node_ref=node_ref,
+                name=name,
+                source_hash=source_hash,
+                named_by=named_by,
+                updated_at=now_s(),
+                workspace_id=key[0],
+            )
+            self._node_names[key] = row
+            return row
+
+    def delete_node_name(self, factory_id: str, node_ref: str) -> bool:
+        key = (self._ws(), norm_id(factory_id), node_ref)
+        with self._lock:
+            return self._node_names.pop(key, None) is not None
 
     # ── Proposals ───────────────────────────────────────────────
 

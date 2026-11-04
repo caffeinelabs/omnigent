@@ -491,7 +491,8 @@
         "team",
         "auto",
         "pause",
-        "move"
+        "move",
+        "name"
       ],
       "run": [],
       "study": [
@@ -501,7 +502,8 @@
       "task": [
         "talk",
         "pause",
-        "move"
+        "move",
+        "name"
       ]
     }
   },

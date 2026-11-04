@@ -121,10 +121,7 @@
           }
         ],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
-            "Agent assistant (sample)"
-          ],
+          "ancestors": ["An assistant in the app", "Agent assistant (sample)"],
           "level": "project",
           "level_name": "Project",
           "ref": "assistant-core",
@@ -160,10 +157,7 @@
           }
         ],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
-            "Agent assistant (sample)"
-          ],
+          "ancestors": ["An assistant in the app", "Agent assistant (sample)"],
           "level": "project",
           "level_name": "Project",
           "ref": "connectors-core",
@@ -199,10 +193,7 @@
           }
         ],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too.",
-            "Agent assistant (sample)"
-          ],
+          "ancestors": ["An assistant in the app", "Agent assistant (sample)"],
           "level": "project",
           "level_name": "Project",
           "ref": "skill-discovery",
@@ -341,7 +332,7 @@
           "level_name": "Need",
           "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
           "state": "needs",
-          "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+          "title": "An assistant in the app"
         }
       },
       {
@@ -431,7 +422,7 @@
           "level_name": "Need",
           "ref": "need:from-C-12",
           "state": "waiting",
-          "title": "From C-12"
+          "title": "Third round of build-tier drafts"
         }
       },
       {
@@ -439,6 +430,7 @@
         "items": [
           {
             "cost": 27.6,
+            "full_title": "From C-13: Shortlist fixes",
             "glyph": "C",
             "grandchildren": {
               "by_state": {
@@ -454,6 +446,7 @@
             "kind_name": "From a proposal",
             "level": "feature",
             "level_name": "Feature",
+            "named": "words",
             "needs": {
               "blocking": 0,
               "open": 0
@@ -476,7 +469,7 @@
               "label": "Done",
               "segments": []
             },
-            "title": "From C-13: Shortlist fixes"
+            "title": "Shortlist fixes"
           }
         ],
         "parent": {
@@ -486,7 +479,7 @@
           "level_name": "Need",
           "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
           "state": "done",
-          "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+          "title": "Your shortlist pick"
         }
       }
     ],
@@ -751,9 +744,7 @@
         ],
         "later": ["ads-integration", "growth-seo", "sales-skill", "promotion-skill"],
         "parent": {
-          "ancestors": [
-            "I want an assistant in the app that helps with building, and later with discovery and sales too."
-          ],
+          "ancestors": ["An assistant in the app"],
           "level": "feature",
           "level_name": "Feature",
           "ref": "I-1",
@@ -848,7 +839,7 @@
           "level_name": "Feature",
           "ref": "feature:from-C-12",
           "state": "waiting",
-          "title": "From C-12: Third round of build-tier drafts"
+          "title": "Third round of build-tier drafts"
         }
       },
       {
@@ -1000,13 +991,13 @@
           }
         ],
         "parent": {
-          "ancestors": ["Your shortlist pick: env badge copy, / to chat, status page, request id."],
+          "ancestors": ["Your shortlist pick"],
           "implicit": true,
           "level": "feature",
           "level_name": "Feature",
           "ref": "feature:from-C-13",
           "state": "done",
-          "title": "From C-13: Shortlist fixes"
+          "title": "Shortlist fixes"
         }
       }
     ],

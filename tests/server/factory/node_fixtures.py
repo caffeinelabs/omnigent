@@ -28,6 +28,7 @@ day, with neutral names (the web's v3 sample tells the same story):
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -645,6 +646,98 @@ def factory_1340() -> NodeFacts:
             closed_alarms=closed_alarms(),
         )
     )
+
+
+LIVE_ASK: Final = (
+    "i want to build a chat agent like feature. those agents can not only help with "
+    "building, but also discovery, sales etc. for stuff like sales, promotions we might "
+    "also need some integrations such as an ads network. you need to scope these as "
+    "projects appropriately, and build on the idea"
+)
+"""The person's ask at 05:55, as typed (lower case, run on)."""
+DRAFTS_MESSAGE: Final = "a" * 31 + "3"
+DRAFTS_ASK: Final = (
+    "@Atlas build-tier-drafts-2 hit the same 300 s sandbox launch timeout: the cluster "
+    "was full again, so it waited for a new slot. Can you start a third round?"
+)
+SHORTLIST_ASK: Final = (
+    "@Atlas thanks. Please start 2, 3, 4 and 6 as four projects on "
+    "sample-org/sample-app#sample-main (previews + demos on, as you do)"
+)
+FOLLOW_UP_OPTIONS: Final = (
+    {"id": "follow-up", "label": "Follow-up project now", "recommended": True},
+    {"id": "park", "label": "Park it"},
+    {"id": "revert", "label": "Revert #9881"},
+)
+
+
+def factory_live() -> NodeFacts:
+    """
+    :returns: The sample factory as the live cockpit showed it: no initiative
+        was stored, so C-11's four projects sit under the implicit feature
+        "From C-11: create … · create …" below the person's raw ask; the drafts
+        project is titled "Build-tier drafts render (main) · v3" under another
+        raw ask; and D-49 is Atlas's own question on the product (start a
+        follow-up for live search?), not a proposal.
+    """
+    facts = factory_1340()
+    wave_1 = " · ".join(f"create {slug}" for slug in WAVE_1)
+    shortlist = " · ".join(f"create {slug}" for slug in SHORTLIST)
+    titles = {
+        "assistant-core": "Assistant core: sessions, tool registry, flagged chat API",
+        "build-tier-drafts-3": "Build-tier drafts render (main) · v3",
+    }
+    projects = [
+        dataclasses.replace(
+            p,
+            title=titles.get(p.slug, p.title),
+            charter={k: v for k, v in p.charter.items() if k != "initiative"},
+        )
+        for p in facts.projects
+    ]
+    proposals = []
+    for row in facts.proposals:
+        if row.number == 19:
+            continue
+        if row.number == 11:
+            row = dataclasses.replace(row, title=wave_1)
+        elif row.number == 12:
+            row = dataclasses.replace(
+                row,
+                title="create build-tier-drafts-3",
+                reply_to_chat=DRAFTS_MESSAGE,
+                on_behalf_of="ana",
+            )
+        elif row.number == 13:
+            row = dataclasses.replace(row, title=shortlist)
+        proposals.append(row)
+    question = FactoryDecision(
+        id=hex_id(549),
+        factory_id=FID,
+        number=49,
+        question="Discovery is on the base env but live search does not work. "
+        "Start a follow-up project to fix it?",
+        source="agent",
+        blocking=True,
+        options=[dict(o) for o in FOLLOW_UP_OPTIONS],
+        assignee="owners",
+        created_at=AT_1303 + 120,
+        updated_at=AT_1303 + 120,
+    )
+    decisions = [d for d in facts.decisions if d.number != 49] + [question]
+    facts = dataclasses.replace(
+        facts,
+        initiatives=[],
+        projects=projects,
+        proposals=proposals,
+        decisions=decisions,
+        asks={
+            ASK_MESSAGE: (LIVE_ASK, "ana"),
+            DRAFTS_MESSAGE: (DRAFTS_ASK, "ana"),
+            SHORTLIST_MESSAGE: (SHORTLIST_ASK, "ana"),
+        },
+    )
+    return snapshot_waits(facts)
 
 
 def snapshot_waits(facts: NodeFacts) -> NodeFacts:

@@ -176,7 +176,13 @@ def _by_title(tree: Tree, q: str) -> list[tuple[int, int, str, _N]]:
             continue
         title = node.title.lower()
         tag = (node.tag or "").lower()
-        if words not in title and words not in tag and words != node.ref.lower():
+        full = (node.full_title or "").lower()
+        if (
+            words not in title
+            and words not in full
+            and words not in tag
+            and words != node.ref.lower()
+        ):
             continue
         prefix = 0 if title.startswith(words) or tag == words else 1
         out.append((prefix, max(tree.level_index(node), 0), node.title.lower(), node))

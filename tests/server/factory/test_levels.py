@@ -87,7 +87,16 @@ def test_the_defaults_are_the_ladder_of_the_spec() -> None:
         "area": "sentinel",
         "item": "sentinel",
     }
-    assert doc["verbs"]["project"] == ["talk", "add", "start", "team", "auto", "pause", "move"]
+    assert doc["verbs"]["project"] == [
+        "talk",
+        "add",
+        "start",
+        "team",
+        "auto",
+        "pause",
+        "move",
+        "name",
+    ]
     assert doc["verbs"]["run"] == []
     assert doc["order"] == {
         "cols": ["First", "Then", "After that", "Last"],

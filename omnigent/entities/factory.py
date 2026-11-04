@@ -508,6 +508,35 @@ class FactoryNodeRead:
 
 
 @dataclass(frozen=True)
+class FactoryNodeName:
+    """
+    The short name (2–6 words) a node of the cockpit's level tree shows (``factory_node_names``).
+
+    The node keeps its full text (a person's ask, a proposal's machine label, a
+    long title) for its details; this is what every page, tile and crumb shows.
+
+    :param node_ref: The node's ref (``ask:<message id>``, ``feature:from-C-11``, ``T-16`` …).
+    :param name: The short name.
+    :param source_hash: A digest of the full text it was made from: the factory
+        names a node again only when that text changes.
+    :param named_by: The person who named it; ``None`` when the factory did.
+    :param updated_at: Epoch seconds.
+    """
+
+    factory_id: str
+    node_ref: str
+    name: str
+    source_hash: str = ""
+    named_by: str | None = None
+    updated_at: int = 0
+    workspace_id: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """:returns: A JSON-ready copy of the row."""
+        return _plain(self)
+
+
+@dataclass(frozen=True)
 class ChatThreadStats:
     """
     Aggregate of one thread's messages (not a table row).

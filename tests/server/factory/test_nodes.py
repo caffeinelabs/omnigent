@@ -203,7 +203,9 @@ def test_the_shortlist_is_one_implicit_feature_with_four_projects(tree: Tree) ->
     page = _page(tree, "feature:from-C-13")
 
     assert page["node"]["implicit"] is True and page["node"]["kind"] == "proposal"
-    assert page["node"]["title"].startswith("From C-13")
+    # The machine label stays in its details; it shows under its first words until named.
+    assert page["node"]["full_title"].startswith("From C-13")
+    assert (page["node"]["title"], page["node"]["named"]) == ("Shortlist fixes", "words")
     assert [c["ref"] for c in page["breadcrumb"]] == ["product", PICK]
     assert _refs(page["children"]["items"]) == list(SHORTLIST)
     assert page["children"]["columns"] is None
@@ -600,8 +602,10 @@ def test_a_viewer_who_cannot_read_a_project_sees_nothing_of_it() -> None:
 def test_readers_see_the_verbs_but_cannot_use_them(tree: Tree) -> None:
     verbs = _page(tree, "assistant-core", can_edit=False)["verbs"]
 
-    assert [v["verb"] for v in verbs] == ["talk", "add", "team", "auto", "pause", "move"]
+    assert [v["verb"] for v in verbs] == ["talk", "add", "team", "auto", "pause", "move", "name"]
     assert all(not v["enabled"] and v["reason"] for v in verbs)
+    # A stored node is renamed (a short name); only an implicit one is "named" into a node.
+    assert verbs[-1]["label"] == "Rename"
 
 
 def test_renamed_levels_name_every_page() -> None:

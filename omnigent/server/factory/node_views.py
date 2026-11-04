@@ -62,6 +62,8 @@ class DecisionRefView(_View):
     blocks_nothing: bool | None = None
     grouped: bool | None = None
     row_id: str | None = None
+    in_your_move: bool | None = None
+    """The page's Your move already asks it: drawn there, not here again."""
 
 
 class SegmentView(_View):
@@ -140,6 +142,10 @@ class NodeSummaryView(_View):
     glyph: str | None = None
     tag: str | None = None
     title: str
+    full_title: str | None = None
+    """The text the short ``title`` stands for (a person's ask, a machine label), for Details."""
+    named: Literal["person", "factory", "words"] | None = None
+    """Where the short title came from: a person, the factory's namer, or its first words."""
     short: str | None = None
     base: str | None = None
     implicit: bool | None = None
@@ -290,6 +296,9 @@ class ThreadRefView(_View):
     key: str
     responder: str | None = None
     unread: int
+    """Unread conversation (people's and agents' words, live cards for this viewer)."""
+    activity: int | None = None
+    """System activity in the thread since this viewer's read mark (never shown inline)."""
     last: ThreadLastView | None = None
 
 
@@ -379,11 +388,49 @@ class ChildPageView(_View):
     via_fold: int | None = None
 
 
+class YourMoveActionView(_View):
+    """A row's one primary action: answer with ``option``, open ``url``, or open the ask."""
+
+    label: str
+    option: str | None = None
+    url: str | None = None
+
+
+class YourMoveItemView(_View):
+    """One thing the viewer must do: "Apply C-16 · unblocks Agent assistant · [Apply]"."""
+
+    id: str
+    """The ask: a decision (``D-45``) or a group of merges (``merge:main``)."""
+    ref: str
+    """The node it sits on (where its card and details are)."""
+    verb: str
+    object: str
+    action: YourMoveActionView
+    decision: DecisionRefView
+    weight: float
+    unblocks: str | None = None
+    """What answering it lets move, by short name ("Agent assistant", "T-16 and panel")."""
+    unblocks_ref: str | None = None
+    """The first of ``unblocks_refs`` (the node a row links to)."""
+    unblocks_refs: list[str] | None = None
+    about: str | None = None
+    """A question's few words (``Start a follow-up project``), for an ask that is no apply."""
+    blocks_nothing: bool | None = None
+
+
+class YourMoveView(_View):
+    """What the viewer must do here, most held work first; ``more`` waits behind "+n"."""
+
+    items: list[YourMoveItemView] = Field(max_length=3)
+    more: int
+
+
 class NodePageView(_View):
     """``GET …/n/{ref}``: one node, its breadcrumb, status, roll-up and children."""
 
     node: NodeFullView
     breadcrumb: list[CrumbView]
+    your_move: YourMoveView
     status: StatusLineView
     rollup: RollupView
     chips: list[ChipView] = Field(max_length=3)
