@@ -20,7 +20,7 @@ import {
   type DefinitionView,
   fetchDefinitionVersions,
 } from "@/lib/factoryApi";
-import { learnKey, useDefinitionVersions } from "../insights/learnQueries";
+import { learnKey, useDefinitionVersions, usePinDefinition } from "../insights/learnQueries";
 import { type FactoryShellValue, useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { UNDO_WINDOW_S, undoLeft, versionRows } from "../steer/steerModel";
 import { useDebounced } from "../team/teamQueries";
@@ -223,6 +223,63 @@ export function useNodeUndo(ref: string, factoryId?: string) {
     if (gone && undo) forgetUndo(fid, ref, undo);
   }, [fid, gone, ref, undo]);
   return undo && left != null && left > 0 ? { undo, left } : null;
+}
+
+/**
+ * The Undo of a definition version an apply made on `ref` (Team, Rename
+ * levels): it re-pins `parent` only while `version` is still the version in
+ * force (read again first), so a version someone landed after it is never
+ * dropped with it. `undone` is the toast after it ran.
+ */
+export function useVersionUndo(ref: string, factoryId?: string) {
+  const fid = useFid(factoryId);
+  const client = useQueryClient();
+  const shell = useOptionalFactoryShell();
+  const toast = useFactoryToast();
+  const { mutateAsync: pin } = usePinDefinition(fid);
+  const refresh = useRefreshNodes(fid);
+  return useCallback(
+    (label: string, version: number, parent: number, undone: string): NodeUndo => {
+      const entry: NodeUndo = {
+        label,
+        expiresAt: Date.now() + UNDO_WINDOW_S * 1000,
+        version: { version, parent },
+        run: async () => {
+          const versions = await readDefinitionVersions(client, fid).catch(() => null);
+          if (!versions) {
+            toast.show({
+              message: "Could not undo: the definition's versions could not be read.",
+            });
+            return;
+          }
+          const left = versionUndoLeft(
+            versions.data,
+            entry.version!,
+            serverNowS(shell),
+            undoViewer(shell),
+          );
+          if (left == null) {
+            forgetUndo(fid, ref, entry);
+            toast.show({ message: `v${version} is no longer in force; undo from Versions.` });
+            return;
+          }
+          try {
+            await pin(parent);
+          } catch (error) {
+            toast.show({
+              message: `Could not undo: ${error instanceof Error ? error.message : String(error)}`,
+            });
+            return;
+          }
+          forgetUndo(fid, ref, entry);
+          void refresh();
+          toast.show({ message: undone });
+        },
+      };
+      return entry;
+    },
+    [client, fid, pin, ref, refresh, shell, toast],
+  );
 }
 
 /** "Not applied: …", from a refused write (409 stale, 422 wrong level, 403 with who may). */

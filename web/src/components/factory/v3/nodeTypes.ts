@@ -514,3 +514,103 @@ export interface TeamSheet {
   /** $/h while the team works, now. */
   rate?: number;
 }
+
+// ── Lenses: lineage, timeline, money (api.md §3.7) ──────────────
+
+/** A link outside the breadcrumb on a lineage row ("approved by C-11"). */
+export interface LineageLink {
+  kind: string;
+  ref?: string;
+  title: string;
+  state?: string;
+}
+
+/** One row of a lineage: a node with its one line (and a need's evidence, a feature's approval). */
+export interface LineageRow extends Crumb {
+  line: StatusLine;
+  /** At the root: what it builds, in product words. */
+  why_html?: string;
+  progress?: Progress;
+  /** A need's evidence in one phrase ("an ask · no user evidence yet"). */
+  evidence?: string;
+  links?: LineageLink[];
+}
+
+/** `GET …/n/{ref}/lineage`: ancestors top to bottom, the node, the levels below, results. */
+export interface LineageView {
+  scope: string;
+  ancestors: LineageRow[];
+  here: LineageRow;
+  below: LevelCount[];
+  /** Product tree only. */
+  results?: Results;
+  version: string;
+}
+
+/** One stretch of a lane: work, work on a node now done, a wait on another node, a wait on a person. */
+export interface TimelineBar {
+  from: string;
+  to: string;
+  kind: "work" | "done" | "wait" | "you";
+  label: string;
+}
+
+export interface TimelineLane {
+  ref: string;
+  title: string;
+  state: NodeState;
+  bars: TimelineBar[];
+}
+
+/** `GET …/n/{ref}/timeline`: one lane per child over a window (ISO instants). */
+export interface TimelineView {
+  scope: string;
+  axis: [string, string];
+  now: string;
+  /** This viewer's last look: shaded from here to now. */
+  last_look?: string;
+  lanes: TimelineLane[];
+  version: string;
+}
+
+export interface MoneyRow {
+  ref: string;
+  title: string;
+  tag?: string;
+  state: NodeState;
+  cost: number;
+  budget?: number;
+  burn?: number;
+}
+
+/** `GET …/n/{ref}/money`: the children's cost against their budgets, most first. */
+export interface MoneyView {
+  scope: string;
+  rows: MoneyRow[];
+  total: number;
+  budget?: number;
+  /** What the node spent that no child holds (its leads and agents). */
+  rest?: number;
+  version: string;
+}
+
+// ── The levels block (`GET /factories/{fid}/levels`) ───────────
+
+export interface LevelInfo {
+  key: string;
+  name: string;
+  plural: string;
+  /** `when_any`, `when_many`, `inline`; absent: always. */
+  show?: string;
+  debug?: boolean;
+  /** Hidden in this factory now (no node on it yet). */
+  hidden?: boolean;
+}
+
+/** Both trees' levels as the definition names them, and the definition version. */
+export interface LevelsInfo {
+  trees: Record<string, { root: string; name?: string; home?: string; levels: LevelInfo[] }>;
+  tiles_max?: number;
+  fold_single_child?: string;
+  version: number;
+}

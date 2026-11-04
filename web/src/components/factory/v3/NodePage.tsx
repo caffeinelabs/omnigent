@@ -3,7 +3,15 @@
 // under parents. One parent per node and one level per view: nothing here is
 // drawn between nodes. The node's chat is the page's right column (`chat`).
 
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MutableRefObject,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Navigate } from "react-router-dom";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
@@ -31,6 +39,7 @@ import type {
   LevelView as View,
   NodePage as Page,
   NodeSummary,
+  TimelineView,
   VerbArgs,
   VerbAvail,
 } from "./nodeTypes";
@@ -39,9 +48,10 @@ import { useSheetActions } from "./sheets/V3Sheets";
 import { hasWhy } from "./statusModel";
 import { useNodeKeys, useRovingStops } from "./useNodeKeys";
 import { useFactoryToast } from "../ui/Toast";
+import { LineageBody, LineageFold, MoneyBody, TimelineBody } from "./lenses/LensBodies";
+import { LENS_NAMES, type Lens, useLensChoice } from "./lenses/lensModel";
+import { timelineSub } from "./lenses/TimelineLens";
 import { type OpenVerb, VerbPreview } from "./verbs/VerbPreviews";
-
-type Lens = "map" | "list";
 
 const OVERLAY_NAMES: [keyof Overlays, string][] = [
   ["needs", "Needs you"],
@@ -70,7 +80,7 @@ function Seg({
   label,
 }: {
   options: [Lens, string][];
-  value: Lens;
+  value: Lens | null;
   onChange: (v: Lens) => void;
   label: string;
 }) {
@@ -78,7 +88,8 @@ function Seg({
     <span
       role="tablist"
       aria-label={label}
-      className="inline-flex shrink-0 rounded-lg border border-border bg-muted/40 p-0.5"
+      data-testid="v3-lens-bar"
+      className="inline-flex max-w-full shrink-0 overflow-x-auto rounded-lg border border-border bg-muted/40 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
       {options.map(([v, name]) => (
         <button
@@ -86,6 +97,7 @@ function Seg({
           role="tab"
           type="button"
           aria-selected={v === value}
+          data-lens={v}
           onClick={() => onChange(v)}
           className={cn(
             "rounded-md px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground",
@@ -113,7 +125,7 @@ function SectionHead({
   title: string;
   sub: string;
   lenses: Lens[];
-  lens: Lens;
+  lens: Lens | null;
   onLens: (l: Lens) => void;
   overlays: Overlays;
   offered: (keyof Overlays)[];
@@ -130,10 +142,10 @@ function SectionHead({
           label="Lens"
           value={lens}
           onChange={onLens}
-          options={lenses.map((l) => [l, l === "map" ? "Map" : "List"])}
+          options={lenses.map((l) => [l, LENS_NAMES[l]])}
         />
       )}
-      {offered.length > 0 && (
+      {offered.length > 0 && (lens === "map" || lens === "list") && (
         <span
           aria-label="Overlays"
           className="flex max-w-full items-center gap-1 overflow-x-auto [scrollbar-width:none] md:basis-full md:flex-wrap [&::-webkit-scrollbar]:hidden"
@@ -177,12 +189,35 @@ function viewSub(v: View): string {
   return `${v.total}${grouped}${fold}`;
 }
 
-function Below({ page, level, explicit }: { page: Page; level: string | null; explicit: boolean }) {
+/** What the section's heading says for a lens other than Map and List. */
+function lensHead(lens: Lens, page: Page, timeline?: TimelineView | null) {
+  const plural = levelName(page.children.level, page.children.level_name);
+  switch (lens) {
+    case "lineage":
+      return { title: "Lineage", sub: "where it came from, what is below, where it landed" };
+    case "timeline":
+      return { title: `${plural} over time`, sub: timeline ? timelineSub(timeline) : "" };
+    default:
+      return { title: "Money", sub: "cost so far against budget" };
+  }
+}
+
+function Below({
+  page,
+  level,
+  explicit,
+  lensKey,
+}: {
+  page: Page;
+  level: string | null;
+  explicit: boolean;
+  /** Where `v` finds the next lens. */
+  lensKey: MutableRefObject<(() => void) | null>;
+}) {
   const { factoryId } = useNodeActions();
   const grouped = Boolean(level && level !== page.children.level);
   const view = useLevel(page.node.ref, grouped ? level : null, factoryId);
   const more = useMoreChildren(page.node.ref, page.children, factoryId);
-  const [lens, setLens] = useState<Lens>("map");
   const [overlays, setOverlays] = useState<Overlays>(DEFAULT_OVERLAYS);
   const c: ChildPage = more.items.length
     ? { ...page.children, items: [...page.children.items, ...more.items] }
@@ -191,10 +226,55 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
     ? (view.data?.groups.flatMap((g) => g.items) ?? [])
     : [...c.items, ...c.ghosts];
   const tiles = grouped ? Boolean(view.data && drawsTiles(view.data)) : drawsTiles(c);
-  const lenses: Lens[] = items.length ? (tiles ? ["map", "list"] : ["list"]) : [];
-  const shownLens: Lens = lenses.includes(lens) ? lens : "list";
+  const choice = useLensChoice(page, { grouped, items: items.length, tiles });
+  const { lens, lenses, choose } = choice;
+  useEffect(() => {
+    lensKey.current = choice.next;
+    return () => {
+      lensKey.current = null;
+    };
+  }, [choice.next, lensKey]);
   const offered = usefulOverlays(items);
   const toggle = (k: keyof Overlays) => setOverlays((o) => ({ ...o, [k]: !o[k] }));
+  const since = page.rollup.since?.at;
+  const other = lens === "lineage" || lens === "timeline" || lens === "money";
+  if (other || choice.pending) {
+    const shown: Lens = choice.pending ? "timeline" : lens!;
+    const head = lensHead(shown, page, choice.timeline.data);
+    const folds = !items.length && shown === "lineage";
+    return (
+      <section className="mt-[18px]" aria-label={head.title} data-testid="v3-below">
+        <SectionHead
+          title={head.title}
+          sub={head.sub}
+          lenses={lenses}
+          lens={shown}
+          onLens={choose}
+          overlays={overlays}
+          offered={offered}
+          onOverlay={toggle}
+          since={since}
+        />
+        {folds && (
+          <button
+            type="button"
+            onClick={() => choose(null)}
+            className="-mt-1 mb-2 text-xs text-status-blue-fg hover:underline"
+          >
+            Fold
+          </button>
+        )}
+        {shown === "lineage" ? (
+          <LineageBody nodeRef={page.node.ref} />
+        ) : shown === "money" ? (
+          <MoneyBody nodeRef={page.node.ref} />
+        ) : (
+          <TimelineBody query={choice.timeline} />
+        )}
+      </section>
+    );
+  }
+  const shownLens: "map" | "list" = lens === "map" ? "map" : "list";
   if (grouped) {
     if (view.isPending)
       return <div aria-busy="true" className="h-40 animate-pulse rounded-xl bg-muted" />;
@@ -206,12 +286,12 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
           title={name}
           sub={viewSub(view.data)}
           lenses={lenses}
-          lens={shownLens}
-          onLens={setLens}
+          lens={lens}
+          onLens={choose}
           overlays={overlays}
           offered={offered}
           onOverlay={toggle}
-          since={page.rollup.since?.at}
+          since={since}
         />
         {explicit && (
           <p className="-mt-0.5 mb-2.5 text-xs text-foreground-tertiary">
@@ -226,7 +306,11 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
       </section>
     );
   }
-  if (!c.items.length && !c.later.length && !c.ghosts.length) return null;
+  if (!c.items.length && !c.later.length && !c.ghosts.length) {
+    return lenses.includes("lineage") ? (
+      <LineageFold page={page} onOpen={() => choose("lineage")} />
+    ) : null;
+  }
   const name = levelName(c.level, c.level_name);
   return (
     <section className="mt-[18px]" aria-label={name} data-testid="v3-below">
@@ -234,12 +318,12 @@ function Below({ page, level, explicit }: { page: Page; level: string | null; ex
         title={name}
         sub={childSub(c)}
         lenses={lenses}
-        lens={shownLens}
-        onLens={setLens}
+        lens={lens}
+        onLens={choose}
         overlays={overlays}
         offered={offered}
         onOverlay={toggle}
-        since={page.rollup.since?.at}
+        since={since}
       />
       <ChildrenView page={c} lens={shownLens} overlays={overlays} more={more} />
     </section>
@@ -361,7 +445,8 @@ function useOpenVerb(page: Page, talk?: NodeActions["onVerb"]) {
         return;
       }
       if (!verb.enabled) return;
-      if (verb.verb !== "team" && !source?.preview) {
+      // Team and Rename levels are definition versions: they preview through the definition.
+      if (verb.verb !== "team" && verb.verb !== "rename" && !source?.preview) {
         toast.show({
           message: `${verb.label}: this server cannot preview it yet, so nothing changed.`,
         });
@@ -428,10 +513,13 @@ function LoadedNodePage({
   const verbs = useOpenVerb(page, actions?.onVerb);
   const sheets = useSheetActions();
   useMarkSeen(page.node.ref, factoryId);
+  const lensKey = useRef<(() => void) | null>(null);
+  const onLens = useCallback(() => lensKey.current?.(), []);
   useNodeKeys(body, {
     onStepOut: parent ? () => navigate(nodeHref(factoryId, parent.ref)) : undefined,
     onWhy: why ? toggleWhy : undefined,
     onVerbKey: verbs.onKey,
+    onLens,
   });
   const openVerb = verbs.open?.verb.verb ?? null;
   const value = useMemo<NodeActions>(
@@ -474,8 +562,8 @@ function LoadedNodePage({
                   />
                 </div>
               )}
-              {!level && <NodeContent node={page.node} />}
-              <Below page={page} level={shown} explicit={Boolean(level)} />
+              {!level && <NodeContent page={page} />}
+              <Below page={page} level={shown} explicit={Boolean(level)} lensKey={lensKey} />
               <KeysLine stops={stops} out={Boolean(parent)} why={why} />
             </div>
             {chat && <NodeChat page={page} sample={chat.sample} />}

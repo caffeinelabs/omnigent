@@ -362,6 +362,65 @@ describe("cockpit v3 · the server's node API", () => {
   });
 });
 
+describe("cockpit v3 · the factory tree in the shell", () => {
+  it("Product | Factory in the top bar: one tree at a time, the factory's asks counted", async () => {
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    serve();
+    renderAt("/n/fx");
+
+    expect(await screen.findByTestId("v3-node-page")).toHaveAttribute("data-ref", "fx");
+    const trees = screen.getByTestId("cockpit-trees");
+    await waitFor(() =>
+      expect(within(trees).getByTestId("cockpit-tree-factory")).toHaveAttribute(
+        "aria-current",
+        "page",
+      ),
+    );
+    // C-17 and C-18 wait on a person, and an older ask on Sentinel.
+    expect(within(trees).getByTestId("cockpit-tree-factory-count")).toHaveTextContent("3");
+    // v3's two trees take the place of v2's places.
+    expect(screen.queryByTestId("cockpit-tabs")).toBeNull();
+
+    fireEvent.click(within(trees).getByTestId("cockpit-tree-product"));
+    expect(await screen.findByTestId("v3-node-page")).toHaveAttribute("data-ref", "product");
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("cockpit-trees")).getByTestId("cockpit-tree-product"),
+      ).toHaveAttribute("aria-current", "page"),
+    );
+  });
+
+  it("an area deep in the factory tree is the Factory's too", async () => {
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    serve();
+    renderAt("/n/fx:health");
+
+    expect(await screen.findByTestId("v3-closed-alarms")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("cockpit-tree-factory")).toHaveAttribute("aria-current", "page"),
+    );
+  });
+
+  it("r on Factory › Definition renames the levels; elsewhere r still talks in the chat", async () => {
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v3");
+    serve();
+    const first = renderAt("/n/fx:definition");
+    expect(await screen.findByTestId("v3-levels-block")).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "r" });
+
+    expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Rename levels");
+    expect(screen.queryByTestId("v3-chat-full")).toBeNull();
+    first.unmount();
+
+    renderAt("/n/I-1");
+    expect(await screen.findByTestId("v3-node-page")).toHaveAttribute("data-ref", "I-1");
+    fireEvent.keyDown(document.body, { key: "r" });
+    expect(await screen.findByTestId("v3-chat-full")).toBeInTheDocument();
+    expect(screen.queryByTestId("v3-preview")).toBeNull();
+  });
+});
+
 describe("cockpit v3 · the node chat in the shell", () => {
   it("replaces the Room drawer: the Room button opens the node's chat", async () => {
     serve();

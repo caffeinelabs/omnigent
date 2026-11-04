@@ -2,7 +2,8 @@
 // Add child (a held child with a matching title is pulled forward instead of
 // copied), Start now, Autonomy & merge, Pause / Resume, Move (parents one
 // level up only), Name it / file under, and any other verb as a plain
-// preview. Team has its own panel (`TeamPanel`). Words in the chat open these
+// preview. Team and Rename levels have their own panels (`TeamPanel`,
+// `RenamePanel`): both are definition versions. Words in the chat open these
 // same previews, with what they named filled in.
 
 import { useId, useState } from "react";
@@ -17,6 +18,7 @@ import {
   PreviewPanel,
   type PreviewPanelProps,
 } from "./PreviewPanel";
+import { RenamePanel } from "./RenamePanel";
 import { TeamPanel } from "./TeamPanel";
 
 /** A verb opened on this page, with what words in the chat named. */
@@ -351,6 +353,8 @@ export function VerbPreview({
       return <ParentPreview {...props} naming={false} />;
     case "name":
       return <ParentPreview {...props} naming />;
+    case "rename":
+      return <RenamePanel {...props} />;
     default:
       return <PlainPreview {...props} />;
   }

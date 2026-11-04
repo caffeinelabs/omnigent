@@ -448,7 +448,8 @@
     "tiles_max": 12,
     "verbs": {
       "area": [
-        "talk"
+        "talk",
+        "rename"
       ],
       "change": [
         "talk"
@@ -469,8 +470,7 @@
         "add"
       ],
       "item": [
-        "talk",
-        "rename"
+        "talk"
       ],
       "need": [
         "talk",

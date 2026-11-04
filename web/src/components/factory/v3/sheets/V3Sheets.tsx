@@ -1,9 +1,10 @@
 // Cockpit v3's sheets, opened by the address so a link opens the exact view:
 // `?peek=needs` (Needs you, ranked by what each ask holds, the asks that
 // block nothing grouped, the alarms the server closed with their causes),
-// `?peek=env` (the base env: what it runs, its health, how to sign in) and
+// `?peek=env` (the base env: what it runs, its health, how to sign in),
 // `?peek=try&at=<ref>` (what can be tried there: the passing steps by name,
-// the flag and the sign-in note). Keys are `KeyboardHelp`; Find is the ⌘K
+// the flag and the sign-in note) and `?peek=lineage&at=<ref>` (where a node
+// came from, the phone's Lineage). Keys are `KeyboardHelp`; Find is the ⌘K
 // palette. A sheet never draws a line between nodes.
 
 import { ExternalLinkIcon } from "lucide-react";
@@ -15,20 +16,16 @@ import { useFactoryToast } from "../../ui/Toast";
 import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { DecisionButtons } from "../DecisionButtons";
+import { ago, envLines } from "../envWords";
+import { ClosedAlarmRows } from "../factory/FactoryAreas";
+import { LineageBody } from "../lenses/LensBodies";
 import { type NodeActions, NodeContextProvider, type SheetKind } from "../NodeContext";
 import { NodeLink } from "../nodeParts";
 import { useAnswerDecision, useNode } from "../nodeQueries";
 import { PRODUCT_REF } from "../nodeRoutes";
 import { useNodeSource } from "../nodeSource";
 import { useNeedsYou } from "../nodeSteer";
-import type {
-  BaseEnv,
-  DecisionAction,
-  DecisionRef,
-  NeedsYouList,
-  NodePage,
-  QuietAsk,
-} from "../nodeTypes";
+import type { DecisionAction, DecisionRef, NeedsYouList, QuietAsk } from "../nodeTypes";
 import { PreviewLines } from "../verbs/PreviewPanel";
 
 /** The address of a sheet: `?peek=<sheet>` and, for Try it, `&at=<ref>`. */
@@ -78,18 +75,6 @@ export function useOpenSheet(): (sheet: SheetKind | null, at?: string) => void {
 
 const ACT =
   "inline-flex items-center gap-1.5 rounded-[7px] border px-2.5 py-0.5 text-[12.5px] font-semibold whitespace-nowrap";
-
-/** "18 min ago" from an ISO time; other words pass through. */
-function ago(at: string | undefined, now: Date): string | null {
-  if (!at) return null;
-  const t = Date.parse(at);
-  if (!Number.isFinite(t) || !/^\d{4}-/.test(at)) return at;
-  const min = Math.max(0, Math.round((now.getTime() - t) / 60_000));
-  if (min < 1) return "just now";
-  if (min < 60) return `${min} min ago`;
-  const h = Math.round(min / 60);
-  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
-}
 
 function errorWords(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -299,28 +284,7 @@ function NeedsList({
             {list.closed_alarms.length} alarm{list.closed_alarms.length > 1 ? "s" : ""} closed by
             the server as noise, with their causes
           </b>
-          {list.closed_alarms.map((a) => (
-            <div key={a.id} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2">
-              <span className="font-mono text-xs text-foreground-tertiary">{a.id}</span>
-              <span>
-                <span className="text-foreground-tertiary line-through">{a.was}</span>
-                <br />
-                <span className="text-muted-foreground">{a.cause}</span>
-                {a.real_ask && (
-                  <b className="font-semibold">
-                    {" "}
-                    The real ask is {a.real_ask}
-                    {a.real_ask_verb ? ` (${a.real_ask_verb})` : ""}.
-                  </b>
-                )}{" "}
-                {a.ref && (
-                  <NodeLink nodeRef={a.ref} className="text-status-blue-fg hover:underline">
-                    open
-                  </NodeLink>
-                )}
-              </span>
-            </div>
-          ))}
+          <ClosedAlarmRows alarms={list.closed_alarms} />
           <p className="text-xs text-foreground-tertiary">
             An alarm reaches you only when its cause path ends at a person. Waits the factory heals
             by itself live under{" "}
@@ -450,33 +414,6 @@ function NeedsYouSheet({ factoryId: fid, open, onClose }: SheetProps) {
 }
 
 // ── The base env and Try it ────────────────────────────────────
-
-function envLines(env: BaseEnv, page: NodePage | null | undefined, now: Date) {
-  const when = ago(env.deployed_at, now);
-  const smoke = env.smoke
-    ? `${env.smoke.ok ? "smoke OK" : "smoke failing"}${env.smoke.checks ? `: ${env.smoke.checks}` : ""}`
-    : null;
-  const held = page?.results?.in_base_env;
-  return [
-    {
-      label: "Deployed",
-      html: [
-        env.sha ? `<b>${esc(env.sha)}</b> (${esc(env.branch)})` : esc(env.branch),
-        when && esc(when),
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    },
-    ...(smoke ? [{ label: "Health", html: esc(smoke) }] : []),
-    ...(env.follows
-      ? [{ label: "Follows", html: `${esc(env.branch)}; it ${esc(env.follows)}` }]
-      : []),
-    ...((env.signin_note ?? env.note)
-      ? [{ label: "Sign-in", html: esc((env.signin_note ?? env.note)!) }]
-      : []),
-    ...(held ? [{ label: "Holds", html: `${held} merged change${held === 1 ? "" : "s"}` }] : []),
-  ];
-}
 
 function BaseEnvSheet({ factoryId, open, onClose }: SheetProps) {
   const root = useNode(open ? PRODUCT_REF : "", factoryId);
@@ -609,6 +546,22 @@ function TryItSheet({ factoryId, open, at, onClose }: SheetProps & { at: string 
   );
 }
 
+/** Where a node came from, as a sheet (the phone's Lineage button). */
+function LineageSheet({ factoryId, open, at, onClose }: SheetProps & { at: string }) {
+  const page = useNode(open ? at : "", factoryId);
+  return (
+    <Peek
+      open={open}
+      onOpenChange={(next) => !next && onClose()}
+      wide
+      title="Lineage"
+      description={page.data ? page.data.node.title : undefined}
+    >
+      {open && <LineageBody nodeRef={at} />}
+    </Peek>
+  );
+}
+
 /** Every v3 sheet the address can name; mounted once per cockpit (the shell, a story, a test). */
 export function V3Sheets({
   factoryId,
@@ -631,6 +584,9 @@ export function V3Sheets({
       )}
       <BaseEnvSheet factoryId={factoryId} open={sheet === "env"} onClose={close} />
       <TryItSheet factoryId={factoryId} open={sheet === "try"} at={at} onClose={close} />
+      {source?.lineage && (
+        <LineageSheet factoryId={factoryId} open={sheet === "lineage"} at={at} onClose={close} />
+      )}
       {keys && (
         <KeyboardHelp open={sheet === "keys"} onOpenChange={(next) => !next && close()} nodes />
       )}

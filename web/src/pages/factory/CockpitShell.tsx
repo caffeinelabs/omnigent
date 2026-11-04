@@ -26,6 +26,7 @@ import {
   useFactoryPaletteHotkey,
 } from "@/components/factory/cmdk/useFactoryPaletteHotkey";
 import { useFactoryServerNowS } from "@/components/factory/factoryClock";
+import { factoryPageHref } from "@/components/factory/factoryRoutes";
 import { shellNeedsCount } from "@/components/factory/home/homeModel";
 import { useCachedFactoryAsks } from "@/components/factory/home/homeQueries";
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
@@ -64,7 +65,7 @@ import { DISCOVERY_THREAD, chatNodeRef } from "@/components/factory/v3/chat/node
 import { NODE_STALE_MS, nodeQueryKeys, useNode } from "@/components/factory/v3/nodeQueries";
 import { useNeedsYou } from "@/components/factory/v3/nodeSteer";
 import { V3Sheets } from "@/components/factory/v3/sheets/V3Sheets";
-import { PRODUCT_REF, nodeHref } from "@/components/factory/v3/nodeRoutes";
+import { FX_REF, PRODUCT_REF, nodeHref } from "@/components/factory/v3/nodeRoutes";
 import { useNodeSource } from "@/components/factory/v3/nodeSource";
 import { DecisionsPage } from "./DecisionsPage";
 
@@ -243,6 +244,11 @@ export function CockpitShell({
   // v3: the base env the top bar names (the product's node page, read again with the live mark above).
   const root = useNode(v3 ? PRODUCT_REF : "", fid).data;
   const env = root?.node.env;
+  // v3: the tree the page is in (its node's root, from the page's own read) and the factory's asks.
+  const pageRef = v3 && location.page === "node" ? (location.id ?? "") : "";
+  const pageNode = useNode(pageRef, fid).data;
+  const fxRoot = useNode(v3 ? FX_REF : "", fid).data;
+  const inFactory = (pageNode?.breadcrumb[0]?.ref ?? pageNode?.node.ref) === FX_REF;
   useCockpitKeys({
     onPalette: () => {
       if (!(v3 && chatSlot.focus())) setPalette(true);
@@ -316,6 +322,12 @@ export function CockpitShell({
                       onOpen: () => setParam(PEEK_PARAM, "env"),
                     }
                   : null,
+                trees: {
+                  current: inFactory ? "factory" : "product",
+                  productHref: factoryPageHref(fid),
+                  factoryHref: nodeHref(fid, FX_REF),
+                  factoryNeeds: fxRoot?.node.needs.open ?? 0,
+                },
               }
             : {})}
         />

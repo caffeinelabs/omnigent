@@ -1049,8 +1049,8 @@ class VerbsDef(_Block):
     change: Verbs = _verbs("talk")
     run: Verbs = _verbs()
     fx: Verbs = _verbs("talk")
-    area: Verbs = _verbs("talk")
-    item: Verbs = _verbs("talk", "rename")
+    area: Verbs = _verbs("talk", "rename")
+    item: Verbs = _verbs("talk")
 
 
 KIND_IS_LEVEL: Final[dict[str, str]] = {

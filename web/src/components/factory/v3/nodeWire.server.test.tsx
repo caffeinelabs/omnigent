@@ -1,12 +1,13 @@
 /* oxlint-disable no-await-in-loop -- pages render one at a time, in order */
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import serverLenses from "../__fixtures__/nodeLenses.server.json";
 import serverLevels from "../__fixtures__/nodeLevels.server.json";
 import serverPages from "../__fixtures__/nodePages.server.json";
 import { renderNode } from "./fixture/renderNode";
 import { resultsWords } from "./LevelStrip";
 import { liveNodeSource } from "./nodeSource";
-import type { LevelView, NodePage } from "./nodeTypes";
+import type { LevelView, LineageView, MoneyView, NodePage, TimelineView } from "./nodeTypes";
 import { normalizeNodePage } from "./nodeWire";
 import { statusText } from "./statusModel";
 
@@ -24,6 +25,7 @@ vi.mock("@/lib/identity", () => ({
 
 const PAGES = serverPages as unknown as Record<string, NodePage>;
 const LEVELS = serverLevels as unknown as Record<string, LevelView>;
+const LENSES = serverLenses as unknown as Record<string, unknown>;
 const EMPTY = new Set(["none", "None", "—", "-"]);
 const ZERO = /^0(\s|$)/;
 
@@ -31,10 +33,15 @@ function serve() {
   authenticatedFetch.mockImplementation(async (url: string) => {
     const path = new URL(url, "http://x").pathname;
     const level = path.match(/\/n\/([^/]+)\/level\/([^/]+)$/);
+    const lens = path.match(/\/n\/([^/]+)\/(lineage|timeline|money)$/);
     const ref = decodeURIComponent(path.match(/\/n\/([^/]+)$/)?.[1] ?? "");
     const body = level
       ? LEVELS[`${decodeURIComponent(level[1]!)}/${decodeURIComponent(level[2]!)}`]
-      : PAGES[ref];
+      : lens
+        ? LENSES[`${lens[2]}/${decodeURIComponent(lens[1]!)}`]
+        : path.endsWith("/levels")
+          ? LENSES.levels
+          : PAGES[ref];
     if (!body) return new Response("{}", { status: 404 });
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -123,6 +130,68 @@ describe("cockpit v3 · the server's node pages", () => {
       view.unmount();
     }
   }, 60_000);
+
+  it("reads the server's lenses: the feature's timeline and money, a task's lineage", async () => {
+    serve();
+    const lensBar = () =>
+      within(screen.getByTestId("v3-lens-bar"))
+        .getAllByRole("tab")
+        .map((t) => t.getAttribute("data-lens"));
+    const timeline = LENSES["timeline/I-1"] as TimelineView;
+    const t = renderNode("I-1", { source: liveNodeSource, query: "?lens=timeline" });
+    const drawn = await screen.findByTestId("v3-timeline");
+    expect(lensBar()).toEqual(["map", "list", "lineage", "timeline", "money"]);
+    expect(
+      within(drawn)
+        .getAllByTestId("v3-timeline-lane")
+        .map((l) => l.getAttribute("data-ref")),
+    ).toEqual(timeline.lanes.map((l) => l.ref));
+    const kinds = (ref: string) =>
+      [...drawn.querySelectorAll(`[data-ref="${ref}"] [data-kind]`)].map((b) =>
+        b.getAttribute("data-kind"),
+      );
+    // Held for C-16: a person is the cause (amber); the panel waits on another node (grey).
+    expect(kinds("assistant-core").at(-1)).toBe("you");
+    expect(kinds("assistant-panel-ux")).toEqual(["wait"]);
+    expect(kinds("connectors-core")).toEqual(["wait", "done"]);
+    expect(
+      t.container.querySelectorAll("svg line, svg path, svg polyline, svg polygon"),
+    ).toHaveLength(0);
+    t.unmount();
+
+    const m = renderNode("I-1", { source: liveNodeSource, query: "?lens=money" });
+    const money = await screen.findByTestId("v3-money");
+    expect(
+      within(money)
+        .getAllByTestId("v3-money-row")
+        .map((r) => r.getAttribute("data-ref")),
+    ).toEqual((LENSES["money/I-1"] as MoneyView).rows.map((r) => r.ref));
+    expect(within(money).getByTestId("v3-money-total")).toHaveTextContent("$51.13");
+    m.unmount();
+
+    renderNode("T-16", { source: liveNodeSource, query: "?lens=lineage" });
+    const lineage = await screen.findByTestId("v3-lineage");
+    expect(within(lineage).getAllByTestId("v3-lineage-row")).toHaveLength(
+      (LENSES["lineage/T-16"] as LineageView).ancestors.length,
+    );
+    expect(lineage).toHaveTextContent("approved by C-11 · Agent assistant, wave 1");
+    expect(within(lineage).getByTestId("v3-lineage-here")).toHaveTextContent("Task · here");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("the factory tree: Environments shows the base env, Definition the levels to rename", async () => {
+    serve();
+    const env = renderNode("fx:environments", { source: liveNodeSource });
+    const block = await screen.findByTestId("v3-base-env");
+    expect(block).toHaveTextContent("Base env · sample-main");
+    expect(block).toHaveTextContent("817480d");
+    env.unmount();
+    renderNode("fx:definition", { source: liveNodeSource });
+    const levels = await screen.findByTestId("v3-levels-block");
+    expect(levels).toHaveTextContent("definition version 14");
+    expect(within(levels).getAllByTestId("v3-level-row")[0]).toHaveTextContent("hidden now");
+    expect(screen.getByRole("button", { name: /Rename levels/ })).toBeInTheDocument();
+  });
 
   it("the product page shows the server's strip and results", async () => {
     serve();

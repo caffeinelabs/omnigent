@@ -51,7 +51,9 @@ WEB_PAGES = (
     "feature:from-C-13",
     "fx",
     "fx:rules",
+    "fx:environments",
     "fx:health",
+    "fx:definition",
     "base-env",
 )
 WEB_LEVELS = (("product", "feature"), ("product", "project"), ("I-1", "task"))
@@ -459,6 +461,34 @@ def test_the_team_draws_working_agents_and_counts_idle_ones(tree: Tree) -> None:
         "Base env sample-main @817480d · ready"
     )
     assert _page(tree, "fx:definition")["node"]["short"] == "version 14"
+
+
+def test_the_environments_area_shows_the_base_env(tree: Tree) -> None:
+    env = _page(tree, "fx:environments")["node"]["env"]
+
+    assert env == _page(tree, "product")["node"]["env"]
+    assert (env["branch"], env["sha"], env["app_url"]) == (
+        "sample-main",
+        "817480d",
+        "https://app.sample.test",
+    )
+    assert "env" not in _page(tree, "fx:health")["node"]
+
+
+def test_levels_are_renamed_from_the_definition_area_only(tree: Tree) -> None:
+    verbs = _page(tree, "fx:definition")["verbs"]
+
+    assert [v["verb"] for v in verbs] == ["talk", "rename"]
+    assert {k: verbs[1][k] for k in ("label", "key", "enabled")} == {
+        "label": "Rename levels",
+        "key": "r",
+        "enabled": True,
+    }
+    # No other node of the factory tree renames anything (rules, envs, alarms, agents).
+    for ref in ("fx", "fx:rules", "fx:health", "C-17", "base-env", "D-48"):
+        assert "rename" not in [v["verb"] for v in _page(tree, ref)["verbs"]], ref
+    readers = _page(tree, "fx:definition", can_edit=False)["verbs"]
+    assert not readers[1]["enabled"] and readers[1]["reason"]
 
 
 def test_in_base_env_needs_every_merged_change() -> None:

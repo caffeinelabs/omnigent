@@ -61,6 +61,10 @@ export function sampleNodeSource(
     needsYou: async (_fid, tree) => normalizeNeedsYou(engine.needsYou(tree)),
     find: async (_fid, q) => normalizeFind(engine.find(q)),
     seen: async (_fid, ref) => engine.seen(ref),
+    lineage: async (_fid, ref) => engine.lineage(ref),
+    timeline: async (_fid, ref) => engine.timeline(ref),
+    money: async (_fid, ref) => engine.money(ref),
+    levels: async () => engine.levelsInfo(),
     team: async (_fid, ref) => engine.teamSheet(ref),
   };
 }

@@ -5,8 +5,8 @@
 import { type ReactNode, createContext, useContext, useMemo } from "react";
 import type { DecisionAction, DecisionRef, VerbArgs, VerbAvail } from "./nodeTypes";
 
-/** A sheet a page part can open (`?peek=`): Needs you, the base env, Try it, the keys. */
-export type SheetKind = "needs" | "env" | "try" | "keys";
+/** A sheet a page part can open (`?peek=`): Needs you, the base env, Try it, the keys, a lineage. */
+export type SheetKind = "needs" | "env" | "try" | "keys" | "lineage";
 
 export interface NodeActions {
   factoryId: string;

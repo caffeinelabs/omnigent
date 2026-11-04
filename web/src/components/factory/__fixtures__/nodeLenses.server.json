@@ -74,6 +74,185 @@
     "q": "panel",
     "version": "bf03ded18b13b923"
   },
+  "levels": {
+    "fold_single_child": "implicit_only",
+    "kind_authority": {
+      "study": {
+        "approval": "budget",
+        "create": ["scout"],
+        "move": []
+      }
+    },
+    "kinds": {
+      "adhoc": "Task (no ticket)",
+      "agent": "Agent",
+      "alarm": "Alarm",
+      "area": "Area",
+      "ask": "Ask",
+      "commit": "Local commit",
+      "decision": "Decision",
+      "definition": "Definition",
+      "env": "Environment",
+      "factory": "Factory",
+      "feature": "Feature",
+      "goal": "Goal",
+      "item": "Item",
+      "opportunity": "Opportunity",
+      "pr": "Pull request",
+      "product": "Product",
+      "project": "Project",
+      "proposal": "From a proposal",
+      "question": "Question",
+      "rule": "Rule",
+      "run": "Run",
+      "study": "Study",
+      "task": "Task"
+    },
+    "order": {
+      "cols": ["First", "Then", "After that", "Last"],
+      "later": "Later (held)"
+    },
+    "responders": {
+      "area": "sentinel",
+      "change": "lead",
+      "feature": "atlas",
+      "fx": "sentinel",
+      "goal": "atlas",
+      "item": "sentinel",
+      "need": "scout",
+      "product": "atlas",
+      "project": "lead",
+      "run": null,
+      "study": "scout",
+      "task": "lead"
+    },
+    "tiles_max": 12,
+    "trees": {
+      "factory": {
+        "home": "area",
+        "levels": [
+          {
+            "authority": {
+              "approval": "owner",
+              "create": [],
+              "move": []
+            },
+            "key": "area",
+            "name": "Area",
+            "plural": "Areas"
+          },
+          {
+            "authority": {
+              "approval": "owner",
+              "create": ["atlas", "sentinel", "owner"],
+              "move": []
+            },
+            "key": "item",
+            "name": "Item",
+            "plural": "Items"
+          }
+        ],
+        "name": "Factory",
+        "root": "fx"
+      },
+      "product": {
+        "home": "feature",
+        "levels": [
+          {
+            "authority": {
+              "approval": "owner",
+              "create": ["owner"],
+              "move": []
+            },
+            "hidden": true,
+            "key": "goal",
+            "name": "Goal",
+            "plural": "Goals",
+            "show": "when_any"
+          },
+          {
+            "authority": {
+              "approval": "ledger",
+              "create": ["scout", "operator", "owner"],
+              "move": []
+            },
+            "key": "need",
+            "name": "Need",
+            "plural": "Needs"
+          },
+          {
+            "authority": {
+              "approval": "owner",
+              "create": ["atlas", "owner"],
+              "move": ["atlas"]
+            },
+            "key": "feature",
+            "name": "Feature",
+            "plural": "Features"
+          },
+          {
+            "authority": {
+              "approval": "autonomy",
+              "create": ["atlas", "lead", "operator", "owner"],
+              "move": ["atlas"]
+            },
+            "key": "project",
+            "name": "Project",
+            "plural": "Projects"
+          },
+          {
+            "authority": {
+              "approval": "none",
+              "create": ["lead"],
+              "move": ["atlas"]
+            },
+            "key": "task",
+            "name": "Task",
+            "plural": "Tasks"
+          },
+          {
+            "authority": {
+              "approval": "none",
+              "create": ["lead"],
+              "move": []
+            },
+            "key": "change",
+            "name": "Change",
+            "plural": "Changes",
+            "show": "inline"
+          },
+          {
+            "authority": {
+              "approval": "none",
+              "create": ["server"],
+              "move": []
+            },
+            "debug": true,
+            "key": "run",
+            "name": "Run",
+            "plural": "Runs"
+          }
+        ],
+        "name": "Product",
+        "root": "product"
+      }
+    },
+    "verbs": {
+      "area": ["talk", "rename"],
+      "change": ["talk"],
+      "feature": ["talk", "add", "auto", "pause", "move", "name"],
+      "fx": ["talk"],
+      "goal": ["talk", "add"],
+      "item": ["talk"],
+      "need": ["talk", "add", "research", "name"],
+      "product": ["talk", "add"],
+      "project": ["talk", "add", "start", "team", "auto", "pause", "move"],
+      "run": [],
+      "study": ["talk", "research"],
+      "task": ["talk", "pause", "move"]
+    },
+    "version": 14
+  },
   "lineage/I-1": {
     "ancestors": [
       {
@@ -792,6 +971,113 @@
     "scope": "T-16",
     "version": "bf03ded18b13b923"
   },
+  "lineage/fx:health": {
+    "ancestors": [
+      {
+        "level": "fx",
+        "level_name": "Factory",
+        "line": {
+          "decision": {
+            "actions": [
+              {
+                "id": "apply",
+                "label": "Apply"
+              },
+              {
+                "id": "edit",
+                "label": "Edit & apply"
+              },
+              {
+                "id": "reject",
+                "label": "Reject"
+              }
+            ],
+            "age": "5h 54m",
+            "asker": "Atlas",
+            "id": "D-50",
+            "row_id": "00000000000000000000000000000226",
+            "subject": "C-17",
+            "title": "Decision 50",
+            "verb": "Apply rule C-17"
+          },
+          "ends": "person",
+          "kind": "needs",
+          "label": "Needs you:",
+          "segments": [
+            {
+              "ref": "fx:rules",
+              "sep": "›",
+              "title": "Rules"
+            },
+            {
+              "ref": "C-17",
+              "sep": "›",
+              "title": "C-17"
+            },
+            {
+              "decision": {
+                "actions": [
+                  {
+                    "id": "apply",
+                    "label": "Apply"
+                  },
+                  {
+                    "id": "edit",
+                    "label": "Edit & apply"
+                  },
+                  {
+                    "id": "reject",
+                    "label": "Reject"
+                  }
+                ],
+                "age": "5h 54m",
+                "asker": "Atlas",
+                "id": "D-50",
+                "row_id": "00000000000000000000000000000226",
+                "subject": "C-17",
+                "title": "Decision 50",
+                "verb": "Apply rule C-17"
+              },
+              "person": true,
+              "sep": "→"
+            }
+          ]
+        },
+        "ref": "fx",
+        "state": "needs",
+        "title": "Factory",
+        "why_html": "How the factory itself runs: its team, rules, environments, health and definition. Product work never shows here."
+      }
+    ],
+    "below": [
+      {
+        "by_state": {
+          "done": 3
+        },
+        "count": 3,
+        "later": 0,
+        "level": "item",
+        "name": "Items",
+        "needs": 0
+      }
+    ],
+    "here": {
+      "level": "area",
+      "level_name": "Area",
+      "line": {
+        "detail": "3 alarms closed by the server today, each with its cause",
+        "ends": "other",
+        "kind": "done",
+        "label": "Done",
+        "segments": []
+      },
+      "ref": "fx:health",
+      "state": "done",
+      "title": "Health"
+    },
+    "scope": "fx:health",
+    "version": "bf03ded18b13b923"
+  },
   "money/I-1": {
     "rows": [
       {
@@ -824,6 +1110,33 @@
     ],
     "scope": "I-1",
     "total": 51.13,
+    "version": "bf03ded18b13b923"
+  },
+  "money/product": {
+    "rest": 326.87,
+    "rows": [
+      {
+        "burn": 2.5,
+        "cost": 51.13,
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "state": "needs",
+        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+      },
+      {
+        "cost": 38.4,
+        "ref": "build-tier-drafts-3",
+        "state": "waiting",
+        "title": "build-tier-drafts-3"
+      },
+      {
+        "cost": 27.6,
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
+        "state": "done",
+        "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+      }
+    ],
+    "scope": "product",
+    "total": 117.13,
     "version": "bf03ded18b13b923"
   },
   "needs-you/factory": {
@@ -1406,6 +1719,47 @@
     "last_look": "2026-11-03T12:30:00Z",
     "now": "2026-11-03T13:40:00Z",
     "scope": "I-1",
+    "version": "bf03ded18b13b923"
+  },
+  "timeline/assistant-core": {
+    "axis": ["2026-11-03T06:00:00Z", "2026-11-03T13:40:00Z"],
+    "lanes": [
+      {
+        "bars": [
+          {
+            "from": "2026-11-03T06:12:00Z",
+            "kind": "done",
+            "label": "T-15",
+            "to": "2026-11-03T06:55:00Z"
+          }
+        ],
+        "ref": "T-15",
+        "state": "done",
+        "title": "T-15"
+      },
+      {
+        "bars": [
+          {
+            "from": "2026-11-03T06:55:00Z",
+            "kind": "work",
+            "label": "T-16",
+            "to": "2026-11-03T07:46:00Z"
+          },
+          {
+            "from": "2026-11-03T07:46:00Z",
+            "kind": "you",
+            "label": "Held for C-16: needs you: Apply C-16",
+            "to": "2026-11-03T13:40:00Z"
+          }
+        ],
+        "ref": "T-16",
+        "state": "waiting",
+        "title": "T-16"
+      }
+    ],
+    "last_look": "2026-11-03T12:30:00Z",
+    "now": "2026-11-03T13:40:00Z",
+    "scope": "assistant-core",
     "version": "bf03ded18b13b923"
   }
 }

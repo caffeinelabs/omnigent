@@ -1,5 +1,6 @@
 // Where v3 pages read nodes from: the server's node API
-// (`GET /v1/factory/factories/{fid}/n/{ref}` and `…/n/{ref}/level/{level}`).
+// (`GET /v1/factory/factories/{fid}/n/{ref}`, `…/n/{ref}/level/{level}` and
+// the lenses `…/n/{ref}/lineage|timeline|money`).
 // Stories and tests pass their own source (the sample factory) through
 // `NodeSourceProvider`; the sample never ships in the live path.
 //
@@ -17,9 +18,13 @@ import type {
   DecisionRef,
   FindHit,
   LevelView,
+  LevelsInfo,
+  LineageView,
+  MoneyView,
   NeedsYouList,
   NodePage,
   TeamSheet,
+  TimelineView,
   VerbApplied,
   VerbPreview,
   VerbRequest,
@@ -27,9 +32,12 @@ import type {
 import {
   normalizeFind,
   normalizeLevelView,
+  normalizeLineage,
+  normalizeMoney,
   normalizeNeedsYou,
   normalizeNodePage,
   normalizePreview,
+  normalizeTimeline,
 } from "./nodeWire";
 
 export interface NodeSource {
@@ -75,6 +83,14 @@ export interface NodeSource {
   find?: (factoryId: string, q: string, signal?: AbortSignal) => Promise<FindHit[]>;
   /** This person looked at this node now (`PUT …/n/{ref}/seen`). */
   seen?: (factoryId: string, ref: string) => Promise<void>;
+  /** Where the node came from, what is below it, where it landed (`GET …/n/{ref}/lineage`). */
+  lineage?: (factoryId: string, ref: string, signal?: AbortSignal) => Promise<LineageView | null>;
+  /** One lane per child over the last day (`GET …/n/{ref}/timeline`). */
+  timeline?: (factoryId: string, ref: string, signal?: AbortSignal) => Promise<TimelineView | null>;
+  /** The children's cost against their budgets (`GET …/n/{ref}/money`). */
+  money?: (factoryId: string, ref: string, signal?: AbortSignal) => Promise<MoneyView | null>;
+  /** Both trees' levels as the definition names them (`GET …/levels`). */
+  levels?: (factoryId: string, signal?: AbortSignal) => Promise<LevelsInfo>;
   /**
    * A node's team for the Team panel (the sample's; the live panel reads the
    * team editor's routes: the project's team spec, the catalog, the definition).
@@ -183,6 +199,29 @@ export const liveNodeSource: NodeSource = {
     const url = `${nodePath(fid, ref)}/level/${enc(level)}${query("cursor", cursor)}`;
     const view = await readOrNull<LevelView>(await authenticatedFetch(url, { signal }));
     return view && normalizeLevelView(view);
+  },
+  lineage: async (fid, ref, signal) => {
+    const view = await readOrNull<LineageView>(
+      await authenticatedFetch(`${nodePath(fid, ref)}/lineage`, { signal }),
+    );
+    return view && normalizeLineage(view);
+  },
+  timeline: async (fid, ref, signal) => {
+    const view = await readOrNull<TimelineView>(
+      await authenticatedFetch(`${nodePath(fid, ref)}/timeline`, { signal }),
+    );
+    return view && normalizeTimeline(view);
+  },
+  money: async (fid, ref, signal) => {
+    const view = await readOrNull<MoneyView>(
+      await authenticatedFetch(`${nodePath(fid, ref)}/money`, { signal }),
+    );
+    return view && normalizeMoney(view);
+  },
+  levels: async (fid, signal) => {
+    const res = await authenticatedFetch(`${factoryPath(fid)}/levels`, { signal });
+    if (!res.ok) throw await factoryErrorFromResponse(res);
+    return (await res.json()) as LevelsInfo;
   },
   answer: async (_fid, decision, action) => {
     // The answer route takes the decision's row id; `id` is its ref ("D-45").

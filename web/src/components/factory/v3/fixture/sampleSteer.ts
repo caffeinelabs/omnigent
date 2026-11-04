@@ -19,8 +19,8 @@ import type {
   VerbPreview,
   VerbRequest,
 } from "../nodeTypes";
-import type { RawDecision, RawFactory, RawNode, RawWait } from "./sampleData";
-import { SampleEngine } from "./sampleEngine";
+import type { RawDecision, RawFactory, RawLevel, RawNode, RawWait } from "./sampleData";
+import { SampleLensEngine } from "./sampleLenses";
 
 /** How long an apply can be undone. */
 export const SAMPLE_UNDO_MS = 10 * 60_000;
@@ -57,7 +57,7 @@ function text(value: VerbRequest["args"][string]): string {
 }
 
 /** A sample engine that also previews and applies verbs, ranks asks, finds nodes and keeps marks. */
-export class SampleSteerEngine extends SampleEngine {
+export class SampleSteerEngine extends SampleLensEngine {
   private undos = new Map<string, string>();
   private seq = 0;
   private marks = new Set<string>();
@@ -291,6 +291,40 @@ export class SampleSteerEngine extends SampleEngine {
     const after = `${vendor} · ${model}`;
     const delta = (this.data.modelRate[after] ?? 0) - (this.data.modelRate[before] ?? 0);
     return { a, i, vendor, model, before, after, delta };
+  }
+
+  /**
+   * The level names a rename sets (`<level>.name`, `<level>.plural`), checked
+   * as the definition checks them: none empty, no two levels of a tree alike.
+   */
+  private renames(request: VerbRequest): { level: RawLevel; name: string; plural: string }[] {
+    const out: { level: RawLevel; name: string; plural: string }[] = [];
+    for (const tree of Object.values(this.data.trees)) {
+      for (const level of tree.levels) {
+        const name = text(request.args[`${level.key}.name`]);
+        const plural = text(request.args[`${level.key}.plural`]);
+        const has = (k: string) => k in request.args;
+        if (!has(`${level.key}.name`) && !has(`${level.key}.plural`)) continue;
+        if ((has(`${level.key}.name`) && !name) || (has(`${level.key}.plural`) && !plural)) {
+          throw new FactoryApiError("A level needs a name.", 422, "invalid_definition", null, null);
+        }
+        out.push({ level, name: name || level.name, plural: plural || level.plural });
+      }
+      const said = tree.levels.map((l) => {
+        const r = out.find((x) => x.level === l);
+        return (r ? r.name : l.name).toLowerCase();
+      });
+      if (new Set(said).size !== said.length) {
+        throw new FactoryApiError(
+          "Two levels would have the same name.",
+          422,
+          "invalid_definition",
+          null,
+          null,
+        );
+      }
+    }
+    return out;
   }
 
   preview(ref: string, request: VerbRequest): VerbPreview {
@@ -566,6 +600,25 @@ export class SampleSteerEngine extends SampleEngine {
           apply_label: verb === "name" ? "Save" : "Move",
         };
       }
+      case "rename": {
+        const renames = this.renames(request);
+        const said = renames.map(
+          ({ level, name, plural }) => `${esc(level.name)} → <b>${esc(name)}</b> (${esc(plural)})`,
+        );
+        return {
+          ...base,
+          title: "Rename levels",
+          rollup_delta: [],
+          effects: [
+            ...(said.length ? [line("Names", said.join(" · "))] : []),
+            line(
+              "What changes",
+              "Every page, the level strip, previews and agent prompts use the new names. Keys, refs, URLs and data stay the same.",
+            ),
+          ],
+          apply_label: "Save as a definition version",
+        };
+      }
       default:
         return {
           ...base,
@@ -587,7 +640,11 @@ export class SampleSteerEngine extends SampleEngine {
     const token = `u-${this.seq}`;
     this.undos.set(
       token,
-      JSON.stringify({ nodes: this.data.nodes, decisions: this.data.decisions }),
+      JSON.stringify({
+        nodes: this.data.nodes,
+        decisions: this.data.decisions,
+        trees: this.data.trees,
+      }),
     );
     return token;
   }
@@ -702,6 +759,15 @@ export class SampleSteerEngine extends SampleEngine {
         message = verb === "name" ? `Named ${n.title}` : `Moved ${n.title}`;
         break;
       }
+      case "rename": {
+        const renames = this.renames(request);
+        for (const { level, name, plural } of renames) Object.assign(level, { name, plural });
+        this.visible = new Map();
+        message = renames.length
+          ? `Levels renamed: ${renames.map((r) => r.name).join(", ")}`
+          : "No level renamed";
+        break;
+      }
       default:
         Object.assign(n, {
           state: "moving",
@@ -724,8 +790,9 @@ export class SampleSteerEngine extends SampleEngine {
     if (!saved) {
       throw new FactoryApiError("That change can no longer be undone.", 410, "gone", null, null);
     }
-    const o = JSON.parse(saved) as Pick<RawFactory, "nodes" | "decisions">;
+    const o = JSON.parse(saved) as Pick<RawFactory, "nodes" | "decisions" | "trees">;
     this.data.nodes = o.nodes;
+    this.data.trees = o.trees;
     this.data.decisions.splice(0, this.data.decisions.length, ...o.decisions);
     this.undos.delete(token);
     this.writes.push(`undo ${token}`);

@@ -60,6 +60,7 @@ const VERB_LABEL: Record<string, [string, string]> = {
   resume: ["Resume", "p"],
   move: ["Move", "m"],
   name: ["Name it / file under", "n"],
+  rename: ["Rename levels", "r"],
 };
 
 interface PathSeg {
@@ -1230,6 +1231,9 @@ export class SampleEngine {
           return s !== "done";
         case "talk":
           return Boolean(this.responder(n));
+        case "rename":
+          // The level names live in the definition: renamed from its area only.
+          return n.lvl === "area" && n.kind === "def";
         default:
           return true;
       }
@@ -1320,7 +1324,7 @@ export class SampleEngine {
       api_url: e.api,
       note: e.signin,
       follows: e.follows,
-      ref: "env:base",
+      ref: "env:base-env",
     };
   }
 
@@ -1333,7 +1337,11 @@ export class SampleEngine {
         return {
           id: k.tag ?? k.id,
           was: k.title.replace(/^“|”$/g, ""),
-          cause: (k.doneNote ?? "").replace(/^closed by the server: /, ""),
+          // The cause alone: the real ask is its own field.
+          cause: (k.doneNote ?? "")
+            .replace(/^closed by the server: /, "")
+            .replace(/\s*The real ask is [^.]*\.$/, "")
+            .replace(/[.;]$/, ""),
           ...(k.realAsk ? { real_ask: k.realAsk } : {}),
           ...(real ? { real_ask_verb: real.verb } : {}),
           ...(k.about ? { ref: k.about } : {}),
@@ -1373,7 +1381,9 @@ export class SampleEngine {
         : {}),
       ...(this.tryItOf(n).length ? { try_it: this.tryItOf(n) } : {}),
       ...(n.tryFlag ? { try_flag: n.tryFlag } : {}),
-      ...(n.lvl === "root" && n.tree === "product" ? { env: this.envOf() } : {}),
+      ...((n.lvl === "root" && n.tree === "product") || (n.lvl === "area" && n.kind === "env")
+        ? { env: this.envOf() }
+        : {}),
       ...(this.closedAlarms(n.id).length ? { closed_alarms: this.closedAlarms(n.id) } : {}),
       ...(n.evidenceItems && n.evidence
         ? {
