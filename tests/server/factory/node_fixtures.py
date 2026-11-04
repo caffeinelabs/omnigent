@@ -506,7 +506,16 @@ def factory_1340() -> NodeFacts:
             16,
             status="pending",
             title="Update assistant-core (constraints, DoD)",
-            ops=[{"op": "update", "slug": "assistant-core"}],
+            ops=[
+                {
+                    "op": "update",
+                    "slug": "assistant-core",
+                    "patch": {
+                        "constraints": "Debit the user's credits on each turn.",
+                        "dod": ["Each turn debits the user's credits"],
+                    },
+                }
+            ],
         ),
         _proposal(
             19,

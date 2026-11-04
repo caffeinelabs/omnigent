@@ -142,7 +142,7 @@ function NeedsList({
       {rows.length > 0 && (
         <ul role="list" className="overflow-hidden rounded-xl bg-card-solid ring-1 ring-border">
           {rows.map((row, i) => (
-            <MoveRowItem key={row.id} row={row} primary={i === 0} testId="v3-needs-item" />
+            <MoveRowItem key={row.id} row={row} primary={i === 0} testId="v3-needs-item" inbox />
           ))}
         </ul>
       )}

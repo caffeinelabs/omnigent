@@ -8,8 +8,10 @@ import type {
   Crumb,
   DecisionAction,
   DecisionRef,
+  MoveBelow,
   NeedsYouItem,
   NeedsYouList,
+  NodeLink,
   NodePage,
   NodeSummary,
   QuietAsk,
@@ -224,12 +226,30 @@ export function childPhrase(node: NodeSummary, above?: Above): Phrase | null {
 
 // ── Your move ──────────────────────────────────────────────────
 
+/** One answer as a row draws it: its words and what it does (answer, or open a link). */
+export interface RowAnswer {
+  /** Named by its outcome ("Yes, allow it", "No") on a newer server. */
+  label: string;
+  action?: DecisionAction;
+  url?: string;
+  /** The one answer that may be filled (on the list's first row). */
+  primary?: boolean;
+  /** Waits in the ask's details, not on its row. */
+  more?: boolean;
+}
+
 /** A row of Your move as the page draws it. */
 export interface MoveRow {
   id: string;
   decision: DecisionRef;
-  /** "Apply C-16". */
+  /** The ask in plain words ("Atlas wants Connectors core to also edit 3 more files"); "Apply C-16" from an older server. */
   text: string;
+  /** `text` is the server's plain sentence (no code to explain, no name after it). */
+  plain?: boolean;
+  /** Its answers, outcome-named, the primary first; empty: the row opens the ask. */
+  answers: RowAnswer[];
+  /** Where it lives when that is not the page's node (Home names it). */
+  where?: NodeLink;
   /** What the ask is about in a few words ("update assistant core"), when its text names only a code. */
   name?: string | null;
   /** "Agent assistant", "this task"; null when it names nothing it frees (it may still hold work). */
@@ -258,7 +278,14 @@ export interface MoveView {
   more: number;
   /** Where each initiative of several waves here is: one quiet line each (the server's). */
   waves?: WaveLine[];
+  /** Children with asks deeper down: one line each ("Assistant core · 2 need you"). */
+  below: MoveBelow[];
+  belowMore: number;
+  /** Where the ask that holds this node lives, when nothing here needs the viewer. */
+  heldBy: NodeLink | null;
 }
+
+const NO_LEVELS = { below: [] as MoveBelow[], belowMore: 0, heldBy: null };
 
 /** Every id an ask goes by: its ref, its row id, its subject ("C-16"). */
 export function askKeys(decision: DecisionRef): string[] {
@@ -396,6 +423,11 @@ function spelledAs(name: string, text: string | null | undefined): string {
 /** A bare id ("T-16", "PR-9856", "#9856"): never what "unblocks" says. */
 const BARE_REF = /(?:^|[\s,(])(?:[A-Z]{1,3}-\d+|#\d+)(?=$|[\s,).])/;
 
+/** An older server's one button as the row's answers. */
+function legacyAnswers(primary: MoveRow["primary"]): RowAnswer[] {
+  return primary ? [{ ...primary, primary: true }] : [];
+}
+
 function rowOf(
   decision: DecisionRef,
   unblocks: string | null,
@@ -408,12 +440,24 @@ function rowOf(
     id: decision.id,
     decision,
     text,
+    answers: legacyAnswers(primary),
     name: askName(decision, text),
     unblocks,
     quiet,
     at,
     primary,
   };
+}
+
+/** The server's outcome-named answers, each with the decision action it sends. */
+function answersOf(item: YourMoveItem): RowAnswer[] {
+  return (item.answers ?? []).map((a) => ({
+    label: a.label,
+    // The answer goes out under its option; its words are the outcome's.
+    ...(a.url ? { url: a.url } : { action: { id: a.option, label: a.label } }),
+    ...(a.primary ? { primary: true } : {}),
+    ...(a.more ? { more: true } : {}),
+  }));
 }
 
 /**
@@ -460,9 +504,16 @@ export function deriveMoves(
 ): MoveRow[] {
   const out: MoveRow[] = [];
   const seen = new Set<string>();
-  const add = (row: MoveRow) => {
+  let names: Map<string, string> | null = null;
+  const add = (row: MoveRow, move?: YourMoveItem) => {
     if (askKeys(row.decision).some((k) => seen.has(k))) return;
     askKeys(row.decision).forEach((k) => seen.add(k));
+    // A newer server's words for it (the row it shows on the tree's root).
+    if (move?.sentence) {
+      names ??= knownNames(page, needs);
+      out.push({ ...itemRow(move, page, names), unblocks: row.unblocks, quiet: row.quiet });
+      return;
+    }
     out.push(row);
   };
   const status = page.status;
@@ -486,10 +537,11 @@ export function deriveMoves(
         lastRef(item.breadcrumb),
         false,
       ),
+      item.move,
     );
   }
   const quiet: QuietAsk[] = (needs?.blocks_nothing ?? []).filter((q) => inSubtree(q, page));
-  for (const ask of quiet) add(rowOf(ask, null, ask.node?.ref, true));
+  for (const ask of quiet) add(rowOf(ask, null, ask.node?.ref, true), ask.move);
   if (own?.blocks_nothing) add(rowOf(own, null, undefined, true));
   return out;
 }
@@ -500,12 +552,15 @@ function lastRef(crumbs: readonly Crumb[] | undefined): string | undefined {
 
 function itemRow(item: YourMoveItem, page: NodePage, names: Map<string, string>): MoveRow {
   const object = item.object && item.object !== item.id ? item.object : null;
-  // A question reads by its topic, not its number ("Answer: live search follow-up").
-  const text = item.about
-    ? `${item.verb}: ${item.about}`
-    : object
-      ? `${item.verb} ${object}`
-      : item.decision.verb || item.verb;
+  // The server's plain sentence; an older server's verb and object, a question by its topic.
+  const plain = Boolean(item.sentence);
+  const text =
+    item.sentence ??
+    (item.about
+      ? `${item.verb}: ${item.about}`
+      : object
+        ? `${item.verb} ${object}`
+        : item.decision.verb || item.verb);
   const p = item.primary;
   const action = p?.option ? item.decision.actions.find((a) => a.id === p.option) : undefined;
   const primary: MoveRow["primary"] = p?.url
@@ -524,24 +579,36 @@ function itemRow(item: YourMoveItem, page: NodePage, names: Map<string, string>)
     item.unblocks && !BARE_REF.test(item.unblocks) && slugWords(item.unblocks) === item.unblocks
       ? item.unblocks
       : null;
-  const unblocks = quiet
-    ? null
-    : named?.complete
-      ? named.text
-      : (given ?? named?.text ?? (page.breadcrumb?.length && page.node ? thisNode(page) : null));
+  // A newer server says what an ask frees only when that is true now: no guess for it.
+  const guess = !plain && page.breadcrumb?.length && page.node ? thisNode(page) : null;
+  const unblocks = quiet ? null : named?.complete ? named.text : (given ?? named?.text ?? guess);
+  const answers = item.answers?.length ? answersOf(item) : legacyAnswers(primary);
+  const first = answers.find((a) => a.primary) ?? answers[0];
   return {
     id: item.id,
     decision: item.decision,
     text,
-    name: item.object_name
-      ? continued(item.object_name)
-      : item.about
-        ? null
-        : askName(item.decision, text),
+    ...(plain ? { plain: true } : {}),
+    answers,
+    ...(item.where ? { where: item.where } : {}),
+    name: plain
+      ? null
+      : item.object_name
+        ? continued(item.object_name)
+        : item.about
+          ? null
+          : askName(item.decision, text),
     unblocks,
     quiet,
     at: item.ref,
-    primary,
+    primary:
+      plain && first
+        ? {
+            label: first.label,
+            ...(first.action ? { action: first.action } : {}),
+            ...(first.url ? { url: first.url } : {}),
+          }
+        : primary,
   };
 }
 
@@ -560,19 +627,31 @@ export function moveView(
     const names = knownNames(page, needs);
     const row = (item: YourMoveItem) => itemRow(item, page, names);
     const rows = given.items.slice(0, max).map(row);
-    const keys = new Set(rows.flatMap((r) => askKeys(r.decision)));
-    const rest = [
-      ...given.items.slice(max).map(row),
-      ...derived.filter((r) => !askKeys(r.decision).some((k) => keys.has(k))),
-    ];
+    const listed = [...given.items.slice(max), ...(given.rest ?? [])].map(row);
+    const keys = new Set([...rows, ...listed].flatMap((r) => askKeys(r.decision)));
+    // A newer server lists this level's asks only: a page below the root adds none of Needs you's.
+    const scoped = given.rest !== undefined && page.breadcrumb.length > 0;
+    const extra = scoped
+      ? []
+      : derived.filter((r) => !askKeys(r.decision).some((k) => keys.has(k)));
+    const rest = [...listed, ...extra];
     const more = Math.max(0, given.more) + Math.max(0, given.items.length - max);
     const waves = given.waves?.length ? { waves: given.waves } : {};
-    return { rows, rest: rest.slice(0, more), more, ...waves };
+    return {
+      rows,
+      rest: rest.slice(0, more),
+      more,
+      below: given.below ?? [],
+      belowMore: given.below_more ?? 0,
+      heldBy: given.held_by ?? null,
+      ...waves,
+    };
   }
   return {
     rows: derived.slice(0, max),
     rest: derived.slice(max),
     more: Math.max(0, derived.length - max),
+    ...NO_LEVELS,
   };
 }
 

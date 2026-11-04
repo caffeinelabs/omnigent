@@ -233,7 +233,7 @@
             "level_name": "Feature",
             "needs": {
               "blocking": 2,
-              "open": 4
+              "open": 2
             },
             "owner": {
               "name": "Atlas",
@@ -695,7 +695,7 @@
             "named": "words",
             "needs": {
               "blocking": 0,
-              "open": 1
+              "open": 0
             },
             "progress": {
               "label": "1/1",
@@ -733,7 +733,7 @@
             "named": "words",
             "needs": {
               "blocking": 0,
-              "open": 1
+              "open": 0
             },
             "progress": {
               "label": "1/1",

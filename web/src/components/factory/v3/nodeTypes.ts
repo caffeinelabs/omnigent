@@ -418,12 +418,31 @@ export interface NodePage {
   your_move?: YourMove;
 }
 
-// ── Your move (calm rule 1) ─────────────────────────────────────
+// ── Your move (calm rules 1, 8 and 9) ───────────────────────────
 
-/** One thing the viewer must do: a verb, its object, what it unblocks, one answer. */
+/** One answer of an ask, named by its outcome ("Yes, allow it", "No"). */
+export interface MoveAnswer {
+  /** The decision option it answers with (`apply`, `reject`, a question's own). */
+  option: string;
+  label: string;
+  /** The row's one answer that may be filled (the recommended one, or yes). */
+  primary?: boolean;
+  /** Answered on the code host (a merge): the button opens it. */
+  url?: string;
+  /** Waits in the ask's details, not on its row ("Change it first"). */
+  more?: boolean;
+}
+
+/** One thing the viewer must do: who wants what, its answers, what it unblocks. */
 export interface YourMoveItem {
   /** The ask's id (`D-45`; a group of merges has its own). */
   id: string;
+  /** Who wants what and what a yes does, in product words, no ids (newer servers). */
+  sentence?: string;
+  /** Its answers named by their outcome, the primary first (newer servers). */
+  answers?: MoveAnswer[];
+  /** The node it lives on, when that is not the page's (Home names where each ask lives). */
+  where?: NodeLink;
   /** "Apply". */
   verb: string;
   /** "C-16"; empty when the verb names it already ("Merge #9856 and #9857"). */
@@ -457,11 +476,30 @@ export interface WaveLine {
   line: string;
 }
 
-/** The node's Your move: the first rows and how many more the subtree holds. */
+/** A child with asks deeper down: "Assistant core · 2 need you". */
+export interface MoveBelow {
+  ref: string;
+  title: string;
+  count: number;
+}
+
+/**
+ * The node's Your move: its own asks and its children's (Home: every ask),
+ * the first rows and the next ones, one line per child for the asks deeper
+ * down, where the ask that holds this node lives when nothing here needs the
+ * viewer, and where each initiative of several waves under it is.
+ */
 export interface YourMove {
   items: YourMoveItem[];
   /** Asks past the first rows (behind "+n more"). */
   more: number;
+  /** The next of them (newer servers; older ones only count them). */
+  rest?: YourMoveItem[];
+  /** Children with asks deeper down (newer servers). */
+  below?: MoveBelow[];
+  below_more?: number;
+  /** The node an ask holding this one lives on ("Held for an ask in Assistant core"). */
+  held_by?: NodeLink;
   /** Where each initiative of several waves at or under the node is (absent on older servers). */
   waves?: WaveLine[];
 }
@@ -567,10 +605,16 @@ export interface NeedsYouItem {
   /** What answering it frees ("T-16", "assistant-panel-ux"). */
   holds: string[];
   weight: number;
+  /** The row Your move shows for it on the tree's root page (newer servers). */
+  move?: YourMoveItem;
 }
 
 /** An ask that blocks nothing, with the node it is on and its breadcrumb (they are grouped). */
-export type QuietAsk = DecisionRef & { node?: NodeLink; breadcrumb?: Crumb[] };
+export type QuietAsk = DecisionRef & {
+  node?: NodeLink;
+  breadcrumb?: Crumb[];
+  move?: YourMoveItem;
+};
 
 /** `GET /factories/{fid}/needs-you?tree=`: ranked by what each ask holds. */
 export interface NeedsYouList {

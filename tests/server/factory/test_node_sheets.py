@@ -44,9 +44,8 @@ def test_needs_you_ranks_by_what_each_ask_holds(tree: Tree) -> None:
     view = _needs(tree)
 
     assert [i["decision"]["id"] for i in view["items"]] == ["D-45", "merge:main", "D-49"]
-    assert [i["decision"]["id"] for i in view["blocks_nothing"]] == ["D-43", "D-44"]
-    assert [i["decision"]["verb"] for i in view["blocks_nothing"]] == ["Apply C-14", "Apply C-15"]
-    assert all(i["decision"]["blocks_nothing"] for i in view["blocks_nothing"])
+    # C-14 and C-15 changed projects that finished since: they ask nothing any more.
+    assert view["blocks_nothing"] == []
     d45, merges, d49 = view["items"]
     # D-45 holds T-16 and, through assistant-core, the panel that waits on it.
     assert d45["holds"] == ["T-16", "Assistant panel UX"]
@@ -62,15 +61,18 @@ def test_each_ask_comes_with_the_row_your_move_shows_for_it(tree: Tree) -> None:
 
     rows = [i["move"] for i in view["items"] + view["blocks_nothing"]]
     # Short names and one action, as the home page's Your move words them.
-    assert [r["id"] for r in rows] == ["D-45", "merge:main", "D-49", "D-43", "D-44"]
+    assert [r["id"] for r in rows] == ["D-45", "merge:main", "D-49"]
     assert rows[0] == {**shown["D-45"], "decision": rows[0]["decision"]}
+    # In plain words, naming where each ask lives (as Home's inbox does).
+    assert rows[0]["sentence"].startswith("Atlas wants Assistant core to")
+    assert rows[0]["where"] == {"ref": "assistant-core", "title": "Assistant core"}
     assert (rows[0]["object_name"], rows[0]["unblocks"]) == (
         "Update assistant core",
         "Agent assistant (sample)",
     )
     assert rows[1]["unblocks"] == "Build tier drafts 3"
-    assert all(r["blocks_nothing"] for r in rows[3:])
     factory = _needs(tree, "factory")
+    assert factory["blocks_nothing"][0]["move"]["blocks_nothing"] is True
     assert [i["move"]["verb"] for i in factory["items"]] == ["Apply rule", "Apply rule"]
 
 
@@ -108,10 +110,10 @@ def test_the_closed_alarms_come_with_their_causes_and_the_other_tree_is_a_count(
     assert product["other_tree"] == 3
     assert [i["decision"]["id"] for i in factory["items"]] == ["D-50", "D-51"]
     assert [i["decision"]["id"] for i in factory["blocks_nothing"]] == ["D-37"]
-    assert factory["other_tree"] == 5 and "closed_alarms" not in factory
+    assert factory["other_tree"] == 3 and "closed_alarms" not in factory
 
 
-def test_after_d45_is_answered_needs_you_holds_four(tree: Tree) -> None:
+def test_after_d45_is_answered_needs_you_holds_two(tree: Tree) -> None:
     facts = factory_1340()
     facts.decisions = [d for d in facts.decisions if d.ref != "D-45"]
     facts.proposals = [p for p in facts.proposals if p.ref != "C-16"]
@@ -124,7 +126,7 @@ def test_after_d45_is_answered_needs_you_holds_four(tree: Tree) -> None:
     view = _needs(after)
 
     assert [i["decision"]["id"] for i in view["items"]] == ["merge:main", "D-49"]
-    assert len(view["items"]) + len(view["blocks_nothing"]) == 4
+    assert len(view["items"]) + len(view["blocks_nothing"]) == 2
 
 
 def test_a_viewer_who_cannot_read_a_project_is_not_asked_about_it() -> None:

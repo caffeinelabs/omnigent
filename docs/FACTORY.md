@@ -349,7 +349,14 @@ applied proposals call with the acting person, agent or the server.
   owners' (owner class; the cockpit add and charter PATCH need MANAGE for it).
   An apply that fails part-way takes back the projects it created before
   their PLs started. Pending proposals expire after 72 h; the proposer gets
-  `[Factory proposal · C-<n> applied|rejected|expired|undone …]`.
+  `[Factory proposal · C-<n> applied|rejected|expired|undone …]`. A pending
+  proposal that no longer matters closes itself on the next sweep with its
+  cause (`moot.py`): a project it touches closed, or merged or finished after
+  it was filed (a row from before proposals recorded stages is judged by
+  when the project's stage changed), or every change it makes is already in
+  the charter (`already_applied`); the cockpit never shows it meanwhile. So
+  does an agent's question whose task closed, PR merged or closed, or project
+  finished after it was asked (answered by the server with the cause).
 - **Charter versions** (`server/factory/charter_versions.py`). A person's
   charter edit (`PATCH …/projects/{slug}`) is recorded as a human projects
   proposal that applied when it was filed (`C-n`, `result.charter_edit`, the
@@ -1148,25 +1155,41 @@ and shows every node under a short name; the chat is a conversation.
   an implicit feature or need is still made a stored node by it), with Undo,
   and the factory never renames what a person named (`named: "person"`).
   The factory tree keeps its own words.
-- *Your move* (`your_move.py`): `your_move: {items, more}` on every node page,
-  at most three asks this viewer answers (a decision assigned to them or a
-  role they hold; merges for editors): the asks in the node's subtree and the
-  ones its blocker path and its children's end at, ranked like Needs you
-  (held work first, then the oldest; asks that block nothing last). Each item
-  is `{id, ref, verb, object, object_name?, action: {label, option?, url?},
-  unblocks?, unblocks_ref?, unblocks_refs?, about?, blocks_nothing?,
-  decision, weight}`: "Apply C-16 · Update assistant core · unblocks Agent
-  assistant · [Apply]", where `object_name` is what a proposal changes in at
-  most four words (the factory names a machine or long proposal title too,
-  stored under its code), `unblocks` names, by the short names the rows
-  carry, the children (at a root, the home level's nodes) that hold the work
-  the ask holds, with the page's own node as "this task" / "this project"
-  ("unblocks this task and Assistant panel UX"); when the object already
-  names all it holds (a project's merges), it unblocks the node the ask sits
-  on ("Merge #9856 and #9857 · unblocks this project"). `blocks_nothing`
-  alone marks an ask that holds nothing. `action` is the recommended or
-  applying answer, the merge link, or "Answer" (open the ask). Every other
-  place the page carries one of these asks (the status line, a child's line,
+- *Your move* (`your_move.py`): `your_move: {items, more, rest?, below?,
+  below_more?, held_by?}` on every node page, at most three asks this viewer
+  answers (a decision assigned to them or a role they hold; merges for
+  editors), ranked like Needs you (held work first, then the oldest; asks
+  that block nothing last), the next ones in `rest`. Your move belongs to a
+  level: a page lists only the asks that sit on its own node or one of its
+  direct children (a group of merges sits on its project and its PRs); an
+  ask deeper down is one line per child in `below` (`{ref, title, count}`:
+  "Assistant core · 2 need you"); a root (Home) is the inbox, every ask of
+  its tree, each naming the node it sits on (`where`); and a page with
+  nothing of its own whose blocker path ends at an ask on another page names
+  that page in `held_by` ("Held for an ask in Assistant core"). So an ask
+  shows on Home and on the page that owns it, not on every level between.
+  Each item is `{id, ref, sentence, answers: [{option, label, primary?, url?,
+  more?}], where?, verb, object, object_name?, action: {label, option?,
+  url?}, unblocks?, unblocks_ref?, unblocks_refs?, about?, blocks_nothing?,
+  decision, weight}`. `sentence` says who wants what and what a yes does, in
+  product words and without ids ("Atlas wants Connectors core to also edit 2
+  more files"), and `answers` name their outcome ("Yes, allow it", "No";
+  Edit & apply waits in the details as "Change it first"; a question's own
+  answers without codes or a jargon head): the factory words each open ask
+  with the cheap title model the short names use (`ask_words.py`, stored as
+  `plain:D-n` and `plain:D-n#labels` in `factory_node_names`, again only when
+  the ask's text changes); until then the rows say it (a proposal's ops and
+  the project's short name, a question's own words, a merge's project and
+  base). The original wording and the ids stay in `decision`. `unblocks`
+  names, by the short names the rows carry, the children (at a root, the
+  home level's nodes) that hold the work the ask holds now, with the page's
+  own node as "this task" / "this project", leaving out what the sentence
+  names already; nothing waits on a finished node, and an ask that holds
+  nothing that exists (a proposal for a project that merged or finished, a
+  new project's apply) never says it unblocks anything. `blocks_nothing` alone marks
+  an ask that holds nothing. `action` is the primary answer under its
+  outcome's label. Every other place the page carries one of these asks
+  (the status line, a child's line,
   a segment) is marked `in_your_move`, so the cockpit asks once. An empty
   `items` reads "Nothing needs you". Each Needs you item carries the same
   row as `move` (as the tree's root page words it), and a level's "n you" in
@@ -1379,17 +1402,23 @@ one in force (read again first); a later version says "undo from Versions".
 
 **Calm pages (cockpit v3).** A node page opens with the level strip, the
 node's short name (its ring or state dot beside it), Your move and its
-children, nothing else. Your move lists at most three asks of the node's
-subtree for this viewer, ranked by what each unblocks ("Apply C-16 · update
-assistant core · unblocks Agent assistant", one answer, filled only on the
-first row; a click on the words shows the ask in full with its other answers
-and who asked, "the factory" when it asked by itself; the rest behind "+n
-more"; "Nothing needs you" when empty). What a row unblocks is named as the
-page's rows name those nodes (`unblocks_refs`), the page's own node as "this
-task" or "this project", never by slug or bare id; "blocks nothing" and the
-grey dot only when the server says so (`blocks_nothing`). It reads the page's
-`your_move`; from a server without it, the rows come from the status line
-and Needs you. The "n need you" pill counts every ask of both trees, the
+children, nothing else. Your move lists at most three asks for this viewer,
+the node's own and its children's, ranked by what each unblocks; each deeper
+child with asks is one line ("Assistant core · 2 need you →"), and Home lists
+every ask, each saying where it lives. A row says the ask
+in one plain sentence with its answers named by their outcome ("Atlas wants
+Assistant core to also ensure each turn debits the user's credits ·
+[Yes, allow it] [No]", one answer filled, only on the first row), never
+"Apply" or an id; a click on the sentence shows the ask as it was asked, its
+ids, who asked ("the factory" when it asked by itself) and the answers that
+wait there ("Change it first"); the rest behind "+n more"; "Nothing needs
+you" when empty, or "Held for an ask in Assistant core →" when what holds the
+node lives on another page. What a row unblocks is named as the page's rows
+name those nodes (`unblocks_refs`), the page's own node as "this task" or
+"this project", never by slug or bare id, and only when it is true now; the
+grey dot marks an ask that holds nothing (`blocks_nothing`). It reads the
+page's `your_move`; from a server without it, the rows come from the status
+line and Needs you. The "n need you" pill counts every ask of both trees, the
 Factory switch and each level strip cell ("Features 3 · 5 you") count the
 same asks under them, and the Needs you sheet lists them as Your move rows
 (one filled answer, the other tree's count as a link; the alarms the server

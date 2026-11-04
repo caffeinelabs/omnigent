@@ -1,9 +1,12 @@
 """Every minute, per factory: expire, close stale ones, grace-apply and spawn.
 
 1. Projects proposals pending for 72 hours expire (``proposal.expired``).
-2. Open projects proposals that no longer apply (a project closed or changed
-   since, a slug taken) close themselves with their reason; a person can
-   reopen one (:func:`.proposals.close_stale`).
+2. Open projects proposals that no longer apply (a project closed, finished
+   or changed since, a slug taken, changes the charter already holds) close
+   themselves with their reason; a person can reopen one
+   (:func:`.proposals.close_stale`). So do questions whose task, PR or
+   project finished since they were asked
+   (:func:`.server_decisions.close_finished_subjects`).
 3. Under ``grace`` autonomy, proposals nobody objected to within 15 minutes
    are applied by the server.
 4. Server-owned projects are (re)started: held ones whose dependencies are now
@@ -24,7 +27,13 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from omnigent.factory import LABEL_STATE, STATE_DONE
-from omnigent.server.factory import acceptance, initiative_waves, proposals, spawn
+from omnigent.server.factory import (
+    acceptance,
+    initiative_waves,
+    proposals,
+    server_decisions,
+    spawn,
+)
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.snapshot import list_factory_roots
 
@@ -58,6 +67,7 @@ async def sweep_once(app_state: Any) -> SweepReport:
         try:
             report.expired += await proposals.expire_due(app_state, root.id)
             report.closed += await proposals.close_stale(app_state, root.id)
+            report.closed += await server_decisions.close_finished_subjects(app_state, root.id)
             report.applied += await proposals.apply_graceful(app_state, root.id)
             report.started += await spawn.finish_pending(app_state, root.id)
         except Exception:

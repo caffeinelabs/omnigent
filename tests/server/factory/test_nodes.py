@@ -359,8 +359,8 @@ def test_agent_assistant(tree: Tree) -> None:
     [ghost] = children["ghosts"]
     assert (ghost["ref"], ghost["state"], ghost["tag"]) == ("live-search-fix", "ghost", "C-19")
     assert children["total"] == 9
-    # D-45 on assistant-core, D-49 on its ghost; C-14 / C-15 block nothing.
-    assert page["node"]["needs"] == {"open": 4, "blocking": 2}
+    # D-45 on assistant-core, D-49 on its ghost; C-14 / C-15 changed finished projects.
+    assert page["node"]["needs"] == {"open": 2, "blocking": 2}
     assert page["node"]["state"] == "needs"
     assert page["thread"]["key"] == "feature:I-1"
 
@@ -410,7 +410,7 @@ def test_the_product(tree: Tree) -> None:
         "open": ["PR-9856", "PR-9857"],
         "readouts": "not measured",
     }
-    assert page["node"]["needs"] == {"open": 4, "blocking": 2}
+    assert page["node"]["needs"] == {"open": 2, "blocking": 2}
     assert page["rollup"]["in_base_env"] == {"sha": "817480d", "try_it": True}
     assert page["rollup"]["moving_anywhere"] is False
     assert page["breadcrumb"] == [] and page["thread"]["key"] == "factory"
@@ -601,8 +601,8 @@ def test_a_viewer_who_cannot_read_a_project_sees_nothing_of_it() -> None:
     assert tree.page("assistant-core") is None and tree.page("T-16") is None
     page = _page(tree, "I-1")
     assert "assistant-core" not in _refs(page["children"]["items"])
-    assert page["node"]["needs"] == {"open": 3, "blocking": 1}  # D-45 is not shown
-    assert _page(tree, "product")["node"]["needs"] == {"open": 3, "blocking": 1}
+    assert page["node"]["needs"] == {"open": 1, "blocking": 1}  # D-45 is not shown
+    assert _page(tree, "product")["node"]["needs"] == {"open": 1, "blocking": 1}
     assert _page(tree, "assistant-panel-ux")["chips"][0]["title"] == "3 met links"
 
 

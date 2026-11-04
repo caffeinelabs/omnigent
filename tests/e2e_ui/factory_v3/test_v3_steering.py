@@ -142,15 +142,15 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
     assert factory.apply_decision in _needs_you(v3_server, factory)
     cockpit.open(factory.project)
     row = move_row(page, factory.project, factory.apply_decision)
-    expect(row).to_contain_text(f"Apply {factory.proposal}", timeout=LOAD_MS)
+    expect(row.get_by_test_id("v3-move-text")).to_contain_text("Assistant core", timeout=LOAD_MS)
 
     with page.expect_response(
         lambda r: r.request.method == "POST" and r.url.endswith("/answer")
     ) as answered:
-        row.get_by_role("button", name="Apply", exact=True).click()
+        row.get_by_role("button", name="Yes, allow it", exact=True).click()
     assert answered.value.status == 200, answered.value.text()
     expect(page.locator("[data-factory-toast]")).to_contain_text(
-        f"{factory.apply_decision}: Apply"
+        f"{factory.apply_decision}: Yes, allow it"
     )
     expect(row).to_have_count(0, timeout=LOAD_MS)
     applied = api(v3_server.base_url, factory.fid, f"/proposals/{factory.proposal}")
@@ -158,7 +158,7 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
     assert _status_of(v3_server, factory, factory.held_task) != held_before
 
     # The answer applied C-16: its Undo stays beside the verbs while the server keeps one.
-    undo = _undo_latest(page, factory.project, f"Apply {factory.proposal}")
+    undo = _undo_latest(page, factory.project, "Your answer")
     with page.expect_response(
         lambda r: r.request.method == "POST" and r.url.endswith("/undo")
     ) as undone:
@@ -168,13 +168,13 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
     fresh = undone.value.json()["decision"]["ref"]
     assert fresh != factory.apply_decision
     expect(page.locator("[data-factory-toast]")).to_contain_text(
-        f"Undone: Apply {factory.proposal} ({factory.apply_decision}). "
+        f"Undone: Your answer ({factory.apply_decision}). "
         f"{factory.proposal} asks again in {fresh}."
     )
     expect(node(page, factory.project).get_by_test_id("v3-undo-latest")).to_have_count(0)
     # Put back: C-16 waits for a person again (Your move asks it), T-16 is held for it.
-    expect(move_row(page, factory.project, fresh)).to_contain_text(
-        f"Apply {factory.proposal}", timeout=LOAD_MS
+    expect(move_row(page, factory.project, fresh).get_by_test_id("v3-answer")).to_have_text(
+        "Yes, allow it", timeout=LOAD_MS
     )
     after = api(v3_server.base_url, factory.fid, f"/proposals/{factory.proposal}")
     assert after["proposal"]["status"] == "pending", after
@@ -201,17 +201,18 @@ def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
     items = sheet.get_by_test_id("v3-needs-item")
     before = _asks_in(v3_server, factory, "factory")
     expect(items).to_have_count(before, timeout=LOAD_MS)
-    rule = items.filter(has_text="C-17")
+    # C-17 in plain words: Sentinel wants to add a factory rule.
+    rule = items.filter(has_text="spike unproven external capabilities first")
     ask = rule.get_attribute("data-decision")
     assert ask, "C-17's ask has an id"
 
     with page.expect_response(
         lambda r: r.request.method == "POST" and r.url.endswith("/answer")
     ) as answered:
-        rule.get_by_role("button", name="Apply", exact=True).click()
+        rule.get_by_role("button", name="Yes, add the rule", exact=True).click()
     assert answered.value.status == 200, answered.value.text()
     toast = page.locator("[data-factory-toast]")
-    expect(toast).to_contain_text(f"{ask}: Apply")
+    expect(toast).to_contain_text(f"{ask}: Yes, add the rule")
     # A rule applies as a definition version: there is no proposal Undo to offer.
     expect(page.locator("[data-factory-toast] [data-toast-undo]")).to_have_count(0)
     applied = api(v3_server.base_url, factory.fid, "/proposals/C-17")["proposal"]
@@ -445,13 +446,16 @@ def test_needs_you_ranks_each_ask_by_what_it_holds(
     # What holds the most first: C-16 (T-16 and the panel), the merges on main, then D-49;
     # the asks that block nothing come last, each a row of its own.
     expect(items.nth(0)).to_have_attribute("data-decision", factory.apply_decision)
-    expect(items.nth(0)).to_contain_text(f"Apply {factory.proposal}")
+    expect(items.nth(0)).to_contain_text("Assistant core")
+    expect(items.nth(0)).not_to_contain_text(f"Apply {factory.proposal}")
     expect(items.nth(0)).not_to_contain_text("**")
     expect(items.nth(1)).to_have_attribute("data-decision", re.compile(r"^merge:"))
-    expect(items.nth(1)).to_contain_text("Merge #9856 and #9857")
-    # It holds work (Needs you ranks it with the asks that do): never "blocks nothing".
-    expect(items.nth(2)).not_to_contain_text("blocks nothing")
-    expect(items.last).to_contain_text("blocks nothing")
+    expect(items.nth(1)).to_contain_text("merged into main (2 changes)")
+    # A new project ranks with the asks that hold work; nothing that exists waits on it yet.
+    expect(items.nth(2)).to_contain_text("a new project: Fix live search")
+    expect(items.nth(2).get_by_test_id("v3-move-unblocks")).to_have_count(0)
+    # An ask that blocks nothing comes last and claims nothing.
+    expect(items.last.get_by_test_id("v3-move-unblocks")).to_have_count(0)
     # One filled answer in the sheet; the alarms the server closed live under Factory › Health.
     expect(sheet.locator('[data-testid="v3-answer"].bg-status-yellow')).to_have_count(1)
     expect(sheet.get_by_test_id("v3-needs-closed")).to_have_count(0)
@@ -460,7 +464,9 @@ def test_needs_you_ranks_each_ask_by_what_it_holds(
     expect(sheet.get_by_test_id("v3-needs-item")).to_have_count(
         _asks_in(v3_server, factory, "factory"), timeout=LOAD_MS
     )
-    expect(sheet.get_by_test_id("v3-needs-item").first).to_contain_text("C-17")
+    expect(sheet.get_by_test_id("v3-needs-item").first).to_contain_text(
+        "add a factory rule: spike unproven external capabilities first"
+    )
     assert cockpit.errors == [], cockpit.errors
 
 

@@ -396,13 +396,35 @@ class YourMoveActionView(_View):
     url: str | None = None
 
 
+class YourMoveAnswerView(_View):
+    """One answer of an ask, named by its outcome ("Yes, allow it", "No")."""
+
+    option: str
+    label: str
+    primary: bool | None = None
+    """The row's one answer that may be filled (the recommended one, or yes)."""
+    url: str | None = None
+    """Answered on the code host (a merge): the button opens it."""
+    more: bool | None = None
+    """Waits in the ask's details, not on its row."""
+
+
 class YourMoveItemView(_View):
-    """One thing the viewer must do: "Apply C-16 · unblocks Agent assistant · [Apply]"."""
+    """
+    One thing the viewer must do, in plain words: "Atlas wants Connectors core
+    to also edit 3 more files · [Yes, allow it] [No]".
+    """
 
     id: str
     """The ask: a decision (``D-45``) or a group of merges (``merge:main``)."""
     ref: str
     """The node it sits on (where its card and details are)."""
+    sentence: str
+    """Who wants what and what a yes does, in product words (no ids)."""
+    answers: list[YourMoveAnswerView]
+    """Its answers named by their outcome, the primary first."""
+    where: NodeLinkView | None = None
+    """The node it sits on, when that is not the page's (Home names where each ask lives)."""
     verb: str
     object: str
     action: YourMoveActionView
@@ -431,14 +453,29 @@ class WaveLineView(_View):
     line: str
 
 
+class YourMoveBelowView(_View):
+    """A child with asks deeper down: "Assistant core · 2 need you"."""
+
+    ref: str
+    title: str
+    count: int
+
+
 class YourMoveView(_View):
     """
-    What the viewer must do here, most held work first; ``more`` waits behind "+n";
-    ``waves``: where each initiative of several waves at or under the node is.
+    What the viewer must do here (its own asks and its children's), most held
+    work first; ``more`` waits behind "+n" (the next of them in ``rest``);
+    ``below`` the children with asks deeper down; ``held_by`` the node an ask
+    holding this one lives on, when nothing here needs the viewer; ``waves``:
+    where each initiative of several waves at or under the node is.
     """
 
     items: list[YourMoveItemView] = Field(max_length=3)
     more: int
+    rest: list[YourMoveItemView] | None = Field(None, max_length=12)
+    below: list[YourMoveBelowView] | None = Field(None, max_length=6)
+    below_more: int | None = None
+    held_by: NodeLinkView | None = None
     waves: list[WaveLineView] | None = None
 
 

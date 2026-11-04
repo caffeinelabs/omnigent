@@ -480,7 +480,10 @@ export function useAnswerAsk(
               toast.show({ message });
               return;
             }
-            const label = `${action.label} ${undo.proposal}`;
+            // An outcome-named answer ("Yes, allow it") reads as the person's answer; an id never shows.
+            const label = /^apply\b/i.test(action.label)
+              ? `${action.label} ${undo.proposal}`
+              : "Your answer";
             const entry: NodeUndo = {
               label,
               expiresAt: Date.now() + leftMs,

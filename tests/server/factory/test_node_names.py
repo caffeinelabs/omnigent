@@ -193,7 +193,7 @@ def test_the_live_page_shows_first_words_until_the_factory_names_them() -> None:
         "Build a chat agent like feature",
     ]
     # The factory is asked for names, higher levels first; folded parents never show.
-    assert [w.ref for w in tree.unnamed] == [
+    assert [w.ref for w in tree.unnamed if w.kind == "name"] == [
         ASK,
         f"ask:{DRAFTS_MESSAGE}",
         f"ask:{SHORTLIST_MESSAGE}",
@@ -206,6 +206,15 @@ def test_the_live_page_shows_first_words_until_the_factory_names_them() -> None:
         "C-18",
     ]
     assert "feature:from-C-12" not in [w.ref for w in tree.unnamed]
+    # Then every open ask, in plain words (a question's answers too).
+    asks = {w.ref: w.labels for w in tree.unnamed if w.kind == "ask"}
+    assert asks == {
+        "plain:D-45": 0,
+        "plain:D-49": 3,
+        "plain:D-50": 0,
+        "plain:D-51": 0,
+        "plain:D-37": 0,
+    }
     # A slug's words are its name: shown at once, never sent to the model.
     panel = tree.nodes["assistant-panel-ux"]
     assert (panel.title, panel.full_title, panel.named) == (
@@ -258,7 +267,7 @@ def test_stored_names_win_and_only_a_changed_text_is_named_again() -> None:
     assert (wave.title, wave.named) == ("Agent assistant", "factory")
     assert wave.full_title is not None and wave.full_title.startswith("From C-11:")
     assert tree.nodes[DRAFTS].title == "Build-tier drafts"
-    assert tree.unnamed == []
+    assert [w for w in tree.unnamed if w.kind == "name"] == []
 
     facts = factory_live()
     facts.names = {
@@ -299,7 +308,7 @@ async def test_the_factory_names_each_text_once_and_again_when_it_changes() -> N
     node_names.reset()
     namer = _Namer(answer=_named)
     state, deps, root, store = _env(namer)
-    wants = Tree(factory_live()).unnamed
+    wants = [w for w in Tree(factory_live()).unnamed if w.kind == "name"]
 
     task = node_names.schedule(state, deps, root, wants)
     assert task is not None

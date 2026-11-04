@@ -213,6 +213,7 @@ describe("calm · Your move", () => {
         id: "D-45",
         decision: ask("D-45", "Apply C-16"),
         text: "Apply C-16",
+        answers: [],
         unblocks: "x",
         quiet: false,
         primary: null,
@@ -221,6 +222,7 @@ describe("calm · Your move", () => {
         id: "D-49",
         decision: ask("D-49", "Apply C-19"),
         text: "Apply C-19",
+        answers: [],
         unblocks: "y",
         quiet: false,
         primary: null,
@@ -232,6 +234,104 @@ describe("calm · Your move", () => {
     expect(view.rows[1]!.primary?.url).toBe("https://example.com/pulls");
     expect(view.more).toBe(1);
     expect(view.rest.map((r) => r.id)).toEqual(["D-49"]);
+  });
+
+  it("reads a newer server's plain rows: the sentence, outcome answers, where it lives", () => {
+    const status: StatusLine = { kind: "needs", label: "", segments: [], ends: "person" };
+    const given = normalizeYourMove(
+      {
+        items: [
+          {
+            id: "D-44",
+            ref: "connectors-core",
+            sentence: "Atlas wants Connectors core to also edit 2 more files",
+            answers: [
+              { option: "apply", label: "Yes, allow it", primary: true },
+              { option: "reject", label: "No" },
+              { option: "edit", label: "Change it first", more: true },
+            ],
+            where: { ref: "connectors-core", title: "Connectors core" },
+            verb: "Apply",
+            object: "C-15",
+            action: { label: "Yes, allow it", option: "apply" },
+            decision: ask("D-44", "Apply C-15", {
+              actions: [
+                { id: "apply", label: "Apply" },
+                { id: "edit", label: "Edit & apply" },
+                { id: "reject", label: "Reject" },
+              ],
+            }),
+          },
+        ],
+        more: 0,
+        below: [{ ref: "assistant-core", title: "Assistant core", count: 2 }],
+      },
+      status,
+    )!;
+    const page = {
+      breadcrumb: [{ ref: "product", title: "Sample app", level: "product" }],
+      node: { ref: "I-1", title: "Agent assistant", level: "feature" },
+      children: { items: [], later: [], ghosts: [] },
+      status,
+      your_move: given,
+    } as unknown as NodePage;
+    const view = moveView(page, [], 3);
+    const [row] = view.rows;
+
+    expect(row!.text).toBe("Atlas wants Connectors core to also edit 2 more files");
+    expect(row!.plain).toBe(true);
+    expect(row!.name).toBeNull();
+    // Each answer goes out under its option, named by its outcome.
+    expect(row!.answers.map((a) => [a.label, a.action?.id, Boolean(a.more)])).toEqual([
+      ["Yes, allow it", "apply", false],
+      ["No", "reject", false],
+      ["Change it first", "edit", true],
+    ]);
+    expect(row!.primary?.label).toBe("Yes, allow it");
+    expect(row!.where).toEqual({ ref: "connectors-core", title: "Connectors core" });
+    expect(view.below).toEqual([{ ref: "assistant-core", title: "Assistant core", count: 2 }]);
+    expect(view.heldBy).toBeNull();
+  });
+
+  it("a page below the root lists only its own level: Needs you adds none of its rows", () => {
+    const status: StatusLine = { kind: "idle", label: "", segments: [], ends: "other" };
+    const plain = (id: string) => ({
+      id,
+      sentence: `Juno asks question ${id}?`,
+      answers: [{ option: "yes", label: "Go ahead", primary: true }],
+      verb: "Answer",
+      decision: ask(id, `Answer ${id}`),
+    });
+    const moves = normalizeYourMove(
+      { items: ["D-1", "D-2", "D-3"].map(plain), more: 2, rest: [plain("D-4")] },
+      status,
+    )!;
+    const elsewhere = deriveMoves(
+      { status, breadcrumb: [], your_move: undefined } as unknown as NodePage,
+      {
+        items: [],
+        blocks_nothing: [ask("D-45", "Apply C-16")],
+        closed_alarms: [],
+        other_tree: 0,
+      },
+      null,
+    );
+    const at = (breadcrumb: unknown[]) =>
+      ({
+        breadcrumb,
+        node: { ref: "I-1", title: "Agent assistant", level: "feature" },
+        children: { items: [], later: [], ghosts: [] },
+        status,
+        your_move: moves,
+      }) as unknown as NodePage;
+
+    const feature = moveView(at([{ ref: "product", title: "Home", level: "product" }]), elsewhere);
+    const home = moveView(at([]), elsewhere);
+
+    expect(feature.rows.map((r) => r.id)).toEqual(["D-1", "D-2", "D-3"]);
+    expect(feature.rest.map((r) => r.id)).toEqual(["D-4"]);
+    // Home is the inbox: what the server did not send yet comes from Needs you.
+    expect(home.rest.map((r) => r.id)).toEqual(["D-4", "D-45"]);
   });
 
   it("names what an ask unblocks as the page's rows do: itself as “this task”, never a slug or an id", () => {

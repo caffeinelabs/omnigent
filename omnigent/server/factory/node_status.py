@@ -609,8 +609,12 @@ class Paths:
             if project is not None:
                 holders.setdefault(ask.id, set()).add(project.ref)
         for ref, decisions in t.decisions_at.items():
+            # Nothing waits on a finished node; an ask that holds nothing frees nothing.
+            if t.state(ref) == "done":
+                continue
             for decision in decisions:
-                holders.setdefault(decision.ref, set()).add(ref)
+                if t.blocks(decision):
+                    holders.setdefault(decision.ref, set()).add(ref)
         for ask_id, refs in holders.items():
             dependents = {d.ref: d for ref in sorted(refs) for d in t.dependents_of(ref)}
             out[ask_id] = out.get(ask_id, 0.0) + sum(

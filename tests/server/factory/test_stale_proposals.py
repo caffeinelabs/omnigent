@@ -34,6 +34,14 @@ def _goal(slug: str = "api-version") -> dict[str, Any]:
     return {"op": "update", "slug": slug, "patch": {"goal": "A different goal (sample)."}}
 
 
+SCOPE = ("services/api/**", "env/schema/api.ts", "env/schema/web.ts")
+"""The project's files and two more (sample)."""
+
+
+def _scope(slug: str = "api-version") -> dict[str, Any]:
+    return {"op": "update", "slug": slug, "patch": {"scope_paths": list(SCOPE)}}
+
+
 async def _pending(cockpit: Cockpit, *changes: dict[str, Any], **extra: Any) -> str:
     resp = await propose(cockpit, *changes, **extra)
     assert resp.json()["status"] == "pending", resp.text
@@ -109,17 +117,73 @@ async def test_a_project_finished_before_filing_does_not_close_it(cockpit: Cockp
     assert row is not None and row.based_on["api-version"]["stage"] == "merged"
 
 
-async def test_a_row_from_before_stages_were_recorded_is_left_alone(cockpit: Cockpit) -> None:
-    ref = await _pending(cockpit, _goal())
+def _without_stages(cockpit: Cockpit, ref: str) -> None:
+    """The proposal as a row filed before ``based_on`` recorded each project's stage."""
     row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
     assert row is not None
     old = {
         slug: {k: v for k, v in fp.items() if k != "stage"} for slug, fp in row.based_on.items()
     }
     cockpit.store.update_proposal(row.id, based_on=old)
+
+
+async def test_the_live_shape_closes_itself_once_its_project_merged(cockpit: Cockpit) -> None:
+    """
+    The live C-15: more files for a project, filed before stages were recorded;
+    the project merged since and stays ``active``. It no longer matters.
+    """
+    ref = await _pending(cockpit, _scope())
+    _without_stages(cockpit, ref)
     _finish_project(cockpit, "api-version", "merged")
+    project = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert project is not None and project.status == "active"
+
+    closed = await proposals.close_stale(cockpit.app.state, cockpit.fid)
+
+    assert closed == [ref]
+    row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
+    assert row is not None and row.status == "withdrawn"
+    info = (row.result or {})["closed"]
+    assert (info["code"], info["reason"]) == ("project_done", "project 'api-version' is merged")
+    assert info["reopenable"] is True
+    decision = cockpit.store.get_decision(row.decision_id)
+    assert decision is not None and decision.status == "withdrawn"
+    assert not any(a["id"] == ref for a in (await _asks(cockpit))["asks"])
+
+
+async def test_a_row_from_before_stages_whose_project_had_finished_stays(
+    cockpit: Cockpit,
+) -> None:
+    # Filed for a project that had merged already: the follow-up the lead meant.
+    ref = await _pending(cockpit, _goal())
+    _without_stages(cockpit, ref)
+    row = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
+    project = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None and project is not None
+    cockpit.store.update_project(
+        project.id, stage="merged", stage_changed_at=row.created_at - 3600
+    )
 
     assert await proposals.close_stale(cockpit.app.state, cockpit.fid) == []
+
+
+async def test_changes_the_charter_already_holds_close_it(cockpit: Cockpit) -> None:
+    ref = await _pending(cockpit, _scope())
+    # Another change gave the project the same files meanwhile.
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None
+    cockpit.store.update_project(
+        row.id, charter={**(row.charter or {}), "scope_paths": list(SCOPE)}
+    )
+
+    closed = await proposals.close_stale(cockpit.app.state, cockpit.fid)
+
+    assert closed == [ref]
+    found = proposals.find_proposal(cockpit.deps, cockpit.fid, ref)
+    assert found is not None
+    info = (found.result or {})["closed"]
+    assert (info["code"], info["reopenable"]) == ("already_applied", False)
+    assert info["reason"] == "'api-version' already has these changes"
 
 
 async def test_a_changed_charter_or_a_taken_slug_closes_it(cockpit: Cockpit) -> None:

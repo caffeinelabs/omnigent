@@ -24,6 +24,12 @@ text in one process, and backs off when the runner cannot answer. Each name
 stored drops the factory's projection (:func:`.nodes.invalidate`) and tells
 the cockpits to refresh.
 
+The same path words each open ask (calm rule 9, :mod:`.ask_words`): a
+:class:`Want` of kind ``ask`` asks the model for one plain sentence (who wants
+what, and what a yes does) and, for a question, one outcome-named label per
+answer (:data:`ASK_INSTRUCTIONS`, :func:`parse_ask`); the sentence is stored
+under the want's ref and the labels under it plus :data:`LABELS_SUFFIX`.
+
 Nothing here names a product: the words come from the factory's own records.
 """
 
@@ -67,6 +73,29 @@ NAMING_INSTRUCTIONS: Final = (
     "dates, quotes or trailing punctuation, and do not start with a verb such as "
     "'create', 'add' or 'build'."
 )
+
+ASK_INSTRUCTIONS: Final = (
+    "Rewrite the request in the message as one plain sentence for a busy product owner: "
+    "who wants what, and what happens if they say yes, in product words (like 'Atlas "
+    "wants Connectors core to also edit the env-schema files'). At most 16 words. Never "
+    "use ids or codes (C-15, D-44, T-16, #123), slugs, file paths, or agent jargon such "
+    "as apply, scope, DoD or charter. No quotes and no trailing punctuation."
+)
+"""What the model is told for an ask's sentence (a proposal's answers are named by the rows)."""
+ASK_LABELS_INSTRUCTIONS: Final = (
+    " Then write ' || ' and one button label per numbered answer in the message, in "
+    "order, separated by ' | ': 1 to 4 plain words naming what that answer does (like "
+    "'Yes, start it' or 'Not now'), with no ids."
+)
+"""Added for a question: its answers' labels on the same line."""
+LABELS_SUFFIX: Final = "#labels"
+"""A worded ask's labels are stored under its ref plus this (``plain:D-49#labels``)."""
+SENTENCE_WORDS: Final = (4, 20)
+"""A plain sentence's words, at least and at most."""
+STORED_CHARS_MAX: Final = 80
+"""What one stored row holds (``factory_node_names.name``): a sentence, or a row of labels."""
+LABEL_WORDS_MAX: Final = 5
+LABEL_CHARS_MAX: Final = 28
 
 _WORD_RE: Final = re.compile(r"[0-9A-Za-zÀ-￿]")
 _CODE_PREFIX_RE: Final = re.compile(r"^From\s+[A-Z]{1,3}-\d+\s*:?\s*", re.IGNORECASE)
@@ -466,6 +495,73 @@ def clean(value: str | None) -> str | None:
     return _cap(line)
 
 
+def _plain_line(value: str) -> str:
+    line = next((ln.strip() for ln in str(value).splitlines() if ln.strip()), "")
+    line = " ".join(line.strip(_QUOTES).split()).strip(_QUOTES)
+    return line.rstrip(" .!;:,").strip()
+
+
+def _machine_free(text: str) -> bool:
+    """No record code, slug or path in *text* (what a person never reads in a row)."""
+    if _REF_RE.search(text):
+        return False
+    return not any(slug_token(t) or _PATH_RE.match(_bare_token(t)) for t in text.split())
+
+
+def clean_sentence(value: str | None) -> str | None:
+    """
+    An ask's plain sentence as a row shows it, or ``None`` when *value* is none:
+    its first line, :data:`SENTENCE_WORDS` words, at most :data:`STORED_CHARS_MAX`
+    characters, no code, slug or path.
+    """
+    if not value:
+        return None
+    line = _plain_line(value)
+    low, high = SENTENCE_WORDS
+    if not low <= word_count(line) <= high or len(line) > STORED_CHARS_MAX:
+        return None
+    return _cap(line) if _machine_free(line) else None
+
+
+def clean_labels(value: str | None, count: int) -> list[str] | None:
+    """
+    *count* button labels from ``a | b | c``, or ``None`` unless each is 1 to
+    :data:`LABEL_WORDS_MAX` words, short and free of codes, and all fit one row.
+    """
+    if not value or count < 1:
+        return None
+    parts = [_plain_line(p) for p in str(value).split("|")]
+    parts = [p for p in parts if p]
+    if len(parts) != count:
+        return None
+    for part in parts:
+        if not 1 <= word_count(part) <= LABEL_WORDS_MAX or len(part) > LABEL_CHARS_MAX:
+            return None
+        if not _machine_free(part):
+            return None
+    labels = [_cap(p) for p in parts]
+    return labels if len(" | ".join(labels)) <= STORED_CHARS_MAX else None
+
+
+def parse_ask(value: str | None, labels: int) -> tuple[str, list[str] | None] | None:
+    """
+    The model's words for an ask: ``sentence || label | label`` (labels only for a
+    question). :returns: ``(sentence, labels or None)``, or ``None`` without a sentence.
+    """
+    if not value:
+        return None
+    head, sep, tail = str(value).partition("||")
+    sentence = clean_sentence(head)
+    if sentence is None:
+        return None
+    return sentence, clean_labels(tail, labels) if sep and labels else None
+
+
+def ask_instructions(labels: int) -> str:
+    """:returns: What the model is told for an ask with *labels* answers to name."""
+    return ASK_INSTRUCTIONS + (ASK_LABELS_INSTRUCTIONS if labels else "")
+
+
 # ── Naming in the background ───────────────────────────────────
 
 
@@ -478,12 +574,17 @@ class Want:
     :param text: What the name is made from (the full text).
     :param hash: :func:`digest` of *text*.
     :param level: The node's level (higher levels are named first).
+    :param kind: ``name`` (a node's or a proposal's short name) or ``ask`` (an
+        ask's plain sentence, and *labels* answer labels, :mod:`.ask_words`).
+    :param labels: The answers an ``ask`` names (0: a proposal, whose rows name them).
     """
 
     ref: str
     text: str
     hash: str
     level: str
+    kind: str = "name"
+    labels: int = 0
 
 
 @dataclass
@@ -569,13 +670,13 @@ async def _drain(app_state: Any, deps: FactoryDeps, root: Conversation, queue: _
             want = queue.pending.pop(ref)
             queue.tried[ref] = (want.hash, time.monotonic())
             try:
-                name = clean(await generate(app_state, root, want.text))
+                rows = await _words(app_state, root, want)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - a name is cosmetic; the first words stay
                 _logger.info("factory %s: naming %s failed", root.id, ref, exc_info=True)
-                name = None
-            if name is None:
+                rows = []
+            if not rows:
                 queue.failures += 1
                 if queue.failures >= FAILURES_MAX:
                     queue.backoff_until = time.monotonic() + BACKOFF_S
@@ -585,9 +686,14 @@ async def _drain(app_state: Any, deps: FactoryDeps, root: Conversation, queue: _
                 continue
             queue.failures = 0
             try:
-                await asyncio.to_thread(
-                    deps.factory_store.set_node_name, root.id, ref, name, source_hash=want.hash
-                )
+                for key, value in rows:
+                    await asyncio.to_thread(
+                        deps.factory_store.set_node_name,
+                        root.id,
+                        key,
+                        value,
+                        source_hash=want.hash,
+                    )
             except Exception:  # noqa: BLE001 - the next projection asks again
                 _logger.warning("factory %s: could not store the name of %s", root.id, ref)
                 continue
@@ -600,10 +706,29 @@ async def _drain(app_state: Any, deps: FactoryDeps, root: Conversation, queue: _
         show()
 
 
-async def generate(app_state: Any, root: Conversation, text: str) -> str | None:
+async def _words(app_state: Any, root: Conversation, want: Want) -> list[tuple[str, str]]:
+    """:returns: The ``(ref, words)`` rows to store for *want* (none when the model gave none)."""
+    if want.kind != "ask":
+        name = clean(await generate(app_state, root, want.text))
+        return [(want.ref, name)] if name else []
+    raw = await generate(app_state, root, want.text, instructions=ask_instructions(want.labels))
+    parsed = parse_ask(raw, want.labels)
+    if parsed is None:
+        return []
+    sentence, labels = parsed
+    rows = [(want.ref, sentence)]
+    if labels:
+        rows.append((want.ref + LABELS_SUFFIX, " | ".join(labels)))
+    return rows
+
+
+async def generate(
+    app_state: Any, root: Conversation, text: str, *, instructions: str = NAMING_INSTRUCTIONS
+) -> str | None:
     """
-    One name for *text*: the namer :data:`NAMER_ATTR` sets, else the economy title
-    model the runner bound to the factory's root session runs.
+    One name (or, with :func:`ask_instructions`, an ask's words) for *text*: the
+    namer :data:`NAMER_ATTR` sets, else the economy title model the runner bound
+    to the factory's root session runs.
 
     :returns: The model's answer as it came (see :func:`clean`), or ``None``.
     """
@@ -626,24 +751,30 @@ async def generate(app_state: Any, root: Conversation, text: str) -> str | None:
         harness_override=root.harness_override,
         model_override=root.model_override,
         sub_agent_name=root.sub_agent_name,
-        additional_instructions=NAMING_INSTRUCTIONS,
+        additional_instructions=instructions,
     )
     return await asyncio.wait_for(generator(request), timeout=TIMEOUT_S)
 
 
 __all__ = [
+    "ASK_INSTRUCTIONS",
     "BACKOFF_S",
+    "LABELS_SUFFIX",
     "NAMED_LEVELS",
     "NAMER_ATTR",
     "NAMING_INSTRUCTIONS",
     "WORDS_MAX",
     "Want",
+    "ask_instructions",
     "clean",
+    "clean_labels",
+    "clean_sentence",
     "digest",
     "fallback",
     "generate",
     "is_slug",
     "machine_label",
+    "parse_ask",
     "reset",
     "schedule",
     "slug_token",

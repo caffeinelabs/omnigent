@@ -345,7 +345,7 @@ describe("cockpit v3 · the server's node API", () => {
     expect(reads).toContain(`${SNAPSHOT}/n/product/level/feature`);
   });
 
-  it("Apply in Your move answers through the answer route and reads the page again", async () => {
+  it("Yes in Your move answers through the answer route and reads the page again", async () => {
     const decision = PAGES["assistant-core"]!.status.decision!;
     const answer = `/v1/factory/decisions/${decision.row_id}/answer`;
     serve({
@@ -357,13 +357,15 @@ describe("cockpit v3 · the server's node API", () => {
     const reads = () => server.calls.filter((c) => c.path === `${SNAPSHOT}/n/assistant-core`);
     const before = reads().length;
 
-    fireEvent.click(within(move).getByRole("button", { name: "Apply" }));
+    // The ask in plain words: its yes names what it does, never "Apply".
+    expect(within(move).queryByRole("button", { name: "Apply" })).toBeNull();
+    fireEvent.click(within(move).getByRole("button", { name: "Yes, allow it" }));
 
     await waitFor(() =>
       expect(server.calls.find((c) => c.path === answer)?.body).toEqual({ option_id: "apply" }),
     );
     await waitFor(() => expect(reads().length).toBeGreaterThan(before));
-    expect(await screen.findByText("D-45: Apply")).toBeInTheDocument();
+    expect(await screen.findByText("D-45: Yes, allow it")).toBeInTheDocument();
   });
 });
 

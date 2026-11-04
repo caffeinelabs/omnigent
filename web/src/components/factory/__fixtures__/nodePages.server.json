@@ -208,7 +208,7 @@
           "named": "words",
           "needs": {
             "blocking": 0,
-            "open": 1
+            "open": 0
           },
           "progress": {
             "label": "1/1",
@@ -246,7 +246,7 @@
           "named": "words",
           "needs": {
             "blocking": 0,
-            "open": 1
+            "open": 0
           },
           "progress": {
             "label": "1/1",
@@ -547,7 +547,7 @@
       "level_name": "Feature",
       "needs": {
         "blocking": 2,
-        "open": 4
+        "open": 2
       },
       "owner": {
         "name": "Atlas",
@@ -827,9 +827,25 @@
       "items": [
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, allow it",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, allow it",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -859,17 +875,38 @@
           "object": "C-16",
           "object_name": "Update assistant core",
           "ref": "assistant-core",
-          "unblocks": "Assistant core and Assistant panel UX",
-          "unblocks_ref": "assistant-core",
-          "unblocks_refs": ["assistant-core", "assistant-panel-ux"],
+          "sentence": "Atlas wants Assistant core to also ensure each turn debits the user's credits",
+          "unblocks": "Assistant panel UX",
+          "unblocks_ref": "assistant-panel-ux",
+          "unblocks_refs": ["assistant-panel-ux"],
           "verb": "Apply",
-          "weight": 180.0
+          "weight": 180.0,
+          "where": {
+            "ref": "assistant-core",
+            "title": "Assistant core"
+          }
         },
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, start it",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, start it",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -898,52 +935,16 @@
           "object": "C-19",
           "object_name": "Fix live search",
           "ref": "live-search-fix",
-          "unblocks": "this feature",
-          "unblocks_ref": "I-1",
-          "unblocks_refs": ["I-1"],
+          "sentence": "Atlas wants a new project: Fix live search",
           "verb": "Apply",
-          "weight": 0.0
-        },
-        {
-          "action": {
-            "label": "Apply",
-            "option": "apply"
-          },
-          "blocks_nothing": true,
-          "decision": {
-            "actions": [
-              {
-                "id": "apply",
-                "label": "Apply"
-              },
-              {
-                "id": "edit",
-                "label": "Edit & apply"
-              },
-              {
-                "id": "reject",
-                "label": "Reject"
-              }
-            ],
-            "age": "5h 54m",
-            "asker": "Atlas",
-            "blocks_nothing": true,
-            "expires": "2d 16h",
-            "id": "D-43",
-            "row_id": "0000000000000000000000000000021f",
-            "subject": "C-14",
-            "title": "Decision 43",
-            "verb": "Apply C-14"
-          },
-          "id": "D-43",
-          "object": "C-14",
-          "object_name": "Proposal 14",
-          "ref": "connectors-core",
-          "verb": "Apply",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "live-search-fix",
+            "title": "Fix live search"
+          }
         }
       ],
-      "more": 1
+      "more": 0
     }
   },
   "PR-9876": {
@@ -1190,7 +1191,6 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
-          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1221,7 +1221,6 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
-              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1267,7 +1266,6 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
-        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1302,7 +1300,6 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
-            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1354,48 +1351,11 @@
     ],
     "version": "bf03ded18b13b923",
     "your_move": {
-      "items": [
-        {
-          "action": {
-            "label": "Apply",
-            "option": "apply"
-          },
-          "decision": {
-            "actions": [
-              {
-                "id": "apply",
-                "label": "Apply"
-              },
-              {
-                "id": "edit",
-                "label": "Edit & apply"
-              },
-              {
-                "id": "reject",
-                "label": "Reject"
-              }
-            ],
-            "age": "5h 54m",
-            "asker": "Atlas",
-            "expires": "2d 16h",
-            "id": "D-45",
-            "row_id": "00000000000000000000000000000221",
-            "subject": "C-16",
-            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
-            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
-            "verb": "Apply C-16"
-          },
-          "id": "D-45",
-          "object": "C-16",
-          "object_name": "Update assistant core",
-          "ref": "assistant-core",
-          "unblocks": "this task and Assistant panel UX",
-          "unblocks_ref": "assistant-panel-ux",
-          "unblocks_refs": ["T-16", "assistant-panel-ux"],
-          "verb": "Apply",
-          "weight": 180.0
-        }
-      ],
+      "held_by": {
+        "ref": "assistant-core",
+        "title": "Assistant core"
+      },
+      "items": [],
       "more": 0
     }
   },
@@ -1433,7 +1393,7 @@
           "level_name": "Feature",
           "needs": {
             "blocking": 2,
-            "open": 4
+            "open": 2
           },
           "owner": {
             "name": "Atlas",
@@ -1469,7 +1429,6 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
-              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1510,7 +1469,6 @@
                   "asker": "Atlas",
                   "expires": "2d 16h",
                   "id": "D-45",
-                  "in_your_move": true,
                   "row_id": "00000000000000000000000000000221",
                   "subject": "C-16",
                   "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1623,7 +1581,7 @@
       "named": "words",
       "needs": {
         "blocking": 2,
-        "open": 4
+        "open": 2
       },
       "owner": {
         "name": "Scout",
@@ -1651,7 +1609,6 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
-          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1692,7 +1649,6 @@
               "asker": "Atlas",
               "expires": "2d 16h",
               "id": "D-45",
-              "in_your_move": true,
               "row_id": "00000000000000000000000000000221",
               "subject": "C-16",
               "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1748,7 +1704,6 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
-        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1798,7 +1753,6 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
-            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -1859,126 +1813,15 @@
     ],
     "version": "bf03ded18b13b923",
     "your_move": {
-      "items": [
+      "below": [
         {
-          "action": {
-            "label": "Apply",
-            "option": "apply"
-          },
-          "decision": {
-            "actions": [
-              {
-                "id": "apply",
-                "label": "Apply"
-              },
-              {
-                "id": "edit",
-                "label": "Edit & apply"
-              },
-              {
-                "id": "reject",
-                "label": "Reject"
-              }
-            ],
-            "age": "5h 54m",
-            "asker": "Atlas",
-            "expires": "2d 16h",
-            "id": "D-45",
-            "row_id": "00000000000000000000000000000221",
-            "subject": "C-16",
-            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
-            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
-            "verb": "Apply C-16"
-          },
-          "id": "D-45",
-          "object": "C-16",
-          "object_name": "Update assistant core",
-          "ref": "assistant-core",
-          "unblocks": "Agent assistant (sample)",
-          "unblocks_ref": "I-1",
-          "unblocks_refs": ["I-1"],
-          "verb": "Apply",
-          "weight": 180.0
-        },
-        {
-          "action": {
-            "label": "Apply",
-            "option": "apply"
-          },
-          "decision": {
-            "actions": [
-              {
-                "id": "apply",
-                "label": "Apply"
-              },
-              {
-                "id": "edit",
-                "label": "Edit & apply"
-              },
-              {
-                "id": "reject",
-                "label": "Reject"
-              }
-            ],
-            "age": "35m",
-            "asker": "Atlas",
-            "expires": "2d 16h",
-            "id": "D-49",
-            "row_id": "00000000000000000000000000000225",
-            "subject": "C-19",
-            "title": "Start the live-search fix?",
-            "verb": "Apply C-19"
-          },
-          "id": "D-49",
-          "object": "C-19",
-          "object_name": "Fix live search",
-          "ref": "live-search-fix",
-          "unblocks": "Agent assistant (sample)",
-          "unblocks_ref": "I-1",
-          "unblocks_refs": ["I-1"],
-          "verb": "Apply",
-          "weight": 0.0
-        },
-        {
-          "action": {
-            "label": "Apply",
-            "option": "apply"
-          },
-          "blocks_nothing": true,
-          "decision": {
-            "actions": [
-              {
-                "id": "apply",
-                "label": "Apply"
-              },
-              {
-                "id": "edit",
-                "label": "Edit & apply"
-              },
-              {
-                "id": "reject",
-                "label": "Reject"
-              }
-            ],
-            "age": "5h 54m",
-            "asker": "Atlas",
-            "blocks_nothing": true,
-            "expires": "2d 16h",
-            "id": "D-43",
-            "row_id": "0000000000000000000000000000021f",
-            "subject": "C-14",
-            "title": "Decision 43",
-            "verb": "Apply C-14"
-          },
-          "id": "D-43",
-          "object": "C-14",
-          "object_name": "Proposal 14",
-          "ref": "connectors-core",
-          "verb": "Apply",
-          "weight": 0.0
+          "count": 2,
+          "ref": "I-1",
+          "title": "Agent assistant (sample)"
         }
       ],
-      "more": 1
+      "items": [],
+      "more": 0
     }
   },
   "assistant-core": {
@@ -2472,9 +2315,25 @@
       "items": [
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, allow it",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, allow it",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -2504,6 +2363,7 @@
           "object": "C-16",
           "object_name": "Update assistant core",
           "ref": "assistant-core",
+          "sentence": "Atlas wants Assistant core to also ensure each turn debits the user's credits",
           "unblocks": "Debit each turn and Assistant panel UX",
           "unblocks_ref": "T-16",
           "unblocks_refs": ["T-16", "assistant-panel-ux"],
@@ -2635,7 +2495,6 @@
           "asker": "Atlas",
           "expires": "2d 16h",
           "id": "D-45",
-          "in_your_move": true,
           "row_id": "00000000000000000000000000000221",
           "subject": "C-16",
           "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2698,7 +2557,6 @@
         "asker": "Atlas",
         "expires": "2d 16h",
         "id": "D-45",
-        "in_your_move": true,
         "row_id": "00000000000000000000000000000221",
         "subject": "C-16",
         "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2746,7 +2604,6 @@
             "asker": "Atlas",
             "expires": "2d 16h",
             "id": "D-45",
-            "in_your_move": true,
             "row_id": "00000000000000000000000000000221",
             "subject": "C-16",
             "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
@@ -2834,48 +2691,11 @@
     ],
     "version": "bf03ded18b13b923",
     "your_move": {
-      "items": [
-        {
-          "action": {
-            "label": "Apply",
-            "option": "apply"
-          },
-          "decision": {
-            "actions": [
-              {
-                "id": "apply",
-                "label": "Apply"
-              },
-              {
-                "id": "edit",
-                "label": "Edit & apply"
-              },
-              {
-                "id": "reject",
-                "label": "Reject"
-              }
-            ],
-            "age": "5h 54m",
-            "asker": "Atlas",
-            "expires": "2d 16h",
-            "id": "D-45",
-            "row_id": "00000000000000000000000000000221",
-            "subject": "C-16",
-            "text": "Implements the D-42 answer: debit each turn. T-16 waits for it.",
-            "title": "Atlas proposes C-16: update assistant-core (constraints, DoD)",
-            "verb": "Apply C-16"
-          },
-          "id": "D-45",
-          "object": "C-16",
-          "object_name": "Update assistant core",
-          "ref": "assistant-core",
-          "unblocks": "this project and Debit each turn",
-          "unblocks_ref": "T-16",
-          "unblocks_refs": ["assistant-panel-ux", "T-16"],
-          "verb": "Apply",
-          "weight": 180.0
-        }
-      ],
+      "held_by": {
+        "ref": "assistant-core",
+        "title": "Assistant core"
+      },
+      "items": [],
       "more": 0
     }
   },
@@ -3367,6 +3187,14 @@
             "option": "merge",
             "url": "https://github.com/sample-org/sample-app/pull/9856"
           },
+          "answers": [
+            {
+              "label": "Review and merge",
+              "option": "merge",
+              "primary": true,
+              "url": "https://github.com/sample-org/sample-app/pull/9856"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -3386,6 +3214,7 @@
           "id": "merge:main",
           "object": "#9856 and #9857",
           "ref": "build-tier-drafts-3",
+          "sentence": "Nova wants Build tier drafts 3 merged into main (2 changes)",
           "unblocks": "this project",
           "unblocks_ref": "build-tier-drafts-3",
           "unblocks_refs": ["build-tier-drafts-3"],
@@ -4200,9 +4029,25 @@
       "items": [
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, add the rule",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, add the rule",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -4230,14 +4075,35 @@
           "object": "C-17",
           "object_name": "Spike unproven external capabilities",
           "ref": "C-17",
+          "sentence": "Atlas wants to add a factory rule: spike unproven external capabilities first",
           "verb": "Apply rule",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "C-17",
+            "title": "Spike unproven external capabilities first"
+          }
         },
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, add the rule",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, add the rule",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -4265,14 +4131,20 @@
           "object": "C-18",
           "object_name": "Name pending scope decisions",
           "ref": "C-18",
+          "sentence": "Atlas wants to add a factory rule: name pending scope decisions in READY posts",
           "verb": "Apply rule",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "C-18",
+            "title": "Name pending scope decisions in READY posts"
+          }
         },
         {
           "about": "Decision 37",
           "action": {
             "label": "Answer"
           },
+          "answers": [],
           "blocks_nothing": true,
           "decision": {
             "actions": [],
@@ -4287,8 +4159,13 @@
           "id": "D-37",
           "object": "D-37",
           "ref": "member:0000000000000000000000000000025b",
+          "sentence": "An agent asks: decision 37?",
           "verb": "Answer",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "member:0000000000000000000000000000025b",
+            "title": "Sentinel"
+          }
         }
       ],
       "more": 0
@@ -5118,9 +4995,25 @@
       "items": [
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, add the rule",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, add the rule",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -5148,14 +5041,35 @@
           "object": "C-17",
           "object_name": "Spike unproven external capabilities",
           "ref": "C-17",
+          "sentence": "Atlas wants to add a factory rule: spike unproven external capabilities first",
           "verb": "Apply rule",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "C-17",
+            "title": "Spike unproven external capabilities first"
+          }
         },
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, add the rule",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, add the rule",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -5183,8 +5097,13 @@
           "object": "C-18",
           "object_name": "Name pending scope decisions",
           "ref": "C-18",
+          "sentence": "Atlas wants to add a factory rule: name pending scope decisions in READY posts",
           "verb": "Apply rule",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "C-18",
+            "title": "Name pending scope decisions in READY posts"
+          }
         }
       ],
       "more": 0
@@ -5217,7 +5136,7 @@
           "named": "words",
           "needs": {
             "blocking": 2,
-            "open": 4
+            "open": 2
           },
           "owner": {
             "name": "Scout",
@@ -5528,7 +5447,7 @@
       "level_name": "Product",
       "needs": {
         "blocking": 2,
-        "open": 4
+        "open": 2
       },
       "owner": {
         "name": "Atlas",
@@ -5774,9 +5693,25 @@
       "items": [
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, allow it",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, allow it",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -5806,11 +5741,16 @@
           "object": "C-16",
           "object_name": "Update assistant core",
           "ref": "assistant-core",
+          "sentence": "Atlas wants Assistant core to also ensure each turn debits the user's credits",
           "unblocks": "Agent assistant (sample)",
           "unblocks_ref": "I-1",
           "unblocks_refs": ["I-1"],
           "verb": "Apply",
-          "weight": 180.0
+          "weight": 180.0,
+          "where": {
+            "ref": "assistant-core",
+            "title": "Assistant core"
+          }
         },
         {
           "action": {
@@ -5818,6 +5758,14 @@
             "option": "merge",
             "url": "https://github.com/sample-org/sample-app/pull/9856"
           },
+          "answers": [
+            {
+              "label": "Review and merge",
+              "option": "merge",
+              "primary": true,
+              "url": "https://github.com/sample-org/sample-app/pull/9856"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -5837,17 +5785,38 @@
           "id": "merge:main",
           "object": "#9856 and #9857",
           "ref": "build-tier-drafts-3",
+          "sentence": "Nova wants Build tier drafts 3 merged into main (2 changes)",
           "unblocks": "Build tier drafts 3",
           "unblocks_ref": "build-tier-drafts-3",
           "unblocks_refs": ["build-tier-drafts-3"],
           "verb": "Merge",
-          "weight": 120.0
+          "weight": 120.0,
+          "where": {
+            "ref": "build-tier-drafts-3",
+            "title": "Build tier drafts 3"
+          }
         },
         {
           "action": {
-            "label": "Apply",
+            "label": "Yes, start it",
             "option": "apply"
           },
+          "answers": [
+            {
+              "label": "Yes, start it",
+              "option": "apply",
+              "primary": true
+            },
+            {
+              "label": "No",
+              "option": "reject"
+            },
+            {
+              "label": "Change it first",
+              "more": true,
+              "option": "edit"
+            }
+          ],
           "decision": {
             "actions": [
               {
@@ -5876,14 +5845,16 @@
           "object": "C-19",
           "object_name": "Fix live search",
           "ref": "live-search-fix",
-          "unblocks": "Agent assistant (sample)",
-          "unblocks_ref": "I-1",
-          "unblocks_refs": ["I-1"],
+          "sentence": "Atlas wants a new project: Fix live search",
           "verb": "Apply",
-          "weight": 0.0
+          "weight": 0.0,
+          "where": {
+            "ref": "live-search-fix",
+            "title": "Fix live search"
+          }
         }
       ],
-      "more": 2
+      "more": 0
     }
   }
 }

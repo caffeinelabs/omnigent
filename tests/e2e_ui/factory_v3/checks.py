@@ -9,8 +9,10 @@ What every cockpit v3 screen must hold, checked in the browser. Not a test modul
   column the Room's answer cards and the chat's icons stay as they are.
 - :data:`CALM_CHECKS` holds a page to the calm rules: about 120 words outside
   the chat, titles of six words or fewer and never a slug, Your move naming
-  what it unblocks by name (no slug, no bare id), each ask once (one answer
-  button), and a chat with no system event inline and no resolved incident.
+  what it unblocks by name (no slug, no bare id), its rows in plain words (no
+  record id such as C-15 or D-44 and no bare "Apply" button), each ask once
+  (one answer button), and a chat with no system event inline and no resolved
+  incident.
 - :func:`node` is a node page by ref; :func:`api` reads the factory's API as
   the browser's user (single-user server: no header). :func:`verb`,
   :func:`details` and :func:`move_row` reach what a calm page keeps behind its
@@ -101,6 +103,18 @@ CALM_CHECKS = """(node) => {
   const machine = /\\b(T|I|PR|O|R|G|D)-\\d+\\b|\\b[a-z][a-z0-9]*(-[a-z0-9]+)+\\b/;
   const unblocks = [...node.querySelectorAll('[data-testid="v3-move-unblocks"]')]
     .map((el) => el.innerText.trim());
+  // A row says who wants what in plain words: no record id, no bare "Apply".
+  const rows = [...node.querySelectorAll('[data-testid="v3-move-row"]')];
+  const code = /\b(C|D|T|PR|I|INC)-\d+\b|#\d+/;
+  const idsInMove = rows
+    .map((row) => row.querySelector('[data-testid="v3-move-text"]')?.innerText ?? '')
+    .concat(rows.flatMap((row) => [...row.querySelectorAll('button, a')]
+      .filter((b) => !b.closest('[data-testid="v3-move-peek"]'))
+      .map((b) => b.innerText.trim())))
+    .filter((t) => code.test(t));
+  const applyLabels = [...node.querySelectorAll('[data-testid="v3-your-move"] button')]
+    .map((b) => b.innerText.trim())
+    .filter((t) => /^Apply\b/.test(t));
   const body = document.body.innerText;
   const asks = [...node.querySelectorAll('[data-testid="v3-move-row"]')]
     .map((row) => row.dataset.ask)
@@ -120,9 +134,12 @@ CALM_CHECKS = """(node) => {
     : [];
   return {
     words: count(outside),
+    text: outside.replace(/\s+/g, ' ').slice(0, 1500),
     longTitles: titles.filter((t) => count(t) > TITLE_WORDS_MAX),
     slugTitles: titles.filter((t) => slug.test(t)),
     machineMoves: unblocks.filter((t) => machine.test(t)),
+    idsInMove,
+    applyLabels,
     repeatedAsks: asks.filter((a) => body.split(a).length - 1 > 1),
     doubledAnswers: Object.entries(answers).filter(([, n]) => n > 1).map(([id]) => id),
     systemInline: system,
@@ -134,10 +151,12 @@ CALM_CHECKS = """(node) => {
 
 def assert_calm(found: dict[str, Any], *where: object) -> None:
     """A :data:`CALM_CHECKS` result that holds every calm rule."""
-    assert found["words"] <= PAGE_WORDS_MAX, (*where, "words", found["words"])
+    assert found["words"] <= PAGE_WORDS_MAX, (*where, "words", found["words"], found["text"])
     assert found["longTitles"] == [], (*where, "long titles", found["longTitles"])
     assert found["slugTitles"] == [], (*where, "slugs as titles", found["slugTitles"])
     assert found["machineMoves"] == [], (*where, "ids in Your move", found["machineMoves"])
+    assert found["idsInMove"] == [], (*where, "record ids in Your move", found["idsInMove"])
+    assert found["applyLabels"] == [], (*where, "an Apply button", found["applyLabels"])
     assert found["repeatedAsks"] == [], (*where, "asks shown twice", found["repeatedAsks"])
     assert found["doubledAnswers"] == [], (*where, "answers twice", found["doubledAnswers"])
     assert found["systemInline"] == [], (*where, "system events inline", found["systemInline"])

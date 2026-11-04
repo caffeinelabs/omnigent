@@ -13,9 +13,14 @@ relative to now:
 - a shortlist the person picked (C-13) became four small projects, all merged;
 - an Atlas proposal (C-12) made ``build-tier-drafts-3``, whose two PRs wait for
   a person to merge them into ``main``;
-- C-14 and C-15 ask things that block nothing; C-19 (D-49) proposes a follow-up
-  under I-1; C-17 and C-18 are rule proposals for the factory tree, each adding
-  a rule (Apply makes a definition version);
+- C-14 and C-15 changed projects that finished since: C-14 asks more of
+  ``skill-discovery``, C-15 lets ``connectors-core`` edit more files (filed
+  before proposals recorded stages, as the live one was): neither asks
+  anything any more and no page shows them (the server tests hold the live
+  shape, a merged project that stays active); C-19 (D-49) proposes a
+  follow-up under I-1; Atlas asks how users reach the assistant (D-52, about
+  I-1, blocking nothing); C-17 and C-18 are rule proposals for the factory
+  tree, each adding a rule (Apply makes a definition version);
 - the server closed three alarms today (D-46, D-47, D-48);
 - the base env (the integration project ``base-env``) runs the base's head,
   which holds every merge, and answers its smoke checks;
@@ -78,6 +83,8 @@ ASK: Final = (
 H: Final = 3600
 DEPLOYED_SHA: Final = "5a3c9e1" + "0" * 33
 """The base head the base env runs (it holds every merge of the story)."""
+CONNECTOR_SCHEMAS: Final = ("env/schema/connectors.ts", "env/schema/oauth.ts")
+"""The files C-15 asked to add to connectors-core (sample)."""
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,12 @@ class Seeded:
     proposal: str
     held_task: str
     feature: str = "I-1"
+    feature_ask: str = ""
+    """Atlas's question about the feature itself (``D-52``): Home and the feature only."""
+    moot_proposal: str = ""
+    """C-15: it changed a project that merged since, so it asks nothing (``C-15``)."""
+    moot_decision: str = ""
+    """C-15's decision (``D-44``): no page shows it."""
     project: str = "assistant-core"
 
 
@@ -401,15 +414,25 @@ def seed_factory_1340(
     c14 = _proposal(
         fs,
         fid,
-        "Update connectors-core (sample)",
-        ops=[{"op": "update", "slug": "connectors-core", "patch": {"constraints": "sample"}}],
-    )
-    c15 = _proposal(
-        fs,
-        fid,
         "Update skill-discovery (sample)",
         ops=[{"op": "update", "slug": "skill-discovery", "patch": {"constraints": "sample"}}],
     )
+    # As live: filed before stages were recorded (its based_on names none).
+    c15 = _proposal(
+        fs,
+        fid,
+        "Update connectors-core (scope_paths)",
+        ops=[
+            {
+                "op": "update",
+                "slug": "connectors-core",
+                "patch": {"scope_paths": ["connectors/**", *CONNECTOR_SCHEMAS]},
+            }
+        ],
+        based_on={"connectors-core": {"updated_at": int(clock - 7 * H), "hash": "0" * 24}},
+        rationale="The connector reads its settings from the env-schema files.",
+    )
+    _backdate(db_uri, SqlFactoryProposal, {c15.id: clock - 6 * H - 20 * 60})
 
     # ── Projects ──
     wave = {"ref": "I-1", "title": "Agent assistant (sample)", "role": "part", "wave": 1}
@@ -659,6 +682,7 @@ def seed_factory_1340(
             continue
         row = _decision(fs, fid, f"filler-{n}", f"Earlier question {n} (sample)", source="agent")
         fs.set_decision_status(row.id, "expired")
+    moot_decision = ""
     for proposal in (c14, c15):
         row = _decision(
             fs,
@@ -671,6 +695,7 @@ def seed_factory_1340(
             options=[dict(o) for o in _APPLY_OPTIONS],
         )
         fs.update_proposal(proposal.id, decision_id=row.id)
+        moot_decision = row.ref
 
     # ── C-16 and D-45, filed through the route like a person's change ──
     resp = httpx.post(
@@ -800,6 +825,24 @@ def seed_factory_1340(
         )
         fs.update_proposal(proposal_row.id, decision_id=row.id)
 
+    # ── D-52: Atlas asks about the feature itself (it blocks nothing) ──
+    entry = _decision(
+        fs,
+        fid,
+        "assistant-entry",
+        "How should users reach the Assistant? A flagged tab in the header is the "
+        "smallest change.",
+        source="agent",
+        blocking=False,
+        subject="I-1",
+        asked_by_session_id=fid,
+        options=[
+            {"id": "tab", "label": "Widen scope: flagged tab in header", "recommended": True},
+            {"id": "menu", "label": "Menu item only"},
+        ],
+        assignee="owners",
+    )
+
     # ── The factory thread's system events (the chat's Activity) and a lead's message ──
     rejected = fs.list_proposals(fid, status="rejected", limit=1)[0]
     _thread_activity(db_uri, fs, fid, clock, rejected, lead=fid)
@@ -835,6 +878,9 @@ def seed_factory_1340(
         apply_decision=decision,
         proposal=proposal,
         held_task=t16.ref,
+        feature_ask=entry.ref,
+        moot_proposal=f"C-{c15.number}",
+        moot_decision=moot_decision,
     )
 
 

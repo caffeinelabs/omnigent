@@ -78,10 +78,12 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import (
     alarms,
+    ask_words,
     auto_merge,
     autonomy,
     features,
     levels,
+    moot,
     node_names,
     node_refs,
     node_status,
@@ -640,7 +642,7 @@ class Tree:
             targets=merging,
         )
         self.closed_alarms = alarms.visible(facts.closed_alarms, self.hidden)
-        self._quiet = self._held_alarms()
+        self._quiet = self._held_alarms() | self._moot_asks()
         self.unnamed: list[node_names.Want] = []
         self._build()
         self._hide_levels()
@@ -650,6 +652,7 @@ class Tree:
         self._name_proposals()
         self._order_columns()
         self.paths = node_status.Paths(self)
+        self._word_asks()
 
     # ── Building ───────────────────────────────────────────────
 
@@ -750,6 +753,17 @@ class Tree:
                 elif node_names.wants_name(proposal.title, slugs=self.slugs):
                     wants.append(want)
         self.unnamed.extend(wants)
+
+    def _word_asks(self) -> None:
+        """
+        Every open ask in plain words too (:mod:`.ask_words`): the factory words
+        the ones whose text it has not worded yet, after the names.
+        """
+        for decisions in self.decisions_at.values():
+            for decision in decisions:
+                found = ask_words.want(self, self.paths.decision_ask(decision), decision)
+                if found is not None:
+                    self.unnamed.append(found)
 
     def proposal_name(self, proposal: FactoryProposal) -> str | None:
         """
@@ -1587,6 +1601,18 @@ class Tree:
             if all(self._held_and_resumes(loop, tasks) for loop in rows)
         )
 
+    def _moot_asks(self) -> frozenset[str]:
+        """
+        The open asks that no longer matter (bare decision ids, :mod:`.moot`): a
+        projects proposal whose project finished or closed since it was filed or
+        whose changes already hold, a question whose task, PR or project
+        finished since it was asked. The sweep closes each with its cause;
+        until then it is no ask.
+        """
+        proposals = {p.ref: p for p in self.facts.proposals}
+        subjects = moot.Subjects(self.facts.projects, self.facts.tasks, self.facts.prs)
+        return moot.quiet_ids(self.facts.decisions, proposals, subjects)
+
     def _held_and_resumes(self, loop: FactoryLoop, tasks: Mapping[str, FactoryTask]) -> bool:
         """*loop*'s task is held on purpose and the hold ends its stall."""
         from omnigent.server.factory.loops import resumes_when_held
@@ -1829,7 +1855,7 @@ class Tree:
         but ``projects`` (``tuning``, ``rules`` and tier-2 ``code``) is a factory
         change that waits on its answer, so it always holds; a ``projects``
         proposal holds while it adds a project (create or split) or changes a
-        project that is still active.
+        project that is still active and not finished (merged or done).
         """
         if decision.blocking:
             return True
@@ -1845,14 +1871,17 @@ class Tree:
         """
         Whether a proposal's decision holds work (:meth:`blocks`): every kind
         but ``projects`` does; a ``projects`` proposal while it adds a project
-        or changes one that is still active. The timeline asks it of answered
-        proposals too (an ask on a finished project held nothing).
+        or changes one that is still active and not finished (merged or done).
+        The timeline asks it of answered proposals too (an ask on a finished
+        project held nothing).
         """
         if proposal.kind != "projects" or _planned(proposal):
             return True
         rows = self.wfacts.projects
         return any(
-            (row := rows.get(slug)) is not None and row.status == "active"
+            (row := rows.get(slug)) is not None
+            and row.status == "active"
+            and row.stage not in moot.DONE_STAGES
             for slug in waits.proposal_slugs(proposal)
         )
 
@@ -3295,7 +3324,8 @@ class Tree:
             out["results"] = self.results(node)
         if node.parent is None:
             out["home"] = self.home.get(node.tree) or (self.ladder[node.tree][1:2] or [""])[0]
-        return your_move.mark_repeats(out, (i["id"] for i in moves["items"]))
+        shown = [*moves["items"], *moves.get("rest", [])]
+        return your_move.mark_repeats(out, (i["id"] for i in shown))
 
     def level_view(
         self,

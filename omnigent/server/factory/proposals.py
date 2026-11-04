@@ -58,8 +58,6 @@ from omnigent.factory import (
     PROPOSAL_OPEN_STATUSES,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
-    STAGE_DONE,
-    STAGE_MERGED,
     THREAD_FACTORY,
     THREAD_MAX_LEN,
 )
@@ -72,6 +70,7 @@ from omnigent.server.factory import (
     events,
     gating,
     initiatives,
+    moot,
     projects,
     spawn,
     start,
@@ -3217,15 +3216,17 @@ STALE_CODES: Final = frozenset(
         "unknown_dependency",
         "not_your_project",
         "stale_proposal",
+        moot.ALREADY,
     }
 )
 """Refusals that stay true: a closed, finished or gone project, a taken slug, a changed
-charter. A full factory (``over_caps``), a cycle or unmapped PRs can still clear: those wait."""
+charter, changes the charter already holds. A full factory (``over_caps``), a cycle or
+unmapped PRs can still clear: those wait."""
 REOPENABLE_CODES: Final = frozenset({"project_done", "unknown_dependency"})
 """Reasons a person can still apply the proposal despite (a finished project takes a
 follow-up; a missing dependency can be created): only these offer Reopen. For the rest
 Apply would refuse it again, so the work is proposed again instead."""
-DONE_STAGES: Final = (STAGE_MERGED, STAGE_DONE)
+DONE_STAGES: Final = moot.DONE_STAGES
 CLOSED_BY: Final = "server"
 
 
@@ -3235,9 +3236,11 @@ def stale_reason(
     """
     Why an open projects proposal no longer applies (synchronous: store reads).
 
-    It re-validates the ops against the factory as it is now, then its
-    ``based_on``. A person who reopened it after it closed for a reason keeps it
-    open for that reason.
+    It re-validates the ops against the factory as it is now, then asks
+    :func:`.moot.proposal_reason` (a project that finished since it was filed,
+    also a row from before stages were recorded; changes the charter already
+    holds), then its ``based_on``. A person who reopened it after it closed for
+    a reason keeps it open for that reason.
 
     :returns: ``(code, reason)``, e.g. ``("project_closed", "project 'api' is cancelled")``,
         or ``None`` while a person could still apply it.
@@ -3249,7 +3252,8 @@ def stale_reason(
         if exc.code in STALE_CODES:
             found = (exc.code, exc.message)
     if found is None:
-        found = _finished_since(deps, root, row.based_on or {})
+        rows = {p.slug: p for p in deps.factory_store.list_projects(root.id)}
+        found = moot.proposal_reason(row, rows)
     if found is None:
         try:
             check_based_on(deps, root, row.based_on or {})
@@ -3259,24 +3263,6 @@ def stale_reason(
     if found is not None and isinstance(reopened, Mapping) and reopened.get("code") == found[0]:
         return None
     return found
-
-
-def _finished_since(
-    deps: FactoryDeps, root: Conversation, based_on: Mapping[str, Any]
-) -> tuple[str, str] | None:
-    """
-    ``project_done`` when a project the proposal touches merged or finished after
-    it was filed (its stage then is in ``based_on``; rows from before that are skipped).
-    A project stays ``active`` once merged or done, so validation never refuses it.
-    """
-    for slug, ref in based_on.items():
-        then = ref.get("stage") if isinstance(ref, Mapping) else None
-        if not isinstance(then, str) or then in DONE_STAGES:
-            continue
-        row = deps.factory_store.get_project(root.id, slug)
-        if row is not None and row.stage in DONE_STAGES:
-            return "project_done", f"project {slug!r} is {row.stage}"
-    return None
 
 
 def closed_itself_text(ref: str, reason: str) -> str:

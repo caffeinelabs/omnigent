@@ -14,6 +14,7 @@ import type {
   LineageRow,
   LineageView,
   MoneyView,
+  MoveAnswer,
   NeedsYouItem,
   NeedsYouList,
   NodeLink,
@@ -108,8 +109,24 @@ function wireAction(value: unknown): DecisionAction | null {
   return label ? { id: str(v?.id) ?? str(v?.option) ?? label.toLowerCase(), label } : null;
 }
 
+/** One outcome-named answer of an ask, as the server sends it. */
+function moveAnswer(raw: Wire): MoveAnswer | null {
+  const option = str(raw.option);
+  const label = str(raw.label);
+  if (!option || !label) return null;
+  return {
+    option,
+    label,
+    ...(raw.primary === true ? { primary: true } : {}),
+    ...(str(raw.url) ? { url: str(raw.url) } : {}),
+    ...(raw.more === true ? { more: true } : {}),
+  };
+}
+
+const NO_STATUS: StatusLine = { kind: "idle", label: "", segments: [], ends: "other" };
+
 /** One Your move row as the server sends it: its ask in full, or the ask's fields beside the row's. */
-function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
+export function moveItem(raw: Wire, status: StatusLine = NO_STATUS): YourMoveItem | null {
   const d = (raw.decision as DecisionRef | undefined) ?? undefined;
   const id = str(raw.id) ?? str(raw.decision_id) ?? str(raw.merge_id) ?? d?.id;
   if (!id) return null;
@@ -154,8 +171,18 @@ function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
     ? raw.unblocks_refs.filter((r): r is string => typeof r === "string" && Boolean(r))
     : [];
   const named = str(raw.object_name);
+  const sentence = str(raw.sentence);
+  const answers = Array.isArray(raw.answers)
+    ? raw.answers.flatMap((a) => moveAnswer(a as Wire) ?? [])
+    : [];
+  const where = raw.where as { ref?: unknown; title?: unknown } | undefined;
   return {
     id,
+    ...(sentence ? { sentence } : {}),
+    ...(answers.length ? { answers } : {}),
+    ...(typeof where?.ref === "string" && typeof where.title === "string"
+      ? { where: { ref: where.ref, title: where.title } }
+      : {}),
     verb,
     ...(object ? { object } : {}),
     ...(named ? { object_name: named } : {}),
@@ -183,15 +210,44 @@ function waveLines(raw: unknown): WaveLine[] {
   });
 }
 
-/** `your_move` as a list, `{items, more, waves?}` or absent (older servers). */
+function nodeLink(raw: unknown): NodeLink | null {
+  const v = raw as { ref?: unknown; title?: unknown } | null;
+  return typeof v?.ref === "string" && typeof v.title === "string"
+    ? { ref: v.ref, title: v.title }
+    : null;
+}
+
+/** `your_move` as a list, `{items, more, rest?, below?, held_by?, waves?}` or absent (older servers). */
 export function normalizeYourMove(raw: unknown, status: StatusLine): YourMove | undefined {
   if (raw == null) return undefined;
   const list = Array.isArray(raw) ? raw : ((raw as Wire).items ?? (raw as Wire).rows);
   if (!Array.isArray(list)) return undefined;
   const items = list.flatMap((r) => moveItem(r as Wire, status) ?? []);
-  const more = Array.isArray(raw) ? 0 : Number((raw as Wire).more ?? 0) || 0;
-  const waves = Array.isArray(raw) ? [] : waveLines((raw as Wire).waves);
-  return waves.length ? { items, more, waves } : { items, more };
+  if (Array.isArray(raw)) return { items, more: 0 };
+  const wire = raw as Wire;
+  const more = Number(wire.more ?? 0) || 0;
+  const rest = Array.isArray(wire.rest)
+    ? wire.rest.flatMap((r) => moveItem(r as Wire, status) ?? [])
+    : undefined;
+  const below = Array.isArray(wire.below)
+    ? wire.below.flatMap((b) => {
+        const child = nodeLink(b);
+        const count = Number((b as Wire).count ?? 0) || 0;
+        return child && count > 0 ? [{ ...child, count }] : [];
+      })
+    : [];
+  const held = nodeLink(wire.held_by);
+  const belowMore = Number(wire.below_more ?? 0) || 0;
+  const waves = waveLines(wire.waves);
+  return {
+    items,
+    more,
+    ...(rest ? { rest } : {}),
+    ...(below.length ? { below } : {}),
+    ...(belowMore ? { below_more: belowMore } : {}),
+    ...(held ? { held_by: held } : {}),
+    ...(waves.length ? { waves } : {}),
+  };
 }
 
 /** A node page from the server, in the shapes the page renders. */
@@ -404,20 +460,26 @@ type WireQuiet = QuietAsk | NeedsYouItem;
 export function normalizeNeedsYou(list: NeedsYouList): NeedsYouList {
   const quiet = (list.blocks_nothing ?? []) as WireQuiet[];
   return {
-    items: (list.items ?? []).map((i) => ({
-      ...i,
-      decision: askWords(i.decision),
-      breadcrumb: belowRoot(i.breadcrumb),
-      holds: i.holds ?? [],
-    })),
+    items: (list.items ?? []).map((i) => {
+      const move = i.move ? moveItem(i.move as unknown as Wire) : null;
+      return {
+        ...i,
+        decision: askWords(i.decision),
+        breadcrumb: belowRoot(i.breadcrumb),
+        holds: i.holds ?? [],
+        ...(move ? { move } : {}),
+      };
+    }),
     blocks_nothing: quiet.map((q) => {
       if (!("decision" in q)) return askWords(q);
       const crumbs = belowRoot(q.breadcrumb);
       const at = crumbs.at(-1);
+      const move = q.move ? moveItem(q.move as unknown as Wire) : null;
       return {
         ...askWords(q.decision),
         breadcrumb: crumbs,
         ...(at ? { node: { ref: at.ref, title: at.title } } : {}),
+        ...(move ? { move } : {}),
       };
     }),
     closed_alarms: list.closed_alarms ?? [],

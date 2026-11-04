@@ -90,8 +90,9 @@ describe("cockpit v3 · the server's node pages", () => {
     // The server marks the ask its Your move shows: the path points up at it.
     const held = "T-16 → held for C-16 → your move, above";
     expect(statusText(page("assistant-core").status)).toBe(`Not moving: ${held}`);
+    // The panel's own page does not list C-16 (it lives on Assistant core): its Details say it.
     expect(statusText(page("assistant-panel-ux").status)).toBe(
-      `Not started for 7 h: waits on Assistant core › ${held}`,
+      "Not started for 7 h: waits on Assistant core › T-16 → held for C-16 → needs you: Apply C-16 (D-45)",
     );
     expect(page("assistant-panel-ux").status.note).toMatch(/3 projects linked without a reason/);
     expect(statusText(page("product").status)).toBe(
@@ -131,6 +132,64 @@ describe("cockpit v3 · the server's node pages", () => {
       expect({ ref, lines: lines.length }).toEqual({ ref, lines: 0 });
       expect({ ref, empty: emptyCells(view.container) }).toEqual({ ref, empty: [] });
       view.unmount();
+    }
+  }, 60_000);
+
+  it("Your move belongs to its level and speaks plainly", async () => {
+    serve();
+    const code = /\b(?:C|D|T|PR|I)-\d+\b|#\d+/;
+    const open = async (ref: string) => {
+      const view = renderNode(ref, { source: liveNodeSource });
+      await waitFor(() =>
+        expect(screen.getByTestId("v3-node-page")).toHaveAttribute("data-ref", ref),
+      );
+      await waitFor(() => expect(view.container.querySelector('[aria-busy="true"]')).toBeNull());
+      const rows = screen.queryAllByTestId("v3-move-row");
+      const found = rows.map((row) => ({
+        id: row.getAttribute("data-decision"),
+        text: within(row).getByTestId("v3-move-text").textContent ?? "",
+        answers: [...row.querySelectorAll('[data-testid="v3-move-answers"] button, a')]
+          .map((b) => b.textContent?.replace(" ↗", "") ?? "")
+          .filter((t) => t && !rows.some((r) => r.getAttribute("data-ask") === t)),
+        where: row.querySelector('[data-testid="v3-move-where"]')?.textContent ?? null,
+      }));
+      const below = screen
+        .queryAllByTestId("v3-move-below")
+        .map((b) => b.textContent?.replace(/\s+/g, " ").trim());
+      const held = screen.queryByTestId("v3-move-held")?.textContent ?? null;
+      view.unmount();
+      return { rows: found, below, held };
+    };
+
+    const home = await open("product");
+    const feature = await open("I-1");
+    const project = await open("assistant-core");
+    const task = await open("T-16");
+    const need = await open("ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1");
+
+    // Home is the inbox, naming where each ask lives; each page lists its own level's asks.
+    expect(home.rows.map((r) => r.id)).toEqual(["D-45", "merge:main", "D-49"]);
+    // A sentence that names where the ask lives says it once; one that does not, after it.
+    expect(home.rows[0]!.where).toBeNull();
+    expect(home.rows[2]!.where).toBeNull();
+    expect(feature.rows.map((r) => r.id)).toEqual(["D-45", "D-49"]);
+    expect(project.rows.map((r) => r.id)).toEqual(["D-45"]);
+    expect(feature.rows.every((r) => r.where === null)).toBe(true);
+    // The held task points at where its ask lives; a need one line per child below.
+    expect(task.rows).toEqual([]);
+    expect(task.held).toBe("Held for an ask in Assistant core →");
+    expect(need.rows).toEqual([]);
+    expect(need.below).toEqual(["Agent assistant (sample) · 2 need you →"]);
+    // Plain words: who wants what, answers named by their outcome, no Apply, no ids.
+    expect(project.rows[0]!.text).toBe(
+      "Atlas wants Assistant core to also ensure each turn debits the user's credits",
+    );
+    expect(project.rows[0]!.answers).toEqual(["Yes, allow it", "No"]);
+    for (const row of [...home.rows, ...feature.rows, ...project.rows]) {
+      expect({ id: row.id, text: row.text }).not.toEqual(
+        expect.objectContaining({ text: expect.stringMatching(code) }),
+      );
+      expect(row.answers.filter((a) => /^Apply\b/.test(a) || code.test(a))).toEqual([]);
     }
   }, 60_000);
 

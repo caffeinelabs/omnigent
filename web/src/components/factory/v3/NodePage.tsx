@@ -399,7 +399,7 @@ function LoadedNodePage({
                   />
                 </div>
               )}
-              <YourMove view={move} />
+              <YourMove view={move} inbox={!page.breadcrumb.length} />
               {!level && <NodeContent page={page} part="body" />}
               <Below page={page} level={shown} explicit={Boolean(level)} lensKey={lensKey} />
             </div>

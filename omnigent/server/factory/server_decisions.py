@@ -364,6 +364,53 @@ async def close_by_server(
     return row
 
 
+def finished_subjects(deps: FactoryDeps, factory_id: str) -> list[tuple[FactoryDecision, str]]:
+    """
+    The open questions whose subject finished after they were asked (synchronous):
+    a closed task, a merged or closed PR, a project that merged, finished or
+    closed (:meth:`.moot.Subjects.why`).
+
+    :returns: ``(decision, why)`` pairs, e.g. ``(D-52, "#9882 merged")``.
+    """
+    from omnigent.server.factory import moot
+
+    store = deps.factory_store
+    rows = store.list_decisions(factory_id=factory_id, status="open", limit=500)
+    rows = [d for d in rows if d.source in moot.ASKED_SOURCES]
+    if not rows:
+        return []
+    subjects = moot.Subjects(
+        store.list_projects(factory_id), store.list_tasks(factory_id), store.list_prs(factory_id)
+    )
+    return moot.decision_reasons(rows, subjects)
+
+
+async def close_finished_subjects(app_state: Any, factory_id: str) -> list[str]:
+    """
+    Close the questions nothing is left to act on (:func:`finished_subjects`),
+    each answered by the server with why. Never raises.
+
+    :returns: The refs closed.
+    """
+    deps = getattr(app_state, FACTORY_STATE_ATTR, None)
+    if not isinstance(deps, FactoryDeps):
+        return []
+    try:
+        stale = await asyncio.to_thread(finished_subjects, deps, factory_id)
+    except Exception:  # noqa: BLE001 - the next sweep retries
+        _logger.warning("factory: no finished subjects for %s", factory_id, exc_info=True)
+        return []
+    from omnigent.server.factory import node_refs
+
+    closed: list[str] = []
+    for decision, why in stale:
+        about = node_refs.normalize(decision.subject or "") or decision.project_slug
+        row = await close_by_server(app_state, decision.id, why=why, about=about)
+        if row is not None:
+            closed.append(row.ref)
+    return closed
+
+
 async def expire_by_key(app_state: Any, factory_id: str, dedupe_key: str) -> None:
     """Expire the open decision of *factory_id* carrying *dedupe_key*, if any."""
     store = _store(app_state)
@@ -662,10 +709,12 @@ __all__ = [
     "WRAPPED_UP_SOURCES",
     "blocked_key",
     "close_by_server",
+    "close_finished_subjects",
     "closed_data",
     "ended_project_decisions",
     "expire_by_key",
     "expire_decision",
+    "finished_subjects",
     "launch_failed_key",
     "open_blocked_decision",
     "open_decision",

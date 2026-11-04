@@ -341,8 +341,11 @@ export function NodeHeader({
   const setDetails = onDetailsChange ?? setOwnDetails;
   const { aboveId } = useNodeActions();
   const name = nodeName(node);
-  // The viewer's own asks are Your move; a phrase says only what holds it otherwise.
-  const covered = page.status.ends === "person" && endsAbove(page.status, aboveId);
+  // The viewer's own asks are Your move (or its line to where they live); a phrase
+  // says only what holds it otherwise.
+  const covered =
+    page.status.ends === "person" &&
+    (endsAbove(page.status, aboveId) || Boolean(page.your_move?.held_by));
   const phrase = page.breadcrumb.length && !covered ? childPhrase(node) : null;
   return (
     <section data-testid="v3-header" className="mb-4 flex flex-col gap-1.5">
