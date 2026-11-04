@@ -54,7 +54,9 @@ export function sampleNodeSource(
     level: async (_fid, ref, level) => engine.level(ref, level),
     answer: async (_fid, decision, action) => {
       engine.answer(decision.id, action.label);
+      return engine.answerOutcome(decision.id, action.label);
     },
+    undoAnswer: async (_fid, decision) => engine.unanswer(decision.id),
     preview: async (_fid, ref, request) => engine.preview(ref, request),
     apply: async (_fid, ref, request) => engine.apply(ref, request),
     undo: async (_fid, token) => engine.undo(token),

@@ -304,7 +304,7 @@ def test_every_cockpit_write_route_requires_human_origin() -> None:
         for route in router.routes
         if isinstance(route, APIRoute) and route.methods & {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    assert len(writes) == 9
+    assert len(writes) == 10
     for route in writes:
         calls = [dep.call for dep in route.dependant.dependencies]
         assert require_human_origin in calls, route.path

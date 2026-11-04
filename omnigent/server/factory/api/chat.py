@@ -6,7 +6,7 @@ People (user JWT; writes carry :data:`~omnigent.server.factory.origin.HUMAN_ORIG
   responder, last ``seq``, the caller's unread count and ``node_ref`` (the node
   it is about: ``product``, a project's slug, ``PR-<n>``, ``T-16`` …; ``null``
   for ``#discovery``). ``nodes=1`` adds the node threads (``need:``,
-  ``feature:``, ``study:``, ``task:``) that have messages. READ.
+  ``feature:``, ``study:``, ``task:``) that have messages, the newest 50. READ.
 - ``GET /v1/factory/factories/{fid}/chat?thread=&before_seq=&after_seq=&limit=``:
   a page of messages, oldest first. READ.
 
@@ -62,6 +62,8 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 PAGE_MAX: Final = 200
 UNREAD_CAP: Final = 99
 MENTION_PREVIEW_CHARS: Final = 200
+NODE_THREADS_MAX: Final = 50
+"""Node threads ``?nodes=1`` lists at most (the newest): each costs a lookup and an unread read."""
 _T = TypeVar("_T")
 
 # Factory events become cards in the Room.
@@ -186,7 +188,8 @@ def thread_views(
 
     :param hidden: Project slugs left out, with their PR threads (and their tasks' threads).
     :param nodes: Also the node threads (``need:``, ``feature:``, ``study:``, ``task:``)
-        that have messages, newest first, after the PRs.
+        that have messages, newest first, after the PRs (the newest
+        :data:`NODE_THREADS_MAX`: each costs a lookup and an unread read).
     :returns: ``ThreadView`` JSON, fixed threads first, then projects, then PRs (newest first).
     """
     store = deps.factory_store
@@ -202,7 +205,7 @@ def thread_views(
     if nodes:
         node_keys = [k for k in stats if thread_kind(k) in chat_routing.NODE_KINDS]
         node_keys.sort(key=lambda k: -stats[k].last_seq)
-        keys += [k for k in node_keys if k not in keys]
+        keys += [k for k in node_keys[:NODE_THREADS_MAX] if k not in keys]
     threads: list[chat.Thread] = []
     for key in keys:
         try:

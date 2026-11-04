@@ -93,7 +93,7 @@ export function TeamRows({
   return (
     <ul
       data-testid="v3-team-rows"
-      className="flex flex-col overflow-hidden rounded-[10px] ring-1 ring-border"
+      className="@container flex flex-col overflow-hidden rounded-[10px] ring-1 ring-border"
     >
       {rows.map((r) => {
         const vendor = r.options.find((o) => o.vendor === r.vendor);
@@ -106,14 +106,16 @@ export function TeamRows({
             data-changed={r.before ? "" : undefined}
             className={cn(
               "grid grid-cols-[20px_minmax(0,8rem)_minmax(0,7rem)_minmax(0,1fr)_minmax(0,9rem)_4rem] items-center gap-2.5 border-t border-border px-3 py-2 text-[13px] first:border-t-0",
-              "max-md:grid-cols-[20px_minmax(0,1fr)_auto] max-md:gap-y-1",
+              "@max-[38rem]:grid-cols-[20px_minmax(0,1fr)_auto] @max-[38rem]:gap-y-1",
               r.before && "bg-status-blue/8",
             )}
           >
             <Avatar actor={{ name: r.name }} />
             <span className="min-w-0 truncate font-semibold">{r.name}</span>
-            <span className="min-w-0 truncate text-muted-foreground max-md:hidden">{r.role}</span>
-            <span className="flex min-w-0 gap-1.5 max-md:col-span-3 max-md:col-start-1 max-md:row-start-2">
+            <span className="min-w-0 truncate text-muted-foreground @max-[38rem]:hidden">
+              {r.role}
+            </span>
+            <span className="flex min-w-0 gap-1.5 @max-[38rem]:col-span-3 @max-[38rem]:col-start-1 @max-[38rem]:row-start-2">
               <select
                 aria-label={`${r.name} vendor`}
                 value={r.vendor}
@@ -144,7 +146,7 @@ export function TeamRows({
                 ))}
               </select>
             </span>
-            <span className="min-w-0 truncate text-xs text-foreground-tertiary max-md:hidden">
+            <span className="min-w-0 truncate text-xs text-foreground-tertiary @max-[38rem]:hidden">
               {r.before ? `was ${r.before}` : (r.state ?? "")}
             </span>
             <span className="text-right font-mono text-xs text-muted-foreground">

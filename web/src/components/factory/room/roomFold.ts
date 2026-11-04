@@ -67,6 +67,32 @@ export function supersededIssueCards(messages: readonly ChatMessageView[]): Set<
   return out;
 }
 
+/**
+ * System cards of `types` that a newer card of the same object in `messages`
+ * repeats (their ids): a proposal filed and then applied is one live card.
+ */
+export function supersededCards(
+  messages: readonly ChatMessageView[],
+  types: readonly string[],
+): Set<string> {
+  const keyOf = (m: ChatMessageView) =>
+    m.author_kind === "system" && m.card && types.includes(m.card.type)
+      ? `${m.card.type}:${m.card.id ?? m.card.ref ?? ""}`
+      : null;
+  const newest = new Map<string, ChatMessageView>();
+  for (const message of messages) {
+    const key = keyOf(message);
+    const seen = key ? newest.get(key) : undefined;
+    if (key && (!seen || seen.seq < message.seq)) newest.set(key, message);
+  }
+  const out = new Set<string>();
+  for (const message of messages) {
+    const key = keyOf(message);
+    if (key && newest.get(key)?.id !== message.id) out.add(message.id);
+  }
+  return out;
+}
+
 interface BaseItem {
   type: "base";
   key: string;

@@ -11,7 +11,7 @@ import { FactoryApiError } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { useApplyVerb, useVerbPreview } from "../nodeSteer";
 import type { NodePage, VerbArgs, VerbAvail, VerbRequest } from "../nodeTypes";
-import { levelName } from "../nodeWire";
+import { escText, levelName } from "../nodeWire";
 import {
   FIELD,
   PreviewField,
@@ -74,7 +74,9 @@ function AddChildPreview({ page, verb, args, onClose }: VerbProps) {
   const columns = kids.columns ?? [];
   const laterTitle = kids.later_title ?? (kids.later.length ? "Later" : null);
   const [title, setTitle] = useState(args?.title ?? "");
-  const [col, setCol] = useState<number | "later">(columns[1]?.col ?? columns[0]?.col ?? 0);
+  // A new child with nothing to wait on lands in the first column; it goes
+  // later in the order by what it depends on (the server's rule).
+  const [col, setCol] = useState<number | "later">(columns[0]?.col ?? 0);
   const [dep, setDep] = useState("");
   const [because, setBecause] = useState("");
   const [heldFor, setHeldFor] = useState("");
@@ -83,7 +85,10 @@ function AddChildPreview({ page, verb, args, onClose }: VerbProps) {
   const request: Args = {
     title: title.trim(),
     col,
-    ...(dep && !later ? { depends_on: dep, because: because.trim() } : {}),
+    // What it waits on, as the projects op names it: a list of refs and a reason each.
+    ...(dep && !later
+      ? { depends_on: [dep], ...(because.trim() ? { depends_why: { [dep]: because.trim() } } : {}) }
+      : {}),
     ...(later && heldFor.trim() ? { held_for: heldFor.trim() } : {}),
   };
   // No title yet: no preview (the server would refuse an empty one).
@@ -92,11 +97,23 @@ function AddChildPreview({ page, verb, args, onClose }: VerbProps) {
     ...columns.map((c) => ({ value: c.col as number | "later", label: c.title })),
     ...(laterTitle ? [{ value: "later" as const, label: laterTitle }] : []),
   ];
-  const into = later ? laterTitle : columns.find((c) => c.col === col)?.title;
   const pulled = data?.pulls_forward;
+  // Where it lands, as the server placed it (its column follows what it depends on).
+  const ghost = data?.columns_after?.items.find(
+    (k) => k.state === "ghost" && k.ref === pulled?.ref,
+  );
+  const landed = typeof ghost?.col === "number" ? ghost.col : col;
+  const into = later ? laterTitle : columns.find((c) => c.col === landed)?.title;
+  // The banner says the pull-forward; the server's sentence saying it again is left out.
+  const said = pulled ? `${escText(pulled.title)} is already here` : null;
+  const preview =
+    data && said
+      ? { ...data, effects: data.effects.filter((e) => !e.html.startsWith(said)) }
+      : data;
   return (
     <PreviewPanel
       {...panel}
+      preview={preview}
       label="Add child"
       title={`Add a ${noun} under ${page.node.title}`}
       applyLabel={later ? "Add as held" : "Add and plan"}
@@ -393,7 +410,12 @@ function ParentPreview({ page, verb, onClose, naming }: VerbProps & { naming: bo
       )}
       {parents.length > 0 && (
         <PreviewField
-          label={`Parent${parentCrumb ? ` (${levelName(parentCrumb.level, parentCrumb.level_name)})` : ""}`}
+          label={
+            naming
+              ? // What it is filed under is the server's to say (its line names the level).
+                "File under"
+              : `Parent${parentCrumb ? ` (${levelName(parentCrumb.level, parentCrumb.level_name)})` : ""}`
+          }
         >
           <PreviewOptions
             label="Parent"

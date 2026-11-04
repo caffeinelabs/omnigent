@@ -1342,7 +1342,10 @@ class Tree:
         everyone = self.facts.members
         if everyone:
             running = sum(1 for m in everyone if m.get("running"))
-            team.short = f"{len(everyone)} members · {running} running"
+            # Nothing renders as "0": idle members are counted, never drawn.
+            team.short = f"{len(everyone)} members · " + (
+                f"{running} running" if running else "all idle"
+            )
 
     def _areas(self) -> None:
         """Each area's one line on what it holds; an area with nothing to act on is done."""

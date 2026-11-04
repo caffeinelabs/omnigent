@@ -319,9 +319,14 @@ export function sampleRoomPreflight(nodeThreads = false): Preflight {
 
 /** Every route the node chat reads: the Room, the node API and preflight, under the sample snapshot's id. */
 export function sampleRoomRoutes(
-  options: SampleOptions & { snapshot?: FactorySnapshot; messages?: ChatMessageView[] } = {},
+  options: SampleOptions & {
+    snapshot?: FactorySnapshot;
+    messages?: ChatMessageView[];
+    /** The server routes the per-node threads (preflight `node_threads`). */
+    nodeThreads?: boolean;
+  } = {},
 ): StoryRoutes {
-  const { snapshot = sampleRoomSnapshot(), messages, ...sample } = options;
+  const { snapshot = sampleRoomSnapshot(), messages, nodeThreads = false, ...sample } = options;
   const fid = snapshot.factory.id;
   return {
     ...roomRoutes(fid, {
@@ -330,7 +335,7 @@ export function sampleRoomRoutes(
       proposals: [],
     }),
     ...sampleNodeRoutes(fid, sample),
-    "/v1/factory/preflight": { body: sampleRoomPreflight() },
+    "/v1/factory/preflight": { body: sampleRoomPreflight(nodeThreads) },
     [`/v1/factory/factories/${fid}/notify/me/ui`]: { body: { cockpit: "v2" } },
   };
 }

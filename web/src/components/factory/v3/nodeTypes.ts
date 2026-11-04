@@ -61,6 +61,24 @@ export interface DecisionRef {
   row_id?: string;
 }
 
+/** An answer's Undo: the proposal it applied, which can be taken back until `until_s`. (client) */
+export interface AnswerUndo {
+  /** `C-16`. */
+  proposal: string;
+  /** Epoch seconds on the server's clock (the proposal's `undo_until`). */
+  until_s: number;
+}
+
+/** What an answer did: its Undo while the proposal it applied keeps one. (client) */
+export interface AnswerOutcome {
+  undo?: AnswerUndo | null;
+}
+
+/** What taking an answer back left: the proposal asks a person again in `decision` (`D-52`). (client) */
+export interface AnswerUndone {
+  decision?: string | null;
+}
+
 /** A path step: down into the child that blocks most (`›`), a hop or a hold (`→`), or the person. */
 export type Segment =
   | { sep: "›"; ref: string; title?: string }
@@ -409,10 +427,17 @@ export interface LevelView {
 // ── Steering: verb previews, apply and Undo (api.md §4) ─────────
 
 /** What a verb's preview and apply send: the verb, its arguments and the facts version read. */
+/** One argument of a verb: a word, a number, a switch, a list of refs, or a reason per ref. */
+export type VerbArg = string | number | boolean | null | string[] | Record<string, string>;
+
 export interface VerbRequest {
   verb: string;
-  /** The verb's own arguments (a new child's title and column, a parent to move under …). */
-  args: Record<string, string | number | boolean | null>;
+  /**
+   * The verb's own arguments (a new child's title and column, a parent to move
+   * under …). Add child names what it waits on as `depends_on: [ref]` with
+   * `depends_why: {ref: reason}`, as the server's projects op does.
+   */
+  args: Record<string, VerbArg>;
   /** The page's `version`: a write based on older facts is refused (409 stale). */
   based_on: string;
 }
@@ -448,6 +473,10 @@ export interface VerbPreview {
   parents?: NodeLink[];
   /** The apply button's words ("Pull forward and plan"). (client) */
   apply_label?: string;
+  /** False when this viewer may only look (an owner's verb for an editor; a form's first read). */
+  can_apply?: boolean;
+  /** Who may apply it, in words ("an owner"). */
+  who_may?: string;
 }
 
 /** What `POST …/n/{ref}/apply` returns: the page after, and the Undo for 10 minutes. */

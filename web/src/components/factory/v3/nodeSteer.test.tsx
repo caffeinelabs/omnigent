@@ -128,11 +128,11 @@ describe("cockpit v3 · since last look (W10)", () => {
 });
 
 describe("cockpit v3 · the steering routes (api.md §3.8, §4)", () => {
-  it("are not on the live source until each endpoint lands", () => {
-    expect(SERVED_STEER).toEqual([]);
-    for (const name of ["preview", "apply", "undo", "needsYou", "find", "seen"] as const) {
-      expect(liveNodeSource[name]).toBeUndefined();
-    }
+  it("are all on the live source: the server serves every one", () => {
+    const names = ["preview", "apply", "undo", "needsYou", "find", "seen"] as const;
+    expect([...SERVED_STEER].sort()).toEqual([...names].sort());
+    for (const name of names) expect(liveNodeSource[name]).toBe(steerRoutes[name]);
+    expect(liveNodeSource.undoAnswer).toBeTypeOf("function");
   });
 
   it("send what api.md names: preview, apply with the preview id, undo by token, seen", async () => {

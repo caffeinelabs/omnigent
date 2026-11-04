@@ -1258,6 +1258,8 @@ export interface PreviewAppliedMeta {
   verb: string;
   label?: string | null;
   by?: string | null;
+  /** Who applied it (a user id): they, or an owner, may undo it (older servers: absent). */
+  by_user?: string | null;
   /** `POST …/undo/{token}` takes it back until `undo_until` (epoch seconds). */
   undo_token?: string | null;
   undo_until?: number | null;

@@ -196,6 +196,8 @@ export function NodeLink({
   className,
   children,
   title,
+  "data-testid": testId,
+  "data-kind": kind,
 }: {
   nodeRef: string;
   level?: string | null;
@@ -203,6 +205,8 @@ export function NodeLink({
   className?: string;
   children: ReactNode;
   title?: string;
+  "data-testid"?: string;
+  "data-kind"?: string;
 }) {
   const { factoryId, prefetch } = useNodeActions();
   const ahead = (_event: MouseEvent | FocusEvent) => prefetch?.(nodeRef);
@@ -214,6 +218,8 @@ export function NodeLink({
       onFocus={ahead}
       title={title}
       {...(roving ? { "data-node-link": nodeRef } : {})}
+      data-testid={testId}
+      data-kind={kind}
       className={className}
     >
       {children}

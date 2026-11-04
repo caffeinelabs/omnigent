@@ -35,6 +35,9 @@ import {
 export const roomQueryKey = (factoryId: string) => ["factory-room", factoryId] as const;
 export const threadsQueryKey = (factoryId: string) =>
   [...roomQueryKey(factoryId), "threads"] as const;
+/** The threads with cockpit v3's per-node ones (`?nodes=1`); under `threadsQueryKey`, so it reads again with it. */
+export const nodeThreadsQueryKey = (factoryId: string) =>
+  [...threadsQueryKey(factoryId), "nodes"] as const;
 export const messagesQueryKey = (factoryId: string, thread: string) =>
   [...roomQueryKey(factoryId), "chat", thread] as const;
 export const proposalsQueryKey = (factoryId: string) =>
@@ -61,12 +64,19 @@ function useFallbackInterval(): number | false {
   return useSessionUpdatesConnected() ? false : FACTORY_FALLBACK_POLL_MS;
 }
 
-/** The Room's threads with the viewer's unread counts. */
-export function useRoomThreads(factoryId: string | null | undefined) {
+/**
+ * The Room's threads with the viewer's unread counts. `nodes`: also the
+ * per-node threads (`need:`, `feature:`, `task:` …) that have messages, for
+ * cockpit v3's chat; the Room's own list and badge never count them.
+ */
+export function useRoomThreads(
+  factoryId: string | null | undefined,
+  { nodes = false }: { nodes?: boolean } = {},
+) {
   const refetchInterval = useFallbackInterval();
   return useQuery<ThreadsResponse>({
-    queryKey: threadsQueryKey(factoryId ?? ""),
-    queryFn: ({ signal }) => fetchRoomThreads(factoryId as string, signal),
+    queryKey: nodes ? nodeThreadsQueryKey(factoryId ?? "") : threadsQueryKey(factoryId ?? ""),
+    queryFn: ({ signal }) => fetchRoomThreads(factoryId as string, signal, { nodes }),
     enabled: Boolean(factoryId),
     refetchInterval,
     retry: retryTransient,
@@ -223,14 +233,17 @@ function newChannel(): ReadChannel | null {
 
 /** Zero a thread's unread count in this client's cache (and anything read up to `lastSeq`). */
 export function applyReadMark(queryClient: QueryClient, mark: ReadMark): void {
-  queryClient.setQueryData<ThreadsResponse>(threadsQueryKey(mark.factoryId), (prev) =>
-    prev
-      ? {
-          data: prev.data.map((t) =>
-            t.key === mark.thread && t.last_seq <= mark.lastSeq ? { ...t, unread: 0 } : t,
-          ),
-        }
-      : prev,
+  // Both lists: the Room's, and cockpit v3's with the per-node threads.
+  queryClient.setQueriesData<ThreadsResponse>(
+    { queryKey: threadsQueryKey(mark.factoryId) },
+    (prev) =>
+      prev
+        ? {
+            data: prev.data.map((t) =>
+              t.key === mark.thread && t.last_seq <= mark.lastSeq ? { ...t, unread: 0 } : t,
+            ),
+          }
+        : prev,
   );
 }
 
@@ -294,8 +307,12 @@ export function useMarkThreadRead(
   channel: ReadChannel | null,
 ): void {
   const queryClient = useQueryClient();
-  const threads = queryClient.getQueryData<ThreadsResponse>(threadsQueryKey(factoryId));
-  const unread = threads?.data.find((t) => t.key === thread)?.unread ?? 0;
+  const unread = queryClient
+    .getQueriesData<ThreadsResponse>({ queryKey: threadsQueryKey(factoryId) })
+    .reduce((most, [, threads]) => {
+      const found = threads?.data.find((t) => t.key === thread)?.unread ?? 0;
+      return Math.max(most, found);
+    }, 0);
   useEffect(() => {
     if (!active || !thread || newestSeq <= 0) return;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;

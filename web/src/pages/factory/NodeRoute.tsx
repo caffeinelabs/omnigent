@@ -20,13 +20,12 @@ import {
 } from "@/components/factory/factoryRoutes";
 import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
-import { useFactoryToast } from "@/components/factory/ui/Toast";
 import { useNodeChatSlot } from "@/components/factory/v3/chat/chatLayout";
 import type { NodeActions } from "@/components/factory/v3/NodeContext";
 import { NodePage } from "@/components/factory/v3/NodePage";
-import { useAnswerDecision } from "@/components/factory/v3/nodeQueries";
 import { PRODUCT_REF } from "@/components/factory/v3/nodeRoutes";
 import { useNodeSource } from "@/components/factory/v3/nodeSource";
+import { useAnswerAsk } from "@/components/factory/v3/nodeSteer";
 import type { FactorySnapshot, TaskView } from "@/lib/factoryApi";
 import { fetchFactoryTasks } from "@/lib/factoryRoomApi";
 import { useParams } from "@/lib/routing";
@@ -98,28 +97,14 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
   const { factoryId } = useFactoryShell();
   const cockpit = useCockpitV2();
   const source = useNodeSource();
-  const toast = useFactoryToast();
   const chatSlot = useNodeChatSlot();
-  const { mutate: answer } = useAnswerDecision(factoryId);
-  const openSheet = useOpenSheet();
   const sample = source?.kind === "sample";
+  // An answer that applied a proposal keeps its Undo on this node for 10 minutes.
+  const answer = useAnswerAsk(nodeRef, { sample, factoryId });
+  const openSheet = useOpenSheet();
   const actions = useMemo<Omit<NodeActions, "factoryId" | "prefetch" | "aboveId">>(
     () => ({
-      onAnswer: (decision, action) => {
-        answer(
-          { decision, action },
-          {
-            onSuccess: () =>
-              toast.show({
-                message: sample
-                  ? `Sample data: nothing was answered. The sample shows what ${decision.id}: ${action.label} would do.`
-                  : `${decision.id}: ${action.label}`,
-              }),
-            onError: (error) =>
-              toast.show({ message: `${decision.id} was not answered: ${String(error)}` }),
-          },
-        );
-      },
+      onAnswer: answer,
       // "Open C-16": the ask with its full text and its rank, in Needs you.
       onOpenDecision: () => openSheet("needs"),
       // Talk: the node's chat (the page opens every other verb's preview itself).
@@ -127,7 +112,7 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
         if (verb.verb === "talk") chatSlot?.focus();
       },
     }),
-    [answer, chatSlot, openSheet, sample, toast],
+    [answer, chatSlot, openSheet],
   );
   return (
     <NodePage

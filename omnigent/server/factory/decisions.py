@@ -633,7 +633,8 @@ async def _run_proposal_answer(
             decision=view,
         )
         if isinstance(exc, CockpitError):
-            failure.extra = {**exc.extra, "decision": view}
+            # Why the proposal did not apply, in its own words (a cockpit refusal's text).
+            failure.extra = {**exc.extra, "decision": view, "reason": exc.message}
         return answered, None, None, failure
     if not sent:
         answered = (

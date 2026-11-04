@@ -13,6 +13,7 @@ import {
   baseMovesOf,
   foldRoomItems,
   namesRepos,
+  supersededCards,
   supersededIssueCards,
 } from "./roomFold";
 import { interleave, type BusLine } from "./roomModel";
@@ -205,5 +206,28 @@ describe("an incident's cards", () => {
     const messages = roomMessages();
     expect(supersededIssueCards(messages).size).toBe(0);
     expect(fold(messages).every((i) => i.type === "message")).toBe(true);
+  });
+});
+
+describe("supersededCards", () => {
+  it("keeps one live card per object: earlier copies of a proposal card are repeats", () => {
+    const base = roomMessages()[0]!;
+    const card = (id: string, seq: number, type: string, ref: string, author = "system") =>
+      ({
+        ...base,
+        id,
+        seq,
+        author_kind: author,
+        card: { type, ref, id: null },
+      }) as ChatMessageView;
+    const messages = [
+      card("filed", 1, "proposal", "C-20"),
+      card("control", 2, "control", "C-20"),
+      card("applied", 3, "proposal", "C-20"),
+      card("other", 4, "proposal", "C-21"),
+      card("quoted", 5, "proposal", "C-21", "agent"),
+    ];
+    expect([...supersededCards(messages, ["proposal"])]).toEqual(["filed"]);
+    expect([...supersededCards(messages, ["issue"])]).toEqual([]);
   });
 });

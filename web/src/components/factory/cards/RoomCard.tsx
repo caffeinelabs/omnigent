@@ -43,6 +43,8 @@ export function RoomCard({
   if (!card) return attached ? null : line;
   switch (card.type) {
     case "proposal": {
+      // A newer card of this proposal is in the thread: this one is its line.
+      if (data.repeated?.has(message.id)) return attached ? null : line;
       const proposal =
         data.proposals?.find((p) => p.id === card.id) ??
         data.proposals?.find((p) => p.ref === card.ref) ??
@@ -101,7 +103,8 @@ export function RoomCard({
     }
     case "why":
     case "closed_alarm":
-    case "offer": {
+    case "offer":
+    case "preview_applied": {
       // The cockpit's card shows the line itself when it cannot draw.
       const fallback = attached ? null : line;
       return data.nodeCard ? data.nodeCard(message, attached, fallback) : fallback;

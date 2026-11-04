@@ -27,12 +27,14 @@ export interface RoomCardData {
   /** The dock's narrow column: cards fold their long parts. */
   compact: boolean;
   /**
-   * Cards the Room does not draw (cockpit v3's `why`, `closed_alarm` and
-   * `offer`). A card it cannot draw renders `fallback` (the message's own
+   * Cards the Room does not draw (cockpit v3's `why`, `closed_alarm`, `offer`
+   * and `preview_applied`). A card it cannot draw renders `fallback` (the message's own
    * line, null under a message), so it never renders empty. Absent elsewhere.
    */
   nodeCard?:
     ((message: ChatMessageView, attached: boolean, fallback: ReactNode) => ReactNode) | null;
+  /** Messages whose card a newer one of the same object repeats: their line, not the card (v3). */
+  repeated?: ReadonlySet<string> | null;
 }
 
 export const RoomCardContext = createContext<RoomCardData | null>(null);

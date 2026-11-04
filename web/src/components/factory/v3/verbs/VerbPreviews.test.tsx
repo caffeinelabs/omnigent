@@ -120,7 +120,7 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     expect(title).toHaveFocus();
     await userEvent.type(title, "Ads network integration");
     expect(await within(panel).findByTestId("v3-preview-found")).toHaveTextContent(
-      "Ads network integration is already here, held for ad-network credentials and an ad-spend cap. Adding it now pulls it forward into Then instead of making a second copy.",
+      "Ads network integration is already here, held for ad-network credentials and an ad-spend cap. Adding it now pulls it forward into First instead of making a second copy.",
     );
     await waitFor(() =>
       expect(within(panel).getByTestId("v3-preview-apply")).toHaveTextContent(

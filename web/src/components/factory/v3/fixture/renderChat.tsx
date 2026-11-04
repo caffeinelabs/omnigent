@@ -7,7 +7,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import type { ChatMessageView, FactorySnapshot } from "@/lib/factoryApi";
+import type { ChatMessageView, FactorySnapshot, ViewerBlock } from "@/lib/factoryApi";
 import type { PostChatRequest } from "@/lib/factoryRoomApi";
 import { useLocation, useParams } from "@/lib/routing";
 import type { StoryResponse, StoryRoutes } from "../../factoryStoryFixtures";
@@ -16,7 +16,7 @@ import { type NodeChatSlot, NodeChatSlotContext } from "../chat/chatLayout";
 import type { NodeActions } from "../NodeContext";
 import { NodePage } from "../NodePage";
 import { nodeHref } from "../nodeRoutes";
-import { NodeSourceProvider } from "../nodeSource";
+import { type NodeSource, NodeSourceProvider } from "../nodeSource";
 import { sampleRoomRoutes, sampleRoomSnapshot } from "./sampleRoom";
 import { type SampleOptions, sampleNodeSource } from "./sampleNodeSource";
 
@@ -129,6 +129,12 @@ export function renderChat(
     messages?: ChatMessageView[];
     /** The page says its nodes are the sample's, not this factory's (`chat.sample`). */
     sampleNodes?: boolean;
+    /** The node source (default: the sample's with these options). */
+    source?: NodeSource;
+    /** The server routes the per-node threads (preflight `node_threads`). */
+    nodeThreads?: boolean;
+    /** Who looks (default: no viewer block, every lever open). */
+    viewer?: ViewerBlock;
     install: (fetch: FakeFetch) => void;
   },
 ) {
@@ -138,18 +144,25 @@ export function renderChat(
     search: query = "",
     messages,
     sampleNodes = false,
+    source,
+    nodeThreads,
+    viewer,
     install,
     ...sample
   } = options;
   const snapshot = sampleRoomSnapshot();
-  const fetch = fetchOf(sampleRoomRoutes({ snapshot, messages, ...sample }), snapshot.factory.id);
+  if (viewer) snapshot.viewer = viewer;
+  const fetch = fetchOf(
+    sampleRoomRoutes({ snapshot, messages, nodeThreads, ...sample }),
+    snapshot.factory.id,
+  );
   install(fetch);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const shell = shellOf(snapshot);
   const chatSlot = slot ?? null;
   const view = render(
     <QueryClientProvider client={client}>
-      <NodeSourceProvider source={sampleNodeSource(sample)}>
+      <NodeSourceProvider source={source ?? sampleNodeSource(sample)}>
         <MemoryRouter initialEntries={[`${nodeHref(FID, nodeRef)}${query}`]}>
           <FactoryShellContext.Provider value={shell}>
             <NodeChatSlotContext.Provider value={chatSlot}>
