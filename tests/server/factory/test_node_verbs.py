@@ -801,12 +801,17 @@ async def test_every_verb_a_page_offers_is_served_there(cockpit: Cockpit) -> Non
     task = cockpit.store.get_task_by_key(cockpit.fid, "core", "cache")
     assert task is not None
     refs = ["product", await _need_of(cockpit, "I-1"), "I-1", "core", "panel", task.ref]
-    args = {"add": {"title": "Sample"}, "move": {"to": "I-1"}, "name": {"title": "Sample"}}
+    args = {
+        "add": {"title": "Sample"},
+        "move": {"to": "I-1"},
+        "name": {"title": "Sample"},
+        "auto": {"auto_merge": True},
+    }
     for ref in refs:
         page = await _page(cockpit, ref)
         for verb in [v["verb"] for v in page["verbs"]]:
-            if verb in ("talk", "auto", "research"):
-                continue  # the chat; S13 and S14 serve the others
+            if verb in ("talk", "research"):
+                continue  # the chat; S14 serves research
             resp = await cockpit.post(
                 _url(cockpit, ref, "preview"), {"verb": verb, "args": args.get(verb, {})}
             )

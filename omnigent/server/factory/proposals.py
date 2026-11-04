@@ -10,7 +10,8 @@ against the factory: slugs free (including other pending proposals), the
 project cap and pods, the factory's repos and default base, no ``depends_on``
 cycle, a scope-overlap warning. ``based_on`` fingerprints every touched row.
 
-The autonomy policy (:mod:`.autonomy`, with the owners' ``autonomy.level``)
+The autonomy policy (:mod:`.autonomy`, with the owners' ``autonomy.level`` and
+its per-subtree ``autonomy.scopes``)
 decides what applies on its own; a proposal that carries out a person's answer
 to a decision (``reply_to="D-<n>"``) applies at once on their behalf
 (:mod:`.answer_authority`). The rest is mirrored as a ``proposal`` decision
@@ -1439,20 +1440,44 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     if own_bet:
         mode = await asyncio.to_thread(bets.autonomy_mode, deps, root.id) or mode
     level = await asyncio.to_thread(autonomy.factory_level, deps, root.id)
+    scopes = await asyncio.to_thread(autonomy.factory_scopes, deps, root.id)
     joined = (
         await asyncio.to_thread(joined_initiatives, deps, root, body, plan)
-        if level == autonomy.LEVEL_TRYOUT and not own_bet
+        if autonomy.LEVEL_TRYOUT in (level, *scopes.values()) and not own_bet
         else {}
+    )
+    # Each op at the level of the subtree it is about (autonomy.scopes), else the factory's.
+    scoped = (
+        await asyncio.to_thread(
+            functools.partial(
+                scoped_levels,
+                deps,
+                root,
+                plan,
+                level=level,
+                scopes=scopes,
+                extends=extends.ref if extends is not None else None,
+                opportunity=body.opportunity,
+            )
+        )
+        if scopes
+        else [(level, None)] * len(plan.changes)
     )
     has_reason = bool((body.rationale or body.reason or "").strip())
     classes: list[autonomy.OpClass] = [
         level_class(c, has_reason=has_reason, joined=joined) for c in plan.changes
     ]
+    levels = [lv for lv, _ in scoped]
     if checked.owner:
         classes.append("owner")
+        levels.append(level)
     # What it needs without the answer (also when another proposal already carried it out).
     unanswered = autonomy.decide(
-        classes, requested=ask is not None or extension is not None, mode=mode, level=level
+        classes,
+        requested=ask is not None or extension is not None,
+        mode=mode,
+        level=level,
+        levels=levels,
     )
     # Never a second approval of what the person decided, whatever the mode.
     verdict = autonomy.Verdict("auto", info_line=True) if carried else unanswered
@@ -1548,6 +1573,10 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             ),
             "mode": mode,
             "level": level,
+            "scoped": [
+                {"op": i, "ref": ref, "level": lv} for i, (lv, ref) in enumerate(scoped) if ref
+            ]
+            or None,
             "by_level": verdict.by_level,
             "authority": audit,
             "joined": joined or None,
@@ -1582,6 +1611,58 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     decision = await _mirror(app_state, root, row, plan, caller.title)
     row = await asyncio.to_thread(store.update_proposal, row.id, decision_id=decision.id) or row
     return _reply(row, decision=decision.ref)
+
+
+def scoped_levels(
+    deps: FactoryDeps,
+    root: Conversation,
+    plan: Plan,
+    *,
+    level: str,
+    scopes: Mapping[str, str],
+    extends: str | None = None,
+    opportunity: str | None = None,
+) -> list[tuple[str, str | None]]:
+    """
+    Each change's autonomy level (synchronous): the level of the nearest scoped
+    ancestor (``autonomy.scopes``) of each project it touches, the strictest of
+    those, else the factory's *level* (:func:`.autonomy.op_level`).
+
+    A new project is placed where applying files it: in the feature the plan
+    extends (*extends*, ``analysis.initiative.id``: :func:`.initiatives.link_created`
+    files it there), else in a new or implicit feature under the need
+    *opportunity*. A create that only joins a person's ask (``create_joined``)
+    without extending its feature lands outside it, so that feature's level
+    does not decide it. A move counts where the project is and where it goes.
+
+    :returns: ``(level, the scope ref that set it or None)`` per change, in order.
+    """
+    from omnigent.server.factory import definition, subtrees
+
+    if not scopes:
+        return [(level, None)] * len(plan.changes)
+    store = deps.factory_store
+    goals = definition.value(deps, root.id, "strategy.goals")
+    lineage = subtrees.load(store, root.id, scopes, goals if isinstance(goals, list) else ())
+    rows = {p.slug: p for p in store.list_projects(root.id)}
+
+    def stored(slug: str) -> tuple[str, ...]:
+        row = rows.get(slug)
+        return lineage.chain(row) if row is not None else (slug,)
+
+    def landing(slug: str) -> tuple[str, ...]:
+        return (slug, *lineage.above(extends, opportunity))
+
+    out: list[tuple[str, str | None]] = []
+    for change in plan.changes:
+        chains = [landing(p.slug) for p in change.creates] if change.op == "create" else []
+        if change.op != "create" and change.slug:
+            chains.append(stored(change.slug))
+        chains += [stored(slug) for slug in change.absorbed]
+        if change.op == "move" and change.slug and change.target:
+            chains.append((change.slug, *lineage.above(change.target)))
+        out.append(autonomy.op_level(chains, scopes, level))
+    return out
 
 
 def level_class(

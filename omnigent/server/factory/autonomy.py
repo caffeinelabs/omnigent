@@ -1,10 +1,14 @@
 """Which project proposals apply on their own, and which wait for a human.
 
-Owners set two things in the definition (``autonomy``, class B, owners only;
-agents never propose either):
+Owners set three things in the definition (``autonomy``, class B, owners only;
+agents never propose any):
 
 - ``autonomy.level``: ``careful`` (the default), ``standard`` or ``tryout``,
   the one knob Steer explains in plain words (:data:`LEVELS`);
+- ``autonomy.scopes``: ``[{ref, level}]``, the level for one subtree (a goal,
+  need, feature or project and everything under it, :mod:`.subtrees`); an op
+  about a project there is decided at the nearest scoped ancestor's level
+  (:func:`op_level`), else at ``autonomy.level``;
 - ``autonomy.projects``: ``confirm``, ``requested`` (the default) or
   ``grace``, the older fine-grained setting.
 
@@ -45,13 +49,14 @@ them. Money is the owners': an op that sets, raises or removes a USD budget
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from omnigent.factory import LABEL_PREFIX
+from omnigent.server.factory.subtrees import SCOPES_MAX, ScopeRef, nearest, unique_refs
 
 LABEL_AUTONOMY: Final = f"{LABEL_PREFIX}autonomy_projects"
 """Root label holding the factory's project autonomy until the definition holds it."""
@@ -90,6 +95,8 @@ OP_CLASSES: Final[tuple[OpClass, ...]] = (
 )
 Approval = Literal["auto", "operator", "owner"]
 _RANK: Final[dict[str, int]] = {"auto": 0, "operator": 1, "owner": 2}
+_LOOSENESS: Final[dict[str, int]] = {level: i for i, level in enumerate(AUTONOMY_LEVELS)}
+"""How far each level loosens the table (the strictest of several wins)."""
 
 MINOR_UPDATE_FIELDS: Final = frozenset(
     {"priority", "demo_focus", "demo", "preview", "preview_slots", "budget_ics", "depends_why"}
@@ -113,6 +120,15 @@ LEVEL_AUTO: Final[dict[str, frozenset[str]]] = {
 """Op classes each level applies at once (with an FYI and Undo), whatever ``projects`` says."""
 
 
+class AutonomyScopeDef(BaseModel):
+    """One subtree's autonomy level: *ref* and everything under it (:mod:`.subtrees`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: ScopeRef
+    level: AutonomyLevel
+
+
 class AutonomyDef(BaseModel):
     """``autonomy`` in the definition: owners only (class B); agents never propose it."""
 
@@ -120,6 +136,9 @@ class AutonomyDef(BaseModel):
 
     projects: Literal["confirm", "requested", "grace"] = "requested"
     level: AutonomyLevel = "careful"
+    scopes: Annotated[
+        list[AutonomyScopeDef], AfterValidator(unique_refs), Field(max_length=SCOPES_MAX)
+    ] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -242,6 +261,49 @@ def factory_level(deps: Any, factory_id: str) -> str:
     return value if value in AUTONOMY_LEVELS else DEFAULT_LEVEL
 
 
+SCOPES_PATH: Final = "autonomy.scopes"
+
+
+def scopes_of(items: Any) -> dict[str, str]:
+    """:returns: ``autonomy.scopes`` as ``{ref: level}`` (malformed entries left out)."""
+    out: dict[str, str] = {}
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        ref, level = item.get("ref"), item.get("level")
+        if isinstance(ref, str) and ref and level in AUTONOMY_LEVELS:
+            out.setdefault(ref, str(level))
+    return out
+
+
+def factory_scopes(deps: Any, factory_id: str) -> dict[str, str]:
+    """:returns: The factory's ``autonomy.scopes`` as ``{ref: level}`` (none when unresolved)."""
+    from omnigent.server.factory import definition
+
+    return scopes_of(definition.value(deps, factory_id, SCOPES_PATH))
+
+
+def op_level(
+    chains: Iterable[Sequence[str]], scopes: Mapping[str, str], default: str
+) -> tuple[str, str | None]:
+    """
+    The level one op is decided at: each project it touches takes the level of its
+    nearest scoped ancestor (*default* outside every scope), and the op the
+    strictest of those.
+
+    :param chains: Per project the op touches, its ref then its ancestors'
+        (:meth:`.subtrees.Lineage.chain`).
+    :returns: ``(level, the scope ref that set it)``; the ref is ``None`` at *default*.
+    """
+    found: list[tuple[str, str | None]] = []
+    for chain in chains:
+        hit = nearest(chain, scopes)
+        found.append((hit[1], hit[0]) if hit is not None else (default, None))
+    if not found:
+        return default, None
+    return min(found, key=lambda f: _LOOSENESS.get(f[0], 0))
+
+
 def update_class(fields: Iterable[str], *, has_reason: bool = True) -> OpClass:
     """
     :param has_reason: The proposal says why (a dependency change is routine only then).
@@ -351,9 +413,21 @@ def decide(
     requested: bool,
     mode: str = DEFAULT_AUTONOMY,
     level: str = DEFAULT_LEVEL,
+    levels: Sequence[str] | None = None,
 ) -> Verdict:
-    """:returns: The proposal's verdict for ops of *op_classes*."""
-    return combine(verdict(c, requested=requested, mode=mode, level=level) for c in op_classes)
+    """
+    :param levels: Each op's own level (:func:`op_level`: the subtree it is about),
+        in the order of *op_classes*; *level* for every op when ``None``.
+    :returns: The proposal's verdict for ops of *op_classes*.
+    """
+    classes = list(op_classes)
+    per_op = list(levels) if levels is not None else [level] * len(classes)
+    if len(per_op) != len(classes):
+        raise ValueError("levels must name one level per op class")
+    return combine(
+        verdict(c, requested=requested, mode=mode, level=lv)
+        for c, lv in zip(classes, per_op, strict=True)
+    )
 
 
 # ── Initiatives (the seam ``create_joined`` reads) ─────────────
@@ -402,9 +476,11 @@ __all__ = [
     "MINOR_UPDATE_FIELDS",
     "OP_CLASSES",
     "ROUTINE_UPDATE_FIELDS",
+    "SCOPES_PATH",
     "Approval",
     "AutonomyDef",
     "AutonomyLevel",
+    "AutonomyScopeDef",
     "InitiativeLookup",
     "LevelText",
     "OpClass",
@@ -414,9 +490,12 @@ __all__ = [
     "decide",
     "factory_autonomy",
     "factory_level",
+    "factory_scopes",
     "initiative_lookups",
+    "op_level",
     "raises_budgets",
     "register_initiative_lookup",
+    "scopes_of",
     "sent_budgets",
     "update_class",
     "verdict",

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.conversation import ConversationItem
     from omnigent.entities.factory import FactoryDecision, FactoryTask
+    from omnigent.server.factory.auto_merge import TargetsLike
     from omnigent.server.factory.context import FactoryDeps
 
 HOLD_SOURCES: Final = frozenset({"agent", "blocked_approval"})
@@ -719,7 +720,7 @@ class Reader:
     now: float
     tasks: Sequence[FactoryTask] = ()
     """The factory's tasks: a lead's question naming another one does not hold a task."""
-    targets: frozenset[tuple[str, str]] = frozenset()
+    targets: TargetsLike = frozenset()
     """The auto-merge targets the server merges into now (:func:`.waits.auto_targets`)."""
     _facts: waits.Facts | None = None
     _quiet_s: float | None = None

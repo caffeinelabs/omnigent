@@ -7,6 +7,7 @@
 // same previews, with what they named filled in.
 
 import { useId, useState } from "react";
+import { FactoryApiError } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { useApplyVerb, useVerbPreview } from "../nodeSteer";
 import type { NodePage, VerbArgs, VerbAvail, VerbRequest } from "../nodeTypes";
@@ -184,48 +185,141 @@ function StartNowPreview({ page, verb, onClose }: VerbProps) {
   );
 }
 
+/** The subtree's autonomy level: kept as it is unless picked ("As above" drops its own). */
+const AUTONOMY_CHOICES = [
+  { value: "", label: "Keep" },
+  { value: "careful", label: "Careful" },
+  { value: "standard", label: "Standard" },
+  { value: "tryout", label: "Tryout" },
+  { value: "inherit", label: "As above" },
+];
+
+/** The base the server would have taken when it asks the owner to name it (`args.base`). */
+function askedBase(error: unknown): { base: string | null } | null {
+  if (!(error instanceof FactoryApiError) || error.field !== "args.base") return null;
+  const body = error.body;
+  const base =
+    body !== null && typeof body === "object" ? (body as Record<string, unknown>).base : null;
+  return { base: typeof base === "string" && base ? base : null };
+}
+
 function AutonomyPreview({ page, verb, onClose }: VerbProps) {
-  const [on, setOn] = useState(!page.node.auto_merge);
-  const { panel } = useFlow(page, verb, { auto_merge: on }, onClose);
+  const id = useId();
+  const covered = Boolean(page.node.auto_merge);
+  // Auto-merge: `null` keeps it as it is (nothing sent). A node it does not
+  // cover yet opens on turning it on, what the verb is mostly for; one it
+  // covers keeps it, so picking only a level changes only the level.
+  const [merge, setMerge] = useState<boolean | null>(covered ? null : true);
+  const [level, setLevel] = useState("");
+  // `null` until the owner names a base: the server's choice, never main.
+  const [base, setBase] = useState<string | null>(null);
+  const on = merge ?? covered;
+  const named = merge === true ? base?.trim() : undefined;
+  const args: Args = {
+    ...(merge === null ? {} : { auto_merge: merge }),
+    ...(named ? { base: named } : {}),
+    ...(level ? { autonomy: level } : {}),
+  };
+  const nothing = merge === null && !level;
+  const { panel } = useFlow(page, verb, args, onClose, !nothing);
+  const asked = askedBase(panel.error);
+  const showBase = merge === true && (base !== null || asked !== null);
   return (
     <PreviewPanel
       {...panel}
       label="Autonomy and merge"
       title={`Autonomy for ${page.node.title} and everything under it`}
-      applyLabel={on ? "Turn on for this subtree" : "Turn off for this subtree"}
+      applyLabel={
+        merge === true
+          ? "Turn on for this subtree"
+          : merge === false
+            ? "Turn off for this subtree"
+            : "Apply to this subtree"
+      }
+      blocked={nothing ? "Pick what changes: auto-merge or the autonomy level." : null}
     >
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        data-testid="v3-auto-merge-switch"
-        onClick={() => setOn((v) => !v)}
-        className={cn(
-          "flex items-start gap-3 rounded-[10px] border px-3 py-2 text-left text-[13px]",
-          on ? "border-status-blue bg-status-blue/12" : "border-border-strong bg-muted/40",
-        )}
-      >
-        <span
-          aria-hidden
+      <div className="flex flex-wrap items-start gap-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          data-testid="v3-auto-merge-switch"
+          data-kept={merge === null || undefined}
+          onClick={() => setMerge(!on)}
           className={cn(
-            "relative mt-0.5 inline-block h-[18px] w-[30px] shrink-0 rounded-full transition-colors",
-            on ? "bg-status-blue" : "bg-border-strong",
+            "flex min-w-0 flex-1 items-start gap-3 rounded-[10px] border px-3 py-2 text-left text-[13px]",
+            merge === null
+              ? "border-border-strong bg-transparent"
+              : on
+                ? "border-status-blue bg-status-blue/12"
+                : "border-border-strong bg-muted/40",
           )}
         >
           <span
+            aria-hidden
             className={cn(
-              "absolute top-[2px] size-[14px] rounded-full bg-white transition-[left]",
-              on ? "left-[14px]" : "left-[2px]",
+              "relative mt-0.5 inline-block h-[18px] w-[30px] shrink-0 rounded-full transition-colors",
+              on ? "bg-status-blue" : "bg-border-strong",
+              merge === null && "opacity-60",
             )}
-          />
-        </span>
-        <span>
-          <b className="font-semibold">Auto-merge this subtree</b> when gates, review and demo pass
-          <span className="block text-xs text-muted-foreground">
-            It covers {page.node.title} and everything under it, also what is added later.
+          >
+            <span
+              className={cn(
+                "absolute top-[2px] size-[14px] rounded-full bg-white transition-[left]",
+                on ? "left-[14px]" : "left-[2px]",
+              )}
+            />
           </span>
-        </span>
-      </button>
+          <span>
+            <b className="font-semibold">Auto-merge this subtree</b> when gates, review and demo
+            pass
+            <span className="block text-xs text-muted-foreground">
+              {merge === null
+                ? `Kept as it is (${covered ? "on" : "off"}). Flip it to change it.`
+                : `It covers ${page.node.title} and everything under it, also what is added later.`}
+            </span>
+          </span>
+        </button>
+        {merge !== null && (
+          <button
+            type="button"
+            data-testid="v3-auto-merge-keep"
+            onClick={() => {
+              setMerge(null);
+              setBase(null);
+            }}
+            className="rounded-[7px] border border-border-strong px-2.5 py-0.5 text-[12.5px] text-muted-foreground hover:text-foreground"
+          >
+            Keep as it is
+          </button>
+        )}
+      </div>
+      {showBase && (
+        <PreviewField label="Into base" htmlFor={`${id}-base`}>
+          <input
+            id={`${id}-base`}
+            type="text"
+            value={base ?? ""}
+            onChange={(e) => setBase(e.target.value)}
+            placeholder={asked?.base ?? "the branch to merge into"}
+            aria-describedby={`${id}-base-why`}
+            className={FIELD}
+          />
+          <span id={`${id}-base-why`} className="mt-1 block text-xs text-muted-foreground">
+            {asked?.base
+              ? `${asked.base} is never chosen for you: name it to auto-merge into it.`
+              : "The branch the server merges this subtree's ready PRs into."}
+          </span>
+        </PreviewField>
+      )}
+      <PreviewField label="Autonomy here">
+        <PreviewOptions
+          label="Autonomy here"
+          options={AUTONOMY_CHOICES}
+          value={level}
+          onChange={setLevel}
+        />
+      </PreviewField>
     </PreviewPanel>
   );
 }

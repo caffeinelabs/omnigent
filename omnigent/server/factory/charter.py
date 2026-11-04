@@ -475,7 +475,8 @@ def render_pl_charter(
         *_optional_lines(charter),
         *_update_lines(),
         # Before the profile's lists: a brief cut at its length limit keeps it.
-        f"Merge policy: {_merge_policy(repo, delivery or {}, project_base_branch(project))} "
+        "Merge policy: "
+        f"{_merge_policy(repo, delivery or {}, project_base_branch(project), project)} "
         "Report READY FOR HUMAN MERGE <url> to your lead once every gate is green; never run "
         "`gh pr merge` or the merge gate.",
         *_delivery_lines(project, charter, delivery or {}),
@@ -583,16 +584,22 @@ DELIVERY_LIST_MAX: Final = 8
 """Entries of a profile list a charter line shows; ``sys_factory_rules`` lists them all."""
 
 
-def _merge_policy(repo: str, delivery: Mapping[str, Any], base: str | None = None) -> str:
+def _merge_policy(
+    repo: str,
+    delivery: Mapping[str, Any],
+    base: str | None = None,
+    project: FactoryProject | None = None,
+) -> str:
     """
     The charter's merge policy: the product profile's words, else humans merge *repo*.
 
-    A *base* the owners made an auto-merge target is merged by the server
-    when ready; agents still never merge.
+    A *base* the owners made an auto-merge target (for the factory, or for the
+    subtree *project* sits in by its slug or stored feature) is merged by the
+    server when ready; agents still never merge.
     """
-    from omnigent.server.factory.auto_merge import is_target, policy_text, targets_of
+    from omnigent.server.factory.auto_merge import is_target, policy_text, targets_from
 
-    if base and is_target(targets_of(delivery), repo, base):
+    if base and is_target(targets_from(delivery), repo, base, project):
         return policy_text(repo, base)
     policy = _text(delivery.get("merge_policy"))
     if policy is None:

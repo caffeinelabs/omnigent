@@ -221,6 +221,104 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     );
   });
 
+  it("Autonomy & merge asks for an autonomy level only once one is picked", async () => {
+    const sample = sampleNodeSource();
+    const asked: Record<string, unknown>[] = [];
+    const source: NodeSource = {
+      ...sample,
+      preview: (fid, ref, request, signal) => {
+        asked.push(request.args);
+        return sample.preview!(fid, ref, request, signal);
+      },
+    };
+    renderNode("I-1", { source });
+    await shown("I-1");
+    await userEvent.click(verbButton(/Autonomy & merge/));
+    const panel = await screen.findByTestId("v3-preview");
+    await lines();
+    expect(asked.at(-1)).toEqual({ auto_merge: true });
+    const group = within(panel).getByRole("group", { name: "Autonomy here" });
+    await userEvent.click(within(group).getByRole("button", { name: "Tryout" }));
+    await waitFor(() => expect(asked.at(-1)).toEqual({ auto_merge: true, autonomy: "tryout" }));
+    await waitFor(async () =>
+      expect((await lines()).Autonomy).toBe("tryout here and everything under it"),
+    );
+    // Only the level, then: auto-merge stays as it is and is not sent.
+    await userEvent.click(within(panel).getByTestId("v3-auto-merge-keep"));
+    await waitFor(() => expect(asked.at(-1)).toEqual({ autonomy: "tryout" }));
+    expect(within(panel).getByTestId("v3-auto-merge-switch")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("v3-preview-apply")).toHaveTextContent("Apply to this subtree"),
+    );
+  });
+
+  it("Autonomy & merge on an auto-merged node keeps it when only a level is picked", async () => {
+    const sample = sampleNodeSource();
+    const asked: Record<string, unknown>[] = [];
+    const source: NodeSource = {
+      ...sample,
+      preview: (fid, ref, request, signal) => {
+        asked.push(request.args);
+        return sample.preview!(fid, ref, request, signal);
+      },
+    };
+    renderNode("I-1", { source });
+    await shown("I-1");
+    await userEvent.click(verbButton(/Autonomy & merge/));
+    await lines();
+    await applyIt();
+    await waitFor(() =>
+      expect(screen.getByTestId("v3-header")).toHaveTextContent("auto-merge → sample-main"),
+    );
+    asked.length = 0;
+
+    await userEvent.click(verbButton(/^Autonomy & merge(?!.*Undo)/));
+    const panel = await screen.findByTestId("v3-preview");
+    const toggle = within(panel).getByTestId("v3-auto-merge-switch");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).toHaveAttribute("data-kept", "true");
+    // Nothing picked yet: nothing is asked, and Apply waits.
+    expect(screen.getByTestId("v3-preview-apply")).toBeDisabled();
+    const group = within(panel).getByRole("group", { name: "Autonomy here" });
+    await userEvent.click(within(group).getByRole("button", { name: "Standard" }));
+
+    await waitFor(() => expect(asked.at(-1)).toEqual({ autonomy: "standard" }));
+    expect(asked.every((a) => !("auto_merge" in a))).toBe(true);
+    await waitFor(async () =>
+      expect((await lines()).Autonomy).toBe("standard here and everything under it"),
+    );
+  });
+
+  it("Autonomy & merge asks for the base when the server will not choose it", async () => {
+    const sample = sampleNodeSource();
+    const asked: Record<string, unknown>[] = [];
+    const source: NodeSource = {
+      ...sample,
+      preview: (fid, ref, request, signal) => {
+        asked.push(request.args);
+        return sample.preview!(fid, ref, request, signal);
+      },
+    };
+    renderNode("build-tier-drafts-3", { source });
+    await shown("build-tier-drafts-3");
+    await userEvent.click(verbButton(/Autonomy & merge/));
+    const panel = await screen.findByTestId("v3-preview");
+
+    const field = await within(panel).findByLabelText("Into base");
+    expect(field).toHaveValue("");
+    expect(field).toHaveAttribute("placeholder", "main");
+    expect(panel).toHaveTextContent("main is never chosen for you: name it to auto-merge into it.");
+    expect(asked.at(-1)).toEqual({ auto_merge: true });
+    await userEvent.type(field, "main");
+
+    await waitFor(() => expect(asked.at(-1)).toEqual({ auto_merge: true, base: "main" }));
+    await waitFor(async () => expect((await lines())["Merges into"]).toContain("main"));
+    expect(screen.getByTestId("v3-preview-apply")).toHaveTextContent("Turn on for this subtree");
+  });
+
   it("Move offers only parents one level up and says both roll-ups change", async () => {
     renderNode("assistant-panel-ux");
     await shown("assistant-panel-ux");

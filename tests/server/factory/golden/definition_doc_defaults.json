@@ -19,7 +19,8 @@
   },
   "autonomy": {
     "level": "careful",
-    "projects": "requested"
+    "projects": "requested",
+    "scopes": []
   },
   "briefs": {
     "atlas": "",
@@ -181,6 +182,7 @@
     "competitors": [],
     "delivery": {
       "auto_merge": [],
+      "auto_merge_scopes": [],
       "demo_paths": [],
       "flags": {
         "convention": null,

@@ -198,7 +198,7 @@ async def test_only_an_owner_sets_targets_and_only_as_a_person(cockpit: Cockpit)
     assert editor.status_code == 403
     assert (runner.status_code, error_code(runner)) == (403, "human_only")
     assert owner.status_code == 200, owner.text
-    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid) == {(REPO, BASE)}
+    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid).pairs == {(REPO, BASE)}
     applied = cockpit.store.get_proposal_by_number(cockpit.fid, 1)
     assert applied is not None and (applied.author_kind, applied.class_) == ("human", "human")
     assert definition.classify(PATH, [], TARGETS) == "B" and definition.owner_only(PATH)
@@ -217,7 +217,7 @@ async def test_an_agent_never_proposes_targets(
         assert (resp.status_code, error_code(resp)) == (403, "path_not_allowed"), resp.text
         assert "owners in the cockpit" in resp.text
     assert cockpit.store.get_proposal_by_number(cockpit.fid, 1) is None
-    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid) == frozenset()
+    assert not auto_merge.factory_targets(cockpit.deps, cockpit.fid)
 
 
 async def test_approving_an_agent_proposal_never_widens_targets(cockpit: Cockpit) -> None:
@@ -245,7 +245,7 @@ async def test_approving_an_agent_proposal_never_widens_targets(cockpit: Cockpit
     assert (refused.value.status_code, refused.value.code) == (403, "path_not_allowed")
     stored = cockpit.store.get_proposal(row.id)
     assert stored is not None and stored.status == "refused"
-    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid) == frozenset()
+    assert not auto_merge.factory_targets(cockpit.deps, cockpit.fid)
 
 
 # ── The merger ───────────────────────────────────────────────────────────────

@@ -39,6 +39,7 @@ from pydantic import (
 )
 
 from omnigent.server.factory.charter import BRANCH_RE
+from omnigent.server.factory.subtrees import SCOPES_MAX, ScopeRef, unique_refs
 
 DISCOVERY_ENV: Final = "OMNIGENT_FACTORY_DISCOVERY"
 """Server switch for discovery routes, tools and jobs (off unless ``1``/``true``)."""
@@ -221,6 +222,29 @@ class AutoMergeTargetDef(_Block):
     base: Branch
 
 
+class AutoMergeScopeDef(_Block):
+    """
+    Auto-merge for one subtree: *ref* and everything under it (:mod:`.subtrees`).
+
+    :param merge: ``True``: the server merges the subtree's ready factory PRs
+        into ``repo#base`` (named, never inferred); ``False``: people merge
+        them, whatever an ancestor's scope or the factory-wide targets say.
+    """
+
+    ref: ScopeRef
+    merge: bool = True
+    repo: Repo | None = None
+    base: Branch | None = None
+
+    @model_validator(mode="after")
+    def _named(self) -> AutoMergeScopeDef:
+        if self.merge and not (self.repo and self.base):
+            raise ValueError(f"{self.ref}: an auto-merge scope names its repo and base")
+        if not self.merge and (self.repo or self.base):
+            raise ValueError(f"{self.ref}: a scope that keeps people merging names no base")
+        return self
+
+
 class DeliveryDef(_Block):
     """
     How work reaches users.
@@ -230,12 +254,18 @@ class DeliveryDef(_Block):
     :param auto_merge: Repo and base pairs whose factory PRs the server
         merges once ready and green (:mod:`.auto_merge`). Owners alone set
         it; an agent never proposes it (:data:`AGENT_NEVER`).
+    :param auto_merge_scopes: The same per subtree (:class:`AutoMergeScopeDef`):
+        the nearest scoped ancestor of a PR's project decides. Owners alone
+        set it (:data:`AGENT_NEVER`).
     :param release: What counts as released: ``merged``, ``github_release``,
         ``github_deployment:<env>`` or ``manual``.
     """
 
     merge_policy: Annotated[str, _strip(300)] | None = None
     auto_merge: list[AutoMergeTargetDef] = Field(default_factory=list, max_length=10)
+    auto_merge_scopes: Annotated[
+        list[AutoMergeScopeDef], AfterValidator(unique_refs), Field(max_length=SCOPES_MAX)
+    ] = Field(default_factory=list)
     protected_repos: list[Repo] = Field(default_factory=list, max_length=20)
     demo_paths: list[Glob] = Field(default_factory=list, max_length=30)
     preview_domain: Host = None
@@ -1187,6 +1217,20 @@ LEVEL_KEY: Final = "autonomy_level"
 """Where a version stores a set ``autonomy.level``: its own top-level key, so a server
 from before the level drops only it on a rollback (it reads ``careful``, the safe
 direction) and still reads ``autonomy.projects`` as the owners set it."""
+AUTO_MERGE_SCOPES_KEY: Final = "auto_merge_scopes"
+"""Where a version stores ``product.delivery.auto_merge_scopes``: a server from before
+the scopes drops only them on a rollback and still reads the profile. That is not
+always the safe direction: nothing merges by a scope then, but a ``merge: false``
+scope is dropped too, so the factory-wide targets merge the PRs it kept for people."""
+AUTONOMY_SCOPES_KEY: Final = "autonomy_scopes"
+"""Where a version stores ``autonomy.scopes``: a server from before them drops only
+them and keeps ``autonomy.projects`` and the level, so every op is decided at
+``autonomy.level`` again: looser than a scope that was stricter than it."""
+_LIFTED: Final[tuple[tuple[str, str], ...]] = (
+    ("product.delivery.auto_merge_scopes", AUTO_MERGE_SCOPES_KEY),
+    ("autonomy.scopes", AUTONOMY_SCOPES_KEY),
+)
+"""Fields a version stores under a top-level key of their own (path, key)."""
 
 
 def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
@@ -1194,10 +1238,12 @@ def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
     :returns: *stored* with legacy blocks moved: an owner-set ``models.<kind>``
         becomes ``role_defaults.<kind>.model`` unless that is already set, the
         stored :data:`AUTO_MERGE_KEY` goes back into ``product.delivery``,
-        :data:`LEVEL_KEY` back into ``autonomy.level`` and a stored
-        ``structure.verbs.item`` ``rename`` moves to ``structure.verbs.area``.
+        :data:`LEVEL_KEY` back into ``autonomy.level``, the subtree scopes
+        (:data:`AUTO_MERGE_SCOPES_KEY`, :data:`AUTONOMY_SCOPES_KEY`) back into
+        their blocks and a stored ``structure.verbs.item`` ``rename`` moves to
+        ``structure.verbs.area``.
     """
-    return _rename_on_areas(_upgrade_models(_lower_level(_lower_targets(stored))))
+    return _rename_on_areas(_upgrade_models(_lower_level(_lower_targets(_lower_fields(stored)))))
 
 
 def _rename_on_areas(stored: dict[str, Any]) -> dict[str, Any]:
@@ -1217,6 +1263,42 @@ def _rename_on_areas(stored: dict[str, Any]) -> dict[str, Any]:
     if isinstance(area, list) and "rename" not in area:
         moved["area"] = [*area, "rename"]
     return {**stored, "structure": {**structure, "verbs": moved}}
+
+
+def _lower_fields(stored: dict[str, Any]) -> dict[str, Any]:
+    """Put each of :data:`_LIFTED` back from its top-level key (unknown shapes stay as stored)."""
+    out = stored
+    for path, key in _LIFTED:
+        if key not in out:
+            continue
+        out = {k: v for k, v in out.items() if k != key}
+        *parents, leaf = path.split(".")
+        node = out
+        for part in parents:
+            child = node.get(part)
+            node[part] = node = dict(child) if isinstance(child, Mapping) else {}
+        node[leaf] = stored[key]
+    return out
+
+
+def _lift_fields(stored: dict[str, Any]) -> dict[str, Any]:
+    """Move each of :data:`_LIFTED` a version holds to its own top-level key."""
+    out = stored
+    for path, key in _LIFTED:
+        *parents, leaf = path.split(".")
+        found: Any = out
+        for part in parents:
+            found = found.get(part) if isinstance(found, Mapping) else None
+        if not isinstance(found, Mapping) or leaf not in found:
+            continue
+        value = found[leaf]
+        out = dict(out)
+        node = out
+        for part in parents:
+            node[part] = node = dict(node[part])
+        del node[leaf]
+        out[key] = value
+    return out
 
 
 def _lower_level(stored: dict[str, Any]) -> dict[str, Any]:
@@ -1295,11 +1377,13 @@ def downgrade(stored: Mapping[str, Any]) -> dict[str, Any]:
     :returns: *stored* with ``role_defaults`` written as the legacy ``models``
         block when all it sets is the model alias of ``ic``, ``reviewer`` or
         ``planner``, ``product.delivery.auto_merge`` under
-        :data:`AUTO_MERGE_KEY` and ``autonomy.level`` under :data:`LEVEL_KEY`
-        (:func:`upgrade` reads them back), so a server from before them still
-        reads the version. Anything else stays as it is.
+        :data:`AUTO_MERGE_KEY`, ``autonomy.level`` under :data:`LEVEL_KEY` and
+        the subtree scopes under :data:`AUTO_MERGE_SCOPES_KEY` and
+        :data:`AUTONOMY_SCOPES_KEY` (:func:`upgrade` reads them back), so a
+        server from before them still reads the version. Anything else stays
+        as it is.
     """
-    return _lift_level(_lift_targets(_downgrade_models(stored)))
+    return _lift_fields(_lift_level(_lift_targets(_downgrade_models(stored))))
 
 
 def _downgrade_models(stored: Mapping[str, Any]) -> dict[str, Any]:
@@ -1456,6 +1540,10 @@ AGENT_NEVER: Final[Mapping[str, str]] = {
         "auto-merge targets are set by owners in the cockpit; agents never propose them "
         "and never merge"
     ),
+    "product.delivery.auto_merge_scopes": (
+        "auto-merge per subtree is set by owners at the node; agents never propose it "
+        "and never merge"
+    ),
     "autonomy": "owners set the factory's autonomy in Steer; agents never propose it",
     "structure": (
         "the levels (their names, who answers, verbs and authority) are set by owners in "
@@ -1581,7 +1669,9 @@ __all__ = [
     "AGENT_NEVER",
     "AGENT_PATHS",
     "ALLOWLIST_SEATS",
+    "AUTONOMY_SCOPES_KEY",
     "AUTO_MERGE_KEY",
+    "AUTO_MERGE_SCOPES_KEY",
     "BLOCKS",
     "BRIEF_MAX",
     "CONSENT",
@@ -1617,6 +1707,7 @@ __all__ = [
     "USER_ID",
     "VENDORS_BY_ROLE",
     "AuthorityDef",
+    "AutoMergeScopeDef",
     "AutoMergeTargetDef",
     "BriefsDef",
     "DeliveryDef",

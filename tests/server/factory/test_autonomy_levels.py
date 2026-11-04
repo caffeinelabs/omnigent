@@ -376,7 +376,11 @@ def test_a_set_level_lives_under_its_own_key() -> None:
     # An older server drops only the level (it reads careful) and keeps the owners' confirm.
     assert stored[blocks.LEVEL_KEY] == "standard"
     assert _OldAutonomyDef.model_validate(stored["autonomy"]).projects == "confirm"
-    assert definition.full_doc(stored)["autonomy"] == {"projects": "confirm", "level": "standard"}
+    assert definition.full_doc(stored)["autonomy"] == {
+        "projects": "confirm",
+        "level": "standard",
+        "scopes": [],
+    }
     assert definition.effective(stored)["autonomy"]["level"] == "standard"
     assert product_profile._block_set({blocks.LEVEL_KEY: "standard"}, product_profile.AUTONOMY)
     assert {d["path"] for d in definition.diff({}, {blocks.LEVEL_KEY: "standard"})} == {
