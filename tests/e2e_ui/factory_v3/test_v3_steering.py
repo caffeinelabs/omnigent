@@ -271,13 +271,15 @@ def test_add_child_pulls_the_held_google_ads_forward_and_asks_atlas_to_plan_it(
     held = "google-ads-integration"
     later = api(v3_server.base_url, factory.fid, f"/n/{factory.feature}")["children"]["later"]
     assert held in [k["ref"] for k in later], later
+    # The held project by its short name, as the server words it ("Google ads integration").
+    name = next(k["title"] for k in later if k["ref"] == held)
     cockpit.open(factory.feature)
 
     _verb(page, factory.feature, "Add child").click()
     page.get_by_test_id("v3-preview").get_by_label("Title").fill(GOOGLE_ADS)
     preview = _preview(page)
     expect(preview.get_by_test_id("v3-preview-found")).to_contain_text(
-        f"{held} is already here, held for wave 2"
+        f"{name} is already here, held for wave 2"
     )
     expect(preview.get_by_test_id("v3-preview-found")).to_contain_text(
         "pulls it forward into First instead of making a second copy"
@@ -292,7 +294,9 @@ def test_add_child_pulls_the_held_google_ads_forward_and_asks_atlas_to_plan_it(
     ).to_contain_text("2 → 1")
     expect(preview).to_contain_text("Atlas plans it now")
     # The banner says it once: the server's own sentence for it is not repeated.
-    expect(preview.get_by_text(re.compile(rf"^{held} is already here"))).to_have_count(1)
+    expect(preview.get_by_text(re.compile(rf"^{re.escape(name)} is already here"))).to_have_count(
+        1
+    )
     _clean(page, factory.feature, "add preview")
 
     _apply(page, preview, "Pull forward and plan")
