@@ -16,7 +16,9 @@ Home's "Learned this week" (ids and titles, never a user's words); only a line
 from the last 24 h keeps the digest from being skipped. Every initiative (an
 outcome several projects build) is one line under "Initiatives", the same
 line as Home's card: how many projects merged, whether the walking skeleton is
-on the base env, how its acceptance went and what it waits on.
+on the base env, how its acceptance went and what it waits on. "Decided since
+you looked · n" counts what the factory decided itself since the person last
+looked at the product (:mod:`.checkpoints`), linked to the Decisions list.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import cockpit_v2_enabled
-from omnigent.server.factory import asks, issues, status_summary
+from omnigent.server.factory import asks, checkpoints, issues, status_summary
 from omnigent.server.factory.server_decisions import server_closed
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import rules
@@ -351,7 +353,10 @@ def _counts(
         data = event.data or {}
         if event.kind.startswith("issue.") and data.get("class") != "incident":
             continue
-        if event.kind == "decision.answered" and server_closed(data):
+        if event.kind == "decision.answered" and (
+            server_closed(data) or data.get("by_kind") == checkpoints.FACTORY_BY
+        ):
+            # Noise the server closed, and the factory's own decisions (their own line).
             continue
         counts[event.kind] = counts.get(event.kind, 0) + 1
     if counts.get("issue.opened"):
@@ -363,6 +368,31 @@ def _counts(
             if i.first_seen >= now - DAY_S and vis.issue(i.project_slug, i.target)
         )
     return counts, still_open
+
+
+def decided_line(
+    deps: FactoryDeps,
+    ctx: FactoryCtx,
+    person: Person,
+    vis: Visibility,
+    now: float,
+    base: str | None,
+) -> str | None:
+    """
+    "Decided since you looked · n": what the factory decided itself since the
+    person last looked at the product (at most a week back; a day when they never
+    looked), with a link to the Decisions list. ``None`` at 0 (synchronous).
+    """
+    from omnigent.server.factory import node_refs
+
+    marks = deps.factory_store.list_node_reads(ctx.factory_id, person.user_id, [node_refs.PRODUCT])
+    floor = int(now) - checkpoints.SINCE_DEFAULT_S
+    since = max(floor, marks[0].seen_at) if marks else int(now - DAY_S)
+    count = checkpoints.decided_count(deps, ctx.factory_id, since, vis.hidden)
+    if not count:
+        return None
+    path = rules.factory_path(ctx, f"/n/{node_refs.PRODUCT}?lens=decisions")
+    return f"*Decided since you looked*  {count} · {link(path, 'Decisions', base)}"
 
 
 def _counts_line(counts: Mapping[str, int], still_open: int) -> str | None:
@@ -485,6 +515,7 @@ def build_digest(
     )
     counts, still_open = _counts(deps, ctx, vis, now)
     counted = _counts_line(counts, still_open)
+    decided = decided_line(deps, ctx, person, vis, now, base)
     extras = _budget_extras(deps, ctx, now, idle) if vis.everything and person.acts else []
     spend = spend_line(summary, extras)
     progress = progress_lines(summary, base)
@@ -494,7 +525,13 @@ def build_digest(
     learned, learned_today = (
         discovery_lines(deps, ctx, now, base) if v2 and vis.everything else ([], False)
     )
-    quiet = not waiting.count and counted is None and retro is None and idle is None
+    quiet = (
+        not waiting.count
+        and counted is None
+        and decided is None
+        and retro is None
+        and idle is None
+    )
     if quiet and not learned_today:
         return None
     local = datetime.fromtimestamp(now, tz=prefs_mod.zone(person.prefs))
@@ -527,6 +564,8 @@ def build_digest(
     if progress:
         doing += [f"*In progress ({len((summary or {}).get('working') or [])})*", *progress]
     day = [f"*Last 24 h*  {counted or 'nothing new'}"]
+    if decided:
+        day.append(decided)
     if spend:
         day.append(f"*Spend*  {spend}")
     if nxt:
@@ -647,6 +686,7 @@ __all__ = [
     "bot_test_message",
     "build_digest",
     "code_message",
+    "decided_line",
     "initiative_lines",
     "lead_line",
     "needs_lines",

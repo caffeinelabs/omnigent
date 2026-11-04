@@ -83,6 +83,7 @@ from omnigent.tools.builtins.factory import (
     SYS_DISCOVERY_READ,
     SYS_FACTORY_ASK,
     SYS_FACTORY_CHAT,
+    SYS_FACTORY_DECIDE,
     SYS_FACTORY_DEMO,
     SYS_FACTORY_ENV,
     SYS_FACTORY_INSIGHTS,
@@ -462,6 +463,8 @@ async def execute_factory_tool(
         return await _post_chat(args, server_client=server_client, caller=conversation_id)
     if tool_name == SYS_FACTORY_NODE:
         return await _read_node(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_DECIDE:
+        return await _decide(args, server_client=server_client, caller=conversation_id)
     if tool_name in _LEARNING_TOOLS:
         return await _learning(
             tool_name, args, server_client=server_client, caller=conversation_id
@@ -1471,7 +1474,7 @@ async def _ask(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: s
         if not isinstance(dedupe_key, str) or not dedupe_key.strip():
             return _error(f"{tool} 'dedupe_key' must be a non-empty string")
         body["dedupe_key"] = dedupe_key.strip()[:64]
-    for key, limit in (("for", 128), ("subject", 64)):
+    for key, limit in (("for", 128), ("subject", 64), ("class", 32)):
         value = args.get(key)
         if value is None:
             continue
@@ -1482,6 +1485,71 @@ async def _ask(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: s
     return await _passthrough(
         server_client, "POST", "/v1/factory/agent/decisions", tool_name=tool, body=body
     )
+
+
+_DECIDE_PATH: Final = "/v1/factory/agent/checkpoints"
+
+
+async def _decide(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """
+    ``sys_factory_decide`` → ``POST /v1/factory/agent/checkpoints``.
+
+    A server from before checkpoints has no such route: its plain 404 becomes
+    ``not_served``, and the agent asks with ``sys_factory_ask`` instead.
+    """
+    tool = SYS_FACTORY_DECIDE
+    body: _JsonObject = {"from_session_id": caller}
+    for key, limit in (("question", DECISION_QUESTION_MAX), ("choice", 200), ("why", 300)):
+        value = args.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return _error(f"{tool} requires a non-empty '{key}'")
+        body[key] = _clip(" ".join(value.split()), limit)
+    options = _decision_options(args.get("options"))
+    if isinstance(options, str):
+        return options
+    body["options"] = [{k: v for k, v in o.items() if k != "recommended"} for o in options]
+    for key, limit in (("class", 32), ("node", 96), ("dedupe_key", 64)):
+        value = args.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return _error(f"{tool} '{key}' must be a string")
+        if value.strip():
+            body[key] = value.strip()[:limit]
+    context = args.get("context")
+    if isinstance(context, str) and context.strip():
+        body["context"] = _clip(context.strip(), DECISION_CONTEXT_MAX)
+    confidence = args.get("confidence")
+    if confidence is not None:
+        if isinstance(confidence, bool) or not isinstance(confidence, int | float):
+            return _error(f"{tool} 'confidence' must be a number from 0 to 1")
+        if not 0 <= float(confidence) <= 1:
+            return _error(f"{tool} 'confidence' must be a number from 0 to 1")
+        body["confidence"] = float(confidence)
+    reversible = _optional_bool(args, "reversible", True)
+    if isinstance(reversible, str):
+        return reversible
+    body["reversible"] = reversible
+    effects = args.get("effects")
+    if effects is not None:
+        if not isinstance(effects, list) or not all(isinstance(e, str) for e in effects):
+            return _error(f"{tool} 'effects' must be a list of refs, e.g. ['C-19', 'T-7']")
+        body["effects"] = [e.strip()[:64] for e in effects if e.strip()][:20]
+    resp = await _request(server_client, "POST", _DECIDE_PATH, tool_name=tool, body=body)
+    if isinstance(resp, str):
+        return resp
+    payload = _response_body(resp)
+    if resp.status_code == 404 and _route_missing(payload):
+        return _error(
+            "not_served",
+            message=(
+                "this server records no decisions yet: ask with sys_factory_ask and mark "
+                "your choice recommended"
+            ),
+        )
+    if resp.status_code >= 400:
+        return json.dumps(_error_payload(resp.status_code, payload, resp.text, tool))
+    return json.dumps(payload) if payload is not None else json.dumps({"result": resp.text})
 
 
 def _sha_arg(tool: str, args: _JsonObject, key: str) -> str | None | _JsonObject:

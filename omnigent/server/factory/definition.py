@@ -743,6 +743,7 @@ SPARSE_FIELDS: Final = (
     "product.delivery.auto_merge_scopes",
     "autonomy.level",
     "autonomy.scopes",
+    "autonomy.decide",
     "structure.node_header",
 )
 """Fields inside a stored block left out while they hold their defaults, so a server

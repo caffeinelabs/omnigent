@@ -11,6 +11,7 @@ so a member only writes its own project's records.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import os
 import re
@@ -40,6 +41,7 @@ from omnigent.factory import (
     parse_pr_url,
 )
 from omnigent.server.factory import (
+    decide_first,
     decision_routing,
     definition,
     events,
@@ -110,6 +112,33 @@ class AskBody(BaseModel):
     dedupe_key: str | None = None
     for_: str | None = Field(default=None, alias="for")
     subject: str | None = None
+    class_: str | None = Field(default=None, alias="class", max_length=32)
+
+
+class DecideOption(BaseModel):
+    """One option an agent considered (``sys_factory_decide``)."""
+
+    label: str
+    description: str | None = None
+
+
+class DecideBody(BaseModel):
+    """``POST /v1/factory/agent/checkpoints``: a decision the agent takes itself."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_session_id: str
+    question: str
+    options: list[DecideOption] = Field(default_factory=list)
+    choice: str
+    why: str
+    class_: str | None = Field(default=None, alias="class", max_length=32)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    node: str | None = Field(default=None, max_length=96)
+    effects: list[str] = Field(default_factory=list, max_length=20)
+    reversible: bool = True
+    context: str | None = None
+    dedupe_key: str | None = None
 
 
 class WithdrawBody(BaseModel):
@@ -219,9 +248,75 @@ def _options(body: AskBody) -> list[dict[str, Any]]:
     return options
 
 
+def _open_decision(
+    caller: AgentCaller,
+    *,
+    question: str,
+    options: list[dict[str, Any]],
+    context: str | None,
+    blocking: bool,
+    allow_text: bool,
+    key: str,
+    assignee: str,
+    subject: str | None,
+) -> tuple[FactoryDecision, bool]:
+    """Return the open ask *key* repeats, else open one (synchronous)."""
+    store = caller.deps.factory_store
+    asker = norm_id(caller.session.id)
+    open_rows = store.list_decisions(factory_id=caller.factory_id, status="open", limit=1000)
+    for row in open_rows:
+        if row.dedupe_key == key:
+            return row, True
+    mine = sum(1 for row in open_rows if row.asked_by_session_id == asker)
+    if mine >= DECISION_MAX_OPEN_PER_ASKER:
+        raise FactoryRouteError(
+            409,
+            "too_many_open_decisions",
+            f"you already have {mine} open decisions; wait for answers or withdraw one",
+        )
+    return store.create_decision(
+        caller.factory_id,
+        dedupe_key=key,
+        question=question,
+        source="agent",
+        options=options,
+        blocking=blocking,
+        allow_text=allow_text,
+        project_slug=caller.membership.project,
+        asked_by_session_id=caller.session.id,
+        context=_clip(context, DECISION_CONTEXT_MAX),
+        assignee=assignee,
+        subject=subject,
+    )
+
+
+async def _opened(request: Request, caller: AgentCaller, row: FactoryDecision) -> None:
+    await events.emit(
+        request.app.state,
+        caller.factory_id,
+        "decision.opened",
+        severity="warning" if row.blocking else "notice",
+        project=caller.membership.project,
+        from_id=caller.session.id,
+        subject=f"decision:{row.ref}",
+        summary=f"{caller.title} asks {row.ref}: {row.question}",
+        data={
+            "decision_id": row.id,
+            "number": row.number,
+            "blocking": row.blocking,
+            "assignee": row.assignee,
+        },
+    )
+
+
 @router.post("/decisions")
 async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
-    """Open a decision for the human, or return the open one it repeats."""
+    """
+    Ask a question. Decide first: when the policy lets the factory decide it
+    (:mod:`.decide_policy`), it is answered at once with its recommended option
+    and the answer is this reply; otherwise it opens for a person (or returns
+    the open one it repeats).
+    """
     caller = await authorize_agent(request, body.from_session_id)
     question = " ".join(body.question.split())
     if not question or len(question) > DECISION_QUESTION_MAX:
@@ -234,60 +329,146 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
     project = caller.membership.project
     key = (body.dedupe_key or "").strip()[:64] or default_dedupe_key(project, question)
     store = caller.deps.factory_store
-    asker = norm_id(caller.session.id)
     assignee, warning = await asyncio.to_thread(_assignee_for, caller, body.for_, project)
     subject = await asyncio.to_thread(_subject_key, store, caller.factory_id, body.subject)
-
-    def _open_or_create() -> tuple[FactoryDecision, bool]:
-        open_rows = store.list_decisions(factory_id=caller.factory_id, status="open", limit=1000)
-        for row in open_rows:
-            if row.dedupe_key == key:
-                return row, True
-        mine = sum(1 for row in open_rows if row.asked_by_session_id == asker)
-        if mine >= DECISION_MAX_OPEN_PER_ASKER:
-            raise FactoryRouteError(
-                409,
-                "too_many_open_decisions",
-                f"you already have {mine} open decisions; wait for answers or withdraw one",
-            )
-        return store.create_decision(
+    deps = caller.deps
+    earlier = await asyncio.to_thread(decide_first.recent_decided, deps, caller.factory_id, key)
+    if earlier is not None and earlier.decision_id:
+        prior = await asyncio.to_thread(store.get_decision, earlier.decision_id)
+        if prior is not None:
+            reply = decide_first.decided_reply(earlier, prior.ref, deduped=True)
+            reply["id"] = prior.id
+            return reply
+    routed = await asyncio.to_thread(
+        functools.partial(
+            decide_first.route_ask,
+            deps,
             caller.factory_id,
-            dedupe_key=key,
             question=question,
-            source="agent",
             options=options,
+            context=body.context,
+            declared=body.class_,
+            to_person=bool((body.for_ or "").strip()),
+            project=project,
+        )
+    )
+    row, deduped = await asyncio.to_thread(
+        functools.partial(
+            _open_decision,
+            caller,
+            question=question,
+            options=options,
+            context=body.context,
             blocking=body.blocking,
             allow_text=body.allow_text,
-            project_slug=project,
-            asked_by_session_id=caller.session.id,
-            context=_clip(body.context, DECISION_CONTEXT_MAX),
+            key=key,
             assignee=assignee,
             subject=subject,
         )
-
-    row, deduped = await asyncio.to_thread(_open_or_create)
+    )
+    if routed.route.factory and row.status == "open":
+        # Also an open twin from before: the factory decides it now; its asker is mailed.
+        mine = not deduped or row.asked_by_session_id == norm_id(caller.session.id)
+        made = await decide_first.decide_ask(request.app.state, row, routed, tell=not mine)
+        if made is not None:
+            reply = decide_first.decided_reply(made, row.ref, deduped=deduped)
+            reply["id"] = row.id
+            return reply
     if not deduped:
-        await events.emit(
-            request.app.state,
-            caller.factory_id,
-            "decision.opened",
-            severity="warning" if row.blocking else "notice",
-            project=project,
-            from_id=caller.session.id,
-            subject=f"decision:{row.ref}",
-            summary=f"{caller.title} asks {row.ref}: {question}",
-            data={
-                "decision_id": row.id,
-                "number": row.number,
-                "blocking": row.blocking,
-                "assignee": row.assignee,
-            },
-        )
+        await _opened(request, caller, row)
     reply = _decision_reply(row, deduped=deduped)
     reply["assignee"] = row.assignee or decision_routing.ASSIGNEE_OPERATORS
+    if row.status == "open":
+        reply["routed"] = {"to": "person", "why": routed.route.why()}
     if warning:
         reply["warning"] = warning
     return reply
+
+
+@router.post("/checkpoints")
+async def decide(request: Request, body: DecideBody) -> dict[str, Any]:
+    """
+    ``sys_factory_decide``: a decision the agent takes itself. Recorded as its
+    checkpoint (``K-n``) when the policy lets the factory decide it; otherwise
+    opened as an ask with the agent's choice recommended.
+    """
+    caller = await authorize_agent(request, body.from_session_id)
+    question = " ".join(body.question.split())
+    if not question or len(question) > DECISION_QUESTION_MAX:
+        raise FactoryRouteError(
+            400, "invalid_question", f"question must be 1-{DECISION_QUESTION_MAX} characters"
+        )
+    why = " ".join(body.why.split())
+    if not why:
+        raise FactoryRouteError(400, "invalid_why", "say in one line why this choice")
+    options = _options(
+        AskBody(
+            from_session_id=body.from_session_id,
+            question=question,
+            options=[AskOption(label=o.label, description=o.description) for o in body.options],
+        )
+    )
+    choice = body.choice.strip()
+    if not options:
+        options = [{"id": "1", "label": choice[:DECISION_OPTION_LABEL_MAX]}]
+    picked = next(
+        (
+            o["id"]
+            for o in options
+            if o["id"] == choice or o["label"].casefold() == choice.casefold()
+        ),
+        None,
+    )
+    if picked is None:
+        raise FactoryRouteError(
+            400, "invalid_choice", "choice names one of the options (its label or its number)"
+        )
+    project = caller.membership.project
+    key = (body.dedupe_key or "").strip()[:64] or default_dedupe_key(project, question)
+    store = caller.deps.factory_store
+    node = None
+    if body.node:
+        node = await asyncio.to_thread(_subject_key, store, caller.factory_id, body.node)
+    effects = [e.strip()[:64] for e in body.effects if e and e.strip()]
+
+    async def open_ask(
+        *, question: str, options: list[dict[str, Any]], context: str, key: str
+    ) -> tuple[FactoryDecision, bool]:
+        assignee, _warning = await asyncio.to_thread(_assignee_for, caller, None, project)
+        row, deduped = await asyncio.to_thread(
+            functools.partial(
+                _open_decision,
+                caller,
+                question=question,
+                options=options,
+                context=context,
+                blocking=True,
+                allow_text=True,
+                key=key,
+                assignee=assignee,
+                subject=node,
+            )
+        )
+        if not deduped:
+            await _opened(request, caller, row)
+        return row, deduped
+
+    return await decide_first.record_agent_decision(
+        request.app.state,
+        caller,
+        question=question,
+        options=options,
+        choice=picked,
+        why=why,
+        declared=body.class_,
+        confidence=body.confidence,
+        node=node,
+        effects=effects,
+        reversible=body.reversible,
+        context=_clip(body.context, DECISION_CONTEXT_MAX),
+        dedupe_key=key,
+        open_ask=open_ask,
+    )
 
 
 def _assignee_for(

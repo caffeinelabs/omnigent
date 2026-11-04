@@ -160,6 +160,7 @@ from omnigent.stores.factory_store import (
     validate_project_fields,
     version_content_hash,
 )
+from omnigent.stores.factory_store.sqlalchemy_checkpoints import SqlCheckpointStore
 from omnigent.stores.factory_store.sqlalchemy_discovery import SqlDiscoveryStore
 from omnigent.stores.factory_store.sqlalchemy_initiatives import SqlInitiativeStore
 
@@ -788,7 +789,9 @@ def _feedback(row: SqlFactoryFeedback) -> FactoryFeedback:
     )
 
 
-class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore):
+class SqlAlchemyFactoryStore(
+    SqlDiscoveryStore, SqlInitiativeStore, SqlCheckpointStore, FactoryStore
+):
     """
     SQLAlchemy-backed implementation of :class:`FactoryStore`.
 

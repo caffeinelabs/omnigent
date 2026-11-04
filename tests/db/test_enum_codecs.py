@@ -147,6 +147,16 @@ _CODECS = [
         ec.encode_factory_initiative_status,
         ec.decode_factory_initiative_status,
     ),
+    (
+        ec.FACTORY_CHECKPOINT_STATUS,
+        ec.encode_factory_checkpoint_status,
+        ec.decode_factory_checkpoint_status,
+    ),
+    (
+        ec.FACTORY_CHECKPOINT_BY,
+        ec.encode_factory_checkpoint_by,
+        ec.decode_factory_checkpoint_by,
+    ),
 ]
 
 
@@ -303,3 +313,5 @@ def test_shipped_codes_are_stable() -> None:
     }
     assert ec.FACTORY_READOUT_DECISION == {"keep": 1, "drop": 2, "iterate": 3, "extend": 4}
     assert ec.FACTORY_INITIATIVE_STATUS == {"open": 1, "done": 2, "cancelled": 3}
+    assert ec.FACTORY_CHECKPOINT_STATUS == {"decided": 1, "asked": 2, "answered": 3, "changed": 4}
+    assert ec.FACTORY_CHECKPOINT_BY == {"agent": 1, "server": 2, "person": 3}

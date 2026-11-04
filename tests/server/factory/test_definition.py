@@ -80,7 +80,12 @@ def test_seeding_moves_the_legacy_labels_into_the_doc(world: FactoryWorld) -> No
 
     assert resolved is not None
     assert resolved.doc["engine"] == {"mode": "enforce", "spawn": "lead", "next_hints": True}
-    assert resolved.doc["autonomy"] == {"projects": "grace", "level": "careful", "scopes": []}
+    assert resolved.doc["autonomy"] == {
+        "projects": "grace",
+        "level": "careful",
+        "scopes": [],
+        "decide": [],
+    }
     labels = world.get("lead_a").labels
     assert not set(definition.LEGACY_LABELS) & set(labels)
     assert tasks.engine_mode(world.deps, _fid(world)) == "enforce"

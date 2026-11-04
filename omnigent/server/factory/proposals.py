@@ -69,6 +69,8 @@ from omnigent.server.factory import (
     autonomy,
     bets,
     control,
+    decide_first,
+    decide_policy,
     events,
     gating,
     initiatives,
@@ -1248,6 +1250,11 @@ def _tell_proposer(app_state: Any, row: FactoryProposal, text: str, mail_id: str
 # ── Opening a proposal ─────────────────────────────────────────
 
 
+def tell_proposer(app_state: Any, row: FactoryProposal, text: str) -> str:
+    """:returns: The mail id of *text* sent to *row*'s proposer (see :func:`_tell_proposer`)."""
+    return _tell_proposer(app_state, row, text, None)
+
+
 def _bet_md(row: FactoryProposal) -> list[str]:
     if row.bet is None and not row.opportunity:
         return []
@@ -1483,6 +1490,30 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     verdict = autonomy.Verdict("auto", info_line=True) if carried else unanswered
     peer = await asyncio.to_thread(_peer, deps, root.id, caller) if checked.bet else None
     waits = own_bet and peer is not None
+    # Decide first: an operator's approval the policy lets the factory give itself.
+    decided: tuple[decide_policy.Route, decide_first.Settings] | None = None
+    if (
+        verdict.approval == "operator"
+        and not verdict.grace
+        and not waits
+        and checked.bet is None
+        and not body.opportunity
+    ):
+        decided = await asyncio.to_thread(
+            functools.partial(
+                decide_first.route_proposal,
+                deps,
+                root.id,
+                plan,
+                classes,
+                reply_to=body.reply_to,
+                slugs=decide_first.plan_slugs(plan),
+            )
+        )
+        if decided[0].factory:
+            verdict = autonomy.Verdict("auto", info_line=True, by_level=decided[0].level)
+        else:
+            decided = None
     warnings = [*plan.warnings, *checked.warnings, *(draft.warnings if draft else [])]
     if own_bet and peer is None:
         warnings.append("no_peer_lead: no other lead writes a case against; a person decides")
@@ -1578,6 +1609,7 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             ]
             or None,
             "by_level": verdict.by_level,
+            "decide_first": decided[0].as_json() if decided is not None else None,
             "authority": audit,
             "joined": joined or None,
             "opportunity": row.opportunity,
@@ -1607,6 +1639,10 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
         row = await asyncio.to_thread(store.get_proposal, row.id) or row
         out = _reply(row)
         out.update(spawning=result.get("spawning", []), held=result.get("held", {}))
+        if decided is not None:
+            made = await decide_first.record_proposal(app_state, row, *decided, result)
+            out["checkpoint"] = made.ref
+            out["decided"] = {"by": "the factory", "checkpoint": made.ref, "why": decided[0].why()}
         return out
     decision = await _mirror(app_state, root, row, plan, caller.title)
     row = await asyncio.to_thread(store.update_proposal, row.id, decision_id=decision.id) or row
@@ -2905,6 +2941,22 @@ async def _undo_checks(deps: FactoryDeps, root: Conversation, row: FactoryPropos
     return created
 
 
+async def undo_blocker(
+    deps: FactoryDeps, root: Conversation, row: FactoryProposal
+) -> CockpitError | None:
+    """:returns: Why *row*'s Undo cannot run now (``undo_closed`` …), else ``None``."""
+    try:
+        await _undo_checks(deps, root, row)
+    except CockpitError as exc:
+        return exc
+    return None
+
+
+def changed_since(row: FactoryProposal, slug: str, current: FactoryProject) -> bool:
+    """Whether *slug*'s charter changed since *row* applied (another change wrote it)."""
+    return _changed_since(row, slug, current)
+
+
 async def _take_back(
     app_state: Any,
     root: Conversation,
@@ -3612,6 +3664,7 @@ __all__ = [
     "apply_now",
     "ask_initiative",
     "back_to_pending_text",
+    "changed_since",
     "charter_hash",
     "check_based_on",
     "close_stale",
@@ -3639,8 +3692,10 @@ __all__ = [
     "send_back",
     "sent_back_text",
     "stale_reason",
+    "tell_proposer",
     "undo",
     "undo_answer",
+    "undo_blocker",
     "validate",
     "withdraw",
 ]

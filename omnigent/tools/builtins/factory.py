@@ -15,6 +15,9 @@ the planner. Discovery: the ``sys_discovery_*`` tools for the discovery seat (``
 ``sys_discovery_read`` and ``sys_discovery_opportunity`` (ideas only) for the leads.
 ``sys_factory_node`` (read one node of the cockpit's work tree) for the leads, project
 leads, Scout and the planner; a server without node pages answers it with an error.
+``sys_factory_decide`` (record a decision the agent takes itself, decide first) for the
+leads and project leads; a server without checkpoints answers it with an error, and
+``sys_factory_ask`` with the choice recommended does the same job there.
 """
 
 from __future__ import annotations
@@ -66,6 +69,13 @@ SYS_FACTORY_RULES: Final = "sys_factory_rules"
 SYS_FACTORY_INSIGHTS: Final = "sys_factory_insights"
 SYS_FACTORY_RETRO: Final = "sys_factory_retro"
 SYS_FACTORY_NODE: Final = "sys_factory_node"
+SYS_FACTORY_DECIDE: Final = "sys_factory_decide"
+DECISION_CLASS_WORDS: Final = (
+    "scope, tech, ux, plan, follow_up (a follow-up project), project_change (a goal or "
+    "outcome), new_work, structural (split, merge, cancel), other; Tier 0 always goes to a "
+    "person: merge, credentials, spend, prod_flag, infra, policy, delete_data, pii"
+)
+"""The decision classes the server's decide-first policy reads, in words."""
 NODE_OPS: Final = ("read",)
 NODE_REF_MAX: Final = 200
 SYS_DISCOVERY_READ: Final = "sys_discovery_read"
@@ -94,6 +104,7 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_INSIGHTS,
         SYS_FACTORY_RETRO,
         SYS_FACTORY_NODE,
+        SYS_FACTORY_DECIDE,
         *DISCOVERY_TOOL_NAMES,
     }
 )
@@ -408,8 +419,12 @@ class SysFactoryAskTool(Tool):
             "Ask the human a question. It becomes a decision (D-<n>) in the factory "
             "cockpit and the human's inbox, with one-click options. Use it for every "
             "question or decision you need from the human; never post DECISIONS "
-            "NEEDED lists in chat. Returns at once with {decision: 'D-7', status, "
-            "deduped}; keep working; the answer arrives as `[Factory decision · D-7 "
+            "NEEDED lists in chat. Decide first: when the factory's policy lets the "
+            "factory decide it (its autonomy level, the question's class, a recommended "
+            "option, nothing Tier 0), the result already holds the answer: {status: "
+            "'answered', decided: {label, checkpoint}}: act on it now. Otherwise it "
+            "returns {decision: 'D-7', status: 'open', routed: {why}, deduped}; keep "
+            "working; the answer arrives as `[Factory decision · D-7 "
             "answered …]`. Asking the same open question again returns the same D-n "
             f"(deduped). At most {DECISION_MAX_OPTIONS} options; mark the one you "
             "recommend. Set blocking=false when you can carry on without the answer. "
@@ -493,8 +508,128 @@ class SysFactoryAskTool(Tool):
                             "What it is about, e.g. 'pr:<id>', 'project:<slug>' or 'task:T-4'."
                         ),
                     },
+                    "class": {
+                        "type": "string",
+                        "maxLength": 32,
+                        "description": (
+                            f"What kind of decision it is: {DECISION_CLASS_WORDS}. The "
+                            "server also reads the words; the strictest class wins."
+                        ),
+                    },
                 },
                 "required": ["question"],
+                "additionalProperties": False,
+            },
+        )
+
+
+class SysFactoryDecideTool(Tool):
+    """Record a decision the agent takes itself (decide first; a checkpoint people can change)."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_decide"``."""
+        return SYS_FACTORY_DECIDE
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Record a decision you take yourself, before acting on it: the question, the "
+            "options you considered, your choice and one line on why. The server checks it "
+            "against the factory's decide-first policy (autonomy level, the owners' "
+            "settings, Tier 0). Allowed: it is recorded as checkpoint K-<n> that people see "
+            "and can change direction from; go ahead ({status: 'decided', checkpoint}). Not "
+            "allowed: it opens as a question to a person with your choice recommended "
+            "({status: 'asked', decision: 'D-<n>', why}); wait for its answer for that part. "
+            "Use it for scope, technical, UX and ordering choices and follow-ups; use "
+            "sys_factory_ask when you have no recommendation. If a person later changes "
+            "direction you get `[Factory decision · K-<n> changed by …]`: re-plan from it."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        option = {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "maxLength": DECISION_OPTION_LABEL_MAX},
+                "description": {
+                    "type": "string",
+                    "maxLength": DECISION_OPTION_DESCRIPTION_MAX,
+                },
+            },
+            "required": ["label"],
+            "additionalProperties": False,
+        }
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "maxLength": DECISION_QUESTION_MAX,
+                        "description": "The decision as one question.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": option,
+                        "maxItems": DECISION_MAX_OPTIONS,
+                        "description": "The options you considered (include your choice).",
+                    },
+                    "choice": {
+                        "type": "string",
+                        "maxLength": DECISION_OPTION_LABEL_MAX,
+                        "description": "Your choice: an option's label (or its number).",
+                    },
+                    "why": {
+                        "type": "string",
+                        "maxLength": 300,
+                        "description": "One line on why this choice.",
+                    },
+                    "class": {
+                        "type": "string",
+                        "maxLength": 32,
+                        "description": f"What kind of decision it is: {DECISION_CLASS_WORDS}.",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "How sure you are, 0-1.",
+                    },
+                    "node": {
+                        "type": "string",
+                        "maxLength": 96,
+                        "description": (
+                            "What it is about: 'project:<slug>', 'task:T-4', 'I-1'; your "
+                            "project by default."
+                        ),
+                    },
+                    "effects": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 64},
+                        "maxItems": 20,
+                        "description": "Refs it created or changed, when known (C-19, T-7).",
+                    },
+                    "reversible": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "False when no Undo or revert takes it back.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "maxLength": DECISION_CONTEXT_MAX,
+                        "description": "Markdown background, shown if a person must decide.",
+                    },
+                    "dedupe_key": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "description": "Stable key for this decision; defaults to its text.",
+                    },
+                },
+                "required": ["question", "choice", "why"],
                 "additionalProperties": False,
             },
         )

@@ -1226,9 +1226,14 @@ AUTONOMY_SCOPES_KEY: Final = "autonomy_scopes"
 """Where a version stores ``autonomy.scopes``: a server from before them drops only
 them and keeps ``autonomy.projects`` and the level, so every op is decided at
 ``autonomy.level`` again: looser than a scope that was stricter than it."""
+AUTONOMY_DECIDE_KEY: Final = "autonomy_decide"
+"""Where a version stores ``autonomy.decide``: a server from before decide-first drops only
+it on a rollback and keeps the rest of the block; it decides nothing itself then (the safe
+direction: every decision point waits for a person again)."""
 _LIFTED: Final[tuple[tuple[str, str], ...]] = (
     ("product.delivery.auto_merge_scopes", AUTO_MERGE_SCOPES_KEY),
     ("autonomy.scopes", AUTONOMY_SCOPES_KEY),
+    ("autonomy.decide", AUTONOMY_DECIDE_KEY),
 )
 """Fields a version stores under a top-level key of their own (path, key)."""
 
@@ -1669,6 +1674,7 @@ __all__ = [
     "AGENT_NEVER",
     "AGENT_PATHS",
     "ALLOWLIST_SEATS",
+    "AUTONOMY_DECIDE_KEY",
     "AUTONOMY_SCOPES_KEY",
     "AUTO_MERGE_KEY",
     "AUTO_MERGE_SCOPES_KEY",
