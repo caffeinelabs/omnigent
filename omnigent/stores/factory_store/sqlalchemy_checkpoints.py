@@ -176,6 +176,7 @@ class SqlCheckpointStore:
         proposal_id: str | None = None,
         overrides: str | None = None,
         dedupe_key: str | None = None,
+        status: str | Sequence[str] | None = None,
         limit: int = 200,
     ) -> builtins.list[FactoryCheckpoint]:
         model = SqlFactoryCheckpoint
@@ -193,6 +194,11 @@ class SqlCheckpointStore:
             stmt = stmt.where(model.overrides == overrides)
         if dedupe_key is not None:
             stmt = stmt.where(model.dedupe_key == dedupe_key)
+        if status is not None:
+            names = [status] if isinstance(status, str) else list(status)
+            stmt = stmt.where(
+                model.status.in_([encode_factory_checkpoint_status(n) for n in names])
+            )
         stmt = stmt.order_by(model.number.desc()).limit(limit)
         with self._session("list_factory_checkpoints") as session:
             return [_checkpoint(r) for r in session.execute(stmt).scalars()]

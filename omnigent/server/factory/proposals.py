@@ -1403,7 +1403,12 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
         await asyncio.to_thread(
             answer_authority.authority_for, deps, root, caller, str(body.reply_to), plan
         )
-        if ask is None and answer_authority.is_decision_ref(body.reply_to)
+        if ask is None
+        and answer_authority.is_decision_ref(body.reply_to)
+        and (
+            answer_authority.DECISION_REF_RE.match(str(body.reply_to))
+            or await asyncio.to_thread(answer_authority.is_direction, deps, root.id, body.reply_to)
+        )
         else None
     )
     if authority is not None and (body.bet is not None or body.opportunity):
@@ -1514,7 +1519,34 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             verdict = autonomy.Verdict("auto", info_line=True, by_level=decided[0].level)
         else:
             decided = None
+    # An owner's setting that keeps a class for a person also holds what the level applies.
+    reserved: str | None = None
+    if (
+        verdict.approval == "auto"
+        and verdict.by_level
+        and decided is None
+        and not carried
+        and ask is None
+        and extension is None
+        and checked.bet is None
+        and not body.opportunity
+    ):
+        reserved = await asyncio.to_thread(
+            functools.partial(
+                decide_first.owner_reserved,
+                deps,
+                root.id,
+                plan,
+                classes,
+                reply_to=body.reply_to,
+                slugs=decide_first.plan_slugs(plan),
+            )
+        )
+        if reserved is not None:
+            verdict = autonomy.Verdict("operator")
     warnings = [*plan.warnings, *checked.warnings, *(draft.warnings if draft else [])]
+    if reserved is not None:
+        warnings.append(f"owner_reserved: an owner keeps this for a person ({reserved})")
     if own_bet and peer is None:
         warnings.append("no_peer_lead: no other lead writes a case against; a person decides")
     if authority is not None and (scope_warning := authority.warning()) is not None:

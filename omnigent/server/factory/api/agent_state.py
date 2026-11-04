@@ -22,7 +22,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.entities.factory import FactoryDecision, FactoryPr
+from omnigent.entities.factory import FactoryCheckpoint, FactoryDecision, FactoryPr
 from omnigent.factory import (
     DECISION_CONTEXT_MAX,
     DECISION_MAX_OPEN_PER_ASKER,
@@ -42,6 +42,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import (
     decide_first,
+    decide_policy,
     decision_routing,
     definition,
     events,
@@ -332,26 +333,13 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
     assignee, warning = await asyncio.to_thread(_assignee_for, caller, body.for_, project)
     subject = await asyncio.to_thread(_subject_key, store, caller.factory_id, body.subject)
     deps = caller.deps
-    earlier = await asyncio.to_thread(decide_first.recent_decided, deps, caller.factory_id, key)
-    if earlier is not None and earlier.decision_id:
-        prior = await asyncio.to_thread(store.get_decision, earlier.decision_id)
-        if prior is not None:
-            reply = decide_first.decided_reply(earlier, prior.ref, deduped=True)
-            reply["id"] = prior.id
-            return reply
-    routed = await asyncio.to_thread(
-        functools.partial(
-            decide_first.route_ask,
-            deps,
-            caller.factory_id,
-            question=question,
-            options=options,
-            context=body.context,
-            declared=body.class_,
-            to_person=bool((body.for_ or "").strip()),
-            project=project,
-        )
+    prior = await asyncio.to_thread(
+        decide_first.prior_for_key, deps, caller.factory_id, key, question
     )
+    if prior is not None:
+        reply = await asyncio.to_thread(_prior_reply, deps, prior)
+        if reply is not None:
+            return reply
     row, deduped = await asyncio.to_thread(
         functools.partial(
             _open_decision,
@@ -366,7 +354,25 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
             subject=subject,
         )
     )
-    if routed.route.factory and row.status == "open":
+    routed: decide_first.AskRoute | None = None
+    if deduped:
+        # An open twin is routed with what it was asked with, never this request's words,
+        # and only for the same question: another question under its key just waits.
+        same = decide_first.same_question(row.question, question)
+        if same and row.status == "open" and row.source == "agent":
+            kept = await asyncio.to_thread(decide_first.asked_record, deps, row)
+            routed = await asyncio.to_thread(decide_first.route_open, deps, row, kept)
+    else:
+        inputs = decide_first.Inputs(
+            text=decide_policy.point_text(question, options, body.context),
+            declared=body.class_,
+            to_person=bool((body.for_ or "").strip()),
+            subject=subject,
+        )
+        routed = await asyncio.to_thread(decide_first.route_with, deps, row, inputs)
+        if not routed.route.factory:
+            await asyncio.to_thread(decide_first.save_route, deps, row, routed, inputs)
+    if routed is not None and routed.route.factory and row.status == "open":
         # Also an open twin from before: the factory decides it now; its asker is mailed.
         mine = not deduped or row.asked_by_session_id == norm_id(caller.session.id)
         made = await decide_first.decide_ask(request.app.state, row, routed, tell=not mine)
@@ -379,9 +385,39 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
     reply = _decision_reply(row, deduped=deduped)
     reply["assignee"] = row.assignee or decision_routing.ASSIGNEE_OPERATORS
     if row.status == "open":
-        reply["routed"] = {"to": "person", "why": routed.route.why()}
+        why = (
+            routed.route.why()
+            if routed is not None
+            else await asyncio.to_thread(decide_first.held_why, deps, row)
+        )
+        reply["routed"] = {"to": "person", "why": why or "a person decides it"}
     if warning:
         reply["warning"] = warning
+    return reply
+
+
+def _prior_reply(deps: Any, prior: FactoryCheckpoint) -> dict[str, Any] | None:
+    """
+    The answer a repeated question gets from what was decided on it (synchronous):
+    the factory's choice, or the person's change of direction in force over it.
+    """
+    store = deps.factory_store
+    if prior.status == "changed":
+        override = decide_first.override_of(deps, prior)
+        if override is None:
+            return None
+        reply = decide_first.person_reply(prior, override)
+        decision = store.get_decision(prior.decision_id) if prior.decision_id else None
+        if decision is not None:
+            reply["decision"] = decision.ref
+            reply["id"] = decision.id
+        return reply
+    decision = store.get_decision(prior.decision_id) if prior.decision_id else None
+    reply = decide_first.decided_reply(
+        prior, decision.ref if decision is not None else None, deduped=True
+    )
+    if decision is not None:
+        reply["id"] = decision.id
     return reply
 
 
@@ -390,7 +426,8 @@ async def decide(request: Request, body: DecideBody) -> dict[str, Any]:
     """
     ``sys_factory_decide``: a decision the agent takes itself. Recorded as its
     checkpoint (``K-n``) when the policy lets the factory decide it; otherwise
-    opened as an ask with the agent's choice recommended.
+    opened as a non-blocking ask with the agent's choice recommended (or, while
+    nothing is the factory's, not recorded: the agent decides as before).
     """
     caller = await authorize_agent(request, body.from_session_id)
     question = " ".join(body.question.split())
@@ -442,7 +479,7 @@ async def decide(request: Request, body: DecideBody) -> dict[str, Any]:
                 question=question,
                 options=options,
                 context=context,
-                blocking=True,
+                blocking=False,
                 allow_text=True,
                 key=key,
                 assignee=assignee,

@@ -101,11 +101,15 @@ async def get_checkpoint(
     if not item.nodes:
         return _error(404, "unknown_checkpoint", f"no checkpoint {ref!r} in this factory")
     level = await asyncio.to_thread(people.viewer_level, ctx.deps, ctx.root.id, ctx.user_id)
-    view = checkpoints.detail_view(item, can_change=level >= LEVEL_EDIT)
+    can = level >= LEVEL_EDIT and await asyncio.to_thread(
+        change_direction.may_change, ctx.deps, ctx.root.id, item, ctx.user_id, level
+    )
+    view = checkpoints.detail_view(item, can_change=can)
     return views.validate(views.CheckpointView, view)
 
 
 async def _book_for(env: node_verbs.Env) -> checkpoints.Book:
+    """Every checkpoint this person may read, placed on their tree (read fresh from the store)."""
     tree = await env.tree()
     book = await asyncio.to_thread(checkpoints.load, env.deps, env.fid)
     for item in book.items:
@@ -154,7 +158,7 @@ async def apply_direction(
         if ref is None:
             raise CockpitError(400, "bad_ref", "a checkpoint is K-n, D-n or C-n")
         env = await node_verbs.env_for(request, factory_id)
-        out = await change_direction.apply(env, await _book_for(env), ref, payload)
+        out = await change_direction.apply(env, _book_for, ref, payload)
         return views.validate(views.DirectionAppliedView, out)
 
     return await _guard(run)

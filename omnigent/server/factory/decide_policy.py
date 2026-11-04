@@ -73,6 +73,19 @@ TIER0: Final = (
 """Classes that always stay with a person."""
 NEVER_FACTORY: Final = frozenset({*TIER0, "structural"})
 """Classes no setting gives the factory: Tier 0, and changes no Undo brings back."""
+HOLDS: Final = (
+    "tier0",
+    "irreversible",
+    "to_person",
+    "budget",
+    "no_option",
+    "never",
+    "owner",
+    "level",
+)
+"""Why a person decides, as a route records it."""
+LIFTABLE: Final = frozenset({"owner", "level"})
+"""Holds a later settings change may lift (the sweep decides only those asks)."""
 ALL_KINDS: Final = (*CLASSES, *TIER0)
 DecisionKind = Literal[
     "scope",
@@ -94,18 +107,22 @@ DecisionKind = Literal[
     "pii",
 ]
 
-_STANDARD: Final = frozenset({"scope", "tech", "ux", "plan", "other"})
+_STANDARD: Final = frozenset({"scope", "tech", "ux", "plan"})
 LEVEL_DEFAULTS: Final[dict[str, frozenset[str]]] = {
     "careful": frozenset(),
     "standard": _STANDARD,
     "tryout": _STANDARD | {"follow_up"},
 }
-"""The classes each autonomy level lets the factory decide (owners widen or narrow them)."""
+"""The classes each autonomy level lets the factory decide (owners widen or narrow them).
+
+``other`` (a point whose words name no class) is in none: what the policy cannot
+classify goes to a person unless an owner gives it to the factory."""
 LEVEL_WORDS: Final[dict[str, str]] = {
     "careful": "A person decides every question an agent asks.",
     "standard": (
         "The factory decides scope, technical, UX and ordering questions that have a "
-        "recommended option; follow-up projects and new work wait for a person."
+        "recommended option; follow-up projects, new work and anything it cannot "
+        "classify wait for a person."
     ),
     "tryout": (
         "The factory also starts follow-up projects inside work a person started; new "
@@ -131,7 +148,7 @@ KIND_WORDS: Final[dict[str, str]] = {
     "project_change": "goal or outcome",
     "new_work": "new work",
     "structural": "structural",
-    "other": "routine",
+    "other": "unclassified",
     "merge": "merge",
     "credentials": "credentials",
     "spend": "spend",
@@ -150,27 +167,89 @@ def _rx(*words: str) -> re.Pattern[str]:
     return re.compile(_W + "(?:" + "|".join(words) + ")" + _E)
 
 
+_KEY_COMPOUNDS: Final = (
+    "primary",
+    "foreign",
+    "composite",
+    "sort",
+    "cache",
+    "partition",
+    "hash",
+    "lookup",
+    "map",
+    "json",
+    "object",
+    "unique",
+    "dedupe",
+    "idempotency",
+    "row",
+    "react",
+    "shortcut",
+    "keyboard",
+    "hot",
+    "the",
+)
+"""Words before "key" that make it a data or UI key, not a credential."""
+_NOT_A_KEY: Final = "".join(f"(?<!{w} )" for w in _KEY_COMPOUNDS)
+_UI_NOUNS: Final = (
+    r"(?:page|menu|screen|nav\w*|view|list|tab|bar|panel|content|feed|window|area|section"
+    r"|flow|dashboard|button|title|heading|layout)"
+)
+
 TIER0_WORDS: Final[dict[str, re.Pattern[str]]] = {
-    "merge": _rx(r"merg(?:e|es|ed|ing)", r"force[- ]?push\w*"),
+    "merge": _rx(
+        r"merg(?:e|es|ed|ing)",
+        r"force[- ]?push\w*",
+        r"land(?:s|ed|ing)? (?:the |this |that |a |my |our |its )?"
+        r"(?:prs?|#\d+|changes?|branch(?:es)?|commits?|fix(?:es)?|patch(?:es)?|diffs?|code)",
+        r"land(?:s|ed|ing)?(?: \S+){0,4} (?:on|into|onto) (?:the )?"
+        r"(?:main|master|trunk|base|default|release)",
+        r"(?:main|master|trunk|default|base|release|protected) branch(?:es)?",
+        r"(?:ship|push)(?:es|ed|ing|s|ped|ping)?(?: \S+){0,4} (?:to|into|onto) (?:the )?"
+        r"(?:main|master|trunk)",
+        rf"(?:into|onto|to) (?:main|master|trunk)(?! {_UI_NOUNS})",
+    ),
     "credentials": _rx(
         r"credentials?",
         r"passwords?",
         r"api[- ]?keys?",
         r"access tokens?",
+        r"(?<!design )tokens?",
+        rf"{_NOT_A_KEY}keys?(?!-value| results?| metrics?| points?| takeaways?)",
+        r"signing",
+        r"certificates?",
         r"secrets?",
         r"private keys?",
         r"ssh keys?",
         r"oauth",
         r"service accounts?",
+        r"\.env(?:\.[a-z0-9]+)?",
+        r"env(?:ironment)? files?",
+        r"vault",
     ),
     "spend": _rx(
         r"spend(?:ing)?",
         r"budgets?",
         r"purchase\w*",
-        r"paid (?:plan|tier|account|api)s?",
+        r"buy(?:s|ing)?",
+        r"bought",
+        r"pay(?:s|ing|ment|ments)?",
+        r"paid",
         r"pay for",
         r"subscribe",
         r"subscription",
+        r"pricing",
+        r"billing",
+        r"billed",
+        r"invoices?",
+        r"(?:credit|debit|payment|company) cards?",
+        r"(?:pro|paid|free|team|business|enterprise|premium|hosting|cloud|higher) "
+        r"(?:plans?|tiers?)",
+        r"upgrad\w*(?: \S+){0,3} (?:plans?|tiers?|accounts?|subscriptions?|licen[cs]es?)",
+        r"costs?(?: \S+){0,2} (?:money|dollars?|euros?)",
+        r"(?:extra|monthly|cloud|hosting|license) costs?",
+        r"dollars?",
+        r"euros?",
         r"\$\s?\d[\d,.]*",
         r"usd",
     ),
@@ -180,7 +259,31 @@ TIER0_WORDS: Final[dict[str, re.Pattern[str]]] = {
         r"all users",
         r"every user",
         r"general availability",
-        r"roll(?:ing)? ?out to (?:all|everyone)",
+        r"flags?(?: \S+){0,4} on",
+        r"(?:turn|switch|flip|toggle)(?:s|ed|ing|ped|ping)?(?: \S+){0,4} on (?:for|to|in)",
+        r"enabl(?:e|es|ed|ing)(?: \S+){0,5} (?:flags?|toggles?|features?)",
+        r"enabl(?:e|es|ed|ing)(?: \S+){0,5} for",
+        r"\d{1,3} ?% (?:of )?(?:the )?(?:traffic|users|customers|requests|people|accounts"
+        r"|sessions|tenants)",
+        r"(?:to|for|at) 100 ?%",
+        r"everyone",
+        r"every(?:body| customer| account| tenant)",
+        r"all (?:customers|accounts|traffic|tenants|regions)",
+        r"(?:for|to) (?:all |our |the |every )?customers",
+        r"customers?[- ]facing",
+        r"(?:real|paying|live|external) (?:customers?|users?)",
+        r"(?:to|for) (?:the )?public",
+        r"public(?:ly)? (?:available|accessible|readable|registry|internet|bucket|links?|urls?)",
+        r"make(?: \S+){0,3} public",
+        r"open(?: \S+){0,3} to (?:the )?(?:public|internet|world)",
+        r"go(?:es|ing)? live",
+        r"went live",
+        r"launch(?:es|ed|ing)?(?! (?:a |an |the )?(?:new )?(?:ic|pl|agent|session|member|"
+        r"subagent|worker|run|turn)s?(?![a-z0-9]))",
+        r"releas(?:e|es|ed|ing)",
+        r"publish\w*",
+        r"roll(?:s|ed|ing)?[- ]?outs?",
+        r"roll(?:s|ed|ing)? (?:it |this |them )?out",
     ),
     "infra": _rx(
         r"infra",
@@ -193,6 +296,15 @@ TIER0_WORDS: Final[dict[str, re.Pattern[str]]] = {
         r"cluster",
         r"firewall",
         r"iam",
+        r"deploy\w*",
+        r"environments?",
+        r"ci(?:/cd)? (?:workflows?|pipelines?|config\w*|jobs?|runners?)",
+        r"github actions?",
+        r"workflow files?",
+        r"\.github/workflows",
+        r"buckets?",
+        r"domain names?",
+        r"(?:custom|apex|sub) ?domains?",
     ),
     "policy": _rx(
         r"polic(?:y|ies)",
@@ -207,6 +319,8 @@ TIER0_WORDS: Final[dict[str, re.Pattern[str]]] = {
         r"delet(?:e|es|ed|ing)",
         r"drop(?:s|ped|ping)? (?:[a-z0-9_-]+ ){0,3}"
         r"(?:tables?|columns?|database|db|data|index(?:es)?|buckets?|backups?)",
+        r"(?:remov|reset|wip|overwrit|clear|truncat|purg|eras)\w*(?: \S+){0,5} "
+        r"(?:records?|data|database|db|tables?|users?|accounts?|rows?|history|backups?)",
         r"wip(?:e|es|ed|ing)",
         r"purg(?:e|es|ed|ing)",
         r"truncat\w*",
@@ -220,6 +334,9 @@ TIER0_WORDS: Final[dict[str, re.Pattern[str]]] = {
         r"personally identifiable",
         r"gdpr",
         r"email addresses",
+        r"(?:e-mail|home|postal|mailing|street|ip|physical|billing) addresses?",
+        r"(?:user|customer|people's|real|full|personal)'?s? names?",
+        r"(?:user|customer|personal|private)'?s? (?:data|records|details|info\w*)",
         r"phone numbers",
         r"user data export",
     ),
@@ -349,10 +466,26 @@ def factory_rules(deps: Any, factory_id: str) -> list[DecideRuleDef]:
 # ── Reading a decision point ───────────────────────────────────
 
 
-def tier0_of(text: str) -> list[str]:
-    """:returns: The Tier-0 classes *text* names, in :data:`TIER0` order."""
+def _bases_rx(bases: Iterable[str]) -> re.Pattern[str] | None:
+    names = sorted({b.strip().lower() for b in bases if b and b.strip()}, key=len, reverse=True)
+    if not names:
+        return None
+    alts = "|".join(re.escape(n) for n in names)
+    return _rx(rf"(?:into|onto|to|on) (?:the )?(?:{alts})(?: branch)?(?! {_UI_NOUNS})")
+
+
+def tier0_of(text: str, bases: Iterable[str] = ()) -> list[str]:
+    """
+    :param bases: Base branches people merge into (not an auto-merge target):
+        naming one as where something goes is a merge.
+    :returns: The Tier-0 classes *text* names, in :data:`TIER0` order.
+    """
     lowered = text.lower()
-    return [kind for kind, rx in TIER0_WORDS.items() if rx.search(lowered)]
+    found = [kind for kind, rx in TIER0_WORDS.items() if rx.search(lowered)]
+    extra = _bases_rx(bases)
+    if "merge" not in found and extra is not None and extra.search(lowered):
+        found.insert(0, "merge")
+    return found
 
 
 def classes_of(text: str) -> list[str]:
@@ -382,6 +515,7 @@ class Point:
     :param within_budget: The factory and its project are under their budgets.
     :param to_person: The asker addressed a person (``for=``).
     :param kinds: Classes the caller knows it falls in (a proposal's ops).
+    :param bases: Base branches people merge into (:func:`tier0_of`).
     """
 
     text: str
@@ -392,6 +526,7 @@ class Point:
     within_budget: bool = True
     to_person: bool = False
     kinds: Sequence[str] = ()
+    bases: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -407,6 +542,7 @@ class Route:
     :param tier0: The Tier-0 classes it touches.
     :param rule: The owner setting that decided it (``"ux on I-1: person"``), if one did.
     :param option: The option the factory takes (``who == "factory"``).
+    :param holds: Why a person decides, as codes (:data:`HOLDS`); empty when the factory does.
     """
 
     who: str
@@ -417,6 +553,7 @@ class Route:
     tier0: tuple[str, ...] = ()
     rule: str | None = None
     option: str | None = None
+    holds: tuple[str, ...] = ()
 
     @property
     def factory(self) -> bool:
@@ -427,8 +564,13 @@ class Route:
         """:returns: One line on why it went where it went."""
         return "; ".join(self.reasons)
 
+    @property
+    def liftable(self) -> bool:
+        """Whether only settings hold it (:data:`LIFTABLE`): a later level or owner change may."""
+        return bool(self.holds) and set(self.holds) <= LIFTABLE
+
     def as_json(self) -> dict[str, Any]:
-        """:returns: ``{who, kind, kinds, level, reasons, tier0?, rule?}`` (kept on the record)."""
+        """:returns: ``{who, kind, kinds, level, reasons, tier0?, rule?, holds?}`` (kept)."""
         out: dict[str, Any] = {
             "who": self.who,
             "kind": self.kind,
@@ -440,6 +582,8 @@ class Route:
             out["tier0"] = list(self.tier0)
         if self.rule:
             out["rule"] = self.rule
+        if self.holds:
+            out["holds"] = list(self.holds)
         return out
 
 
@@ -498,7 +642,7 @@ def route(
 
     if scopes:
         level, _ref = autonomy.op_level(point.chains or [()], scopes, level)
-    tier0 = tuple(tier0_of(point.text))
+    tier0 = tuple(tier0_of(point.text, point.bases))
     declared = point.declared if point.declared in ALL_KINDS else None
     kinds: list[str] = []
     for kind in (*point.kinds, *([declared] if declared else []), *classes_of(point.text)):
@@ -509,35 +653,55 @@ def route(
         kinds.append("other")
     lookup = _Lookup(rules, level, point.chains)
     held = [k for k in kinds if lookup.who(k)[0] == PERSON]
-    kind = tier0[0] if tier0 else (held[0] if held else kinds[0])
+    kind = (tier0 or tuple(k for k in held if k in TIER0) or (held[0] if held else kinds[0],))[0]
     reasons: list[str] = []
+    holds: list[str] = []
     rule: str | None = None
-    if tier0:
-        reasons.append(f"Tier 0 ({', '.join(KIND_WORDS[k] for k in tier0)}) is always a person's")
+    declared_tier0 = [k for k in held if k in TIER0 and k not in tier0]
+    if tier0 or declared_tier0:
+        named = ", ".join(KIND_WORDS[k] for k in (*tier0, *declared_tier0))
+        reasons.append(f"Tier 0 ({named}) is always a person's")
+        holds.append("tier0")
     if not point.reversible:
         reasons.append("it cannot be undone")
+        holds.append("irreversible")
     if point.to_person:
         reasons.append("it was asked of a person")
+        holds.append("to_person")
     if not point.within_budget:
         reasons.append("the budget is spent")
+        holds.append("budget")
     if point.chosen is None:
         reasons.append("no recommended option")
+        holds.append("no_option")
     by_level: list[str] = []
     for name in held:
-        if name in tier0:
+        if name in TIER0:
             continue
         _who, said = lookup.who(name)
         if said:
             rule = rule or said
             reasons.append(f"an owner reserved {KIND_WORDS.get(name, name)} decisions")
+            holds.append("owner")
         elif name in NEVER_FACTORY:
             reasons.append(f"{KIND_WORDS.get(name, name)} changes stay with a person")
+            holds.append("never")
         else:
             by_level.append(KIND_WORDS.get(name, name))
     if by_level:
         reasons.append(f"{level} autonomy leaves {', '.join(by_level)} decisions to a person")
+        holds.append("level")
     if reasons:
-        return Route(PERSON, kind, tuple(kinds), level, tuple(reasons), tier0, rule)
+        return Route(
+            PERSON,
+            kind,
+            tuple(kinds),
+            level,
+            tuple(reasons),
+            tier0 or tuple(declared_tier0),
+            rule,
+            holds=tuple(dict.fromkeys(holds)),
+        )
     said = next((lookup.who(k)[1] for k in kinds if lookup.who(k)[1]), None)
     allowed = ", ".join(KIND_WORDS.get(k, k) for k in kinds)
     because = (
@@ -567,9 +731,11 @@ __all__ = [
     "DECIDE_MAX",
     "DECIDE_PATH",
     "FACTORY",
+    "HOLDS",
     "KIND_WORDS",
     "LEVEL_DEFAULTS",
     "LEVEL_WORDS",
+    "LIFTABLE",
     "NEVER_FACTORY",
     "PERSON",
     "TIER0",

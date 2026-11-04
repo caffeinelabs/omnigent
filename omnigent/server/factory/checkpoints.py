@@ -11,9 +11,10 @@ definition version at the time, and its status:
 - ``answered``: a person decided;
 - ``changed``: a person changed direction from it later (``changed_by``).
 
-The factory's own decisions and a person's changes of direction are stored.
-Everything else reads as a checkpoint through the adapter (:func:`load`),
-with no history copied:
+The factory's own decisions and a person's changes of direction are stored;
+so is how an ask that waits for a person was routed (a hidden ``asked`` row,
+:mod:`.decide_first`). Everything else reads as a checkpoint through the
+adapter (:func:`load`), with no history copied:
 
 - a decision (``D-n``) an agent or the server asked: open → ``asked``,
   answered by a person → ``answered`` (a decision the server closed as noise
@@ -59,6 +60,8 @@ FACTORY_NAME: Final = "the factory"
 KIND_DECIDED: Final = "checkpoint.decided"
 KIND_CHANGED: Final = "checkpoint.changed"
 STATUSES: Final = ("decided", "asked", "answered", "changed")
+SHOWN: Final = ("decided", "answered", "changed")
+"""Stored statuses the cockpit shows (a stored ``asked`` row keeps an open ask's route)."""
 WINDOW_S: Final = 30 * 86400
 """How far back the adapter reads decisions and proposals."""
 SINCE_DEFAULT_S: Final = 7 * 86400
@@ -387,7 +390,8 @@ def load(deps: FactoryDeps, factory_id: str, *, now: float | None = None) -> Boo
     store = deps.factory_store
     now = time.time() if now is None else now
     since = int(now) - WINDOW_S
-    stored = store.list_checkpoints(factory_id, since=since, limit=READ_MAX)
+    # A stored ``asked`` row only keeps how an open ask was routed: the ask reads as its D-n.
+    stored = store.list_checkpoints(factory_id, since=since, status=list(SHOWN), limit=READ_MAX)
     proposals = {
         norm_id(p.id): p
         for p in store.list_proposals(
@@ -481,18 +485,42 @@ def decided_since(tree: Tree, book: Book, ref: str, since: int) -> int:
     )
 
 
-def decided_count(deps: FactoryDeps, factory_id: str, since: int, hidden: Iterable[str]) -> int:
-    """:returns: Decisions the factory made after *since*, outside projects in *hidden*."""
+def item_slugs(item: Item) -> set[str]:
+    """:returns: The projects *item* touches: its own, its node's and what its effects name."""
+    out = {item.project_slug} if item.project_slug else set()
+    if (item.node_ref or "").startswith("project:"):
+        out.add((item.node_ref or "").removeprefix("project:"))
+    for effect in item.effects:
+        if effect.get("kind") in ("created", "updated", "cancelled", "restructured"):
+            out.add(str(effect.get("ref") or ""))
+    row = item.proposal_row
+    if row is not None:
+        for op in row.ops or []:
+            if isinstance(op, Mapping) and op.get("slug"):
+                out.add(str(op["slug"]))
+    out.discard("")
+    return out
+
+
+def decided_items(
+    deps: FactoryDeps, factory_id: str, since: int, hidden: Iterable[str]
+) -> list[Item]:
+    """:returns: Decisions the factory made after *since*, none touching a project in *hidden*."""
     gone = set(hidden)
     book = load(deps, factory_id)
-    return sum(
-        1
+    return [
+        i
         for i in book.items
         if i.by_factory
         and i.status in ("decided", "changed")
         and i.at > since
-        and (not i.project_slug or i.project_slug not in gone)
-    )
+        and not (item_slugs(i) & gone)
+    ]
+
+
+def decided_count(deps: FactoryDeps, factory_id: str, since: int, hidden: Iterable[str]) -> int:
+    """:returns: How many of :func:`decided_items` there are."""
+    return len(decided_items(deps, factory_id, since, hidden))
 
 
 # ── Views ──────────────────────────────────────────────────────
@@ -603,15 +631,18 @@ __all__ = [
     "KIND_CHANGED",
     "KIND_DECIDED",
     "PAGE",
+    "SHOWN",
     "SINCE_DEFAULT_S",
     "STATUSES",
     "Book",
     "Item",
     "decided_count",
+    "decided_items",
     "decided_since",
     "detail_view",
     "in_subtree",
     "is_factory_answer",
+    "item_slugs",
     "list_view",
     "load",
     "options_of",

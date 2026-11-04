@@ -262,7 +262,13 @@ async def test_a_merge_into_main_still_waits(cockpit: Cockpit) -> None:
 
     assert reply["status"] == "open"
     assert reply["routed"]["to"] == "person" and "Tier 0" in reply["routed"]["why"]
-    assert cockpit.store.list_checkpoints(cockpit.fid) == []
+    # Only how it was routed is kept (hidden): the ask reads as its D-n.
+    [kept] = cockpit.store.list_checkpoints(cockpit.fid)
+    assert kept.status == "asked" and kept.decision_id == _decision(cockpit, reply["decision"]).id
+    assert "tier0" in kept.policy["holds"]
+    assert reply["decision"] in {
+        i["ref"] for i in (await _get(cockpit, "/n/product/decisions", asked=1))["items"]
+    }
 
 
 async def test_a_tier0_class_never_auto_decides(cockpit: Cockpit) -> None:
@@ -447,17 +453,30 @@ async def test_sys_factory_decide_records_what_it_may_and_asks_the_rest(cockpit:
         "class": "ux",
         "confidence": 0.7,
     }
-    asked = await _decide(cockpit, **body)
+    # Careful: nothing is the factory's, so the agent decides as before (no ask floods a person).
+    idle = await _decide(cockpit, **body)
+    await _level(cockpit, "standard")
+    asked = await _decide(
+        cockpit,
+        **{
+            **body,
+            "question": SEARCH[0],
+            "options": [{"label": "Start it"}, {"label": "No"}],
+            "choice": "Start it",
+            "class": "follow_up",
+        },
+    )
     await _level(cockpit, "tryout")
     decided = await _decide(cockpit, **{**body, "dedupe_key": "tab-2"})
     tier0 = await _decide(
         cockpit, **{**body, "question": "Turn the tab on in production?", "dedupe_key": "t0"}
     )
 
+    assert idle["status"] == "not_recorded" and "decide this as you did before" in idle["message"]
     assert asked["status"] == "asked"
     ask = _decision(cockpit, asked["decision"])
     assert [o.get("recommended", False) for o in ask.options] == [True, False]
-    assert "would choose" in (ask.context or "")
+    assert "would choose" in (ask.context or "") and ask.blocking is False
     assert decided["status"] == "decided"
     row = cockpit.store.get_checkpoint_by_number(
         cockpit.fid, int(decided["checkpoint"].removeprefix("K-"))
@@ -525,7 +544,7 @@ async def test_the_adapter_shows_old_decisions_and_proposals_as_checkpoints(
         "label": "Under More",
     }
     assert details["source"] == "decision" and details["can_change"] is True
-    assert cockpit.store.list_checkpoints(cockpit.fid) == []
+    assert cockpit.store.list_checkpoints(cockpit.fid, status=list(checkpoints.SHOWN)) == []
 
 
 async def test_nodes_count_what_the_factory_decided_since_the_viewer_looked(

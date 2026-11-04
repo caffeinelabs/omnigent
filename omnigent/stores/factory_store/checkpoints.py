@@ -146,6 +146,7 @@ class CheckpointStore(ABC):
         proposal_id: str | None = None,
         overrides: str | None = None,
         dedupe_key: str | None = None,
+        status: str | Sequence[str] | None = None,
         limit: int = 200,
     ) -> builtins.list[FactoryCheckpoint]:
         """
@@ -154,6 +155,7 @@ class CheckpointStore(ABC):
         :param proposal_id: Only rows about this proposal.
         :param overrides: Only the rows that change this checkpoint (``K-3``, ``D-49``).
         :param dedupe_key: Only rows with this key.
+        :param status: Only rows with this status (or one of these).
         :returns: The factory's checkpoints, newest first.
         """
 
@@ -253,9 +255,11 @@ class InMemoryCheckpointStore:
         proposal_id: str | None = None,
         overrides: str | None = None,
         dedupe_key: str | None = None,
+        status: str | Sequence[str] | None = None,
         limit: int = 200,
     ) -> builtins.list[FactoryCheckpoint]:
         fid = _bare(factory_id)
+        statuses = _statuses(status)
         ws = current_workspace_id()
         decision = _bare(decision_id) if decision_id else None
         proposal = _bare(proposal_id) if proposal_id else None
@@ -270,6 +274,7 @@ class InMemoryCheckpointStore:
                 and (proposal is None or row.proposal_id == proposal)
                 and (overrides is None or row.overrides == overrides)
                 and (dedupe_key is None or row.dedupe_key == dedupe_key)
+                and (statuses is None or row.status in statuses)
             ]
         rows.sort(key=lambda r: r.number, reverse=True)
         return rows[:limit]

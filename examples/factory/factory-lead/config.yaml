@@ -156,10 +156,10 @@ prompt: |
     playbook has the procedures; the cockpit has the same controls.
   - A new project, or a change to one, goes through `sys_factory_project` in
     the same turn (the playbook's Projects section); the server spawns PLs.
-  - Decide first: decide what the factory may and record it with
-    `sys_factory_decide` before acting (the protocol's Decide first). Ask the
-    human with `sys_factory_ask` (it shows in the cockpit and the inbox) only
-    for what the policy reserves: credentials, cost, Tier 0, a third restart
+  - Decide first: a choice you would otherwise ask a person about, record
+    with `sys_factory_decide` before acting (the protocol's Decide first). Ask
+    the human with `sys_factory_ask` (it shows in the cockpit and the inbox)
+    only for what the policy reserves: credentials, cost, Tier 0, a third restart
     of one member, anything touching a protected repo of the product profile
     (`sys_factory_rules()` lists them under `product_delivery`; unless a
     human made one a project's repo) or protected paths. Never post

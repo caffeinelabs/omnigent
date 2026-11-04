@@ -174,9 +174,9 @@ prompt: |
     policy): never merge. The merge gate only reports for you:
     `python -m omnigent.factory_merge --dry-run <url>` (the guard denies it
     without `--dry-run`).
-  - IC `BLOCKED`: answer with `sys_session_send(session_id=<ic id>)`; decide
-    what you may (`sys_factory_decide`, Decide first); ask what only a person
-    can answer with `sys_factory_ask` (it returns at once; keep working). IC `FAILED`: re-dispatch
+  - IC `BLOCKED`: answer with `sys_session_send(session_id=<ic id>)`; a
+    choice you would have asked a person about goes to `sys_factory_decide`
+    (Decide first), what only a person can answer to `sys_factory_ask`. IC `FAILED`: re-dispatch
     `<task>-r<k>` with a handoff (branch, PR, NOTES.md), or switch between
     `ic` and `ic_codex`. IC `IN_PROGRESS`: send it the next step with
     `sys_session_send(session_id=<ic id>)`.

@@ -2300,15 +2300,29 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   and no class it falls in is reserved: by the owners' `autonomy.decide`
   `[{kind, who, ref?}]` (class B, per class and per subtree, nearest scope
   first; `who: factory` is refused for Tier 0 and structural changes), else
-  by the level (`careful`: nothing; `standard`: scope, technical, UX,
-  ordering and other questions; `tryout`: also follow-up projects). The
-  strictest class wins, so an agent cannot dodge a reserved class by naming a
-  looser one. A decided ask is answered at once as `answered_by: factory`
-  (never a person's approval: a proposal that carries it out keeps its own
-  rules, except that a create citing a decided follow-up is itself a
-  follow-up) and the tool result is the answer; open asks from before are
-  decided by the minute sweep and the asker is mailed `[Factory decision ·
-  D-n answered by the factory …]`. Every decision is a checkpoint
+  by the level (`careful`: nothing; `standard`: scope, technical, UX and
+  ordering questions; `tryout`: also follow-up projects; a question whose
+  words name no class goes to a person). Owners' subtree settings read the
+  asker's project and what the question is about (`subject`/`node`), the
+  strictest first. The strictest class wins, so an agent cannot dodge a
+  reserved class by naming a looser one; Tier-0 words are generic and broad
+  (a false match only asks a person), plus the bases people merge into. A
+  decided ask is answered at once as `answered_by: factory` (never a
+  person's approval: a proposal that carries it out keeps its own rules,
+  except that one create citing a follow-up the server decided on an ask,
+  beside the asker's project, is itself a follow-up) and the tool result is
+  the answer; a repeated question returns that checkpoint, or the person's
+  change of direction in force over it. An ask that waits keeps what it was
+  routed with (a hidden `asked` checkpoint: declared class, `reversible`,
+  `for=`, subject, words, verdict and definition version); the minute sweep
+  routes it again with those inputs only when the settings changed and only
+  the level or an owner held it (never Tier 0, `reversible=false`, `for=`,
+  a spent budget), decides it when allowed and mails the asker
+  `[Factory decision · D-n answered by the factory …]`. An owner's
+  `who: person` also holds a proposal the level would apply. While nothing
+  is the factory's (careful, nothing widened) `sys_factory_decide` records
+  nothing (`not_recorded`); otherwise a held one opens as a non-blocking
+  ask. Every decision is a checkpoint
   (`factory_checkpoints`, `K-n`; `server/factory/checkpoints.py`): who
   decided, question, options, choice, why, confidence, class, the policy's
   verdict, node, effects, the definition version and level, and status
@@ -2325,7 +2339,14 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   that followed it), tells the deciding agent (else the project's lead, else
   the factory's lead) to re-plan with the direction quoted
   (`[Factory decision · K-n changed by …]`), with Undo through
-  `POST …/undo/{token}`. The Slack digest says "Decided since you looked ·
+  `POST …/undo/{token}`. Who may answer an ask may change direction from it
+  (403 `not_assigned` otherwise); apply reads under the verb lock and marks
+  the old checkpoint changed first (409 `already_changed` on a double
+  apply). Code a finished project merged gets its revert task in the
+  checkpoint's project (else the re-planner plans it), and PRs of the
+  checkpoint's project merged after it are listed for the re-planner to
+  check. A re-plan citing the person's `K-n` (`reply_to="K-n"`) carries
+  their approval like an answered `D-n`. The Slack digest says "Decided since you looked ·
   n". A version stores `autonomy.decide` under its own key
   (`autonomy_decide`): a server from before drops only it, and decides
   nothing itself.

@@ -193,12 +193,16 @@ Databricks identity.
 Decide what you may and record it; ask a person only for what the policy
 reserves. Every decision is a checkpoint people can read and change.
 
-- Before you ask, decide. A scope, technical, UX or ordering choice, or a
-  follow-up inside work a person started: record it with
+- Before you ask, decide. A choice you would otherwise ask a person about
+  (a scope, UX or ordering question, a technical direction that shapes the
+  work, a follow-up inside work a person started): record it with
   `sys_factory_decide(question=…, options=[…], choice=…, why=…, class=…)`
-  before you act on it. `status: "decided"` (checkpoint K-<n>): go ahead.
+  before you act on it. Routine implementation choices are yours: do not
+  record them. `status: "decided"` (checkpoint K-<n>): go ahead.
   `status: "asked"` (a D-<n>, your choice recommended): a person decides it;
-  carry on with what does not depend on it.
+  carry on with what does not depend on it. `status: "not_recorded"`: the
+  owners let the factory decide nothing yet; decide as before and ask only
+  what needs a person.
 - `sys_factory_ask` goes through the same policy: mark the option you would
   pick `recommended`. Where your tools have no `sys_factory_decide`, ask that
   way; the server decides it at once when the policy allows.

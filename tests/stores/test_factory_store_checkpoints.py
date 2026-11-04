@@ -1,9 +1,9 @@
 """Checkpoints (``factory_checkpoints``), in SQL (SQLite or the configured DB) and memory.
 
 ``K-<n>`` per factory and workspace; JSON round-trips; lists newest first and
-filters by time, decision, proposal, what a row overrides and its key; an
-update compares and sets the status; text is clipped to the columns; unknown
-fields and codes are refused. Both stores behave the same.
+filters by time, decision, proposal, what a row overrides, its key and its
+status; an update compares and sets the status; text is clipped to the
+columns; unknown fields and codes are refused. Both stores behave the same.
 """
 
 from __future__ import annotations
@@ -79,6 +79,9 @@ def test_lists_newest_first_with_filters(store: FactoryStore) -> None:
     assert store.list_checkpoints(FID, proposal_id=PROPOSAL) == [b]
     assert store.list_checkpoints(FID, overrides="D-49") == [c]
     assert store.list_checkpoints(FID, dedupe_key="k") == [a]
+    assert store.list_checkpoints(FID, status="answered") == [c]
+    assert store.list_checkpoints(FID, status=["decided", "answered"]) == [c, b, a]
+    assert store.list_checkpoints(FID, status=["asked"]) == []
     assert store.list_checkpoints(FID, since=int(time.time()) + 60) == []
     assert len(store.list_checkpoints(FID, limit=2)) == 2
     with workspace_scope(7):

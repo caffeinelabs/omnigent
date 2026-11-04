@@ -72,8 +72,9 @@ SYS_FACTORY_NODE: Final = "sys_factory_node"
 SYS_FACTORY_DECIDE: Final = "sys_factory_decide"
 DECISION_CLASS_WORDS: Final = (
     "scope, tech, ux, plan, follow_up (a follow-up project), project_change (a goal or "
-    "outcome), new_work, structural (split, merge, cancel), other; Tier 0 always goes to a "
-    "person: merge, credentials, spend, prod_flag, infra, policy, delete_data, pii"
+    "outcome), new_work, structural (split, merge, cancel), other (unclassified: a person "
+    "decides); Tier 0 always goes to a person: merge, credentials, spend, prod_flag, infra, "
+    "policy, delete_data, pii"
 )
 """The decision classes the server's decide-first policy reads, in words."""
 NODE_OPS: Final = ("read",)
@@ -542,7 +543,9 @@ class SysFactoryDecideTool(Tool):
             "and can change direction from; go ahead ({status: 'decided', checkpoint}). Not "
             "allowed: it opens as a question to a person with your choice recommended "
             "({status: 'asked', decision: 'D-<n>', why}); wait for its answer for that part. "
-            "Use it for scope, technical, UX and ordering choices and follow-ups; use "
+            "{status: 'not_recorded'}: the factory decides nothing yet; decide as before. "
+            "Use it for choices you would otherwise ask a person about (scope, UX, ordering, "
+            "a technical direction, a follow-up), not for routine implementation choices; use "
             "sys_factory_ask when you have no recommendation. If a person later changes "
             "direction you get `[Factory decision · K-<n> changed by …]`: re-plan from it."
         )

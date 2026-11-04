@@ -10,7 +10,9 @@ Guards (anything outside them waits as before, with what the answer did not
 cover named in a warning):
 
 - the decision is an agent's question, answered by a person (not the eval
-  harness, not the server) in the last :data:`ANSWER_WINDOW_S`;
+  harness, not the server) in the last :data:`ANSWER_WINDOW_S`; a person's
+  change of direction from a checkpoint (``K-<n>``, still in force) counts
+  as their answer, its option and direction as what they chose;
 - the proposal comes from an agent the answer was given to: the asker, the
   session it was delivered to, the top-level lead above either, or the
   factory's own lead (it gets an info copy of every answer);
@@ -63,6 +65,8 @@ if TYPE_CHECKING:
 ANSWER_WINDOW_S: Final = 24 * 3600
 """An answer older than this no longer approves a proposal on its own."""
 DECISION_REF_RE: Final = re.compile(r"^\s*D-([1-9][0-9]{0,8})\s*$")
+CHECKPOINT_REF_RE: Final = re.compile(r"^\s*K-([1-9][0-9]{0,8})\s*$")
+"""A person's change of direction (``K-n``) approves like an answer to a ``D-n``."""
 NOT_A_PERSON: Final = frozenset({"server", "eval-auto", "factory", ""})
 """``answered_by`` values that are not a person (the eval harness answers as ``eval-auto``,
 decide-first as ``factory``: :mod:`.decide_first`)."""
@@ -87,8 +91,71 @@ _CLAUSE_END_RE: Final = re.compile(r"[.;!?\n]")
 
 
 def is_decision_ref(value: str | None) -> bool:
-    """:returns: Whether *value* names a decision, e.g. ``"D-42"``."""
-    return bool(value and DECISION_REF_RE.match(value))
+    """:returns: Whether *value* names a decision (``"D-42"``) or a checkpoint (``"K-3"``)."""
+    return bool(value and (DECISION_REF_RE.match(value) or CHECKPOINT_REF_RE.match(value)))
+
+
+@dataclass(frozen=True)
+class _Delivered:
+    """Where a change of direction's re-plan went (what :func:`_given_to` reads)."""
+
+    to_id: str | None
+    data: Mapping[str, Any] = field(default_factory=dict)
+
+
+def is_direction(deps: FactoryDeps, factory_id: str, value: str | None) -> bool:
+    """Whether *value* names a person's change of direction (``K-n``), not the factory's own."""
+    match = CHECKPOINT_REF_RE.match(value or "")
+    if match is None:
+        return False
+    row = deps.factory_store.get_checkpoint_by_number(factory_id, int(match.group(1)))
+    return row is not None and row.decided_by_kind == "person" and bool(row.overrides)
+
+
+def _direction(
+    deps: FactoryDeps, factory_id: str, number: int
+) -> tuple[FactoryDecision | None, Any, str | None]:
+    """
+    A person's change of direction ``K-<number>`` read as the answer it is.
+
+    :returns: ``(the answer, where its re-plan went, why it approves nothing)``.
+    """
+    from omnigent.entities.factory import FactoryDecision
+    from omnigent.server.factory.checkpoints import KIND_CHANGED
+
+    store = deps.factory_store
+    row = store.get_checkpoint_by_number(factory_id, number)
+    if row is None:
+        return None, None, "no such checkpoint in this factory"
+    if row.decided_by_kind != "person" or not row.overrides:
+        return None, None, "it is not a person's change of direction"
+    if row.status != "answered":
+        return None, None, f"it is {row.status}, not in force"
+    answer = FactoryDecision(
+        id=row.id,
+        factory_id=row.factory_id,
+        number=row.number,
+        question=row.question,
+        source="agent",
+        status="answered",
+        options=list(row.options or []),
+        project_slug=row.project_slug,
+        asked_by_session_id=row.asked_by_session_id,
+        answer_option_id=row.choice_id,
+        answer_text=row.direction,
+        answered_by=row.decided_by,
+        answered_at=row.created_at,
+        created_at=row.created_at,
+        subject=row.node_ref,
+    )
+    to_id = None
+    for event in store.find_events(
+        factory_id, KIND_CHANGED, 0, row.node_ref, limit=50, newest_first=True
+    ):
+        if (event.data or {}).get("checkpoint") == row.ref:
+            to_id = getattr(event, "to_id", None)
+            break
+    return answer, _Delivered(to_id), None
 
 
 @dataclass
@@ -340,15 +407,26 @@ def authority_for(
     """
     What answer *ref* approves of *plan* (synchronous: store reads; run it in a thread).
 
-    :param ref: The proposal's ``reply_to``, e.g. ``"D-42"``.
+    :param ref: The proposal's ``reply_to``, e.g. ``"D-42"``, or a person's
+        change of direction ``"K-3"`` (its choice and direction are the answer).
     """
     from omnigent.server.factory.people import viewer_level
 
-    match = DECISION_REF_RE.match(ref)
-    assert match is not None
-    label = decision_ref(int(match.group(1)))
-    authority = Authority(ref=label)
-    decision = deps.factory_store.get_decision_by_number(root.id, int(match.group(1)))
+    checkpoint = CHECKPOINT_REF_RE.match(ref)
+    event: Any = None
+    if checkpoint is not None:
+        label = f"K-{int(checkpoint.group(1))}"
+        authority = Authority(ref=label)
+        decision, event, refused = _direction(deps, root.id, int(checkpoint.group(1)))
+        if decision is None:
+            authority.refused = refused
+            return authority
+    else:
+        match = DECISION_REF_RE.match(ref)
+        assert match is not None
+        label = decision_ref(int(match.group(1)))
+        authority = Authority(ref=label)
+        decision = deps.factory_store.get_decision_by_number(root.id, int(match.group(1)))
     if decision is None or not same_id(decision.factory_id, root.id):
         authority.refused = "no such decision in this factory"
         return authority
@@ -362,7 +440,8 @@ def authority_for(
     if decision.answered_at < now_s() - ANSWER_WINDOW_S:
         authority.refused = "it was answered more than 24 hours ago"
         return authority
-    event = _answered_event(deps, decision)
+    if checkpoint is None:
+        event = _answered_event(deps, decision)
     user_id = answerer(decision, event)
     if user_id is None:
         authority.refused = "no person answered it"
@@ -411,6 +490,7 @@ __all__ = [
     "ANSWER_SCOPE_FIELDS",
     "ANSWER_WINDOW_S",
     "CARRIED_OPS",
+    "CHECKPOINT_REF_RE",
     "CLAIM_STATUSES",
     "DECISION_REF_RE",
     "NOT_A_PERSON",
@@ -421,6 +501,7 @@ __all__ = [
     "claimed_by",
     "covers_all",
     "is_decision_ref",
+    "is_direction",
     "named_slugs",
     "spent_by",
 ]

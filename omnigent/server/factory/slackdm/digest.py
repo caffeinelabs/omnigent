@@ -18,7 +18,8 @@ outcome several projects build) is one line under "Initiatives", the same
 line as Home's card: how many projects merged, whether the walking skeleton is
 on the base env, how its acceptance went and what it waits on. "Decided since
 you looked · n" counts what the factory decided itself since the person last
-looked at the product (:mod:`.checkpoints`), linked to the Decisions list.
+looked at the product (:mod:`.checkpoints`), linked to the Decisions list; it
+keeps the digest from being skipped only when one was decided in the last 24 h.
 """
 
 from __future__ import annotations
@@ -380,22 +381,27 @@ def decided_line(
     vis: Visibility,
     now: float,
     base: str | None,
-) -> str | None:
+) -> tuple[str | None, bool]:
     """
     "Decided since you looked · n": what the factory decided itself since the
     person last looked at the product (at most a week back; a day when they never
-    looked), with a link to the Decisions list. ``None`` at 0 (synchronous).
+    looked), outside the projects they may not read, with a link to the
+    Decisions list (synchronous).
+
+    :returns: ``(the line or None at 0, whether one was decided in the last 24 h)``:
+        only that keeps the digest from being skipped.
     """
     from omnigent.server.factory import node_refs
 
     marks = deps.factory_store.list_node_reads(ctx.factory_id, person.user_id, [node_refs.PRODUCT])
     floor = int(now) - checkpoints.SINCE_DEFAULT_S
     since = max(floor, marks[0].seen_at) if marks else int(now - DAY_S)
-    count = checkpoints.decided_count(deps, ctx.factory_id, since, vis.hidden)
-    if not count:
-        return None
+    items = checkpoints.decided_items(deps, ctx.factory_id, since, vis.hidden)
+    if not items:
+        return None, False
     path = rules.factory_path(ctx, f"/n/{node_refs.PRODUCT}?lens=decisions")
-    return f"*Decided since you looked*  {count} · {link(path, 'Decisions', base)}"
+    recent = any(i.at > now - DAY_S for i in items)
+    return f"*Decided since you looked*  {len(items)} · {link(path, 'Decisions', base)}", recent
 
 
 def _counts_line(counts: Mapping[str, int], still_open: int) -> str | None:
@@ -518,7 +524,7 @@ def build_digest(
     )
     counts, still_open = _counts(deps, ctx, vis, now)
     counted = _counts_line(counts, still_open)
-    decided = decided_line(deps, ctx, person, vis, now, base)
+    decided, decided_today = decided_line(deps, ctx, person, vis, now, base)
     extras = _budget_extras(deps, ctx, now, idle) if vis.everything and person.acts else []
     spend = spend_line(summary, extras)
     progress = progress_lines(summary, base)
@@ -531,7 +537,7 @@ def build_digest(
     quiet = (
         not waiting.count
         and counted is None
-        and decided is None
+        and not decided_today
         and retro is None
         and idle is None
     )
