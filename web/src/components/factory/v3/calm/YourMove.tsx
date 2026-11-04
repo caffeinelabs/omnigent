@@ -10,7 +10,7 @@ import { swallowEnter } from "../DecisionButtons";
 import { useNodeActions } from "../NodeContext";
 import { NodeLink } from "../nodeParts";
 import { AMBER } from "../nodeTokens";
-import type { DecisionRef, NodePage } from "../nodeTypes";
+import type { NodePage } from "../nodeTypes";
 import { inProductTree } from "../lenses/lensModel";
 import { useNeedsYou } from "../nodeSteer";
 import { type MoveRow, type MoveView, deriveMoves, moveView } from "./calmModel";
@@ -29,35 +29,29 @@ const BTN =
   "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[7px] border px-2.5 py-0.5 text-[12.5px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-status-blue focus-visible:ring-offset-1 focus-visible:ring-offset-background";
 const QUIET = "border-border-strong bg-card-solid text-foreground hover:border-status-blue";
 
-function Answer({ decision, primary }: { decision: DecisionRef; primary: boolean }) {
+/** The row's one button: its answer, a link out (a merge), or "Answer" to open the ask. */
+function Answer({ row, primary, onOpen }: { row: MoveRow; primary: boolean; onOpen: () => void }) {
   const { onAnswer } = useNodeActions();
-  const first = decision.actions[0];
   const look = primary ? AMBER.button : QUIET;
-  if (decision.external_url) {
+  const p = row.primary;
+  const tag = { "data-testid": "v3-answer", "data-decision": row.id };
+  if (p?.url) {
     return (
-      <a
-        href={decision.external_url}
-        target="_blank"
-        rel="noopener noreferrer"
-        data-testid="v3-answer"
-        data-decision={decision.id}
-        className={cn(BTN, look)}
-      >
-        {first?.label ?? decision.verb} ↗
+      <a {...tag} href={p.url} target="_blank" rel="noopener noreferrer" className={cn(BTN, look)}>
+        {p.label} ↗
       </a>
     );
   }
-  if (!first) return null;
+  const action = p?.action;
   return (
     <button
+      {...tag}
       type="button"
-      data-testid="v3-answer"
-      data-decision={decision.id}
       onKeyDown={swallowEnter}
-      onClick={() => onAnswer?.(decision, first)}
+      onClick={() => (action ? onAnswer?.(row.decision, action) : onOpen())}
       className={cn(BTN, look)}
     >
-      {first.label}
+      {p?.label ?? "Answer"}
     </button>
   );
 }
@@ -74,7 +68,7 @@ function Peek({ row }: { row: MoveRow }) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const others = d.external_url ? [] : d.actions.slice(1);
+  const others = d.external_url ? [] : d.actions.filter((a) => a.id !== row.primary?.action?.id);
   return (
     <div
       data-testid="v3-move-peek"
@@ -151,7 +145,7 @@ function Row({ row, primary }: { row: MoveRow; primary: boolean }) {
             {quiet ? " · blocks nothing" : ` · unblocks ${row.unblocks}`}
           </span>
         </button>
-        <Answer decision={row.decision} primary={primary} />
+        <Answer row={row} primary={primary} onOpen={() => setOpen(true)} />
       </div>
       {open && <Peek row={row} />}
     </li>

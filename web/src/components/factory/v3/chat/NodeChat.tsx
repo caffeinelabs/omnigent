@@ -69,6 +69,9 @@ import {
   threadOwnerRef,
 } from "./nodeThread";
 
+/** The node chat reads its thread with each row's lane (the server's conversation / activity split). */
+const NODE_FEED = "all" as const;
+
 /** The Room's cards that answer an ask: a key never answers them (Enter, or 1-5 for an option). */
 const ANSWER_CARDS =
   '[data-testid^="decision-card-"],[data-testid^="proposal-card-"],[data-testid^="loop-card-"]';
@@ -332,20 +335,31 @@ function QuickVerbs({ verbs }: { verbs: QuickVerb[] }) {
 }
 
 /**
- * The newest seq this viewer had read in the thread when the page opened (its
- * unread count says how many of the newest were not), so the Activity line can
- * say what is new; looking at the list moves it. Null until the thread is read.
+ * What was new in the thread when the page opened, so the Activity line can
+ * say "n since you looked": the server's count of activity after this
+ * viewer's read mark when it sends one, else the newest seq they had read
+ * (the thread's unread count says how many of the newest were not). Looking
+ * at the list makes nothing new. Null until the thread is read.
  */
-function useSinceSeq(fid: string, key: string, unread: number | undefined) {
-  const messages = useRoomMessages(fid, key);
-  const [mark, setMark] = useState<{ key: string; seq: number } | null>(null);
-  if ((!mark || mark.key !== key) && messages.data && unread != null) {
-    const sorted = [...flattenPages(messages.data)].sort((a, b) => a.seq - b.seq);
-    const read = sorted[sorted.length - unread - 1];
-    setMark({ key, seq: read ? read.seq : 0 });
+function useSince(fid: string, key: string, unread: number | undefined) {
+  const messages = useRoomMessages(fid, key, NODE_FEED);
+  const [mark, setMark] = useState<{
+    key: string;
+    seq: number | null;
+    fresh: number | null;
+  } | null>(null);
+  if ((!mark || mark.key !== key) && messages.data) {
+    const told = messages.data.pages[0]?.activity_since;
+    if (typeof told === "number") setMark({ key, seq: null, fresh: told });
+    else if (unread != null) {
+      const sorted = [...flattenPages(messages.data)].sort((a, b) => a.seq - b.seq);
+      const read = sorted[sorted.length - unread - 1];
+      setMark({ key, seq: read ? read.seq : 0, fresh: null });
+    }
   }
-  const seen = useCallback((seq: number) => setMark({ key, seq }), [key]);
-  return { seq: mark?.key === key ? mark.seq : null, seen };
+  const seen = useCallback((seq: number) => setMark({ key, seq, fresh: null }), [key]);
+  const here = mark?.key === key ? mark : null;
+  return { seq: here?.seq ?? null, fresh: here?.fresh ?? null, seen };
 }
 
 export interface NodeChatProps {
@@ -591,7 +605,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   // ── Conversation and Activity ───────────────────────────────
   const above = actions.aboveId;
   const proposals = useProposals(fid).data?.data ?? null;
-  const threadMessages = useRoomMessages(fid, thread.key).data;
+  const threadMessages = useRoomMessages(fid, thread.key, NODE_FEED).data;
   const laneCtx = useMemo<LaneContext>(
     () => ({
       asked: above instanceof Set ? above : new Set(typeof above === "string" ? [above] : []),
@@ -607,18 +621,18 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
     (message: ChatMessageView) => repeatsAsk(message, laneCtx),
     [laneCtx],
   );
-  const sinceSeq = useSinceSeq(fid, thread.key, room?.unread);
+  const since = useSince(fid, thread.key, room?.unread);
   const activity = useCallback(
     (items: FoldedItem[], render: (item: FoldedItem) => ReactNode) => (
       <ActivityLine
         items={items}
         render={render}
-        sinceSeq={sinceSeq.seq}
-        onSeen={sinceSeq.seen}
+        since={since}
+        onSeen={since.seen}
         title={nodeName(node)}
       />
     ),
-    [node, sinceSeq.seen, sinceSeq.seq],
+    [node, since],
   );
 
   const lead =
@@ -658,7 +672,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   ));
 
   // A verb's card offers its Undo until it ran: the server's "undone" card names its token.
-  const messages = useRoomMessages(fid, thread.key);
+  const messages = useRoomMessages(fid, thread.key, NODE_FEED);
   const undoToken = useUndoToken(fid);
   const viewerId = snapshot.viewer?.user_id;
   const viewerOwner = undoViewer({ snapshot }).owner;
@@ -715,6 +729,7 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
           lane,
           activity,
           hideCard,
+          feed: NODE_FEED,
           empty: (
             <p
               data-testid="v3-chat-empty"
@@ -839,12 +854,12 @@ function PinnedComposer({
   phone: boolean;
   onOpen: () => void;
 }) {
-  const messages = useRoomMessages(fid, threadKey);
+  const messages = useRoomMessages(fid, threadKey, NODE_FEED);
   const last = useMemo(
     () =>
       [...flattenPages(messages.data)]
         .reverse()
-        .find((m) => m.author_kind !== "system" && m.body.trim()),
+        .find((m) => m.author_kind !== "system" && m.lane !== "activity" && m.body.trim()),
     [messages.data],
   );
   return (

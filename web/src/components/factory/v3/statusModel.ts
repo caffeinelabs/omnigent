@@ -38,7 +38,9 @@ export interface StatusOptions {
 export type Above = ReadonlySet<string> | string | null | undefined;
 
 function isAbove(decision: DecisionRef | undefined, above: Above): boolean {
-  if (!decision || !above) return false;
+  if (!decision) return false;
+  if (decision.in_your_move) return true;
+  if (!above) return false;
   if (typeof above === "string") return decision.id === above;
   return [decision.id, decision.row_id, decision.subject].some((k) => k && above.has(k));
 }

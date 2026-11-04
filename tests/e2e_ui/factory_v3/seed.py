@@ -216,7 +216,12 @@ def _thread_activity(
         {"type": "system", "ref": None, "id": None},
     )
     moves = [
-        {"at": int(clock - (90 - 20 * i) * 60), "from_sha": None, "to_sha": f"{i + 1:07x}", "pr": None}
+        {
+            "at": int(clock - (90 - 20 * i) * 60),
+            "from_sha": None,
+            "to_sha": f"{i + 1:07x}",
+            "pr": None,
+        }
         for i in range(3)
     ]
     system(

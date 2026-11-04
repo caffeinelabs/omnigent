@@ -5,7 +5,7 @@
 // buttons here: the viewer's asks are the page's Your move.
 
 import { cn } from "@/lib/utils";
-import { type Phrase, childPhrase, nodeName } from "./calm/calmModel";
+import { type Phrase, childPhrase, fullTitle, nodeName } from "./calm/calmModel";
 import { Glyph, NodeLink, Ring, StateBar, StateDot } from "./nodeParts";
 import { AMBER, STATE_ORDER } from "./nodeTokens";
 import type { NodeState, NodeSummary } from "./nodeTypes";
@@ -150,7 +150,7 @@ export function NodeTile({
         <NodeLink
           nodeRef={node.ref}
           roving
-          title={nodeName(node) !== node.title ? node.title : undefined}
+          title={fullTitle(node) ?? undefined}
           className={cn(
             LINK,
             "min-w-0 flex-1 leading-[1.3] font-semibold [overflow-wrap:anywhere]",
@@ -191,7 +191,7 @@ export function NodeRow({
       <NodeLink
         nodeRef={node.ref}
         roving
-        title={name !== node.title ? node.title : undefined}
+        title={fullTitle(node) ?? undefined}
         className={cn(
           LINK,
           "min-w-0 flex-1 truncate font-medium",

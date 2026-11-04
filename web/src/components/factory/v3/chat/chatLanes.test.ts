@@ -94,7 +94,7 @@ describe("calm chat · conversation and activity", () => {
   });
 
   it("reads the server's lane when it sends one", () => {
-    const told = { ...msg({ author_kind: "agent" }), lane: "activity" } as ChatMessageView;
+    const told = msg({ author_kind: "agent", lane: "activity" });
     expect(messageLane(told, ctx)).toBe("activity");
   });
 
@@ -105,8 +105,10 @@ describe("calm chat · conversation and activity", () => {
       at: 0,
       message: msg({ seq: n }),
     }));
-    expect(activityWords(items, 10)).toBe("Activity · 2 since you looked");
-    expect(activityWords(items, 12)).toBe("Activity · 3");
-    expect(activityWords(items, null)).toBe("Activity · 3");
+    expect(activityWords(items, { seq: 10, fresh: null })).toBe("Activity · 2 since you looked");
+    expect(activityWords(items, { seq: 12, fresh: null })).toBe("Activity · 3");
+    expect(activityWords(items, { seq: null, fresh: null })).toBe("Activity · 3");
+    // The server's count after the reader's read mark, when it sends one.
+    expect(activityWords(items, { seq: null, fresh: 1 })).toBe("Activity · 1 since you looked");
   });
 });

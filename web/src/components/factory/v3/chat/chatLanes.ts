@@ -106,8 +106,7 @@ export function messageLane(message: ChatMessageView, ctx: LaneContext): Lane {
   if (message.card && repeatsAsk(message, ctx) && message.author_kind === "system") {
     return "hidden";
   }
-  const told = (message as { lane?: string }).lane;
-  if (told === "activity" || told === "conversation") return told;
+  if (message.lane === "activity" || message.lane === "conversation") return message.lane;
   if (message.author_kind !== "system") return "conversation";
   if (!message.card) return "activity";
   return liveCard(message, ctx) ? "conversation" : "activity";

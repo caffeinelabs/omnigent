@@ -59,6 +59,8 @@ export interface DecisionRef {
   grouped?: boolean;
   /** The decision's row id, which the answer route takes; absent on a group of merges. */
   row_id?: string;
+  /** The page's Your move shows this ask: no other place on the page repeats it. */
+  in_your_move?: boolean;
 }
 
 /** An answer's Undo: the proposal it applied, which can be taken back until `until_s`. (client) */
@@ -180,8 +182,10 @@ export interface Crumb {
   state: NodeState;
   /** A small code next to the title ("T-16"), on crumbs of row levels only. (client) */
   tag?: string;
-  /** The node's short name, 2–6 words (calm rule 2); the title is the full text. */
-  short_title?: string;
+  /** The full text the title shortens (a person's ask, a machine label), when it does. */
+  full_title?: string;
+  /** Who named the node: a person, the factory, or its first words (until the factory names it). */
+  named?: "person" | "factory" | "words";
   implicit?: boolean;
   /** An implicit parent with one child, shown as that child (italic in the strip). */
   folded?: boolean;
@@ -200,13 +204,15 @@ export interface NodeSummary {
   glyph?: string;
   /** A small code next to the title ("I-1", "#9876", "P0"). (client) */
   tag?: string;
-  title: string;
   /**
-   * The node's short name, 2–6 words (calm rule 2): what every page, row and
-   * crumb shows. The title is the full text (a person's ask, a machine label),
-   * shown only in Details. Absent on older servers: `nodeName` shortens the title.
+   * What every page, row and crumb shows: a short name of 2–6 words (calm
+   * rule 2). Older servers send the full text; `nodeName` shortens it then.
    */
-  short_title?: string;
+  title: string;
+  /** The full text the title shortens (a person's ask, a machine label), shown only in Details. */
+  full_title?: string;
+  /** Who named the node: a person, the factory, or its first words (until the factory names it). */
+  named?: "person" | "factory" | "words";
   short?: string;
   /** The base a project merges into when it is not the factory's. (client) */
   base?: string;
@@ -428,7 +434,11 @@ export interface YourMoveItem {
   unblocks_ref?: string;
   /** The node the ask is on. */
   ref?: string;
-  /** The ask itself, with its answers (the row's button is the first). */
+  /** The row's one button: the recommended answer, a link out (a merge), or none (open the ask). */
+  primary?: { label: string; option?: string; url?: string };
+  /** A question's topic in a few words ("live search follow-up"). */
+  about?: string;
+  /** The ask itself, with its answers. */
   decision: DecisionRef;
 }
 

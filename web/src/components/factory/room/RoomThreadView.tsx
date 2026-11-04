@@ -27,7 +27,7 @@ import { Switch } from "@/components/ui/switch";
 import { useFactoryEvents, useFactoryPeople } from "@/hooks/useFactory";
 import type { ActiveRoomToken } from "@/lib/composerMentions";
 import type { ChatMessageView, FactorySnapshot, TaskView } from "@/lib/factoryApi";
-import { fetchFactoryTasks, postRoomMessage } from "@/lib/factoryRoomApi";
+import { type ChatFeed, fetchFactoryTasks, postRoomMessage } from "@/lib/factoryRoomApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { RoomCardContext, type RoomCardData } from "../cards/RoomCardContext";
@@ -175,6 +175,8 @@ export interface RoomThreadNodeOptions {
   activity?: (items: FoldedItem[], render: (item: FoldedItem) => ReactNode) => ReactNode;
   /** A card under a person's or agent's message to leave out (its ask shows elsewhere on the page). */
   hideCard?: (message: ChatMessageView) => boolean;
+  /** Read the thread with each row's lane (a server without feeds ignores it). */
+  feed?: ChatFeed;
 }
 
 export interface RoomThreadViewProps {
@@ -212,7 +214,8 @@ export function RoomThreadView({
   const nodeCard = node?.card ?? null;
   const title = threadTitle(snapshot, thread);
   const threads = useRoomThreads(fid);
-  const messagesQuery = useRoomMessages(fid, thread);
+  const feed = node?.feed;
+  const messagesQuery = useRoomMessages(fid, thread, feed);
   const messages = useMemo(() => flattenPages(messagesQuery.data), [messagesQuery.data]);
   const threadView = threads.data?.data.find((t) => t.key === thread) ?? null;
   const cardTypes = useMemo(() => new Set(messages.map((m) => m.card?.type)), [messages]);
@@ -382,16 +385,19 @@ export function RoomThreadView({
   const send = async (body: string, mentions: string[]) => {
     const res = await postRoomMessage(fid, { thread, body, mentions });
     atBottom.current = true;
-    queryClient.setQueryData<typeof messagesQuery.data>(messagesQueryKey(fid, thread), (prev) => {
-      if (!prev || prev.pages.length === 0) return prev;
-      const [first, ...rest] = prev.pages;
-      const fresh: ChatMessageView[] = [res.message, ...res.notes].filter(
-        (m) => !first!.data.some((d) => d.id === m.id),
-      );
-      return { ...prev, pages: [{ ...first!, data: [...first!.data, ...fresh] }, ...rest] };
-    });
+    queryClient.setQueryData<typeof messagesQuery.data>(
+      messagesQueryKey(fid, thread, feed),
+      (prev) => {
+        if (!prev || prev.pages.length === 0) return prev;
+        const [first, ...rest] = prev.pages;
+        const fresh: ChatMessageView[] = [res.message, ...res.notes].filter(
+          (m) => !first!.data.some((d) => d.id === m.id),
+        );
+        return { ...prev, pages: [{ ...first!, data: [...first!.data, ...fresh] }, ...rest] };
+      },
+    );
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(fid) });
-    void queryClient.invalidateQueries({ queryKey: messagesQueryKey(fid, thread) });
+    void queryClient.invalidateQueries({ queryKey: messagesQueryKey(fid, thread, feed) });
   };
 
   const renderItem = (item: FoldedItem, prev?: FoldedItem): ReactNode => {

@@ -103,7 +103,8 @@ export function LevelStrip({ page, shown }: { page: NodePage; shown?: string | n
     level: node.level,
     level_name: node.level_name,
     title: node.title,
-    ...(node.short_title ? { short_title: node.short_title } : {}),
+    ...(node.named ? { named: node.named } : {}),
+    ...(node.full_title ? { full_title: node.full_title } : {}),
     state: node.state,
     tag: codeTag(node.tag),
   };

@@ -104,7 +104,7 @@ function wireAction(value: unknown): DecisionAction | null {
   if (typeof value === "string" && value) return { id: value.toLowerCase(), label: value };
   const v = value as Wire | null;
   const label = str(v?.label);
-  return label ? { id: str(v?.id) ?? label.toLowerCase(), label } : null;
+  return label ? { id: str(v?.id) ?? str(v?.option) ?? label.toLowerCase(), label } : null;
 }
 
 /** One Your move row as the server sends it: its ask in full, or the ask's fields beside the row's. */
@@ -129,13 +129,26 @@ function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
     age: d?.age ?? own?.age ?? "",
     ...(str(raw.external_url) ? { external_url: str(raw.external_url) } : {}),
   });
-  const unblocks = raw.unblocks as string | { ref?: string; title?: string; short_title?: string };
+  const unblocks = raw.unblocks as string | { ref?: string; title?: string } | undefined;
   const target =
-    typeof unblocks === "string"
-      ? { title: unblocks }
-      : unblocks && (unblocks.short_title || unblocks.title)
-        ? { title: unblocks.short_title ?? unblocks.title!, ref: unblocks.ref }
-        : null;
+    raw.blocks_nothing === true
+      ? null
+      : typeof unblocks === "string"
+        ? { title: unblocks }
+        : unblocks?.title
+          ? { title: unblocks.title, ref: unblocks.ref }
+          : null;
+  const act = raw.action as { label?: unknown; option?: unknown; url?: unknown } | undefined;
+  const primary =
+    typeof raw.action === "string"
+      ? { label: raw.action }
+      : act && typeof act.label === "string"
+        ? {
+            label: act.label,
+            ...(typeof act.option === "string" ? { option: act.option } : {}),
+            ...(typeof act.url === "string" ? { url: act.url } : {}),
+          }
+        : undefined;
   return {
     id,
     verb,
@@ -145,6 +158,8 @@ function moveItem(raw: Wire, status: StatusLine): YourMoveItem | null {
       ? { unblocks_ref: str(raw.unblocks_ref) ?? target?.ref }
       : {}),
     ...(str(raw.ref) ? { ref: str(raw.ref) } : {}),
+    ...(primary ? { primary } : {}),
+    ...(str(raw.about) ? { about: str(raw.about) } : {}),
     decision,
   };
 }

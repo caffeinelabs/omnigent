@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DecisionRef, NeedsYouList, NodePage, NodeSummary, StatusLine } from "../nodeTypes";
-import { normalizeYourMove } from "../nodeWire";
+import { normalizeNeedsYou, normalizeYourMove } from "../nodeWire";
 import { sampleEngine } from "../fixture/sampleNodeSource";
 import {
   childPhrase,
   deriveMoves,
+  fullTitle,
   moveView,
   movedAsks,
   nodeName,
@@ -37,11 +38,13 @@ describe("calm · short names", () => {
     }
   });
 
-  it("prefers the server's short name", () => {
-    expect(nodeName({ title: "a very long title that goes on and on", short_title: "Asks" })).toBe(
-      "Asks",
-    );
-    expect(nodeName({ title: "Agent assistant", short_title: " " })).toBe("Agent assistant");
+  it("keeps the name the server gave; the full text is the details'", () => {
+    expect(nodeName({ title: "build-tier-drafts-3", named: "person" })).toBe("build-tier-drafts-3");
+    expect(nodeName({ title: "build-tier-drafts-3", named: "words" })).toBe("Build tier drafts 3");
+    expect(
+      fullTitle({ title: "Agent assistant", full_title: "From C-11: create a", named: "factory" }),
+    ).toBe("From C-11: create a");
+    expect(fullTitle({ title: "Agent assistant" })).toBeNull();
   });
 
   it("counts words, not separators", () => {
@@ -111,7 +114,7 @@ describe("calm · Your move", () => {
   it("derives the root's moves from Needs you: ranked, named at the level Home lists, quiet asks last", () => {
     const engine = sampleEngine();
     const page = engine.node("product") as NodePage;
-    const needs = engine.needsYou("product") as NeedsYouList;
+    const needs = normalizeNeedsYou(engine.needsYou("product") as NeedsYouList);
     const rows = deriveMoves(page, needs, "feature");
     expect(rows[0]).toMatchObject({ id: "D-45", text: "Apply C-16" });
     expect(rows[0]!.unblocks).toBe("Agent assistant (sample)");
@@ -125,7 +128,11 @@ describe("calm · Your move", () => {
   it("puts the ask a node waits on first, also when it sits outside its subtree", () => {
     const engine = sampleEngine();
     const page = engine.node("assistant-panel-ux") as NodePage;
-    const rows = deriveMoves(page, engine.needsYou("product") as NeedsYouList, "task");
+    const rows = deriveMoves(
+      page,
+      normalizeNeedsYou(engine.needsYou("product") as NeedsYouList),
+      "task",
+    );
     expect(rows[0]).toMatchObject({ id: "D-45" });
   });
 
@@ -138,23 +145,47 @@ describe("calm · Your move", () => {
             id: "D-45",
             verb: "Apply",
             object: "C-16",
-            unblocks: { ref: "I-1", short_title: "Agent assistant" },
+            unblocks: "Agent assistant",
+            unblocks_ref: "I-1",
+            action: { label: "Apply", option: "apply" },
             decision: ask("D-45", "Apply C-16"),
           },
-          { id: "merge:main", verb: "Merge", object: "#9856 and #9857", action: "Review" },
+          {
+            id: "merge:main",
+            verb: "Merge",
+            object: "#9856 and #9857",
+            action: { label: "Review and merge", url: "https://example.com/pulls" },
+          },
         ],
         more: 1,
       },
       status,
     )!;
-    expect(given.items[1]!.decision.actions).toEqual([{ id: "review", label: "Review" }]);
+    expect(given.items[1]!.primary).toEqual({
+      label: "Review and merge",
+      url: "https://example.com/pulls",
+    });
     const page = { your_move: given } as NodePage;
     const view = moveView(page, [
-      { id: "D-45", decision: ask("D-45", "Apply C-16"), text: "Apply C-16", unblocks: "x" },
-      { id: "D-49", decision: ask("D-49", "Apply C-19"), text: "Apply C-19", unblocks: "y" },
+      {
+        id: "D-45",
+        decision: ask("D-45", "Apply C-16"),
+        text: "Apply C-16",
+        unblocks: "x",
+        primary: null,
+      },
+      {
+        id: "D-49",
+        decision: ask("D-49", "Apply C-19"),
+        text: "Apply C-19",
+        unblocks: "y",
+        primary: null,
+      },
     ]);
     expect(view.rows.map((r) => r.text)).toEqual(["Apply C-16", "Merge #9856 and #9857"]);
     expect(view.rows[0]!.unblocks).toBe("Agent assistant");
+    expect(view.rows[0]!.primary?.action).toEqual({ id: "apply", label: "Apply" });
+    expect(view.rows[1]!.primary?.url).toBe("https://example.com/pulls");
     expect(view.more).toBe(1);
     expect(view.rest.map((r) => r.id)).toEqual(["D-49"]);
   });

@@ -8,23 +8,30 @@ import type { FoldedItem } from "../../room/roomFold";
 import { Peek } from "../../ui/Peek";
 import { itemSeq } from "./chatLanes";
 
+/** What was new when the page opened: the server's count, else the seq read up to. */
+export interface Since {
+  seq: number | null;
+  fresh: number | null;
+}
+
 /** "Activity · 3 since you looked", or "Activity · 12" when nothing is new. */
-export function activityWords(items: readonly FoldedItem[], sinceSeq: number | null): string {
-  const fresh = sinceSeq == null ? 0 : items.filter((i) => itemSeq(i) > sinceSeq).length;
+export function activityWords(items: readonly FoldedItem[], since: Since): string {
+  const fresh =
+    since.fresh ?? (since.seq == null ? 0 : items.filter((i) => itemSeq(i) > since.seq!).length);
   return fresh ? `Activity · ${fresh} since you looked` : `Activity · ${items.length}`;
 }
 
 export function ActivityLine({
   items,
   render,
-  sinceSeq,
+  since,
   onSeen,
   title,
 }: {
   items: FoldedItem[];
   render: (item: FoldedItem) => ReactNode;
-  /** The newest seq the viewer had seen when the page opened; null when not known. */
-  sinceSeq: number | null;
+  /** What was new when the page opened (nothing known: no "since you looked"). */
+  since: Since;
   /** The list was looked at: nothing in it is new any more. */
   onSeen: (seq: number) => void;
   /** The node, for the list's heading. */
@@ -42,7 +49,7 @@ export function ActivityLine({
         className="mb-1.5 flex shrink-0 items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-xs text-foreground-tertiary hover:text-foreground"
       >
         <ActivityIcon aria-hidden className="size-3" />
-        {activityWords(items, sinceSeq)}
+        {activityWords(items, since)}
         <ChevronRightIcon aria-hidden className="size-3" />
       </button>
       <Peek

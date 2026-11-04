@@ -8,7 +8,7 @@ import { type ReactNode, useState } from "react";
 import { ChevronDownIcon, Undo2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { undoLabel } from "../steer/steerModel";
-import { childPhrase, nodeName } from "./calm/calmModel";
+import { childPhrase, fullTitle, nodeName } from "./calm/calmModel";
 import { VerbMenu } from "./calm/NodeMenu";
 import { ChipList } from "./LinkChip";
 import { useNodeActions } from "./NodeContext";
@@ -227,12 +227,12 @@ function MetaLine({ page }: { page: NodePage }) {
   const { node } = page;
   const level = levelName(node.level, node.level_name);
   const kind = node.kind_name && node.kind_name !== level ? node.kind_name : null;
-  const name = nodeName(node);
+  const full = fullTitle(node);
   return (
     <div className="flex flex-col gap-1">
-      {name !== node.title && (
+      {full && (
         <p data-testid="v3-full-title" className="text-foreground [overflow-wrap:anywhere]">
-          {node.title}
+          {full}
         </p>
       )}
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-foreground-tertiary">
@@ -338,7 +338,7 @@ export function NodeHeader({
         <Mark page={page} />
         <h1
           data-testid="v3-title"
-          title={name !== node.title ? node.title : undefined}
+          title={fullTitle(node) ?? undefined}
           className="min-w-0 text-[21px] font-bold tracking-[-0.01em] [overflow-wrap:anywhere] max-md:text-[19px]"
         >
           {name}

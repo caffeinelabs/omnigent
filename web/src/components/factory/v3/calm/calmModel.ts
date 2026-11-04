@@ -4,6 +4,7 @@
 
 import type {
   Crumb,
+  DecisionAction,
   DecisionRef,
   NeedsYouItem,
   NeedsYouList,
@@ -69,10 +70,20 @@ export function shortTitle(title: string, max: number = TITLE_WORDS_MAX): string
   return more ? `${text} +${more}` : text;
 }
 
-/** What a node is called on every page: its short name, else its title shortened. */
-export function nodeName(node: { title: string; short_title?: string | null }): string {
-  const given = node.short_title?.trim();
-  return given || shortTitle(node.title);
+/** What a node is called on every page: the name the server gave it, else its title shortened. */
+export function nodeName(node: { title: string; named?: string | null }): string {
+  if (node.named === "person" || node.named === "factory") return node.title;
+  return shortTitle(node.title);
+}
+
+/** The full text a node's name shortens, when it does (Details and tooltips show it). */
+export function fullTitle(node: {
+  title: string;
+  full_title?: string | null;
+  named?: string | null;
+}): string | null {
+  const full = node.full_title ?? node.title;
+  return full !== nodeName(node) ? full : null;
 }
 
 /** One status phrase for a child row (calm rule 3), or none while it moves or is done. */
@@ -132,6 +143,17 @@ export interface MoveRow {
   unblocks: string | null;
   /** The node the ask is on (the row's words link there). */
   at?: string;
+  /** The row's button: an answer, a link out, or none (the row opens the ask). */
+  primary: { label: string; action?: DecisionAction; url?: string } | null;
+}
+
+/** The first answer of an ask as the row's button (a merge's is a link out). */
+function primaryOf(decision: DecisionRef): MoveRow["primary"] {
+  const first = decision.actions?.[0];
+  if (decision.external_url) {
+    return { label: first?.label ?? decision.verb, url: decision.external_url };
+  }
+  return first ? { label: first.label, action: first } : null;
 }
 
 /** The rows shown and the rest (behind "+n more"; `more` may exceed `rest` when the server only counts them). */
@@ -152,7 +174,8 @@ export function movedAsks(view: MoveView): Set<string> {
 }
 
 function rowOf(decision: DecisionRef, unblocks: string | null, at?: string): MoveRow {
-  return { id: decision.id, decision, text: decision.verb, unblocks, at };
+  const primary = primaryOf(decision);
+  return { id: decision.id, decision, text: decision.verb, unblocks, at, primary };
 }
 
 /**
@@ -231,13 +254,29 @@ function lastRef(crumbs: readonly Crumb[] | undefined): string | undefined {
 }
 
 function itemRow(item: YourMoveItem): MoveRow {
-  const text = item.object ? `${item.verb} ${item.object}` : item.verb;
+  const object = item.object && item.object !== item.id ? item.object : null;
+  // A question reads by its topic, not its number ("Answer: live search follow-up").
+  const text = item.about
+    ? `${item.verb}: ${item.about}`
+    : object
+      ? `${item.verb} ${object}`
+      : item.decision.verb || item.verb;
+  const p = item.primary;
+  const action = p?.option ? item.decision.actions.find((a) => a.id === p.option) : undefined;
+  const primary: MoveRow["primary"] = p?.url
+    ? { label: p.label, url: p.url }
+    : p?.option
+      ? { label: p.label, action: action ?? { id: p.option, label: p.label } }
+      : p
+        ? null
+        : primaryOf(item.decision);
   return {
     id: item.id,
     decision: item.decision,
     text,
     unblocks: item.unblocks ?? null,
     at: item.ref,
+    primary,
   };
 }
 

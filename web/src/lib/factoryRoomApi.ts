@@ -58,7 +58,15 @@ export interface ChatPage {
   data: ChatMessageView[];
   has_more: boolean;
   thread: string | null;
+  /** With `feed`: the reader's activity rows after their read mark in the thread (cockpit v3). */
+  activity_since?: number;
 }
+
+/**
+ * Cockpit v3's node chat: `all` marks each row's `lane` (conversation or
+ * activity); a server without feeds ignores it and sends the rows as they are.
+ */
+export type ChatFeed = "all";
 
 export interface PostChatRequest {
   thread: string;
@@ -92,11 +100,12 @@ export async function fetchRoomThreads(
 export async function fetchRoomMessages(
   factoryId: string,
   thread: string,
-  options: { beforeSeq?: number | null; limit?: number } = {},
+  options: { beforeSeq?: number | null; limit?: number; feed?: ChatFeed } = {},
   signal?: AbortSignal,
 ): Promise<ChatPage> {
   const params = new URLSearchParams({ thread, limit: String(options.limit ?? 50) });
   if (options.beforeSeq != null) params.set("before_seq", String(options.beforeSeq));
+  if (options.feed) params.set("feed", options.feed);
   return readJson(await authenticatedFetch(factoryPath(factoryId, `/chat?${params}`), { signal }));
 }
 

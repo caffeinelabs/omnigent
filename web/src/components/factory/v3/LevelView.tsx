@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { nodeName } from "./calm/calmModel";
+import { fullTitle, nodeName } from "./calm/calmModel";
 import { DoneLine, MoreFooter, PagedRows } from "./Children";
 import { NodeLink, StateDot } from "./nodeParts";
 import { useMoreInGroup } from "./nodeQueries";
@@ -21,7 +21,7 @@ function GroupHead({ group }: { group: LevelGroup }) {
     <div className="mb-1.5 px-0.5 leading-normal" data-testid="v3-group-head">
       <NodeLink
         nodeRef={p.ref}
-        title={name !== p.title ? p.title : undefined}
+        title={fullTitle(p) ?? undefined}
         className={cn(
           "text-[13px] font-semibold text-muted-foreground hover:text-status-blue-fg",
           p.implicit && "italic",
