@@ -510,6 +510,17 @@ def _pick_parent(
 # ── Filing a person's projects proposal, applied at once ───────
 
 
+async def file_and_apply(
+    env: Env,
+    changes: list[dict[str, Any]],
+    rationale: str,
+    *,
+    thread: str = THREAD_FACTORY,
+) -> FactoryProposal:
+    """File *changes* as the person's projects proposal and apply it at once."""
+    return await _file_and_apply(env, changes, rationale, thread=thread)
+
+
 async def _file_and_apply(
     env: Env,
     changes: list[dict[str, Any]],
@@ -3016,6 +3027,10 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
         )
         ref_cancel = proposal_ref(proposal.number)
         return f"{', '.join(cancel)} cancelled ({ref_cancel}): its lead had started"
+    if kind == "direction":
+        from omnigent.server.factory import change_direction
+
+        return await change_direction.undo(env, record)
     if kind == "control":
         targets = [str(t) for t in record.get("targets") or []]
         await _controls(env, str(record.get("action")), targets)
@@ -3164,6 +3179,7 @@ __all__ = [
     "apply",
     "columns_after",
     "env_for",
+    "file_and_apply",
     "plan_verb",
     "preview",
     "preview_id",

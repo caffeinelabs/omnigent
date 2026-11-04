@@ -448,6 +448,8 @@ class NodePageView(_View):
     thread: ThreadRefView
     version: str
     home: str | None = None
+    decided_since: int | None = Field(None, ge=1)
+    """Decisions the factory made in this subtree since the viewer's last look (left out at 0)."""
 
 
 class GroupParentView(CrumbView):

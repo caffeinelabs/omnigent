@@ -537,6 +537,80 @@ class FactoryNodeName:
 
 
 @dataclass(frozen=True)
+class FactoryCheckpoint:
+    """
+    One decision, whoever made it (``factory_checkpoints``), shown as ``K-<number>``.
+
+    Every decision point is a checkpoint a person can see and change direction
+    from. The factory's own decisions are stored here; a person's answers to
+    decisions (``D-n``) and applied proposals (``C-n``) read as checkpoints
+    through an adapter.
+
+    :param status: ``decided`` (the factory decided), ``asked`` (a person
+        decides), ``answered`` (a person decided) or ``changed`` (a person
+        changed direction from it later: :attr:`changed_by`).
+    :param decided_by_kind: ``agent``, ``server`` or ``person``.
+    :param decided_by: The deciding session id, ``factory`` or a user id.
+    :param decided_by_name: Who, as people read it ("Atlas", "the factory").
+    :param node_ref: The node it is scoped to (a node ref or a subject key).
+    :param options: ``[{id, label, description?, recommended?}]`` considered.
+    :param choice_id: The option chosen, when it was one.
+    :param direction: A person's free-text direction (a change of direction).
+    :param why: One line on why.
+    :param confidence: ``0``-``1`` as the decider gave it.
+    :param decision_class: The class the policy read (``ux``, ``follow_up`` …).
+    :param policy: The policy's verdict: ``{who, level, reasons, rule, tier0}``.
+    :param effects: ``[{ref, kind, undo?}]``: what it created or changed.
+    :param facts: ``{facts_version?, definition_version?, level}`` when it was made.
+    :param decision_id: The ``D-n`` row it is about (an ask), if any.
+    :param proposal_id: The ``C-n`` row it is about (a proposal), if any.
+    :param overrides: The checkpoint a person's change of direction overrides
+        (``K-n``, ``D-n`` or ``C-n``).
+    :param changed_by: The ``K-n`` that changed it.
+    :param dedupe_key: A repeated ask with this key returns this checkpoint.
+    """
+
+    id: str
+    factory_id: str
+    number: int
+    question: str
+    status: str = "decided"
+    decided_by_kind: str = "server"
+    decided_by: str | None = None
+    decided_by_name: str | None = None
+    node_ref: str | None = None
+    project_slug: str | None = None
+    options: list[dict[str, Any]] = field(default_factory=list)
+    choice_id: str | None = None
+    choice_label: str | None = None
+    direction: str | None = None
+    why: str | None = None
+    confidence: float | None = None
+    decision_class: str | None = None
+    policy: dict[str, Any] = field(default_factory=dict)
+    effects: list[dict[str, Any]] = field(default_factory=list)
+    facts: dict[str, Any] = field(default_factory=dict)
+    decision_id: str | None = None
+    proposal_id: str | None = None
+    overrides: str | None = None
+    changed_by: str | None = None
+    asked_by_session_id: str | None = None
+    dedupe_key: str | None = None
+    created_at: int = 0
+    updated_at: int = 0
+    workspace_id: int = 0
+
+    @property
+    def ref(self) -> str:
+        """:returns: ``"K-<number>"``."""
+        return f"K-{self.number}"
+
+    def to_dict(self) -> dict[str, Any]:
+        """:returns: A JSON-ready copy of the row."""
+        return _plain(self)
+
+
+@dataclass(frozen=True)
 class ChatThreadStats:
     """
     Aggregate of one thread's messages (not a table row).

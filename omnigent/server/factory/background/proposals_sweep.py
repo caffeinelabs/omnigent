@@ -10,6 +10,9 @@
    met are released, and a spawn a restart cut off is finished, once.
 4. Initiatives' acceptance runs: a due run whose base env never reported
    ready is sent anyway, and a requested run with no result expires.
+5. Decide first: open asks and pending projects proposals the policy now lets
+   the factory decide are decided with their recommended option and recorded
+   as checkpoints (:func:`.decide_first.sweep`).
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from omnigent.factory import LABEL_STATE, STATE_DONE
-from omnigent.server.factory import acceptance, proposals, spawn
+from omnigent.server.factory import acceptance, decide_first, proposals, spawn
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.snapshot import list_factory_roots
 
@@ -39,6 +42,7 @@ class SweepReport:
     applied: list[str] = field(default_factory=list)
     started: list[str] = field(default_factory=list)
     acceptance: list[str] = field(default_factory=list)
+    decided: list[str] = field(default_factory=list)
 
 
 async def sweep_once(app_state: Any) -> SweepReport:
@@ -62,6 +66,10 @@ async def sweep_once(app_state: Any) -> SweepReport:
             report.acceptance += await acceptance.sweep(app_state, root.id)
         except Exception:
             _logger.exception("factory: acceptance sweep failed for %s", root.id)
+        try:
+            report.decided += await decide_first.sweep(app_state, root.id)
+        except Exception:
+            _logger.exception("factory: decide-first sweep failed for %s", root.id)
     return report
 
 
