@@ -47,6 +47,7 @@ def _shot(page: Page, name: str, *, full: bool = False) -> None:
     where = os.environ.get("V3_CALM_SHOTS")
     if where:
         Path(where).mkdir(parents=True, exist_ok=True)
+        page.wait_for_timeout(600)  # a sheet's or a menu's animation ends first
         page.screenshot(path=str(Path(where) / f"{name}.png"), full_page=full)
 
 
