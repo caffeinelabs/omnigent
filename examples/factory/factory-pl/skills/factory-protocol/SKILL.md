@@ -90,6 +90,12 @@ them through its `omnigent` MCP server.
 - `sys_factory_insights(kind, window?)` (leads, PLs, the planner): KPIs with n,
   metrics, findings, loops, and `precedents` (with `q=`): check them before
   `sys_factory_ask`.
+- `sys_factory_node(op="read", ref)` (leads, PLs; where your tools have it):
+  one node of the cockpit's work tree as people see it (`product`, `I-1`, a
+  project slug, `T-16`): its path, status line (who must act), roll-up, chips
+  and children. A Room message about a node already carries its header; read
+  the page for its children or another node. Change the structure through
+  `sys_factory_project`, never by asking people to click.
 - `sys_factory_retro(target, root_causes=[{category, text, evidence}], …)` and
   `sys_factory_propose(kind, …)` (leads, PLs): retros with evidence ids, and
   changes to the factory itself (a PL proposes rules for its project only).

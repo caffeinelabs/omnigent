@@ -131,10 +131,11 @@ async def test_a_thread_named_by_its_node_ref_lands_in_its_thread(cockpit: Cockp
     assert key("fx") == "improvements"
     assert key("api-version") == key("#api-version") == "project:api-version"
     assert key("PR-9630") == key("!9630") == f"pr:{pr_id}"
-    for unknown in ("nowhere", "T-4"):
+    for unknown, code in (("nowhere", "invalid_thread"), ("T-4", "unknown_node")):
         with pytest.raises(CockpitError) as refused:
             key(unknown)
-        assert refused.value.code == "invalid_thread"
+        # T-4 names a task's thread (task:T-4), and this factory has no T-4.
+        assert refused.value.code == code
 
 
 # ── Old rows: the read-time shim ───────────────────────────────

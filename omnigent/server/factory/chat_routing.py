@@ -10,7 +10,19 @@ the factory's routable members (:class:`Members`, built by
 ``discovery``             Scout (the discovery seat), else Atlas
 ``project:<slug>``        that project's PL; Atlas while it has none
 ``pr:<id>``               the PL of the PR's project; Atlas while it has none
+``need:<ref>``            the need level's responder (Scout by default)
+``feature:<ref>``         the feature level's (Atlas by default)
+``study:R-<n>``           the study kind's (Scout by default)
+``task:<ref>``            the task level's (the task's project lead by
+                          default: the message names the task)
 ========================  ==============================================
+
+The four node threads answer by the definition's ``structure.responders``
+(:attr:`Members.responders`, a seat per level): ``atlas``, ``sentinel``,
+``scout`` (Atlas while discovery is off, as Scout is not seated then) or
+``lead`` (the PL of the node's project, :attr:`Members.node_projects`; Atlas
+for a node with no project). A level whose responder is ``null`` routes a
+plain message to nobody, with a note saying how to reach an agent.
 
 - ``@atlas``, ``@sentinel``, ``@scout`` and ``@pl:<slug>`` pick the responders
   instead of the thread's default (mention the default too to add to it);
@@ -40,6 +52,7 @@ from omnigent.factory import (
     THREAD_DISCOVERY,
     THREAD_FACTORY,
     THREAD_IMPROVEMENTS,
+    THREAD_NODE_PREFIXES,
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
     thread_kind,
@@ -60,6 +73,20 @@ MENTION_SENTINEL: Final = "@sentinel"
 MENTION_SCOUT: Final = "@scout"
 MENTION_PL_PREFIX: Final = "@pl:"
 MAX_MENTIONS: Final = 20
+
+NODE_KINDS: Final = tuple(prefix[:-1] for prefix in THREAD_NODE_PREFIXES)
+"""Thread kinds of the cockpit's node threads: ``need``, ``feature``, ``study``, ``task``."""
+SEAT_ATLAS: Final = "atlas"
+SEAT_SENTINEL: Final = "sentinel"
+SEAT_SCOUT: Final = "scout"
+SEAT_LEAD: Final = "lead"
+DEFAULT_RESPONDERS: Final[dict[str, str | None]] = {
+    "need": SEAT_SCOUT,
+    "feature": SEAT_ATLAS,
+    "study": SEAT_SCOUT,
+    "task": SEAT_LEAD,
+}
+"""Who answers each node thread when the definition says nothing (``structure.responders``)."""
 
 _PROJECT: Final = THREAD_PROJECT_PREFIX[:-1]
 _PR: Final = THREAD_PR_PREFIX[:-1]
@@ -106,6 +133,10 @@ class Members:
     :param scout: The discovery seat, if one is seated and may be woken.
     :param discovery: Whether discovery runs for the factory (``@scout`` routes only then).
     :param scout_away: Why Scout cannot answer now (e.g. over today's budget), for the note.
+    :param responders: Node thread kind -> the seat that answers it
+        (``structure.responders``; ``None``: nobody), :data:`DEFAULT_RESPONDERS` when unset.
+    :param node_projects: Node thread key -> the slug of its node's project (a task's).
+    :param node_labels: Node thread key -> how notes name its node, e.g. ``"T-16"``.
     """
 
     atlas: Agent | None
@@ -116,6 +147,9 @@ class Members:
     scout: Agent | None = None
     discovery: bool = False
     scout_away: str | None = None
+    responders: Mapping[str, str | None] = field(default_factory=lambda: dict(DEFAULT_RESPONDERS))
+    node_projects: Mapping[str, str] = field(default_factory=dict)
+    node_labels: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -221,7 +255,29 @@ def _default(thread: str, members: Members) -> tuple[Agent | None, str, str | No
             return None, _pl_name(slug), f"{_pl_name(slug)} not up yet; Atlas has it"
         label = _pr_label(thread, members)
         return None, label, f"{label} has no project yet; Atlas has it"
+    if kind in NODE_KINDS:
+        seat = members.responders.get(kind, DEFAULT_RESPONDERS[kind])
+        return _seat(seat, thread, members)
     return None, "nobody", None
+
+
+def _seat(seat: str | None, thread: str, members: Members) -> tuple[Agent | None, str, str | None]:
+    """:returns: ``(responder, its name, why Atlas answers instead)`` of a node thread's seat."""
+    if seat == SEAT_SENTINEL:
+        if members.sentinel is None:
+            return None, "Sentinel", "Sentinel is not up; Atlas will answer"
+        return members.sentinel, members.sentinel.name, None
+    if seat == SEAT_SCOUT and members.discovery:
+        return _scout(members)
+    if seat == SEAT_LEAD:
+        slug = members.node_projects.get(thread)
+        pl = members.pls.get(slug) if slug else None
+        if slug and pl is None:
+            return None, _pl_name(slug), f"{_pl_name(slug)} not up yet; Atlas has it"
+        if pl is not None:
+            return pl, pl.name, None
+    # Atlas: its own seat, Scout's while discovery is off, a lead's on a node with no project.
+    return members.atlas, "Atlas", None
 
 
 def _mentioned(mention: str, members: Members) -> tuple[Agent | None, str, str | None]:
@@ -276,10 +332,15 @@ def routes(
             continue  # No discovery here: "@scout" is plain text.
         if is_agent_mention(mention):
             wanted.append((*_mentioned(mention, members), VIA_MENTION))
-    if not wanted and author_kind == "human":
-        wanted.append((*_default(thread, members), VIA_DEFAULT))
-    targets: list[Target] = []
     notes: list[str] = []
+    if not wanted and author_kind == "human":
+        kind = thread_kind(thread)
+        if kind in NODE_KINDS and members.responders.get(kind, "") is None:
+            label = members.node_labels.get(thread) or thread
+            notes.append(f"Nobody answers {label}'s thread; @mention an agent to ask one")
+        else:
+            wanted.append((*_default(thread, members), VIA_DEFAULT))
+    targets: list[Target] = []
     unroutable: list[str] = []
     atlas = members.atlas
 
@@ -352,8 +413,10 @@ def team_signal(thread: str, body: str) -> tuple[str, str] | None:
 
 
 __all__ = [
+    "DEFAULT_RESPONDERS",
     "MAX_MENTIONS",
     "MENTION_SCOUT",
+    "NODE_KINDS",
     "STATE_DEAD",
     "STATE_DONE",
     "STATE_GONE",

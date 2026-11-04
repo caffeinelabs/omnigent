@@ -761,6 +761,7 @@ async def test_preflight_shape(
         "max_projects": 10,
         "tier2": {"enabled": False, "reason": "OMNIGENT_FACTORY_SMITH is not 1", "checks": None},
         "cockpit_v2": False,
+        "node_threads": True,
     }
     assert bob["github"] == {"connected": False, "login": None}
     schemas.Preflight.model_validate(bob)

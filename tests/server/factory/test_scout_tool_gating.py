@@ -49,6 +49,7 @@ SCOUT_SURFACE = {
     "sys_factory_ask",
     "sys_factory_chat",
     "sys_factory_propose",
+    "sys_factory_node",
 }
 
 

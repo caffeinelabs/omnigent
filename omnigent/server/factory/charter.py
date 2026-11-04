@@ -44,6 +44,9 @@ DEPENDS_MERGED: Final = "merged"
 DEPENDS_READY: Final = "ready"
 DEPENDS_MODES: Final = (DEPENDS_MERGED, DEPENDS_READY)
 """``depends_mode``: a dependency counts once its PR merged, or once it is ready for merge."""
+CHANGE_DEP_RE: Final = re.compile(r"^PR-([1-9][0-9]{0,8})$")
+"""A ``depends_on`` item that names one change (``PR-9876``) instead of a project: it is
+met once that pull request merged, whatever the rest of its project still does."""
 SPAWN_SERVER: Final = "server"
 SPAWN_LEAD: Final = "lead"
 SPAWN_OWNERS: Final = (SPAWN_SERVER, SPAWN_LEAD)
@@ -158,6 +161,21 @@ def _slugs(value: Any) -> list[str]:
     out: list[str] = []
     for item in _texts(value):
         if PROJECT_SLUG_RE.match(item) and item not in out:
+            out.append(item)
+    return out
+
+
+def change_dependency(item: object) -> int | None:
+    """:returns: The PR number a ``depends_on`` item names (``PR-9876`` -> 9876), else ``None``."""
+    match = CHANGE_DEP_RE.match(item) if isinstance(item, str) else None
+    return int(match.group(1)) if match else None
+
+
+def _dependencies(value: Any) -> list[str]:
+    """``depends_on`` items: project slugs and change refs (``PR-<n>``), each once."""
+    out: list[str] = []
+    for item in _texts(value):
+        if (PROJECT_SLUG_RE.match(item) or CHANGE_DEP_RE.match(item)) and item not in out:
             out.append(item)
     return out
 
@@ -293,7 +311,7 @@ def normalize_charter(
         from omnigent.server.factory.start import split_dependency_reasons
 
         raw_deps, reasons = split_dependency_reasons(raw_deps)
-    depends_on = _slugs(raw_deps)
+    depends_on = _dependencies(raw_deps)
     if depends_on:
         out["depends_on"] = depends_on
         mode = src.get("depends_mode")
@@ -656,7 +674,10 @@ def _update_lines() -> list[str]:
 
 
 def project_depends_on(project: FactoryProject) -> tuple[list[str], str]:
-    """:returns: ``(depends_on slugs, depends_mode)`` of the project's charter."""
+    """
+    :returns: ``(depends_on items, depends_mode)`` of the project's charter: project
+        slugs, and change refs (``PR-9876``, :func:`change_dependency`).
+    """
     charter = normalize_charter(project.charter)
     return list(charter.get("depends_on") or []), charter.get("depends_mode", DEPENDS_MERGED)
 
@@ -790,6 +811,7 @@ def render_kickoff_brief(
 
 __all__ = [
     "BRANCH_RE",
+    "CHANGE_DEP_RE",
     "DEFAULT_BASE_BRANCH",
     "DEFAULT_BASE_ENV",
     "DEPENDS_MERGED",
@@ -806,6 +828,7 @@ __all__ = [
     "UPDATE_LINE",
     "WHY_KEYS",
     "TeamBlock",
+    "change_dependency",
     "initiative_lines",
     "normalize_charter",
     "preview_tooling_ref",

@@ -1,7 +1,10 @@
 """Project proposals (``C-n``): agents propose project changes, the server applies them.
 
 ``sys_factory_project`` files one proposal of 1-12 changes (create, update,
-split, merge, cancel). Each change is validated with the cockpit's own models
+split, merge, cancel, move, reorder: ``move`` files a project under another
+open feature, its home; ``reorder`` moves it between its siblings' columns and
+is stored as the ``update`` of ``depends_on`` it makes). Each change is
+validated with the cockpit's own models
 (errors carry field paths such as ``changes[1].project.slug``) and checked
 against the factory: slugs free (including other pending proposals), the
 project cap and pods, the factory's repos and default base, no ``depends_on``
@@ -75,6 +78,7 @@ from omnigent.server.factory import (
 from omnigent.server.factory.actor import Actor, proposal_ref
 from omnigent.server.factory.charter import (
     SPAWN_LEAD,
+    change_dependency,
     normalize_charter,
     resolve_base_branch,
     spawn_owner,
@@ -167,12 +171,35 @@ class CancelOp(_Body):
     teardown_previews: bool = True
 
 
+class MoveOp(_Body):
+    """``{op: "move", slug, to: "I-n"}``: file the project under another open feature."""
+
+    op: Literal["move"]
+    slug: str
+    to: str = Field(min_length=1, max_length=16)
+
+
+class ReorderOp(_Body):
+    """
+    ``{op: "reorder", slug, after?, reason?}``: put the project in its siblings' first
+    column (no ``after``) or right after the sibling ``after`` (it waits on it). Siblings
+    share its home feature; dependencies outside them stay.
+    """
+
+    op: Literal["reorder"]
+    slug: str
+    after: str | None = None
+    reason: str | None = Field(None, max_length=200)
+
+
 _OPS: Final[dict[str, type[_Body]]] = {
     "create": CreateOp,
     "update": UpdateOp,
     "split": SplitOp,
     "merge": MergeOp,
     "cancel": CancelOp,
+    "move": MoveOp,
+    "reorder": ReorderOp,
 }
 
 
@@ -240,6 +267,7 @@ class Change:
     stored: dict[str, Any]
     op_class: autonomy.OpClass
     slug: str | None = None
+    target: str | None = None
     creates: list[ProjectIn] = field(default_factory=list)
     patch: CharterPatchIn | None = None
     absorbed: list[str] = field(default_factory=list)
@@ -255,6 +283,8 @@ class Change:
             return f"split {self.slug} into {', '.join(p.slug for p in self.creates)}"
         if self.op == "merge":
             return f"merge {', '.join(self.absorbed)} into {self.slug}"
+        if self.op == "move":
+            return f"move {self.slug} to {self.target}"
         if self.op == "update" and self.patch is not None:
             return f"update {self.slug} ({', '.join(sorted(self.patch.model_fields_set))})"
         return f"{self.op} {self.slug}"
@@ -394,6 +424,15 @@ class _Context:
     live_pods: int
     max_pods: int
     protected: frozenset[str] = frozenset()
+    store: Any = None
+    _features: dict[str, Any] | None = None
+
+    def features(self) -> dict[str, Any]:
+        """``I-n`` -> the factory's open initiatives (read once, when a move asks)."""
+        if self._features is None:
+            rows = self.store.list_initiatives(self.root.id, limit=5000) if self.store else []
+            self._features = {r.ref: r for r in rows if r.status != "cancelled"}
+        return self._features
 
 
 def _load_context(deps: FactoryDeps, root: Conversation, exclude: str | None) -> _Context:
@@ -418,6 +457,7 @@ def _load_context(deps: FactoryDeps, root: Conversation, exclude: str | None) ->
         live_pods=len(spawn._live_members(deps, root.id)),
         max_pods=spawn._max_pods(deps, root),
         protected=_protected_repos(deps, root.id),
+        store=store,
     )
 
 
@@ -493,7 +533,7 @@ def _parse_change(
     env = parse_body(model, raw, prefix=where)
     if scope is not None:
         slug = getattr(env, "slug", None)
-        if not isinstance(env, UpdateOp | SplitOp | CancelOp) or slug != scope:
+        if not isinstance(env, UpdateOp | SplitOp | CancelOp | ReorderOp) or slug != scope:
             raise CockpitError(
                 403,
                 "not_your_project",
@@ -628,6 +668,22 @@ def _parse_change(
             absorbed=list(env.from_),
             pr_map=pr_map,
         )
+    if isinstance(env, MoveOp):
+        row = touch(env.slug, f"{where}.slug")
+        to = env.to.strip()
+        target = ctx.features().get(f"I-{to[2:]}" if to[:2].lower() == "i-" else to)
+        if target is None:
+            raise CockpitError(
+                404, "unknown_feature", f"{env.to!r} names no open feature", field=f"{where}.to"
+            )
+        if row.feature == target.ref:
+            raise CockpitError(
+                409, "no_change", f"{env.slug} is already under {target.ref}", field=f"{where}.to"
+            )
+        stored = {"op": "move", "slug": env.slug, "to": target.ref}
+        return Change(index, "move", stored, "structural", slug=env.slug, target=target.ref)
+    if isinstance(env, ReorderOp):
+        return _reorder_change(ctx, index, env, touch(env.slug, f"{where}.slug"), where)
     assert isinstance(env, CancelOp)
     touch(env.slug, f"{where}.slug")
     stored = {"op": "cancel", "slug": env.slug, "teardown_previews": env.teardown_previews}
@@ -639,6 +695,44 @@ def _parse_change(
         slug=env.slug,
         teardown_previews=env.teardown_previews,
     )
+
+
+def _reorder_change(
+    ctx: _Context, index: int, env: ReorderOp, row: FactoryProject, where: str
+) -> Change:
+    """A reorder as the ``update`` of ``depends_on`` it makes among the project's siblings."""
+    siblings = {
+        slug
+        for slug, p in ctx.rows.items()
+        if slug != env.slug
+        and p.status == projects.STATUS_ACTIVE
+        and p.feature is not None
+        and p.feature == row.feature
+    }
+    if env.after is not None and env.after not in siblings:
+        raise CockpitError(
+            400,
+            "invalid_body",
+            f"after must name a sibling under {row.feature or 'its feature'}: "
+            f"{', '.join(sorted(siblings)) or 'none'}",
+            field=f"{where}.after",
+        )
+    charter = normalize_charter(row.charter)
+    current = list(charter.get("depends_on") or [])
+    new = [d for d in current if d not in siblings] + ([env.after] if env.after else [])
+    if new == current:
+        raise CockpitError(409, "no_change", f"{env.slug} is already there", field=where)
+    why = dict(charter.get("depends_why") or {})
+    if env.after:
+        why[env.after] = env.reason or why.get(env.after) or f"ordered after {env.after}"
+    patch = parse_body(
+        CharterPatchIn,
+        {"depends_on": new, "depends_why": {d: why[d] for d in new if d in why}},
+        prefix=where,
+    )
+    stored = {"op": "update", "slug": env.slug, "patch": patch.model_dump(exclude_unset=True)}
+    op_class = autonomy.update_class(patch.model_fields_set, has_reason=True)
+    return Change(index, "update", stored, op_class, slug=env.slug, patch=patch)
 
 
 def _check_dependencies(
@@ -681,10 +775,30 @@ def _check_dependencies(
                 old = normalize_charter(row.charter).get("depends_why") if row else None
                 reasons[change.slug] = {**(old or {}), **(change.patch.depends_why or {})}
     known = set(ctx.rows) | set(new)
+    numbers = {p.number for p in ctx.prs}
     warnings: list[str] = []
     unexplained: CockpitError | None = None
     for slug, (deps_, at) in new.items():
         for dep in deps_:
+            number = change_dependency(dep)
+            if number is not None:
+                # A change (PR-9876) is met once it merged; it is never part of a cycle.
+                if number not in numbers:
+                    raise CockpitError(
+                        400,
+                        "unknown_dependency",
+                        f"depends_on {dep!r} names no tracked pull request",
+                        field=at,
+                    )
+                if agent and unexplained is None and not (reasons.get(slug) or {}).get(dep):
+                    unexplained = CockpitError(
+                        400,
+                        "dependency_reason_required",
+                        f"say in one line why {slug} must wait for {dep}: "
+                        f"depends_why={{{dep!r}: '…'}}",
+                        field=at.removesuffix(".depends_on") + f".depends_why.{dep}",
+                    )
+                continue
             if dep not in known:
                 raise CockpitError(
                     400, "unknown_dependency", f"depends_on {dep!r} names no project", field=at
@@ -1958,7 +2072,7 @@ async def decline(app_state: Any, caller: AgentCaller, body: ProposalIn) -> dict
 
 
 def _undo_until(plan: Plan, now: int) -> int | None:
-    if all(c.op in ("create", "update") for c in plan.changes):
+    if all(c.op in ("create", "update", "move") for c in plan.changes):
         return now + UNDO_WINDOW_S
     return None
 
@@ -1966,10 +2080,14 @@ def _undo_until(plan: Plan, now: int) -> int | None:
 def _before(deps: FactoryDeps, root: Conversation, plan: Plan) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for change in plan.changes:
-        if change.op == "update" and change.slug:
+        if change.op in ("update", "move") and change.slug:
             row = deps.factory_store.get_project(root.id, change.slug)
             if row is not None:
                 out[change.slug] = {"charter": row.charter, "priority": row.priority}
+                if change.op == "move":
+                    # Its home and the plans that listed it, which an Undo puts back.
+                    out[change.slug]["feature"] = row.feature
+                    out[change.slug]["plans"] = projects.plans_listing(deps, root.id, change.slug)
     return out
 
 
@@ -2343,6 +2461,11 @@ async def _apply_change(
             check_depends=False,
         )
         result["merged"].append(change.slug)
+    elif change.op == "move" and change.slug and change.target:
+        await projects.move_project_core(
+            app_state, root, change.slug, change.target, actor, via=ref
+        )
+        result.setdefault("moved", []).append(change.slug)
 
 
 # ── Human answers (through the mirrored decision) ──────────────
@@ -2682,6 +2805,17 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
     restored: list[str] = []
     for slug, before in (row.before or {}).items():
         if isinstance(before, Mapping):
+            if "feature" in before:
+                plans = before.get("plans")
+                await projects.move_project_core(
+                    app_state,
+                    root,
+                    slug,
+                    before.get("feature"),
+                    actor,
+                    via=f"undo {label}",
+                    plans=[str(p) for p in plans] if isinstance(plans, list) else None,
+                )
             await projects.restore_project_core(
                 app_state,
                 root,

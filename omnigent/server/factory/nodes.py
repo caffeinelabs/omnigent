@@ -78,7 +78,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import alarms, features, levels, node_refs, node_status, waits
 from omnigent.server.factory.base import DeployedHead, contains, same_commit
-from omnigent.server.factory.charter import normalize_charter, project_kind
+from omnigent.server.factory.charter import change_dependency, normalize_charter, project_kind
 from omnigent.server.factory.definition_blocks import (
     FACTORY_TREE,
     KIND_IS_LEVEL,
@@ -762,6 +762,8 @@ class Tree:
                 need = found
             elif message and asker.get("kind") == "human":
                 need = self._ask_need(message, row.ask, str(asker.get("name") or ""), None)
+            elif (named := self._named_need(plan.get("need"))) is not None:
+                need = named
             else:
                 origin = row.created_by if (row.created_by or "").startswith("C-") else row.ref
                 need = self._proposal_need(self._proposals.get(origin or ""), str(origin))
@@ -783,6 +785,21 @@ class Tree:
             node.acceptance = _acceptance(row)
             node.steps = _steps(row, node.acceptance)
             node.surfaces = tuple(str(s) for s in plan.get("user_facing") or [])
+
+    def _named_need(self, ref: Any) -> str | None:
+        """
+        The implicit need a person named a feature under (``plan.need``): the need of
+        work started without a proposal keeps its place once that work is named.
+        """
+        parsed = node_refs.parse(ref) if isinstance(ref, str) else None
+        if parsed is None or parsed.kind != "need" or not parsed.id.startswith("by-"):
+            return None
+        who = parsed.id.removeprefix("by-")
+        return self._implicit_need(
+            parsed.id,
+            f"Started by {who}",
+            "Implicit: work started without a proposal. Name it, or file it under a need.",
+        )
 
     def _feature_of(self, project: FactoryProject, home: features.Home) -> str:
         """The project's feature: its home initiative, else the implicit one of its origin."""
@@ -1484,6 +1501,10 @@ class Tree:
         if key not in self._memo:
             self._memo[key] = make()
         return self._memo[key]
+
+    def pr_refs_by_id(self) -> dict[str, str]:
+        """:returns: PR row id (bare hex) -> its change's ref, for the PRs that are changes."""
+        return dict(self._pr_ref)
 
     def lookup(self, ref: str) -> _N | None:
         """:returns: The node *ref* names (any spelling :func:`.node_refs.normalize` reads)."""
@@ -2356,10 +2377,12 @@ class Tree:
         return found.ref if found is not None else None
 
     def met_links(self, node: _N) -> list[tuple[str, str]]:
-        """``(dependency, its ref)`` of the links that no longer hold *node* (history)."""
+        """``(dependency, its ref)`` of the project links that no longer hold *node* (history)."""
         done = self.state(node.ref) == "done"
         out: list[tuple[str, str]] = []
         for dep in node.depends_on:
+            if change_dependency(dep) is not None:
+                continue  # a change link is its own chip ("PR-9876 · met")
             target = self.nodes.get(_project_ref(dep))
             if target is not None and (done or self.state(target.ref) == "done"):
                 out.append((dep, target.ref))
@@ -2371,6 +2394,9 @@ class Tree:
         met = self.met_links(node)
         done = self.state(node.ref) == "done"
         for dep in node.depends_on:
+            if (change := self._change_chip(node, dep)) is not None:
+                out.append(change)
+                continue
             target = self.nodes.get(_project_ref(dep))
             if target is None or (dep, target.ref) in met:
                 continue
@@ -2424,6 +2450,29 @@ class Tree:
                 }
             )
         return out
+
+    def _change_chip(self, node: _N, dep: str) -> dict[str, Any] | None:
+        """
+        A ``depends_on`` item that names a change (``PR-9876``): ``met`` once it
+        merged, else the change's state; ``None`` for a project slug.
+        """
+        number = change_dependency(dep)
+        if number is None:
+            return None
+        rows = [p for p in self.facts.prs if p.number == number]
+        mine = [p for p in rows if p.repo == (self.facts.repo or p.repo)] or rows
+        merged = any(p.state == "merged" for p in mine)
+        target = self.nodes.get(dep)
+        chip: dict[str, Any] = {
+            "kind": "depends on",
+            "title": dep,
+            "state": "met" if merged else (self._words(dep) if target is not None else "open"),
+        }
+        if target is not None:
+            chip["ref"] = target.ref
+        if reason := node.depends_why.get(dep):
+            chip["reason"] = _clip(reason, _SHORT_MAX)
+        return chip
 
     def _alarms_about(self, node: _N) -> list[alarms.ClosedAlarm]:
         """The closed alarms that were about *node* (shown once, as a chip)."""

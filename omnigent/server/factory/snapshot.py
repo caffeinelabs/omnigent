@@ -1669,6 +1669,11 @@ async def get_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         return raw
 
 
+def forget(factory_id: str) -> None:
+    """Drop one factory's cached snapshot (a write the next read must see)."""
+    _snapshots.pop(bare_id(factory_id), None)
+
+
 def reset_cache() -> None:
     """Forget cached snapshots, viewer permissions, costs and handles (tests)."""
     _snapshots.clear()
@@ -1871,6 +1876,7 @@ __all__ = [
     "decision_view",
     "delivered_brief_targets",
     "filter_snapshot",
+    "forget",
     "get_snapshot",
     "is_factory_root",
     "list_factory_roots",

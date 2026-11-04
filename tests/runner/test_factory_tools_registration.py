@@ -7,8 +7,9 @@ new top-level sandbox) is for leads, ``sys_factory_env`` for the project lead
 and env_keeper, ``sys_factory_demo`` for those two and the demo agent,
 ``sys_factory_project`` and ``sys_factory_chat`` for leads and project leads
 (the server scopes a PL to its own project and threads), and
-``sys_factory_task`` (the work graph) for leads, project leads and ICs. The
-read-only planner sees the roster only.
+``sys_factory_task`` (the work graph) for leads, project leads and ICs.
+``sys_factory_node`` (one node of the cockpit's work tree, read-only) is for
+leads, project leads, Scout and the read-only planner.
 Native harnesses see nothing but the relay, so the tools must also ride
 ``build_native_relay_tool_schemas`` — that is what puts
 ``mcp__omnigent__sys_session_post`` in front of Claude Code.
@@ -57,22 +58,28 @@ _PROJECT = "sys_factory_project"
 _TASK = "sys_factory_task"
 _CHAT = "sys_factory_chat"
 _RULES = "sys_factory_rules"
+_NODE = "sys_factory_node"
 _LEARN = {"sys_factory_propose", "sys_factory_insights", "sys_factory_retro"}
 _READ = "sys_discovery_read"
 _IDEA = "sys_discovery_opportunity"
 _DISCOVERY = {_READ, "sys_discovery_query", "sys_discovery_code", _IDEA}
-_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN | _DISCOVERY
+_ALL = (
+    _EVERY_ROLE
+    | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES, _NODE}
+    | _LEARN
+    | _DISCOVERY
+)
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES, _READ, _IDEA} | _LEARN,
-    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN,
+    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES, _READ, _IDEA, _NODE} | _LEARN,
+    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES, _NODE} | _LEARN,
     "env_keeper": _EVERY_ROLE | {_ENV, _DEMO, _RULES},
     "ic": _EVERY_ROLE | {_TASK, _RULES},
     "reviewer": _EVERY_ROLE | {_RULES},
     "demo": _EVERY_ROLE | {_DEMO, _RULES},
-    "planner": {"sys_factory_roster", _RULES, "sys_factory_insights"},
+    "planner": {"sys_factory_roster", _RULES, "sys_factory_insights", _NODE},
     # The discovery seat: no messaging, PR, project or task tool.
     "scout": _DISCOVERY
-    | {"sys_factory_roster", "sys_factory_set", "sys_factory_ask", _CHAT, _RULES}
+    | {"sys_factory_roster", "sys_factory_set", "sys_factory_ask", _CHAT, _RULES, _NODE}
     | {"sys_factory_propose"},
 }
 

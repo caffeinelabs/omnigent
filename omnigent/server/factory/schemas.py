@@ -64,7 +64,9 @@ EngineMode = Literal["observe", "assist", "enforce"]
 ActorKind = Literal["human", "agent", "server"]
 ChatAuthorKind = Literal["human", "agent", "system"]
 ChatCardType = Literal["decision", "proposal", "control", "pr", "demo", "loop", "issue", "system"]
-ThreadKind = Literal["factory", "improvements", "project", "pr"]
+ThreadKind = Literal[
+    "factory", "improvements", "discovery", "project", "pr", "need", "feature", "study", "task"
+]
 ProposalKind = Literal["projects", "tuning", "rules", "code"]
 ProposalStatus = Literal[
     "pending",
@@ -1482,6 +1484,9 @@ class Preflight(_View):
     :param tier2: Whether agents may open code PRs to omnigent (off by default).
     :param cockpit_v2: Whether people may switch to the new cockpit
         (``OMNIGENT_FACTORY_COCKPIT_V2``; off by default, then a per-person choice).
+    :param node_threads: The server routes cockpit v3's per-node threads
+        (``need:``, ``feature:``, ``study:``, ``task:``) and serves the node verbs
+        (preview, apply, undo); older servers leave it out.
     """
 
     github: PreflightGithub
@@ -1493,6 +1498,7 @@ class Preflight(_View):
     max_projects: int = 10
     tier2: Tier2Status | None = None
     cockpit_v2: bool = False
+    node_threads: bool = False
 
 
 # ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──
@@ -1620,8 +1626,10 @@ class ThreadView(_View):
     """
     One Room thread.
 
-    :param key: ``factory``, ``improvements``, ``project:<slug>`` or ``pr:<id>``.
-    :param title: Display name, e.g. ``"#db-version"`` or ``"!9631"``.
+    :param key: ``factory``, ``improvements``, ``project:<slug>``, ``pr:<id>``, or a
+        node thread's ``need:`` / ``feature:`` / ``study:`` / ``task:`` key.
+    :param title: Display name, e.g. ``"#db-version"``, ``"!9631"`` or ``"T-16"``.
+    :param node_ref: The node the thread is about (``product``, a slug, ``PR-9631``, ``T-16``).
     :param responder_session_id: The agent that answers by default.
     :param mention: The newest unread message that @mentions the reader.
     """
@@ -1629,6 +1637,7 @@ class ThreadView(_View):
     key: str
     kind: ThreadKind
     title: str
+    node_ref: str | None = None
     project_slug: str | None = None
     pr_id: str | None = None
     pr_number: int | None = None

@@ -161,6 +161,11 @@ relay surface (Claude Code sees `mcp__omnigent__<name>`).
 - `sys_factory_rules()` (every role), `sys_factory_insights(kind, …)` (leads,
   PLs, the planner), `sys_factory_retro(…)` and `sys_factory_propose(kind, …)`
   (leads and PLs) — see Self-modification.
+- `sys_factory_node(op="read", ref, children_page?)` (leads, PLs, Scout, the
+  planner) — one node of cockpit v3's work tree as people see it (`GET
+  /v1/factory/agent/node`: the node page, verbs disabled; agents change the
+  structure through proposals). A server from before node pages answers
+  `not_served`; Room messages about a node carry its header either way.
 
 For factory roles, `sys_session_get_history`, `sys_session_get_info` and
 `sys_session_list` are scoped to the caller's factory: reading another
@@ -382,7 +387,11 @@ applied proposals call with the acting person, agent or the server.
   say better, and an update older than 3 h is stale.
 - **Dependencies are checked by every core**: an unknown `depends_on` is 400
   `unknown_dependency`, a cycle 409 `cycle` with its path, from the cockpit
-  forms as from proposals.
+  forms as from proposals. An item may name one change instead of a project
+  (`PR-9876`, a tracked PR): it is met once that PR merged, whatever else its
+  project still does (cockpit v3's Start now relaxes a wait to it); it draws
+  no project edge and never closes a cycle. An older server drops such items
+  on read, which only ever releases the project.
 - **Server spawn** (`server/factory/spawn.py`). An applied project's PL is
   created by the server with `sys_factory_spawn`'s exact body, in process,
   as the factory's creator (a 300 s runner token), then briefed (`[Factory
@@ -1129,6 +1138,57 @@ alarm whatever holds its task. The factory tree's Health lists
 today's closed alarms as items (`D-n`) with `closed_alarms` on its page, the
 node each was about carries an "alarm closed" chip, and the root's roll-up
 counts them (`alarms_closed`).
+
+**Threads per node** (cockpit v3). Beside `factory`, `project:<slug>` and
+`pr:<id>`, the Room has a thread per need, feature, study and task:
+`need:<ref>` (`need:O-3`, `need:ask:<id>`, `need:from-C-12`), `feature:<ref>`,
+`study:R-<n>` and `task:<ref>` (`task:T-16`; `T-16` spells it too). A key
+resolves only to a node of this factory (404 `unknown_node`). Who answers is
+the definition's `structure.responders` per level: Atlas for features, Scout
+for needs and studies (Atlas while discovery is off), the project's lead for
+a task (the delivery names the task); `null` routes a plain message to
+nobody, with a note. A lead posts anywhere, a PL also in its tasks' threads,
+Scout in need and study threads; agents' messages still route only by
+@mention, so node threads never loop. Every Room delivery about a node
+carries its header as the cockpit shows it (`node_context.py`: the path, why,
+status line, roll-up and open asks, and how to read the page with
+`sys_factory_node`); the whole delivery stays within the factory's message
+cap (8000 chars), giving up the header's detail, then the oldest context,
+then the end of the longest message, never the header's status or the reply
+call. A factory's root label `omnigent.factory.node_header=off` leaves the
+header out. Cards follow their node: a decision about a task, need, feature
+or study is also carded in that node's thread (the thread above keeps its
+card), an alarm the server closed is a `closed_alarm` card in its task's
+thread, and the cockpit's own cards (`why` for a bare "why" in a node thread,
+which is not routed; `offer`; `preview_applied` after a verb, with its Undo)
+go only to their node's thread. `GET …/chat/threads` names each thread's
+node (`node_ref`) and, with `nodes=1`, lists the node threads that have
+messages; preflight says `node_threads: true`.
+
+**Steering at a node** (`node_verbs.py`). `POST …/n/{ref}/preview {verb,
+args, based_on}` plans a structural verb over the facts and stores nothing:
+its effects in plain words, the parent's columns with the change as a ghost
+(`columns_after`), the roll-up before and after (`rollup_delta`), who
+approves (`approver`, `can_apply`, `who_may`), warnings, whether it can be
+undone, and a `preview_id` that digests the plan and the facts it touches.
+`POST …/n/{ref}/apply {…, preview_id}` re-plans over fresh facts and applies
+only that plan (409 `stale`, with the new preview, when what it touches
+moved), then posts a `preview_applied` card and returns the node page with
+an Undo token; `POST …/undo/{token}` takes it back once within 10 minutes
+(the person who applied it, or an owner). The verbs run today's cores: `add`
+under a feature files the person's projects proposal extending it and
+applies it at once ("Plan X now" goes to the feature's thread; a title that
+matches a held item pulls that item forward; `col: "later"` holds it in a
+later wave), under a project adds a task, under a need starts a feature
+(owners); `start` relaxes a project's unmet project dependencies to their
+newest merged change (`PR-9876`) and starts its lead; `pause`/`resume` run
+the controls of every lead under the node (a task: a hold); `move` files a
+project under another stored feature or a feature under an opportunity, one
+level up only (422 `wrong_level`); `reorder` edits `depends_on` among
+siblings; `split`/`merge`/`close` are the proposal ops (no Undo); `name`
+makes an implicit feature or need a stored one, or files its children under
+one; `team` is a `PUT …/definition` team change (Undo pins the version
+before). Owner changes need an owner (403 `authority` with `who`).
 
 **Steering at the node (cockpit v3).** Every structural verb on a node page
 (Add child, Start now, Team, Autonomy & merge, Pause / Resume, Move, Name it /

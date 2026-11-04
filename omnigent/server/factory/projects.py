@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
@@ -28,6 +28,7 @@ from omnigent.server.factory import control, events, gating, product_profile, sp
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.charter import (
     SPAWN_SERVER,
+    change_dependency,
     normalize_charter,
     preview_tooling_ref,
     project_depends_on,
@@ -193,23 +194,30 @@ def check_dependencies(
     new: Mapping[str, tuple[Sequence[str], str]],
     *,
     closing: Sequence[str] = (),
+    prs: Sequence[FactoryPr] | None = None,
 ) -> None:
     """
-    Refuse ``depends_on`` that names no project, or that closes a cycle.
+    Refuse ``depends_on`` that names no project (or no change), or that closes a cycle.
 
     :param rows: The factory's projects.
     :param new: Slug -> ``(its depends_on, the field to blame)`` for the projects
         being created or re-pointed.
     :param closing: Projects the same plan closes (known, but out of the graph).
+    :param prs: The factory's PRs: a change item (``PR-9876``) must name one of them.
     :raises CockpitError: 400 ``unknown_dependency``, 409 ``cycle`` with the path.
     """
     by_slug = {p.slug: p for p in rows}
     known = set(by_slug) | set(new)
+    numbers = {p.number for p in prs or []}
     for deps_, at in new.values():
         for dep in deps_:
+            number = change_dependency(dep)
+            if number is not None and (prs is None or number in numbers):
+                continue  # a change is met once it merged; it is never part of a cycle
             if dep not in known:
+                what = "no tracked pull request" if number is not None else "no project"
                 raise CockpitError(
-                    400, "unknown_dependency", f"depends_on {dep!r} names no project", field=at
+                    400, "unknown_dependency", f"depends_on {dep!r} names {what}", field=at
                 )
     graph: dict[str, list[str]] = {
         p.slug: project_depends_on(p)[0]
@@ -441,7 +449,10 @@ async def create_project_core(
             )
         rows = await asyncio.to_thread(store.list_projects, root.id)
         if check_depends:
-            check_dependencies(rows, {project.slug: (project.depends_on or [], "depends_on")})
+            prs = await asyncio.to_thread(store.list_prs, root.id)
+            check_dependencies(
+                rows, {project.slug: (project.depends_on or [], "depends_on")}, prs=prs
+            )
         if check_caps:
             over_caps(cap_slots(rows) - cap_allowance, 1, rows)
         fields = start.project_fields(project, actor_name(actor), defaults)
@@ -515,7 +526,8 @@ async def patch_project_core(
                 400, "invalid_body", "a project cannot depend on itself", field="depends_on"
             )
         rows = await asyncio.to_thread(store.list_projects, root.id)
-        check_dependencies(rows, {slug: (patch.depends_on or [], "depends_on")})
+        prs = await asyncio.to_thread(store.list_prs, root.id)
+        check_dependencies(rows, {slug: (patch.depends_on or [], "depends_on")}, prs=prs)
     fields: dict[str, Any] = {
         "charter": normalize_charter(
             start.merge_charter(row.charter, patch), tooling_ref=preview_tooling_ref()
@@ -537,6 +549,98 @@ async def patch_project_core(
     if {"depends_on", "depends_mode"} & patch.model_fields_set:
         await gating.release_ready(app_state, root.id, trigger="charter_update")
     return updated, diff, mail_id
+
+
+def plans_listing(deps: FactoryDeps, factory_id: str, slug: str) -> list[str]:
+    """:returns: The ids of the initiatives whose plan lists project *slug* (sync)."""
+    from omnigent.server.factory.initiative_view import plan_of
+
+    return [
+        row.id
+        for row in deps.factory_store.list_initiatives(factory_id, limit=5000)
+        if slug in plan_of(row)["projects"]
+    ]
+
+
+def rehome(
+    deps: FactoryDeps,
+    factory_id: str,
+    slug: str,
+    to: str | None,
+    *,
+    plans: Sequence[str] | None = None,
+) -> FactoryProject:
+    """
+    Make feature *to* (``I-n``, or ``None``: none stored) project *slug*'s home (sync):
+    its ``feature`` column, the initiative plans that list it (only *to*'s, or
+    exactly *plans* when given: an undo puts its plans back) and its charter's
+    ``initiative`` stamp. Its id, ref, history, cost and chat stay.
+    """
+    from omnigent.server.factory import initiatives
+    from omnigent.server.factory.initiative_view import plan_of
+
+    store = deps.factory_store
+    project = store.get_project(factory_id, slug)
+    if project is None:
+        raise CockpitError(404, "unknown_project", f"no project {slug!r} in this factory")
+    rows = store.list_initiatives(factory_id, limit=5000)
+    target = next((r for r in rows if r.ref == to), None) if to else None
+    keep = set(plans) if plans is not None else ({target.id} if target is not None else set())
+
+    def listed(want: bool) -> Callable[[Any], dict[str, Any] | None]:
+        def change(row: Any) -> dict[str, Any] | None:
+            plan = plan_of(row)
+            if (slug in plan["projects"]) == want:
+                return None
+            plan["projects"] = (
+                [*plan["projects"], slug] if want else [s for s in plan["projects"] if s != slug]
+            )
+            return {"plan": plan}
+
+        return change
+
+    for row in rows:
+        initiatives.mutate(deps, row.id, listed(row.id in keep))
+    charter = normalize_charter(project.charter)
+    stamp = charter.get("initiative")
+    if isinstance(stamp, Mapping) and target is not None:
+        charter["initiative"] = {**stamp, "ref": target.ref, "title": target.title}
+    elif target is None:
+        charter.pop("initiative", None)
+    return store.update_project(project.id, feature=to, charter=charter) or project
+
+
+async def move_project_core(
+    app_state: Any,
+    root: Conversation,
+    slug: str,
+    to: str | None,
+    actor: Actor,
+    *,
+    via: str | None = None,
+    plans: Sequence[str] | None = None,
+) -> FactoryProject:
+    """
+    File project *slug* under another feature (:func:`rehome`) and log ``project.moved``.
+
+    :raises CockpitError: 404 ``unknown_project``, 409 ``project_closed``.
+    """
+    deps = factory_deps(app_state)
+    row = await _active(deps, root, slug)
+    moved = await asyncio.to_thread(lambda: rehome(deps, root.id, slug, to, plans=plans))
+    by = actor_name(actor)
+    await events.emit(
+        app_state,
+        root.id,
+        "project.moved",
+        severity="notice",
+        project=slug,
+        subject=f"project:{slug}",
+        summary=f"{by} moved {slug} from {row.feature or 'its proposal'} to "
+        f"{to or 'its proposal'}" + (f" ({via})" if via else ""),
+        data=_event_data(actor, before=row.feature, after=to, via=via),
+    )
+    return moved
 
 
 async def restore_project_core(
@@ -1026,8 +1130,11 @@ __all__ = [
     "human_actor",
     "human_role",
     "merge_projects_core",
+    "move_project_core",
     "over_caps",
     "patch_project_core",
+    "plans_listing",
+    "rehome",
     "restore_project_core",
     "split_project_core",
     "start_missing_pl_core",

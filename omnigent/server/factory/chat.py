@@ -1,9 +1,11 @@
 """The Room: the factory's shared, durable chat, delivered to agents through the mailer.
 
 Threads are ``factory`` (Atlas), ``improvements`` (Sentinel), ``project:<slug>``
-(its PL) and ``pr:<id>`` (the owning PL). Every message is a
-``factory_chat_messages`` row; :mod:`~omnigent.server.factory.chat_routing`
-decides who answers it.
+(its PL) and ``pr:<id>`` (the owning PL), and the cockpit's node threads
+``need:<ref>``, ``feature:<ref>``, ``study:R-<n>`` and ``task:<ref>`` (who
+answers is the definition's per-level responder; a task's is its project's PL,
+with the task named). Every message is a ``factory_chat_messages`` row;
+:mod:`~omnigent.server.factory.chat_routing` decides who answers it.
 
 Delivery to an agent:
 
@@ -15,7 +17,10 @@ Delivery to an agent:
   out as ONE delivery when its turn ends, or after :data:`COALESCE_MAX_S`.
 - The envelope (:func:`render_envelope`) names the thread and author, quotes
   the body (so nobody can forge a server header), adds the thread since the
-  responder's last reply, the refs' live state and the reply call.
+  responder's last reply, the refs' live state and the reply call. A thread
+  about a node also carries the node's header as the cockpit shows it
+  (breadcrumb, why, status, roll-up, open asks: :mod:`.node_context`), and
+  the whole text stays within :data:`ENVELOPE_MAX_CHARS` (:func:`fit_envelope`).
 - A delivery records ``chat.pending[target] = [(thread, chat_id, requested_at)]``,
   ``requested_at`` being when the delivering attempt began. When the turn it
   started ends without a ``sys_factory_chat`` to the thread, the turn's output
@@ -49,6 +54,7 @@ from omnigent.factory import (
     LABEL_ID,
     LABEL_ROLE,
     LABEL_STATE,
+    MESSAGE_MAX_CHARS,
     PROJECT_SLUG_RE,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
@@ -60,6 +66,7 @@ from omnigent.factory import (
     THREAD_IMPROVEMENTS,
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
+    thread_kind,
 )
 from omnigent.server.factory import chat_routing, events, live, node_refs
 from omnigent.server.factory.actor import Actor, find_refs, parse_ref
@@ -109,6 +116,12 @@ KIND_REPLIED: Final = "chat.replied"
 KIND_AUTO_REPLY: Final = "chat.auto_reply"
 KIND_UNROUTABLE: Final = "chat.unroutable"
 SCOPE: Final = "chat"
+
+ENVELOPE_MAX_CHARS: Final = MESSAGE_MAX_CHARS
+"""The longest delivery the Room sends an agent: the factory's message cap, which every
+server text to a member is held to. The node header counts against it."""
+NODE_HEADER_MAX: Final = 1500
+"""Chars a node's header may take in one delivery (before the guard trims anything else)."""
 
 _IDS_RE: Final = re.compile(r" · ids?=((?:chat_[0-9a-f]{32},?)+)\]$")
 GATE_ORDER: Final = ("base", "checks", "review", "verify", "demo", "mergeable")
@@ -167,11 +180,14 @@ class Thread:
     """
     One resolved Room thread.
 
-    :param key: ``factory`` / ``improvements`` / ``project:<slug>`` / ``pr:<id>``.
-    :param kind: ``factory`` / ``improvements`` / ``project`` / ``pr``.
-    :param title: e.g. ``"#factory"``, ``"#db-version"`` or ``"!9631"``.
-    :param project: The project slug (a PR thread's project when known).
+    :param key: ``factory`` / ``improvements`` / ``project:<slug>`` / ``pr:<id>``, or a
+        node thread's ``need:<ref>`` / ``feature:<ref>`` / ``study:R-<n>`` / ``task:<ref>``.
+    :param kind: ``factory`` / ``improvements`` / ``project`` / ``pr`` / ``need`` /
+        ``feature`` / ``study`` / ``task``.
+    :param title: e.g. ``"#factory"``, ``"#db-version"``, ``"!9631"`` or ``"T-16"``.
+    :param project: The project slug (a PR thread's project when known; a task's).
     :param pr: The PR of a ``pr`` thread.
+    :param node: The node a node thread is about, e.g. ``"T-16"``.
     """
 
     key: str
@@ -179,16 +195,19 @@ class Thread:
     title: str
     project: str | None = None
     pr: FactoryPr | None = None
+    node: str | None = None
 
 
 def thread_title(key: str, pr_number: int | None = None) -> str:
-    """:returns: How a thread is shown, e.g. ``"#db-version"`` or ``"!9631"``."""
+    """:returns: How a thread is shown, e.g. ``"#db-version"``, ``"!9631"`` or ``"T-16"``."""
     if key in FIXED_THREADS or key == THREAD_DISCOVERY:
         return f"#{key}"
     if key.startswith(THREAD_PROJECT_PREFIX):
         return f"#{key[len(THREAD_PROJECT_PREFIX) :]}"
     if pr_number is not None:
         return f"!{pr_number}"
+    if thread_kind(key) in chat_routing.NODE_KINDS:
+        return node_refs.thread_ref(key) or key
     return key
 
 
@@ -249,27 +268,95 @@ def resolve_thread(deps: FactoryDeps, factory_id: str, raw: object) -> Thread:
         canonical = f"{THREAD_PR_PREFIX}{norm_id(pr.id)}"
         title = thread_title(canonical, pr.number)
         return Thread(canonical, "pr", title, project=pr.project_slug, pr=pr)
+    if thread_kind(key) in chat_routing.NODE_KINDS:
+        return _resolve_node_thread(deps, factory_id, key, raw)
     spelled = _node_thread(deps, factory_id, key)
     if spelled is not None:
         return resolve_thread(deps, factory_id, spelled)
     raise CockpitError(
         400,
         "invalid_thread",
-        f"{raw!r} is no thread: use factory, improvements, project:<slug> or pr:<number>",
+        f"{raw!r} is no thread: use factory, improvements, project:<slug>, pr:<number> "
+        "or a node's thread (need:<ref>, feature:<ref>, study:R-<n>, task:<ref>)",
         field="thread",
     )
 
 
 def _node_thread(deps: FactoryDeps, factory_id: str, key: str) -> str | None:
-    """The thread a node ref names: ``product``, ``fx``, a project's slug or ``PR-<n>``."""
+    """
+    The thread a node ref names: ``product``, ``fx``, a project's slug, ``PR-<n>``,
+    or the node thread of a need, feature, study or task (``T-16`` -> ``task:T-16``).
+    """
     ref = node_refs.parse(key)
-    if ref is None or ref.kind not in ("product", "fx", "project", "pr"):
+    if ref is None:
         return None
     if ref.kind == "pr":
         return f"{THREAD_PR_PREFIX}{ref.id}"
     if ref.kind == "project" and deps.factory_store.get_project(factory_id, ref.id) is None:
         return None
+    if ref.kind not in ("product", "fx", "project") and ref.level not in (
+        "need",
+        "feature",
+        "task",
+    ):
+        return None
     return node_refs.thread_key(ref.text)
+
+
+def _resolve_node_thread(deps: FactoryDeps, factory_id: str, key: str, raw: str) -> Thread:
+    """
+    A node thread (``need:``, ``feature:``, ``study:``, ``task:``) whose node is this
+    factory's: a task, a PR no task owns, an opportunity, an asked message, an
+    initiative, a proposal an implicit parent comes from. A study (``R-n``) has no
+    stored row yet, so its thread does not resolve.
+
+    :raises CockpitError: 400 ``invalid_thread`` (no node's key), 404 ``unknown_node``.
+    """
+    ref = node_refs.thread_ref(key)
+    parsed = node_refs.parse(ref) if ref is not None else None
+    canonical = node_refs.thread_key(ref) if ref is not None else None
+    if parsed is None or canonical is None:
+        raise CockpitError(400, "invalid_thread", f"{raw!r} names no node", field="thread")
+    store = deps.factory_store
+    fid = norm_id(factory_id)
+
+    def mine(row: Any) -> bool:
+        return row is not None and norm_id(row.factory_id) == fid
+
+    project: str | None = None
+    found = False
+    if parsed.kind == "task":
+        task = store.get_task_by_number(factory_id, int(parsed.id))
+        found, project = task is not None, task.project_slug if task is not None else None
+    elif parsed.kind == "adhoc":
+        pr = _get_or_none(store.get_pr, parsed.id)
+        found = mine(pr) and pr is not None and not pr.task_id
+        project = pr.project_slug if pr is not None else None
+    elif parsed.kind == "opportunity":
+        found = store.get_opportunity(factory_id, int(parsed.id)) is not None
+    elif parsed.kind == "ask":
+        found = mine(_get_or_none(store.get_chat_message, parsed.id))
+    elif parsed.kind == "initiative":
+        found = store.get_initiative_by_number(factory_id, int(parsed.id)) is not None
+    elif parsed.kind in ("need", "feature"):
+        origin = parsed.id.removeprefix("from-")
+        numbered = node_refs.parse(origin)
+        if numbered is not None and numbered.kind == "proposal":
+            found = store.get_proposal_by_number(factory_id, int(numbered.id)) is not None
+        else:
+            # Origin words (``by-<who>``): the projection makes it; nothing to look up.
+            found = parsed.id.startswith("by-")
+    if not found:
+        raise CockpitError(404, "unknown_node", f"no node {ref!r} in this factory", field="thread")
+    assert ref is not None
+    return Thread(canonical, thread_kind(canonical) or "", ref, project=project, node=ref)
+
+
+def _get_or_none(getter: Callable[[str], Any], row_id: str) -> Any:
+    try:
+        return getter(row_id)
+    except ValueError:
+        return None
 
 
 def _find_pr(deps: FactoryDeps, factory_id: str, ref: str, raw: str) -> FactoryPr:
@@ -375,6 +462,7 @@ def members_of(
     sentinel = _sentinel(deps, root)
     scout, discovery, scout_away = _scout(deps, root)
     prs = [t for t in threads if t.pr is not None]
+    nodes = [t for t in threads if t.kind in chat_routing.NODE_KINDS]
     return Members(
         atlas=_agent(root, "Atlas"),
         sentinel=_agent(sentinel, "Sentinel") if sentinel is not None else None,
@@ -384,7 +472,29 @@ def members_of(
         scout=_agent(scout, "Scout") if scout is not None else None,
         discovery=discovery,
         scout_away=scout_away,
+        responders=node_responders(deps, root.id)
+        if nodes
+        else dict(chat_routing.DEFAULT_RESPONDERS),
+        node_projects={t.key: t.project for t in nodes if t.project},
+        node_labels={t.key: t.title for t in nodes},
     )
+
+
+def node_responders(deps: FactoryDeps, factory_id: str) -> dict[str, str | None]:
+    """
+    Who answers each node thread: the definition's ``structure.responders`` for the
+    node levels (a seat, or ``None`` for nobody), the defaults where it says nothing.
+    """
+    from omnigent.server.factory import definition
+
+    found = definition.value(deps, factory_id, "structure.responders")
+    given = found if isinstance(found, Mapping) else {}
+    out = dict(chat_routing.DEFAULT_RESPONDERS)
+    for kind in chat_routing.NODE_KINDS:
+        if kind in given:
+            seat = given[kind]
+            out[kind] = str(seat) if isinstance(seat, str) and seat else None
+    return out
 
 
 def responder(
@@ -454,9 +564,11 @@ def render_envelope(
     earlier: int = 0,
     refs: Sequence[str] = (),
     header: str | None = None,
+    node: str | None = None,
+    limit: int = ENVELOPE_MAX_CHARS,
 ) -> str:
     """
-    The text one delivery puts into a responder's session.
+    The text one delivery puts into a responder's session, at most *limit* chars.
 
     :param thread: The thread key the reply goes to, e.g. ``"factory"``.
     :param title: e.g. ``"#factory"``.
@@ -465,7 +577,10 @@ def render_envelope(
     :param earlier: Context messages left out before *context*.
     :param refs: Live states of the refs the messages cite, e.g. ``"!9653 (open · checks fail)"``.
     :param header: A PR thread's PR line (number, head, gates).
-    :returns: ``[Factory chat · <title> · from <author> · id=chat_<id>]`` and the body.
+    :param node: The header of the node the thread is about (:mod:`.node_context`):
+        its first line names it, its ``Status:`` line says what holds it.
+    :returns: ``[Factory chat · <title> · from <author> · id=chat_<id>]`` and the body,
+        trimmed by :func:`fit_envelope`.
     """
     ids = [chat_ref(m.id) for m in messages]
     if len(messages) == 1:
@@ -473,25 +588,85 @@ def render_envelope(
     else:
         names = ", ".join(dict.fromkeys(_short(m.author) for m in messages))
         head = f"[Factory chat · {title} · {len(messages)} new from {names} · ids={','.join(ids)}]"
-    lines = [head]
+    top = [head]
     if header:
-        lines.append(header)
+        top.append(header)
+    bodies: list[str] = []
     for message in messages:
         if len(messages) > 1:
-            lines.append(f"[{_hhmm(message.at)}] {message.author}:")
-        lines += _quoted(message.body)
-    if context:
-        lines.append(f"--- thread since your last reply ({len(context) + earlier} more) ---")
-        if earlier:
-            lines.append(f"… {earlier} earlier")
-        lines += [f"[{_hhmm(c.at)}] {c.author}: {one_line(c.body)}" for c in context]
-    if refs:
-        lines.append("Refs: " + " · ".join(refs))
+            bodies.append(f"[{_hhmm(message.at)}] {message.author}:")
+        bodies += _quoted(message.body)
+    shown = [f"[{_hhmm(c.at)}] {c.author}: {one_line(c.body)}" for c in context]
     once = "once " if len(messages) > 1 else ""
-    lines.append(
+    tail = ["Refs: " + " · ".join(refs)] if refs else []
+    tail.append(
         f'Answer {once}with sys_factory_chat(thread="{thread}", reply_to="{ids[-1]}", message=…)'
     )
-    return "\n".join(lines)
+    node_lines = quote_spoofed_lines(node).split("\n") if node else []
+    return fit_envelope(top, node_lines, bodies, shown, earlier, tail, limit)
+
+
+def _context_block(shown: Sequence[str], earlier: int) -> list[str]:
+    if not shown:
+        return []
+    out = [f"--- thread since your last reply ({len(shown) + earlier} more) ---"]
+    if earlier:
+        out.append(f"… {earlier} earlier")
+    return out + list(shown)
+
+
+def fit_envelope(
+    top: Sequence[str],
+    node: Sequence[str],
+    bodies: Sequence[str],
+    context: Sequence[str],
+    earlier: int,
+    tail: Sequence[str],
+    limit: int = ENVELOPE_MAX_CHARS,
+) -> str:
+    """
+    One delivery's text within *limit* chars (the prompt size guard), giving up
+    what matters least first: the node header's detail (it keeps its first line
+    and its status), the oldest thread context, then the end of the longest
+    message. The header line and the reply call always stay.
+
+    :param top: The header line (and a PR thread's PR line).
+    :param node: The node header's lines (:mod:`.node_context`).
+    :param bodies: The delivered messages, quoted.
+    :param context: The thread since the responder's last reply, one line each.
+    :param earlier: Context messages left out before *context*.
+    :param tail: The refs line and the reply call.
+    """
+    node = list(node)
+    context = list(context)
+    bodies = list(bodies)
+
+    def text() -> str:
+        return "\n".join([*top, *node, *bodies, *_context_block(context, earlier), *tail])
+
+    def droppable() -> list[int]:
+        return [i for i in range(1, len(node)) if not node[i].startswith("Status:")]
+
+    while len(text()) > limit and droppable():
+        node.pop(droppable()[-1])
+    while len(text()) > limit and context:
+        context.pop(0)
+        earlier += 1
+    while len(text()) > limit and bodies:
+        longest = max(range(len(bodies)), key=lambda i: len(bodies[i]))
+        over = len(text()) - limit
+        line = bodies[longest]
+        if len(line) <= 2 or len(line) - over < 2:
+            bodies.pop(longest)
+            continue
+        bodies[longest] = line[: len(line) - over - 1].rstrip() + "…"
+    if len(text()) > limit:
+        node = []
+    out = text()
+    if len(out) <= limit:
+        return out
+    end = "\n".join(tail)
+    return out[: max(0, limit - len(end) - 2)] + "…\n" + end
 
 
 def gate_summary(pr: FactoryPr) -> str:
@@ -565,11 +740,18 @@ def _titles(deps: FactoryDeps, session_ids: Iterable[str]) -> dict[str, str]:
 
 
 def build_delivery(
-    deps: FactoryDeps, factory_id: str, target_id: str, thread_key: str, message_ids: Sequence[str]
+    deps: FactoryDeps,
+    factory_id: str,
+    target_id: str,
+    thread_key: str,
+    message_ids: Sequence[str],
+    *,
+    node_header: str | None = None,
 ) -> MailItem | None:
     """
     The mail that delivers *message_ids* (one thread) to *target_id* (store reads).
 
+    :param node_header: The header of the node the thread is about, when it has one.
     :returns: The item, or ``None`` when none of the messages exist any more.
     """
     store = deps.factory_store
@@ -602,12 +784,13 @@ def build_delivery(
         earlier=len(context_rows) - len(shown),
         refs=ref_states(deps, factory_id, refs),
         header=pr_header(pr) if pr is not None else None,
+        node=node_header,
     )
     humans = [r.author for r in rows if r.author_kind == "human"]
     project = (
         thread_key[len(THREAD_PROJECT_PREFIX) :]
         if thread_key.startswith(THREAD_PROJECT_PREFIX)
-        else (pr.project_slug if pr is not None else None)
+        else (pr.project_slug if pr is not None else _task_project(deps, factory_id, thread_key))
     )
     return MailItem(
         mail_id=mail_id_for(rows[-1].id, target_id),
@@ -623,6 +806,17 @@ def build_delivery(
     )
 
 
+def _task_project(deps: FactoryDeps, factory_id: str, thread_key: str) -> str | None:
+    """The project of a task thread's task (``task:T-16``), for the mail log."""
+    if thread_kind(thread_key) != "task":
+        return None
+    parsed = node_refs.parse(node_refs.thread_ref(thread_key) or "")
+    if parsed is None or parsed.kind != "task":
+        return None
+    task = deps.factory_store.get_task_by_number(factory_id, int(parsed.id))
+    return task.project_slug if task is not None else None
+
+
 # ── Views ──────────────────────────────────────────────────────
 
 
@@ -631,7 +825,10 @@ def _int(value: object) -> int | None:
 
 
 def _meta_view(meta: object) -> dict[str, Any] | None:
-    """:returns: ``IssueCardMeta`` / ``BaseMovesMeta`` JSON without internal keys, or ``None``."""
+    """
+    :returns: ``IssueCardMeta`` / ``BaseMovesMeta`` / ``ClosedAlarmMeta`` / ``OfferMeta`` /
+        ``PreviewAppliedMeta`` JSON without internal keys, or ``None``.
+    """
     if not isinstance(meta, Mapping):
         return None
     kind = meta.get("kind")
@@ -641,6 +838,30 @@ def _meta_view(meta: object) -> dict[str, Any] | None:
             "severity": meta["severity"],
             "reopened": _int(meta.get("reopened")) or 0,
             "reopened_at": _int(meta.get("reopened_at")),
+        }
+    if kind == "closed_alarm" and isinstance(meta.get("cause"), str):
+        real = meta.get("real_ask")
+        return {
+            "kind": "closed_alarm",
+            "was": str(meta.get("was") or ""),
+            "cause": meta["cause"],
+            "real_ask": real if isinstance(real, str) and real else None,
+        }
+    if kind == "offer" and isinstance(meta.get("verb"), str):
+        title = meta.get("title")
+        return {
+            "kind": "offer",
+            "verb": meta["verb"],
+            "title": title if isinstance(title, str) else None,
+        }
+    if kind == "preview_applied" and isinstance(meta.get("verb"), str):
+        return {
+            "kind": "preview_applied",
+            **{
+                k: meta[k]
+                for k in ("verb", "label", "by", "undo_token", "undo_until", "filed", "undone")
+                if isinstance(meta.get(k), str | int | bool) and not isinstance(meta.get(k), float)
+            },
         }
     if kind == "base.moved" and isinstance(meta.get("moves"), list):
         moves = [
@@ -862,9 +1083,16 @@ class Room:
         return sent
 
     async def _deliver(self, key: str, batch: _Batch) -> int:
+        from omnigent.server.factory import node_context
+
         deps = factory_deps(self._app_state)
+        node_header = await node_context.delivery_header(
+            self._app_state, batch.factory_id, batch.thread, NODE_HEADER_MAX
+        )
         item = await asyncio.to_thread(
-            build_delivery, deps, batch.factory_id, key, batch.thread, batch.ids
+            lambda: build_delivery(
+                deps, batch.factory_id, key, batch.thread, batch.ids, node_header=node_header
+            )
         )
         if item is None:
             return 0
@@ -1302,12 +1530,16 @@ async def _route_and_store(
     author_session: str | None = None,
     extra_refs: Sequence[str] = (),
     extra_data: Mapping[str, Any] | None = None,
+    routed: bool = True,
 ) -> Posted:
     deps = factory_deps(app_state)
-    members = await asyncio.to_thread(room_members, deps, root, thread, mentions)
-    route = chat_routing.routes(
-        thread.key, mentions, members, author_kind=author_kind, author_session=author_session
-    )
+    if routed:
+        members = await asyncio.to_thread(room_members, deps, root, thread, mentions)
+        route = chat_routing.routes(
+            thread.key, mentions, members, author_kind=author_kind, author_session=author_session
+        )
+    else:
+        route = Route(people=tuple(m for m in mentions if not chat_routing.is_agent_mention(m)))
     refs = list(dict.fromkeys([*(r.text for r in find_refs(body)), *extra_refs]))[:REFS_MAX]
     row = await asyncio.to_thread(
         lambda: deps.factory_store.append_chat(
@@ -1407,7 +1639,8 @@ async def post_human(
     role = await asyncio.to_thread(people.role_of, deps, root.id, user_id)
     author = user_id or "human"
     actor = Actor.human(author, role, name=human_name(user_id))
-    return await _route_and_store(
+    why = is_bare_why(body) and thread.kind in chat_routing.NODE_KINDS and not mentions
+    posted = await _route_and_store(
         app_state,
         root,
         thread,
@@ -1419,6 +1652,35 @@ async def post_human(
         reply_to=reply_to,
         actor=actor,
         event_kind=KIND_POSTED,
+        routed=not why,
+    )
+    if why and thread.node:
+        await _post_why(app_state, root, thread.node, posted.message.id)
+    return posted
+
+
+_WHY_RE: Final = re.compile(r"^\s*why\s*\??\s*$", re.IGNORECASE)
+
+
+def is_bare_why(body: str) -> bool:
+    """A message that only asks "why": a node thread answers it with its why card."""
+    return bool(_WHY_RE.match(body or ""))
+
+
+async def _post_why(app_state: Any, root: Conversation, ref: str, message_id: str) -> None:
+    """The ``why`` card that answers a bare "why" in a node's thread (it renders live)."""
+    from omnigent.server.factory import chat_cards, node_context
+
+    line = ref
+    try:
+        tree = await node_context.full_tree(app_state, root)
+        node = tree.lookup(ref)
+        if node is not None:
+            line = f"Why {tree.fold(node).title}: {node_context.status_words(tree.status(node))}"
+    except Exception:  # noqa: BLE001 - the card renders live; its line is only a fallback
+        _logger.warning("factory room: no status for the why card of %s", ref, exc_info=True)
+    await chat_cards.post_node_card(
+        app_state, root.id, ref, "why", line, message_id=derived_id(message_id, "why")
     )
 
 
@@ -1426,19 +1688,20 @@ def allowed_thread(role: str | None, own_project: str | None, thread: Thread) ->
     """
     Whether an agent of *role* may post in *thread*.
 
-    Leads post anywhere; a project lead in ``#factory``, its project's thread
-    and its project's PR threads; Scout in ``#discovery`` (elsewhere only a reply
-    to a message that reached it, which :func:`post_agent` checks).
+    Leads post anywhere; a project lead in ``#factory``, its project's thread,
+    its project's PR threads and its tasks' threads; Scout in ``#discovery`` and
+    the need and study threads it answers (elsewhere only a reply to a message
+    that reached it, which :func:`post_agent` checks).
     """
     if role == ROLE_LEAD:
         return True
     if role == ROLE_SCOUT:
-        return thread.kind == THREAD_DISCOVERY
+        return thread.kind in (THREAD_DISCOVERY, "need", "study")
     if role != ROLE_PROJECT_LEAD or not own_project:
         return False
     if thread.kind == THREAD_FACTORY:
         return True
-    return thread.kind in ("project", "pr") and thread.project == own_project
+    return thread.kind in ("project", "pr", "task") and thread.project == own_project
 
 
 SCOUT_MENTIONS: Final = frozenset({chat_routing.MENTION_ATLAS, chat_routing.MENTION_SENTINEL})
@@ -1667,6 +1930,7 @@ __all__ = [
     "CHAT_KIND",
     "CHAT_PREFIX",
     "COALESCE_MAX_S",
+    "ENVELOPE_MAX_CHARS",
     "GATE_ORDER",
     "KIND_AUTO_REPLY",
     "KIND_POSTED",
@@ -1686,12 +1950,15 @@ __all__ = [
     "chat_ref",
     "derived_id",
     "envelope_ids",
+    "fit_envelope",
     "gate_summary",
     "get_room",
+    "is_bare_why",
     "mail_id_for",
     "member_state",
     "members_of",
     "message_views",
+    "node_responders",
     "on_status_edge",
     "on_turn_end",
     "one_line",

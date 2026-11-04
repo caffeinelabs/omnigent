@@ -406,11 +406,12 @@ def test_factory_tools_are_on_each_agents_real_surface(lead: AgentSpec, pl: Agen
     for spec in _all_specs(lead, pl):
         names = _relay_tool_names(spec)
         if spec.name == "planner":
-            # The read-only planner sees the roster, the rules and the insights.
+            # The read-only planner sees the roster, the rules, the insights and node pages.
             assert {n for n in names if n.startswith("sys_factory_")} == {
                 "sys_factory_roster",
                 "sys_factory_rules",
                 "sys_factory_insights",
+                "sys_factory_node",
             }
             assert "sys_session_post" not in names
             continue
@@ -2345,6 +2346,7 @@ _SCOUT_TOOLS = {
     "sys_factory_ask",
     "sys_factory_chat",
     "sys_factory_propose",
+    "sys_factory_node",
 }
 
 

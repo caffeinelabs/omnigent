@@ -428,6 +428,9 @@ THREAD_PR_PREFIX: Final = "pr:"
 FIXED_THREADS: Final = (THREAD_FACTORY, THREAD_IMPROVEMENTS)
 THREAD_PREFIXES: Final = (THREAD_PROJECT_PREFIX, THREAD_PR_PREFIX)
 """Room thread keys are a fixed thread, ``project:<slug>`` or ``pr:<pr row id>``."""
+THREAD_NODE_PREFIXES: Final = ("need:", "feature:", "study:", "task:")
+"""The cockpit's per-node threads (``need:O-3``, ``feature:I-1``, ``study:R-1``,
+``task:T-16``): one thread per node of those levels, beside the Room's own."""
 THREAD_MAX_LEN: Final = 80
 CHAT_MESSAGE_MAX_CHARS: Final = 4000
 
@@ -448,8 +451,8 @@ PROPOSAL_STATUSES: Final = (
 PROPOSAL_OPEN_STATUSES: Final = frozenset({"pending", "awaiting_cosign"})
 PROPOSAL_APPROVALS: Final = ("auto", "operator", "owner")
 PROPOSAL_CLASSES: Final = ("A", "B", "human")
-PROJECT_OPS: Final = ("create", "update", "split", "merge", "cancel")
-"""Ops of a ``projects`` proposal."""
+PROJECT_OPS: Final = ("create", "update", "split", "merge", "cancel", "move", "reorder")
+"""Ops of a ``projects`` proposal (a server from before ``move`` and ``reorder`` refuses them)."""
 
 TASK_KINDS: Final = ("implement", "test", "docs", "spike", "ops", "adhoc")
 TASK_STATES: Final = (
@@ -604,15 +607,16 @@ def thread_kind(key: object) -> str | None:
     """
     Classify a Room thread key.
 
-    :param key: e.g. ``"factory"``, ``"project:db-version"`` or ``"pr:<id>"``.
-    :returns: ``factory`` / ``improvements`` / ``discovery`` / ``project`` / ``pr``,
-        or ``None`` when *key* is not a thread key.
+    :param key: e.g. ``"factory"``, ``"project:db-version"``, ``"pr:<id>"`` or ``"task:T-16"``.
+    :returns: ``factory`` / ``improvements`` / ``discovery`` / ``project`` / ``pr``, a
+        node thread's ``need`` / ``feature`` / ``study`` / ``task``, or ``None`` when
+        *key* is not a thread key.
     """
     if not isinstance(key, str) or not key or len(key) > THREAD_MAX_LEN:
         return None
     if key in FIXED_THREADS or key == THREAD_DISCOVERY:
         return key
-    for prefix in THREAD_PREFIXES:
+    for prefix in (*THREAD_PREFIXES, *THREAD_NODE_PREFIXES):
         if key.startswith(prefix) and len(key) > len(prefix):
             return prefix[:-1]
     return None
