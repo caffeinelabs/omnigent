@@ -35,22 +35,35 @@ PAGES = ("product", "I-1", "assistant-core", "T-16")
 LEVEL_PAGES = (("product", "project"), ("product", "task"), ("I-1", "task"))
 """Level views the strip links to (``/n/<ref>/<level>``)."""
 
-# What the node page shows outside its chat column (the Room's own cards stay as they are).
+# What the node page shows: the page, and v3's own parts of its chat column (title,
+# quick verbs, any why/ask/alarm/offer card). The Room's answer cards and the chat's
+# icons stay as they are.
 _BODY_CHECKS = """(node) => {
   const chat = [...document.querySelectorAll(
     '[data-testid="v3-chat"], [data-testid="v3-chat-pinned"]',
   )];
-  const body = (el) => !chat.some((c) => c.contains(el));
-  const lines = [...node.querySelectorAll('svg line, svg path, svg polyline, svg polygon')]
-    .filter(body).map((el) => el.closest('[data-testid]')?.dataset.testid ?? el.tagName);
+  const roots = new Set(chat);
+  const room = '[data-testid^="decision-card-"], [data-testid^="proposal-card-"], '
+    + '[data-testid^="loop-card-"], svg.lucide';
+  const own = (el) => {
+    const part = el.closest('[data-testid^="v3-"]');
+    return part !== null && !roots.has(part) && el.closest(room) === null;
+  };
+  const body = (el) => !chat.some((c) => c.contains(el)) || own(el);
+  const shown = (sel) => [...document.querySelectorAll(sel)]
+    .filter((el) => node.contains(el) || chat.some((c) => c.contains(el)))
+    .filter(body);
+  const lines = shown('svg line, svg path, svg polyline, svg polygon')
+    .map((el) => el.closest('[data-testid]')?.dataset.testid ?? el.tagName);
   const empty = new Set(['none', 'None', '—', '-', '0']);
-  const cells = [...node.querySelectorAll('*')]
-    .filter((el) => body(el) && el.children.length === 0)
+  const cells = shown('*')
+    .filter((el) => el.children.length === 0)
     .map((el) => (el.textContent ?? '').trim())
     .filter((text) => empty.has(text) || /^0(\\s|$)/.test(text));
   return {
     lines,
     cells,
+    chat: shown('*').filter((el) => chat.some((c) => c.contains(el))).length,
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
   };
 }"""
@@ -105,6 +118,7 @@ def test_home_feature_project_and_task_render_the_servers_nodes(
         found = node.evaluate(_BODY_CHECKS)
         assert found["lines"] == [], (ref, width, theme, found["lines"])
         assert found["cells"] == [], (ref, width, theme, found["cells"])
+        assert found["chat"] > 0, (ref, width, theme, "no v3 chat part checked")
         assert found["overflow"] <= 0, (ref, width, theme, found["overflow"])
 
     # One level under a node (the strip's cells): grouped under parents, never joined by lines.

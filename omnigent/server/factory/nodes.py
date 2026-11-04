@@ -1538,8 +1538,11 @@ class Tree:
     def blocks(self, decision: FactoryDecision) -> bool:
         """
         Whether an open decision holds work. An ask says so itself; a proposal's
-        decision (stored as blocking nothing) holds what it proposes: a rule or
-        a new project, or a change to a project that is still active.
+        decision (stored as blocking nothing) holds what it proposes. Every kind
+        but ``projects`` (``tuning``, ``rules`` and tier-2 ``code``) is a factory
+        change that waits on its answer, so it always holds; a ``projects``
+        proposal holds while it adds a project (create or split) or changes a
+        project that is still active.
         """
         if decision.blocking:
             return True
