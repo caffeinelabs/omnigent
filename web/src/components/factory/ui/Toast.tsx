@@ -44,6 +44,9 @@ export const TOAST_UNDO_MS = 12_000;
  */
 export const TOAST_REGION_SELECTOR = "[data-factory-toast]";
 
+/** The toast's Undo button, while one is offered (other `u` keys yield to it). */
+export const TOAST_UNDO_SELECTOR = "[data-factory-toast] [data-toast-undo]";
+
 /** True when `target` sits inside the toast region. */
 export function inToastRegion(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(TOAST_REGION_SELECTOR) !== null;
@@ -151,6 +154,7 @@ export function ToastView({
       {toast.undo && (
         <button
           type="button"
+          data-toast-undo=""
           onClick={onUndo}
           className={cn(
             "h-[26px] shrink-0 cursor-pointer rounded-md border border-primary-foreground/35 px-2.5 font-medium hover:bg-primary-foreground/10",

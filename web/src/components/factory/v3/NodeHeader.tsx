@@ -3,10 +3,13 @@
 // to say is left out; nothing renders empty.
 
 import { type ReactNode, useState } from "react";
+import { Undo2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { undoLabel } from "../steer/steerModel";
 import { ChipList } from "./LinkChip";
 import { useNodeActions } from "./NodeContext";
-import { Avatar, Glyph, Kbd, NodeLink, Ring, money } from "./nodeParts";
+import { Avatar, Glyph, Kbd, NodeLink, Ring, money, sinceWhen } from "./nodeParts";
+import { useNodeUndo } from "./nodeSteer";
 import type { NodePage, Rollup, RollupCount, VerbAvail } from "./nodeTypes";
 import { levelName } from "./nodeWire";
 import { RichText } from "./RichText";
@@ -53,6 +56,7 @@ function CountWords({ c }: { c: RollupCount }) {
 /** Line 4: progress, cost, team, base env, what changed since the last look. */
 export function RollupLine({ page }: { page: NodePage }) {
   const { node, rollup } = page;
+  const { onSheet } = useNodeActions();
   const isRoot = page.breadcrumb.length === 0;
   const parts: { id: string; node: ReactNode; shrink?: boolean }[] = [];
   const add = (id: string, part: ReactNode, shrink = false) => {
@@ -128,18 +132,34 @@ export function RollupLine({ page }: { page: NodePage }) {
     );
   }
   if (rollup.in_base_env) {
+    const chip =
+      "rounded-full border border-status-green/70 bg-status-green/12 px-2 py-px text-xs text-status-green-fg";
+    const env = (
+      <>
+        in base env <span className="font-mono">@{rollup.in_base_env.sha}</span>
+      </>
+    );
     add(
       "env",
-      <span className="rounded-full border border-status-green/70 bg-status-green/12 px-2 py-px text-xs text-status-green-fg">
-        in base env <span className="font-mono">@{rollup.in_base_env.sha}</span>
-      </span>,
+      rollup.in_base_env.try_it && onSheet ? (
+        <button
+          type="button"
+          data-testid="v3-rollup-try"
+          onClick={() => onSheet("try", node.ref)}
+          className={cn(chip, "hover:bg-status-green/20")}
+        >
+          {env} · Try it ↗
+        </button>
+      ) : (
+        <span className={chip}>{env}</span>
+      ),
     );
   }
   if (rollup.since?.items.length) {
     add(
       "since",
       <>
-        <span className="text-status-blue-fg">since {rollup.since.at}:</span>{" "}
+        <span className="text-status-blue-fg">since {sinceWhen(rollup.since.at)}:</span>{" "}
         {rollup.since.items.join(", ")}
         {rollup.since.more ? ` +${rollup.since.more}` : ""}
       </>,
@@ -173,9 +193,33 @@ export function RollupLine({ page }: { page: NodePage }) {
   );
 }
 
-function VerbBar({ verbs }: { verbs: VerbAvail[] }) {
-  const { onVerb } = useNodeActions();
-  if (!verbs.length) return null;
+/** "Undo (8 min left)": the last verb applied here, for its whole window. */
+function UndoLatest({ nodeRef }: { nodeRef: string }) {
+  const latest = useNodeUndo(nodeRef);
+  const [busy, setBusy] = useState(false);
+  if (!latest) return null;
+  return (
+    <button
+      type="button"
+      data-testid="v3-undo-latest"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        void latest.undo.run().finally(() => setBusy(false));
+      }}
+      title={`Undo ${latest.undo.label}`}
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-dashed border-border-strong px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground hover:border-status-blue hover:text-foreground disabled:opacity-50"
+    >
+      <Undo2Icon aria-hidden className="size-3" />
+      {latest.undo.label}: {undoLabel(latest.left)}
+    </button>
+  );
+}
+
+function VerbBar({ verbs, nodeRef }: { verbs: VerbAvail[]; nodeRef: string }) {
+  const { onVerb, openVerb } = useNodeActions();
+  const undo = useNodeUndo(nodeRef);
+  if (!verbs.length && !undo) return null;
   return (
     <div
       role="toolbar"
@@ -189,8 +233,12 @@ function VerbBar({ verbs }: { verbs: VerbAvail[] }) {
           type="button"
           disabled={!v.enabled}
           title={v.enabled ? undefined : v.reason}
+          aria-pressed={v.verb === "talk" ? undefined : openVerb === v.verb}
           onClick={() => onVerb?.(v)}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-card-solid px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground hover:border-border-strong hover:text-foreground disabled:opacity-50"
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-border bg-card-solid px-2.5 py-0.5 text-[12.5px] whitespace-nowrap text-muted-foreground hover:border-border-strong hover:text-foreground disabled:opacity-50",
+            openVerb === v.verb && "border-status-blue bg-status-blue/12 text-status-blue-fg",
+          )}
         >
           {v.label}
           {v.key && (
@@ -200,6 +248,7 @@ function VerbBar({ verbs }: { verbs: VerbAvail[] }) {
           )}
         </button>
       ))}
+      <UndoLatest nodeRef={nodeRef} />
     </div>
   );
 }
@@ -258,7 +307,7 @@ export function NodeHeader({
       {whyOpen && <WhyCard line={status} startNow={start} />}
       <RollupLine page={page} />
       <ChipList chips={page.chips} more={page.more_chips} moreGroups={page.chips_more} />
-      <VerbBar verbs={page.verbs} />
+      <VerbBar verbs={page.verbs} nodeRef={node.ref} />
     </section>
   );
 }

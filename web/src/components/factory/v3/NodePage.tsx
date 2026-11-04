@@ -3,10 +3,10 @@
 // under parents. One parent per node and one level per view: nothing here is
 // drawn between nodes. The node's chat is the page's right column (`chat`).
 
-import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
-import { useNavigate } from "@/lib/routing";
+import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { NodeChat } from "./chat/NodeChat";
 import { ChildrenView } from "./Children";
@@ -20,14 +20,26 @@ import {
 } from "./NodeContext";
 import { NodeContent } from "./NodeContent";
 import { NodeHeader } from "./NodeHeader";
-import { Kbd, NodeLink } from "./nodeParts";
+import { Kbd, NodeLink, sinceWhen } from "./nodeParts";
 import { useLevel, useMoreChildren, useNode, usePrefetchNode } from "./nodeQueries";
 import { nodeHref } from "./nodeRoutes";
+import { useNodeSource } from "./nodeSource";
+import { useMarkSeen } from "./nodeSteer";
 import { DEFAULT_OVERLAYS, type Overlays } from "./NodeTile";
-import type { ChildPage, LevelView as View, NodePage as Page, NodeSummary } from "./nodeTypes";
+import type {
+  ChildPage,
+  LevelView as View,
+  NodePage as Page,
+  NodeSummary,
+  VerbArgs,
+  VerbAvail,
+} from "./nodeTypes";
 import { drawsTiles, levelName } from "./nodeWire";
+import { useSheetActions } from "./sheets/V3Sheets";
 import { hasWhy } from "./statusModel";
 import { useNodeKeys, useRovingStops } from "./useNodeKeys";
+import { useFactoryToast } from "../ui/Toast";
+import { type OpenVerb, VerbPreview } from "./verbs/VerbPreviews";
 
 type Lens = "map" | "list";
 
@@ -141,7 +153,7 @@ function SectionHead({
                     : "border-border text-foreground-tertiary",
                 )}
               >
-                {k === "changed" && since ? `Since ${since}` : name}
+                {k === "changed" && since ? `Since ${sinceWhen(since)}` : name}
               </button>
             );
           })}
@@ -274,7 +286,10 @@ export interface NodePageProps {
   nodeRef: string;
   /** A level under the node to list, grouped under parents (the URL's `/<level>`). */
   level?: string | null;
-  /** The page's actions (answer, open, verbs); links and prefetch are wired here. */
+  /**
+   * The page's actions (answer, open an ask, talk); links, prefetch, sheets and
+   * verb previews are wired here. `onVerb` is asked only for Talk.
+   */
   actions?: Omit<NodeActions, "factoryId" | "prefetch" | "aboveId">;
   /** Says the data is not this factory's, with a way back. */
   notice?: ReactNode;
@@ -296,6 +311,7 @@ function Missing({ nodeRef }: { nodeRef: string }) {
 export function NodePage(props: NodePageProps) {
   const { factoryId, nodeRef, level = null } = props;
   const query = useNode(nodeRef, factoryId);
+  const { search } = useLocation();
   const page = query.data;
   if (query.isPending) {
     return (
@@ -318,11 +334,76 @@ export function NodePage(props: NodePageProps) {
     );
   }
   if (!page) return <Missing nodeRef={nodeRef} />;
-  // An implicit parent with one child answers as that child: show its own address.
+  // An implicit parent with one child answers as that child: show its own address
+  // (with the verb or sheet the address named).
   if (page.node.ref !== nodeRef) {
-    return <Navigate replace to={nodeHref(factoryId, page.node.ref, level)} />;
+    return <Navigate replace to={`${nodeHref(factoryId, page.node.ref, level)}${search}`} />;
   }
   return <LoadedNodePage {...props} page={page} />;
+}
+
+/** What a verb's preview starts from, as the address names it (`?verb=add&title=…`). */
+export const VERB_ARGS: (keyof VerbArgs)[] = ["title", "member", "to"];
+
+/**
+ * The verb opened on this page: its preview shows under the header. Talk goes
+ * to the chat; a verb the source cannot preview says so and changes nothing.
+ * `?verb=start` (words in another node's chat) opens one once the page is in.
+ */
+function useOpenVerb(page: Page, talk?: NodeActions["onVerb"]) {
+  const source = useNodeSource();
+  const toast = useFactoryToast();
+  const [open, setOpen] = useState<OpenVerb | null>(null);
+  const onVerb = useCallback(
+    (verb: VerbAvail, args?: VerbArgs) => {
+      if (verb.verb === "talk") {
+        talk?.(verb, args);
+        return;
+      }
+      if (!verb.enabled) return;
+      if (verb.verb !== "team" && !source?.preview) {
+        toast.show({
+          message: `${verb.label}: this server cannot preview it yet, so nothing changed.`,
+        });
+        return;
+      }
+      setOpen((prev) => (prev?.verb.verb === verb.verb && !args ? null : { verb, args }));
+    },
+    [source?.preview, talk, toast],
+  );
+  const [params, setParams] = useSearchParams();
+  const pending = params.get("verb");
+  useEffect(() => {
+    if (!pending) return;
+    const args: VerbArgs = {};
+    for (const key of VERB_ARGS) {
+      const value = params.get(key);
+      if (value) args[key] = value;
+    }
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const key of ["verb", ...VERB_ARGS]) next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
+    const verb = page.verbs.find((v) => v.verb === pending && v.enabled);
+    if (verb) onVerb(verb, args);
+    else toast.show({ message: `${page.node.title} offers no “${pending}” here.` });
+  }, [onVerb, page, params, pending, setParams, toast]);
+  const close = useCallback(() => setOpen(null), []);
+  /** A verb's key (`a`, `s`, `t` …) opens its preview. */
+  const onKey = useCallback(
+    (key: string) => {
+      const verb = page.verbs.find((v) => v.key === key && v.enabled && v.verb !== "talk");
+      if (!verb) return false;
+      onVerb(verb);
+      return true;
+    },
+    [onVerb, page.verbs],
+  );
+  return { open, onVerb, close, onKey };
 }
 
 function LoadedNodePage({
@@ -342,13 +423,25 @@ function LoadedNodePage({
   const toggleWhy = useCallback(() => setWhyOpen((open) => !open), []);
   const why = hasWhy(page.status);
   const stops = useRovingStops(body);
+  const verbs = useOpenVerb(page, actions?.onVerb);
+  const sheets = useSheetActions();
+  useMarkSeen(page.node.ref, factoryId);
   useNodeKeys(body, {
     onStepOut: parent ? () => navigate(nodeHref(factoryId, parent.ref)) : undefined,
     onWhy: why ? toggleWhy : undefined,
+    onVerbKey: verbs.onKey,
   });
+  const openVerb = verbs.open?.verb.verb ?? null;
   const value = useMemo<NodeActions>(
-    () => ({ ...actions, factoryId, prefetch }),
-    [actions, factoryId, prefetch],
+    () => ({
+      ...sheets,
+      ...actions,
+      factoryId,
+      prefetch,
+      onVerb: verbs.onVerb,
+      openVerb,
+    }),
+    [actions, factoryId, prefetch, sheets, verbs.onVerb, openVerb],
   );
   const shown = level ?? page.home ?? (page.children.level || null);
   const aboveId = page.status.ends === "person" ? (page.status.decision?.id ?? null) : null;
@@ -369,6 +462,16 @@ function LoadedNodePage({
             <div ref={body} className="min-w-0">
               {notice}
               <NodeHeader page={page} whyOpen={whyOpen} onWhyChange={setWhyOpen} />
+              {verbs.open && (
+                <div className="mb-3">
+                  <VerbPreview
+                    key={`${verbs.open.verb.verb}:${JSON.stringify(verbs.open.args ?? {})}`}
+                    page={page}
+                    open={verbs.open}
+                    onClose={verbs.close}
+                  />
+                </div>
+              )}
               {!level && <NodeContent node={page.node} />}
               <Below page={page} level={shown} explicit={Boolean(level)} />
               <KeysLine stops={stops} out={Boolean(parent)} why={why} />

@@ -7,6 +7,7 @@
 import type {
   Chip,
   ChildPage,
+  ClosedAlarm,
   Crumb,
   DecisionRef,
   LevelCount,
@@ -106,12 +107,12 @@ function apiState(s: RawState): NodeState {
 }
 
 export class SampleEngine {
-  private idx = new Map<string, RawNode>();
-  private kidsOf = new Map<string, RawNode[]>();
-  private memo = new Map<string, RawState>();
-  private pmemo = new Map<string, Path>();
-  private visible = new Map<RawTree, RawLevel[]>();
-  private version = 1;
+  protected idx = new Map<string, RawNode>();
+  protected kidsOf = new Map<string, RawNode[]>();
+  protected memo = new Map<string, RawState>();
+  protected pmemo = new Map<string, Path>();
+  protected visible = new Map<RawTree, RawLevel[]>();
+  protected version = 1;
 
   readonly data: RawFactory;
 
@@ -120,7 +121,7 @@ export class SampleEngine {
     this.reindex();
   }
 
-  private reindex() {
+  protected reindex() {
     this.idx = new Map(this.data.nodes.map((n) => [n.id, n]));
     this.kidsOf = new Map();
     for (const n of this.data.nodes) {
@@ -136,11 +137,11 @@ export class SampleEngine {
 
   // ── Structure ────────────────────────────────────────────────
 
-  private N(id: string): RawNode | undefined {
+  protected N(id: string): RawNode | undefined {
     return this.idx.get(id);
   }
 
-  private dec(id: string | undefined): RawDecision | undefined {
+  protected dec(id: string | undefined): RawDecision | undefined {
     return id ? this.data.decisions.find((d) => d.id === id) : undefined;
   }
 
@@ -157,46 +158,46 @@ export class SampleEngine {
     return out;
   }
 
-  private hiddenLevels(tree: RawTree): RawLevel[] {
+  protected hiddenLevels(tree: RawTree): RawLevel[] {
     const shown = this.levels(tree);
     return this.data.trees[tree].levels.filter((l) => !shown.includes(l));
   }
 
-  private lvlIdx(n: RawNode): number {
+  protected lvlIdx(n: RawNode): number {
     return n.lvl === "root" ? -1 : this.levels(n.tree).findIndex((l) => l.key === n.lvl);
   }
 
-  private lvlOf(tree: RawTree, key: string): RawLevel | undefined {
+  protected lvlOf(tree: RawTree, key: string): RawLevel | undefined {
     return this.data.trees[tree].levels.find((l) => l.key === key);
   }
 
-  private lvName(n: RawNode): string {
+  protected lvName(n: RawNode): string {
     return n.lvl === "root"
       ? this.data.trees[n.tree].label
       : (this.lvlOf(n.tree, n.lvl)?.name ?? "");
   }
 
-  private kids(id: string): RawNode[] {
+  protected kids(id: string): RawNode[] {
     return this.kidsOf.get(id) ?? [];
   }
 
-  private realKids(id: string): RawNode[] {
+  protected realKids(id: string): RawNode[] {
     return this.kids(id).filter((k) => !k.ghost);
   }
 
-  private isFolded(n: RawNode | undefined): boolean {
+  protected isFolded(n: RawNode | undefined): boolean {
     return Boolean(n && n.implicit && this.realKids(n.id).length === 1);
   }
 
-  private fold(n: RawNode): RawNode {
+  protected fold(n: RawNode): RawNode {
     return this.isFolded(n) ? this.fold(this.realKids(n.id)[0]!) : n;
   }
 
-  private shownKids(id: string): RawNode[] {
+  protected shownKids(id: string): RawNode[] {
     return this.kids(id).map((k) => this.fold(k));
   }
 
-  private ancestors(id: string): RawNode[] {
+  protected ancestors(id: string): RawNode[] {
     const out: RawNode[] = [];
     let n = this.N(id);
     while (n?.parent) {
@@ -206,11 +207,11 @@ export class SampleEngine {
     return out;
   }
 
-  private visAncestors(id: string): RawNode[] {
+  protected visAncestors(id: string): RawNode[] {
     return this.ancestors(id).filter((a) => !this.isFolded(a));
   }
 
-  private atLevel(scopeId: string, key: string): RawNode[] {
+  protected atLevel(scopeId: string, key: string): RawNode[] {
     const out: RawNode[] = [];
     const walk = (id: string) => {
       for (const k of this.kids(id)) {
@@ -222,7 +223,7 @@ export class SampleEngine {
     return [...new Set(out)];
   }
 
-  private subtree(id: string): RawNode[] {
+  protected subtree(id: string): RawNode[] {
     const out: RawNode[] = [];
     const walk = (i: string) => {
       for (const k of this.kids(i)) {
@@ -260,11 +261,11 @@ export class SampleEngine {
 
   // ── State ────────────────────────────────────────────────────
 
-  private openDecs(id: string): RawDecision[] {
+  protected openDecs(id: string): RawDecision[] {
     return this.data.decisions.filter((d) => d.node === id && d.open);
   }
 
-  private waitMet(w: RawWait): boolean {
+  protected waitMet(w: RawWait): boolean {
     if (w.overridden || w.met) return true;
     if (w.kind === "dep") {
       const t = this.N(w.to ?? "");
@@ -277,13 +278,13 @@ export class SampleEngine {
     return false;
   }
 
-  private activeWaits(n: RawNode): RawWait[] {
+  protected activeWaits(n: RawNode): RawWait[] {
     return (n.waits ?? [])
       .filter((w) => !this.waitMet(w))
       .sort((a, b) => (WAIT_RANK[a.kind] ?? 9) - (WAIT_RANK[b.kind] ?? 9));
   }
 
-  private worst(states: RawState[]): RawState {
+  protected worst(states: RawState[]): RawState {
     return states.reduce((a, b) => ((RANK[b] ?? 0) > (RANK[a] ?? 0) ? b : a));
   }
 
@@ -319,7 +320,7 @@ export class SampleEngine {
     return s;
   }
 
-  private anyMoving(id: string): boolean {
+  protected anyMoving(id: string): boolean {
     return [this.N(id)!, ...this.subtree(id)].some(
       (n) =>
         !n.ghost &&
@@ -329,7 +330,7 @@ export class SampleEngine {
     );
   }
 
-  private needsIn(id: string): RawDecision[] {
+  protected needsIn(id: string): RawDecision[] {
     const ids = new Set<string>();
     for (const n of [this.N(id)!, ...this.subtree(id)]) {
       for (const d of this.openDecs(n.id)) ids.add(d.id);
@@ -339,11 +340,11 @@ export class SampleEngine {
 
   // ── Progress, cost, base env ─────────────────────────────────
 
-  private weight(n: RawNode): number {
+  protected weight(n: RawNode): number {
     return n.est ?? 60;
   }
 
-  private projWeight(p: RawNode): number {
+  protected projWeight(p: RawNode): number {
     const ts = this.realKids(p.id).filter((t) => t.lvl === "task");
     if (ts.length) return ts.reduce((a, t) => a + this.weight(t), 0);
     const sib = p.parent
@@ -355,7 +356,7 @@ export class SampleEngine {
     return ws.length ? ws[Math.floor(ws.length / 2)]! : 60;
   }
 
-  private projProgress(p: RawNode): { p: number; done: number; total: number } | null {
+  protected projProgress(p: RawNode): { p: number; done: number; total: number } | null {
     const ts = this.realKids(p.id).filter((t) => t.lvl === "task");
     if (!ts.length) return null;
     const tot = ts.reduce((a, t) => a + this.weight(t), 0);
@@ -367,7 +368,7 @@ export class SampleEngine {
     };
   }
 
-  private featureBuild(f: RawNode) {
+  protected featureBuild(f: RawNode) {
     const ps = this.realKids(f.id).filter((k) => k.lvl === "project" && k.state !== "later");
     if (!ps.length) return null;
     let tot = 0;
@@ -388,7 +389,7 @@ export class SampleEngine {
     };
   }
 
-  private progressOf(n: RawNode): Progress | undefined {
+  protected progressOf(n: RawNode): Progress | undefined {
     if (n.lvl === "feature" && n.kind === "feature") {
       const b = this.featureBuild(n);
       if (n.acceptance && !n.implicit) {
@@ -417,7 +418,7 @@ export class SampleEngine {
     return undefined;
   }
 
-  private costOf(n: RawNode): number {
+  protected costOf(n: RawNode): number {
     if (n.lvl === "root" && n.tree === "product") return this.data.factory.cost;
     if (n.lvl === "project" || n.lvl === "task" || n.lvl === "run") return n.cost ?? 0;
     return this.subtree(n.id)
@@ -425,33 +426,33 @@ export class SampleEngine {
       .reduce((a, k) => a + (k.cost ?? 0), 0);
   }
 
-  private changedIn(id: string): string[] {
+  protected changedIn(id: string): string[] {
     return [this.N(id)!, ...this.subtree(id)]
       .filter((n) => n.changed && !n.closed)
       .map((n) => n.changed!);
   }
 
-  private changedSummary(id: string): string[] {
+  protected changedSummary(id: string): string[] {
     const ch = this.changedIn(id);
     const merged = ch.filter((x) => /merged/.test(x));
     const other = ch.filter((x) => !/merged/.test(x));
     return (merged.length > 2 ? [`${merged.length} merged`] : merged).concat(other);
   }
 
-  private inBase(n: RawNode): boolean {
+  protected inBase(n: RawNode): boolean {
     if (n.inBase) return true;
     const s = this.subtree(n.id).filter((k) => k.lvl === "change" && k.state === "done");
     return s.length > 0 && s.every((k) => k.inBase);
   }
 
-  private doneNoteOf(n: RawNode): string {
+  protected doneNoteOf(n: RawNode): string {
     if (n.doneNote) return n.doneNote;
     const ch = this.subtree(n.id).filter((k) => k.lvl === "change" && k.state === "done");
     if (!ch.length) return "";
     return `${ch.map((c) => c.tag).join(", ")} merged${ch.every((c) => c.inBase) ? " · in base env" : ""}`;
   }
 
-  private hasTry(n: RawNode): boolean {
+  protected hasTry(n: RawNode): boolean {
     return (
       n.tree === "product" &&
       this.inBase(n) &&
@@ -465,7 +466,7 @@ export class SampleEngine {
 
   // ── The blocker path ─────────────────────────────────────────
 
-  private dependents(id: string): RawNode[] {
+  protected dependents(id: string): RawNode[] {
     return this.data.nodes.filter(
       (n) =>
         !n.closed &&
@@ -474,7 +475,7 @@ export class SampleEngine {
   }
 
   /** What an ask holds: Σ estimate of held tasks + weight of dependent projects. */
-  private decWeight(d: RawDecision | undefined): number {
+  protected decWeight(d: RawDecision | undefined): number {
     if (!d || !d.open || d.low) return 0;
     let w = 0;
     for (const x of this.data.nodes) {
@@ -495,7 +496,7 @@ export class SampleEngine {
   }
 
   /** Paths that end at a person rank first, by the weight they hold, then dependents, then column. */
-  private blockingChild(id: string): RawNode | null {
+  protected blockingChild(id: string): RawNode | null {
     const ks = this.shownKids(id).filter(
       (k) =>
         !k.ghost &&
@@ -522,7 +523,7 @@ export class SampleEngine {
       })[0]!.k;
   }
 
-  private pathOf(id: string): Path {
+  protected pathOf(id: string): Path {
     const hit = this.pmemo.get(id);
     if (hit) return hit;
     this.pmemo.set(id, { segs: [], end: "cycle" });
@@ -531,7 +532,7 @@ export class SampleEngine {
     return r;
   }
 
-  private computePath(id: string): Path {
+  protected computePath(id: string): Path {
     const segs: PathSeg[] = [];
     let cur = id;
     const seen = new Set<string>();
@@ -579,7 +580,7 @@ export class SampleEngine {
     return { segs, end: "cut" };
   }
 
-  private firstMoving(id: string): RawNode | null {
+  protected firstMoving(id: string): RawNode | null {
     const n = this.N(id)!;
     if (this.stateOf(id) === "moving" && n.activity) return n;
     for (const k of this.shownKids(id)) {
@@ -592,7 +593,7 @@ export class SampleEngine {
   }
 
   /** How a node reads inside a line: tasks and changes by their code, the rest by title. */
-  private nm(id: string): string {
+  protected nm(id: string): string {
     const n = this.N(id);
     if (!n) return id;
     const coded =
@@ -600,11 +601,11 @@ export class SampleEngine {
     return coded && n.tag ? n.tag : n.title;
   }
 
-  private homeIdx(tree: RawTree): number {
+  protected homeIdx(tree: RawTree): number {
     return this.levels(tree).findIndex((l) => l.key === this.data.trees[tree].home);
   }
 
-  private displaySegs(id: string, P: Path): PathSeg[] {
+  protected displaySegs(id: string, P: Path): PathSeg[] {
     const n = this.N(id)!;
     let segs = P.segs.filter((s) => !(s.to && this.N(s.to)?.implicit && !s.label));
     if (n.lvl === "root") {
@@ -615,7 +616,7 @@ export class SampleEngine {
     return segs;
   }
 
-  private alsoHolds(id: string, P: Path): string[] {
+  protected alsoHolds(id: string, P: Path): string[] {
     const pathNodes = P.segs.filter((s) => s.to).map((s) => s.to!);
     const anc = new Set([...this.ancestors(id).map((a) => a.id), id]);
     const held = new Set<string>();
@@ -629,7 +630,7 @@ export class SampleEngine {
 
   // ── API shapes ───────────────────────────────────────────────
 
-  private decRef(d: RawDecision): DecisionRef {
+  protected decRef(d: RawDecision): DecisionRef {
     return {
       id: d.id,
       verb: d.verb,
@@ -649,7 +650,7 @@ export class SampleEngine {
     };
   }
 
-  private seg(sg: PathSeg): Segment {
+  protected seg(sg: PathSeg): Segment {
     if (sg.person) return { sep: "→", person: true, decision: this.decRef(sg.person) };
     if (sg.sep === "›") return { sep: "›", ref: sg.to!, title: this.nm(sg.to!) };
     return {
@@ -660,12 +661,12 @@ export class SampleEngine {
     };
   }
 
-  private endOf(P: Path): StatusLine["ends"] {
+  protected endOf(P: Path): StatusLine["ends"] {
     if (P.end === "person" || P.end === "cycle" || P.end === "cut") return P.end;
     return P.end === "moving" ? "moving" : "other";
   }
 
-  private link(id: string) {
+  protected link(id: string) {
     return { ref: id, title: this.nm(id) };
   }
 
@@ -828,7 +829,7 @@ export class SampleEngine {
   }
 
   /** The numbered "why it is not moving", computed from live state. */
-  private whyOf(id: string): Pick<StatusLine, "why" | "why_title" | "note"> {
+  protected whyOf(id: string): Pick<StatusLine, "why" | "why_title" | "note"> {
     const n = this.N(id)!;
     const s = this.stateOf(id);
     const a = (ref: string, text: string) => `<a data-ref="${esc(ref)}">${esc(text)}</a>`;
@@ -894,7 +895,7 @@ export class SampleEngine {
     };
   }
 
-  private chipsOf(n: RawNode): Chip[] {
+  protected chipsOf(n: RawNode): Chip[] {
     const out: Chip[] = [];
     const waits = n.waits ?? [];
     for (const w of waits.filter((dep) => dep.kind === "dep" && !this.waitMet(dep))) {
@@ -963,13 +964,13 @@ export class SampleEngine {
     return out;
   }
 
-  private ownerOf(n: RawNode): string | undefined {
+  protected ownerOf(n: RawNode): string | undefined {
     if (n.owner) return n.owner;
     const r = this.data.responders[n.kind === "study" ? "study" : n.lvl];
     return r && r !== "lead" ? r : undefined;
   }
 
-  private responder(n: RawNode): string | null {
+  protected responder(n: RawNode): string | null {
     const key = n.lvl === "root" ? "root" : n.kind === "study" ? "study" : n.lvl;
     const r = n.lvl === "root" && n.tree === "factory" ? "Sentinel" : this.data.responders[key];
     if (r == null) return null;
@@ -981,7 +982,7 @@ export class SampleEngine {
     return r;
   }
 
-  private team(n: RawNode): Rollup["team"] | undefined {
+  protected team(n: RawNode): Rollup["team"] | undefined {
     if (!n.agents) return undefined;
     const busy = new Set(
       [n, ...this.subtree(n.id)]
@@ -998,7 +999,7 @@ export class SampleEngine {
     };
   }
 
-  private grandchildren(n: RawNode): NodeSummary["grandchildren"] {
+  protected grandchildren(n: RawNode): NodeSummary["grandchildren"] {
     if (n.lvl === "task") return undefined;
     const ks = this.shownKids(n.id).filter((k) => k.lvl !== "run" && !k.ghost);
     if (!ks.length) return undefined;
@@ -1018,7 +1019,7 @@ export class SampleEngine {
   }
 
   /** Implicit parents folded into this node (it is shown in their place). */
-  private foldedFrom(n: RawNode): string[] {
+  protected foldedFrom(n: RawNode): string[] {
     const out: string[] = [];
     let p = this.N(n.parent ?? "");
     while (p && this.isFolded(p)) {
@@ -1079,11 +1080,11 @@ export class SampleEngine {
   }
 
   /** The level key a page names: a root's is its tree's root key ("product", "fx"). */
-  private levelKey(n: RawNode): string {
+  protected levelKey(n: RawNode): string {
     return n.lvl === "root" ? this.data.trees[n.tree].root : n.lvl;
   }
 
-  private crumb(a: RawNode): Crumb {
+  protected crumb(a: RawNode): Crumb {
     return {
       ref: a.id,
       level: this.levelKey(a),
@@ -1097,7 +1098,7 @@ export class SampleEngine {
   }
 
   /** A root's counts by level (and the study kind), named from the levels and kinds. */
-  private rootCounts(n: RawNode, features: RawNode[], projects: number, later: number) {
+  protected rootCounts(n: RawNode, features: RawNode[], projects: number, later: number) {
     const lv = (key: string) => this.levels(n.tree).find((l) => l.key === key);
     const named = (key: string, count: number, name?: string, plural?: string) =>
       name && plural && count ? [{ key, name, plural, count }] : [];
@@ -1125,7 +1126,7 @@ export class SampleEngine {
     ];
   }
 
-  private rollup(n: RawNode): Rollup {
+  protected rollup(n: RawNode): Rollup {
     const s = this.stateOf(n.id);
     const cost = this.costOf(n);
     const pr = this.progressOf(n);
@@ -1164,7 +1165,7 @@ export class SampleEngine {
     return out;
   }
 
-  private levelsBelow(scope: RawNode): LevelCount[] {
+  protected levelsBelow(scope: RawNode): LevelCount[] {
     const out: LevelCount[] = [];
     for (const lv of this.levels(scope.tree).slice(this.lvlIdx(scope) + 1)) {
       const items = this.atLevel(scope.id, lv.key).filter((x) => !x.ghost);
@@ -1188,7 +1189,7 @@ export class SampleEngine {
     return out;
   }
 
-  private resultsOf(id: string): Results {
+  protected resultsOf(id: string): Results {
     const ch = [this.N(id)!, ...this.subtree(id)].filter((n) => n.lvl === "change");
     const merged = ch.filter((c) => c.state === "done");
     return {
@@ -1199,7 +1200,7 @@ export class SampleEngine {
     };
   }
 
-  private verbsOf(n: RawNode): VerbAvail[] {
+  protected verbsOf(n: RawNode): VerbAvail[] {
     const key = n.lvl === "root" ? "root" : n.kind === "study" ? "study" : n.lvl;
     const s = this.stateOf(n.id);
     const vs = (this.data.verbs[key] ?? []).filter((v) => {
@@ -1238,7 +1239,7 @@ export class SampleEngine {
       .map((v) => ({ verb: v, label: VERB_LABEL[v]![0], key: VERB_LABEL[v]![1], enabled: true }));
   }
 
-  private threadKey(n: RawNode): string {
+  protected threadKey(n: RawNode): string {
     if (n.lvl === "root") return n.tree === "product" ? "factory" : "improvements";
     if (n.lvl === "project") return `project:${n.id}`;
     if (n.lvl === "change") return `pr:${n.id}`;
@@ -1249,7 +1250,7 @@ export class SampleEngine {
     return `${n.kind === "study" ? "study" : n.lvl}:${n.id}`;
   }
 
-  private sortByState(arr: RawNode[]): RawNode[] {
+  protected sortByState(arr: RawNode[]): RawNode[] {
     return arr
       .slice()
       .sort(
@@ -1259,7 +1260,7 @@ export class SampleEngine {
       );
   }
 
-  private childPage(n: RawNode): ChildPage {
+  protected childPage(n: RawNode): ChildPage {
     const L = this.levels(n.tree)[this.lvlIdx(n) + 1];
     const shown = this.shownKids(n.id);
     const items = shown.filter((k) => !k.ghost && k.state !== "later");
@@ -1287,6 +1288,57 @@ export class SampleEngine {
         ? { via_fold: shown.filter((k) => k.lvl !== L?.key).length }
         : {}),
     };
+  }
+
+  /** What can be tried in the base env here: its own steps, else its parent's (deduplicated). */
+  protected tryItOf(n: RawNode): NonNullable<NodeFull["try_it"]> {
+    if (!this.hasTry(n)) return [];
+    const src = n.tryIt ? n : [...this.ancestors(n.id)].reverse().find((a) => a.tryIt);
+    const steps = src?.tryIt ?? this.subtree(n.id).flatMap((k) => k.tryIt ?? []);
+    const seen = new Set<string>();
+    return steps
+      .filter((t) => !seen.has(t.t) && Boolean(seen.add(t.t)))
+      .map((t) => ({
+        text: t.t,
+        ...(t.how ? { how: t.how } : {}),
+        ...(t.step ? { acceptance_step: t.step } : {}),
+        ...(t.api ? { api: true } : {}),
+      }));
+  }
+
+  /** The base env, as the root carries it. */
+  protected envOf(): NonNullable<NodeFull["env"]> {
+    const e = this.data.env;
+    return {
+      name: e.name,
+      branch: e.branch,
+      sha: e.sha,
+      deployed_at: e.age,
+      state: "ready",
+      smoke: { ok: /OK/i.test(e.smoke), checks: e.checks },
+      app_url: e.url,
+      api_url: e.api,
+      note: e.signin,
+      follows: e.follows,
+      ref: "env:base",
+    };
+  }
+
+  /** Alarms the server closed under this node (the factory tree's Health area). */
+  protected closedAlarms(id: string): ClosedAlarm[] {
+    return this.kids(id)
+      .filter((k) => k.kind === "alarm" && k.state === "done")
+      .map((k) => {
+        const real = this.dec(k.realAsk);
+        return {
+          id: k.tag ?? k.id,
+          was: k.title.replace(/^“|”$/g, ""),
+          cause: (k.doneNote ?? "").replace(/^closed by the server: /, ""),
+          ...(k.realAsk ? { real_ask: k.realAsk } : {}),
+          ...(real ? { real_ask_verb: real.verb } : {}),
+          ...(k.about ? { ref: k.about } : {}),
+        };
+      });
   }
 
   // ── Reads ────────────────────────────────────────────────────
@@ -1319,6 +1371,10 @@ export class SampleEngine {
             },
           }
         : {}),
+      ...(this.tryItOf(n).length ? { try_it: this.tryItOf(n) } : {}),
+      ...(n.tryFlag ? { try_flag: n.tryFlag } : {}),
+      ...(n.lvl === "root" && n.tree === "product" ? { env: this.envOf() } : {}),
+      ...(this.closedAlarms(n.id).length ? { closed_alarms: this.closedAlarms(n.id) } : {}),
       ...(n.evidenceItems && n.evidence
         ? {
             evidence: {

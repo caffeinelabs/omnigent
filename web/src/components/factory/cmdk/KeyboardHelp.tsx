@@ -1,8 +1,8 @@
 /**
  * `?` in the new cockpit: the keys that work, in one short table. Phones have
  * no keyboard layer, so nothing there opens it. Cockpit v3 adds the node
- * page's keys (move, step in, step out, why), and `/`, `c` and `r` talk in
- * the node's chat.
+ * page's keys (move, step in, step out, why, each verb's preview), and `/`,
+ * `c` and `r` talk in the node's chat.
  */
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -23,16 +23,25 @@ export function cockpitKeyList(mac = isMacPlatform(), nodes = false): [string, s
         ["h", "Step out to the parent"],
         ["w", "Why it is not moving"],
         ["/ · c · r", "Talk in the node's chat"],
+        ["a · s · t", "Add a child · start now (or start research) · team"],
+        ["u · p", "Autonomy and merge · pause or resume (u is Undo while a change offers it)"],
+        ["m · n", "Move (one level up only) · name an implicit parent or file it under"],
+        ["Enter on an answer", "Never answers: an answer is always a click"],
       ]
     : [];
   return [
     ...nodeKeys,
-    [nodes ? (mac ? "⌘K" : "Ctrl K") : `${mac ? "⌘K" : "Ctrl K"} or /`, "Search or run a command"],
+    nodes
+      ? [
+          mac ? "⌘K" : "Ctrl K",
+          "Find any node by ref or title (T-16, #9876, C-16), or run a command",
+        ]
+      : [`${mac ? "⌘K" : "Ctrl K"} or /`, "Search or run a command"],
     ["g h · g d · g p · g t · g s", "Home, Discovery, Projects, Teams, Steer"],
     ["e", "Edit the team (on a project)"],
     ["u", "Undo, while a change offers it"],
     ...(nodes ? [] : ([["r", "Open the Room"]] as [string, string][])),
-    ["Esc", "Close a panel, menu or dialog"],
+    ["Esc", nodes ? "Close a preview, sheet, menu or dialog" : "Close a panel, menu or dialog"],
     ["?", "This list"],
   ];
 }

@@ -60,6 +60,12 @@ export const FactoryTree = page({ nodeRef: "fx" });
 /** After Apply C-16: the core moves, the panel waits on it, the feature's top ask is D-49. */
 export const AfterApplyC16 = page({ nodeRef: "I-1", answered: [["D-45", "Apply"]] });
 
+/** Since your last look (12:30): the roll-up's since line and each tile's badge name what changed. */
+export const SinceLastLook = page({ nodeRef: "I-1" });
+export const SinceLastLookDark = page({ nodeRef: "I-1", theme: "dark" });
+/** The same page once you looked at it (three seconds on it marks the look): nothing is "since". */
+export const SeenNothingSince = page({ nodeRef: "I-1", seen: ["I-1"] });
+
 /** Any node or level, named in the frame's address (`&ref=T-16&level=…`): for sweeps over every page. */
 export const AnyNode: Story = {
   args: {},

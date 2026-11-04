@@ -3,11 +3,19 @@
 // ask verbatim, what is missing). Neither renders when the node has none.
 
 import { cn } from "@/lib/utils";
+import { useNodeActions } from "./NodeContext";
 import type { NodeFull } from "./nodeTypes";
 
 const BLOCK = "rounded-[10px] bg-card-solid px-3.5 py-2.5 ring-1 ring-border";
 
-function Acceptance({ acceptance }: { acceptance: NonNullable<NodeFull["acceptance"]> }) {
+function Acceptance({
+  acceptance,
+  onTry,
+}: {
+  acceptance: NonNullable<NodeFull["acceptance"]>;
+  /** "Try what passes": the Try it sheet. */
+  onTry?: () => void;
+}) {
   const steps = acceptance.steps;
   const pass = steps.filter((s) => s.result === "pass").length;
   const fail = steps.filter((s) => s.result === "fail").length;
@@ -24,6 +32,16 @@ function Acceptance({ acceptance }: { acceptance: NonNullable<NodeFull["acceptan
         <span className="text-muted-foreground">{words.filter(Boolean).join(" · ")}</span>
         {acceptance.note && (
           <span className="text-xs text-foreground-tertiary">{acceptance.note}</span>
+        )}
+        {onTry && (
+          <button
+            type="button"
+            data-testid="v3-try-what-passes"
+            onClick={onTry}
+            className="ml-auto rounded-full border border-status-green/70 bg-status-green/12 px-2 py-px text-xs text-status-green-fg hover:bg-status-green/20"
+          >
+            Try what passes ↗
+          </button>
         )}
       </div>
       <ol className="grid grid-cols-1 gap-x-[18px] gap-y-[3px] lg:grid-cols-2">
@@ -82,10 +100,14 @@ function Evidence({ evidence }: { evidence: NonNullable<NodeFull["evidence"]> })
 }
 
 export function NodeContent({ node }: { node: NodeFull }) {
+  const { onSheet } = useNodeActions();
   if (!node.acceptance?.steps.length && !node.evidence?.items.length) return null;
+  const tryIt = node.try_it?.length && onSheet ? () => onSheet("try", node.ref) : undefined;
   return (
     <div className="flex flex-col gap-3">
-      {node.acceptance?.steps.length ? <Acceptance acceptance={node.acceptance} /> : null}
+      {node.acceptance?.steps.length ? (
+        <Acceptance acceptance={node.acceptance} onTry={tryIt} />
+      ) : null}
       {node.evidence?.items.length ? <Evidence evidence={node.evidence} /> : null}
     </div>
   );

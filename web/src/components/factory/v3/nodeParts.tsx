@@ -221,6 +221,20 @@ export function NodeLink({
   );
 }
 
+/**
+ * When a last look was, as a "since" line says it: "12:30" today, "Nov 2"
+ * earlier (the server sends an ISO time; other words pass through).
+ */
+export function sinceWhen(at: string, now: Date = new Date()): string {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(at)) return at;
+  const t = new Date(at);
+  if (Number.isNaN(t.getTime())) return at;
+  const sameDay = t.toDateString() === now.toDateString();
+  return sameDay
+    ? t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+    : t.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 /** `$25.13`, `$444`. */
 export function money(x: number): string {
   return x >= 100 ? `$${Math.round(x)}` : `$${x.toFixed(2)}`;

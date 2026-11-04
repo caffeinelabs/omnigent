@@ -47,7 +47,7 @@ import {
   projectPageHref,
   settingsPageHref,
 } from "../factoryRoutes";
-import { FOCUS_RING } from "../ui/statusTokens";
+import { FOCUS_RING, MEANING } from "../ui/statusTokens";
 import { CockpitTabs } from "./FactoryTabs";
 import { useViewerCan } from "./viewerCan";
 import type { FactoryLocation } from "./shellRoutes";
@@ -424,6 +424,10 @@ export interface FactoryTopBarProps {
   onClassic: () => void;
   /** Cockpit v3 is on: offer the way back to v2. */
   onV2?: () => void;
+  /** Cockpit v3: "5 need you" opens the ranked Needs you sheet. */
+  onNeedsYou?: () => void;
+  /** Cockpit v3: the base env in one chip ("Base env sample-main @817480d"), opening its sheet. */
+  baseEnv?: { label: string; ok: boolean | null; onOpen: () => void } | null;
 }
 
 export function FactoryTopBar({
@@ -441,6 +445,8 @@ export function FactoryTopBar({
   onAddProject,
   onClassic,
   onV2,
+  onNeedsYou,
+  baseEnv,
 }: FactoryTopBarProps) {
   const fid = snapshot.factory.id;
   const mac = isMacPlatform();
@@ -470,6 +476,46 @@ export function FactoryTopBar({
         />
       )}
       <span className="min-w-0 flex-1" />
+      {baseEnv && !phone && (
+        <button
+          type="button"
+          onClick={baseEnv.onOpen}
+          data-testid="cockpit-base-env"
+          className={cn(
+            "inline-flex h-7 max-w-[16rem] min-w-0 shrink cursor-pointer items-center gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground @max-[1100px]:hidden",
+            FOCUS_RING,
+          )}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              baseEnv.ok == null
+                ? "border border-status-gray"
+                : baseEnv.ok
+                  ? "bg-status-green"
+                  : "bg-status-red",
+            )}
+          />
+          <span className="truncate font-mono">{baseEnv.label}</span>
+        </button>
+      )}
+      {onNeedsYou && needsYou > 0 && (
+        <button
+          type="button"
+          onClick={onNeedsYou}
+          data-testid="cockpit-needs-you"
+          className={cn(
+            "inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold",
+            MEANING.needsYou.surface,
+            MEANING.needsYou.text,
+            "border-status-yellow/55",
+            FOCUS_RING,
+          )}
+        >
+          <span className="tabular-nums">{needsYou}</span> need you
+        </button>
+      )}
       <button
         type="button"
         onClick={onPalette}

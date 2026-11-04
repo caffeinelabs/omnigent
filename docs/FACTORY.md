@@ -1076,6 +1076,31 @@ today's closed alarms as items (`D-n`) with `closed_alarms` on its page, the
 node each was about carries an "alarm closed" chip, and the root's roll-up
 counts them (`alarms_closed`).
 
+**Steering at the node (cockpit v3).** Every structural verb on a node page
+(Add child, Start now, Team, Autonomy & merge, Pause / Resume, Move, Name it /
+file under; their keys `a s t u p m n`) opens a preview under the header
+before anything changes: the parent's First / Then / Later columns with the
+change as a dashed ghost (and its old place struck through), the roll-up
+change, the effects and who approves. Apply sends the preview's id and the
+page's facts version (`based_on`); the toast offers Undo, and the node keeps
+"Undo (n min left)" for the rest of its 10 minutes. Add child pulls a held
+child whose title matches forward instead of copying it; Move offers only
+parents one level up. Plain words in the node's chat ("start the panel now",
+"also plan …", "swap luz to codex") open the same previews, never an apply.
+Team is the team editor in a panel (every member's vendor and model, nothing
+preselected, the $/h before and after) on the definition's own preview, a
+definition version and Undo by re-pinning the version before; the other
+verbs wait for `POST …/n/{ref}/preview|apply` and `POST …/undo/{token}`
+and until then say they cannot be previewed. Sheets open from the address:
+`?peek=needs` (Needs you, ranked by what each ask holds, the asks that block
+nothing grouped with "Apply all", the closed alarms, the other tree's count;
+from `GET …/needs-you`), `?peek=env` (the base env), `?peek=try&at=<ref>`
+(Try it: the passing steps by name, the flag and the sign-in note) and
+`?peek=keys`; ⌘K finds nodes by ref or title (`GET …/find`), and the
+search's projects, PRs and tasks open their node pages. Three seconds on a
+page marks this person's last look (`PUT …/n/{ref}/seen`); the "since" line
+and each child's changes it showed stay until the next visit.
+
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to
 carry: `repo` (the repo whose projects run it; unset: every project's),

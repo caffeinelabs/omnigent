@@ -80,6 +80,7 @@ function GrandDots({ gc }: { gc: NonNullable<NodeSummary["grandchildren"]> }) {
 }
 
 function Badges({ node, overlays }: { node: NodeSummary; overlays: Overlays }) {
+  const { onSheet } = useNodeActions();
   const low = node.needs.open - node.needs.blocking;
   const changed = overlays.changed ? (node.changed ?? []) : [];
   return (
@@ -102,17 +103,32 @@ function Badges({ node, overlays }: { node: NodeSummary; overlays: Overlays }) {
           {low} ask{low > 1 ? "s" : ""} · block nothing
         </span>
       )}
-      {overlays.env && node.try_ready && (
-        <span
-          className={cn(
-            BADGE,
-            "bg-status-green/12 text-status-green-fg ring-1 ring-status-green/70",
-          )}
-          title="In the base env"
-        >
-          Try it
-        </span>
-      )}
+      {overlays.env &&
+        node.try_ready &&
+        (onSheet ? (
+          <button
+            type="button"
+            data-testid="v3-try-badge"
+            onClick={() => onSheet("try", node.ref)}
+            className={cn(
+              BADGE,
+              "bg-status-green/12 text-status-green-fg ring-1 ring-status-green/70 hover:bg-status-green/20",
+            )}
+            title="What can be tried in the base env"
+          >
+            Try it ↗
+          </button>
+        ) : (
+          <span
+            className={cn(
+              BADGE,
+              "bg-status-green/12 text-status-green-fg ring-1 ring-status-green/70",
+            )}
+            title="In the base env"
+          >
+            Try it
+          </span>
+        ))}
       {changed.length > 0 && (
         <span
           className={cn(BADGE, "bg-status-blue/12 text-status-blue-fg")}
@@ -334,6 +350,15 @@ export function NodeRow({
             {node.change.label}
           </span>
         )}
+        {overlays.changed && node.changed?.length ? (
+          <span
+            data-testid="v3-row-since"
+            className={cn(BADGE, "bg-status-blue/12 font-medium text-status-blue-fg")}
+            title={node.changed.join(", ")}
+          >
+            {node.changed.length === 1 ? node.changed[0] : `${node.changed.length} new`}
+          </span>
+        ) : null}
         {owner && node.owner && <Avatar actor={node.owner} />}
         {overlays.needs && node.needs.blocking > 0 && (
           <span

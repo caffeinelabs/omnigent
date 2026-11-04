@@ -11,6 +11,7 @@ import { NodeContextProvider } from "../NodeContext";
 import { NodePage } from "../NodePage";
 import { nodeHref } from "../nodeRoutes";
 import { NodeSourceProvider } from "../nodeSource";
+import { V3Sheets } from "../sheets/V3Sheets";
 import { useParams } from "@/lib/routing";
 import { type SampleOptions, sampleNodeSource } from "./sampleNodeSource";
 
@@ -21,6 +22,8 @@ export interface V3StoryOptions extends SampleOptions {
   /** The node the story opens on. */
   nodeRef?: string;
   level?: string;
+  /** The address's query (`?verb=add&title=…`, `?peek=needs`). */
+  search?: string;
 }
 
 function RoutedNodePage() {
@@ -42,11 +45,16 @@ export function V3PageStory({
   theme = "light",
   nodeRef = "product",
   level,
+  search = "",
   ...sample
 }: V3StoryOptions) {
   const [source] = useState(() => sampleNodeSource(sample));
   return (
-    <FactoryStoryFrame mode="viewport" theme={theme} route={nodeHref(STORY_FID, nodeRef, level)}>
+    <FactoryStoryFrame
+      mode="viewport"
+      theme={theme}
+      route={`${nodeHref(STORY_FID, nodeRef, level)}${search}`}
+    >
       <DocumentTheme theme={theme} />
       <NodeSourceProvider source={source}>
         <FactoryToastProvider>
@@ -54,6 +62,7 @@ export function V3PageStory({
             <Route path="/factory/:factoryId/n/:ref" element={<RoutedNodePage />} />
             <Route path="/factory/:factoryId/n/:ref/:level" element={<RoutedNodePage />} />
           </Routes>
+          <V3Sheets factoryId={STORY_FID} keys />
         </FactoryToastProvider>
       </NodeSourceProvider>
     </FactoryStoryFrame>

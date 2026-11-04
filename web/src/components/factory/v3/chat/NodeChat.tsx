@@ -405,7 +405,8 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
       }
       const v = at === here.node.ref ? here.verbs.find((x) => x.verb === verb && x.enabled) : null;
       if (v) {
-        actions.onVerb?.(v, args);
+        // Always with an object: the preview then leaves focus in this box.
+        actions.onVerb?.(v, args ?? {});
         return;
       }
       const search = new URLSearchParams({ verb });

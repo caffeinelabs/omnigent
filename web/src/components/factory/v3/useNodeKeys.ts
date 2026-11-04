@@ -1,11 +1,14 @@
 // The node page's keys. Tile and row titles are real links with a roving
 // tabindex (one Tab stop for the list); `j`/`k` move DOM focus over them,
 // Enter or `l` step into the focused one, `h` steps out to the parent and `w`
-// opens "why". Keys never fire while someone types or works a menu or dialog,
-// and Enter never answers a decision (the answer buttons swallow it).
+// opens "why"; a verb's key (`a`, `s`, `t`, `u`, `p`, `m`, `n`) opens its
+// preview. Keys never fire while someone types or works a menu or dialog,
+// Enter never answers a decision (the answer buttons swallow it), and `u`
+// stays the toast's Undo while one is offered.
 
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { CHORD_MS, keyOwnedByTarget } from "../cmdk/useFactoryPaletteHotkey";
+import { TOAST_UNDO_SELECTOR } from "../ui/Toast";
 
 const STOP = "[data-node-link]";
 
@@ -55,6 +58,8 @@ export interface NodeKeys {
   onStepOut?: () => void;
   /** `w`: "why" opens or closes. */
   onWhy?: () => void;
+  /** Any other single letter: a verb's key; true when it opened something. */
+  onVerbKey?: (key: string) => boolean;
 }
 
 /** Binds j/k/l/h/w while mounted; `container` holds the roving stops. */
@@ -126,6 +131,11 @@ export function useNodeKeys(container: RefObject<HTMLElement | null>, keys: Node
           event.preventDefault();
           latest.current.onWhy();
           return;
+        default: {
+          if (!free || event.shiftKey || !/^[a-z]$/.test(event.key)) return;
+          if (event.key === "u" && document.querySelector(TOAST_UNDO_SELECTOR)) return;
+          if (latest.current.onVerbKey?.(event.key)) event.preventDefault();
+        }
       }
     };
     window.addEventListener("keydown", handler);

@@ -5,6 +5,9 @@
 import { type ReactNode, createContext, useContext, useMemo } from "react";
 import type { DecisionAction, DecisionRef, VerbArgs, VerbAvail } from "./nodeTypes";
 
+/** A sheet a page part can open (`?peek=`): Needs you, the base env, Try it, the keys. */
+export type SheetKind = "needs" | "env" | "try" | "keys";
+
 export interface NodeActions {
   factoryId: string;
   /** The decision the page's header asks, if any. */
@@ -17,6 +20,10 @@ export interface NodeActions {
   onOpenDecision?: (decision: DecisionRef) => void;
   /** A verb button, a quick verb or words in the chat (with what they named). */
   onVerb?: (verb: VerbAvail, args?: VerbArgs) => void;
+  /** Open a sheet; `at` names the node (Try it). */
+  onSheet?: (sheet: SheetKind, at?: string) => void;
+  /** The verb whose preview is open on this page (its button reads as pressed). */
+  openVerb?: string | null;
 }
 
 const NodeContext = createContext<NodeActions>({ factoryId: "" });

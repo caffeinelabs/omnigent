@@ -252,6 +252,30 @@ describe("cockpit v3 · the switch and routes", () => {
     expect(server.calls.filter((c) => c.path.includes("/decisions/"))).toEqual([]);
   });
 
+  it("opens v3's sheets from the shell: Needs you from “Open C-16”, the base env, the keys", async () => {
+    serve();
+    renderAt("?cockpit=v3");
+    const status = await screen.findByTestId("v3-status");
+    fireEvent.click(within(status).getByRole("button", { name: "Open C-16" }));
+    expect(await screen.findByTestId("v3-needs-sheet", {}, { timeout: 4000 })).toHaveTextContent(
+      "Atlas proposes C-16",
+    );
+    await waitFor(() => expect(location).toBe(`${BASE}?peek=needs`));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("v3-needs-sheet")).toBeNull());
+    // The count is the ranked sheet's: every ask, also those that block nothing.
+    expect(await screen.findByTestId("cockpit-needs-you")).toHaveTextContent("5 need you");
+    const env = await screen.findByTestId("cockpit-base-env");
+    expect(env).toHaveTextContent("Base env sample-main @817480d");
+    fireEvent.click(env);
+    expect(await screen.findByTestId("v3-env-sheet")).toHaveTextContent("smoke OK");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("v3-env-sheet")).toBeNull());
+    fireEvent.keyDown(window, { key: "?" });
+    expect(await screen.findByTestId("cockpit-keys")).toHaveTextContent("a · s · t");
+    expect(location).toBe(`${BASE}?peek=keys`);
+  });
+
   it("ignores ?cockpit=v3 while the server does not offer the new cockpit", async () => {
     serve({ offered: false, choice: null });
     renderAt("?cockpit=v3");

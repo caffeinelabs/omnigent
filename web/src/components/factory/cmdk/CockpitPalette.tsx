@@ -11,6 +11,10 @@
  * verbs run its own levers with Undo, and are hidden while discovery is off.
  * When nothing matches, the only row is "Ask Atlas", which posts to
  * `#factory`. A query that starts with `/` runs a slash command.
+ *
+ * Cockpit v3 (`nodes`) finds nodes first: refs and titles with their
+ * breadcrumbs (`GET …/find`, through the node source), and every project,
+ * PR or task the search finds opens its node page.
  */
 
 import { useMemo, useState } from "react";
@@ -76,6 +80,10 @@ import { useViewerCan } from "../shell/viewerCan";
 import { useTeamCatalog } from "../team/teamQueries";
 import { useOpenTeamEditor } from "../team/teamStaging";
 import { useFactoryToast } from "../ui/Toast";
+import { StateDot } from "../v3/nodeParts";
+import { nodeHref } from "../v3/nodeRoutes";
+import { useNodeFind } from "../v3/nodeSteer";
+import type { FindHit } from "../v3/nodeTypes";
 import {
   type PaletteItem,
   type PaletteKind,
@@ -154,6 +162,8 @@ export interface CockpitPaletteProps {
   onRoom: (thread: string) => void;
   /** What the box starts with (stories and tests). */
   initialQuery?: string;
+  /** Cockpit v3: find nodes first, and open node pages for projects, PRs and tasks. */
+  nodes?: boolean;
 }
 
 export function CockpitPalette({ open, onOpenChange, ...rest }: CockpitPaletteProps) {
@@ -176,12 +186,57 @@ export function CockpitPalette({ open, onOpenChange, ...rest }: CockpitPalettePr
   );
 }
 
+/** A search item's node page under cockpit v3 (projects, PRs and tasks are nodes), else its own page. */
+export function nodeTarget(factoryId: string, item: PaletteItem): PaletteItem {
+  const ref = item.ref ?? "";
+  const node =
+    item.kind === "project" && ref.startsWith("#")
+      ? ref.slice(1)
+      : item.kind === "pr" && /^!\d+$/.test(ref)
+        ? `PR-${ref.slice(1)}`
+        : item.kind === "task" && /^T-\d+$/.test(ref)
+          ? ref
+          : null;
+  return node ? { ...item, target: { href: nodeHref(factoryId, node) } } : item;
+}
+
+function NodeRows({ hits, onOpen }: { hits: FindHit[]; onOpen: (hit: FindHit) => void }) {
+  return (
+    <CommandGroup heading="Nodes" data-testid="factory-palette-group-nodes">
+      {hits.map((hit) => (
+        <CommandItem
+          key={hit.ref}
+          value={`node:${hit.ref}`}
+          onSelect={() => onOpen(hit)}
+          data-testid={`factory-palette-node-${hit.ref.replace(/[^a-z0-9-]+/gi, "-")}`}
+          className="gap-2"
+        >
+          {hit.state ? <StateDot state={hit.state} /> : <CircleDotIcon aria-hidden />}
+          {hit.tag && (
+            <span className="max-w-[30%] shrink-0 truncate font-mono text-xs text-muted-foreground">
+              {hit.tag}
+            </span>
+          )}
+          <RowText
+            title={hit.title}
+            detail={
+              [hit.level_name, hit.breadcrumb.slice(-2).join(" › ")].filter(Boolean).join(" · ") ||
+              null
+            }
+          />
+        </CommandItem>
+      ))}
+    </CommandGroup>
+  );
+}
+
 function PaletteBody({
   snapshot,
   onShare,
   onAddProject,
   onRoom,
   initialQuery = "",
+  nodes = false,
   close,
 }: Omit<CockpitPaletteProps, "open" | "onOpenChange"> & { close: () => void }) {
   const fid = snapshot.factory.id;
@@ -206,6 +261,8 @@ function PaletteBody({
   const top = useTopOpportunities(fid, discoveryOn && !typed).data;
   // A hunch or a question for Scout is free text: nothing to search for.
   const search = useFactorySearch(fid, query, typed && !(discoveryOn && isFreeTextVerb(query)));
+  const find = useNodeFind(query, nodes && typed, fid);
+  const nodeHits = nodes && typed ? (find.data ?? []) : [];
 
   const live = useMemo(() => {
     const waitingOnMe = waitingOnViewer(snapshot.decisions, snapshot.viewer);
@@ -243,16 +300,17 @@ function PaletteBody({
       ];
       return arrangePalette("", items, idleVerbs(ctx));
     }
-    const found =
+    const hits =
       search.current && search.data
         ? hitItems(fid, search.data.results, { discoveryOn: search.data.discovery })
         : snapshotItems(snapshot);
+    const found = nodes ? hits.map((item) => nodeTarget(fid, item)) : hits;
     const arranged = arrangePalette(
       query,
       [...askItems(asks), ...found, ...places],
       paletteVerbs(query, ctx),
     );
-    if (arranged.length > 0 || search.loading) return arranged;
+    if (arranged.length > 0 || search.loading || nodeHits.length) return arranged;
     const atlas = askAtlasVerb(query, ctx);
     return atlas
       ? [{ group: "actions", label: "Actions", rows: [{ type: "verb", verb: atlas }] }]
@@ -422,6 +480,15 @@ function PaletteBody({
           />
         ) : (
           <>
+            {nodeHits.length > 0 && (
+              <NodeRows
+                hits={nodeHits}
+                onOpen={(hit) => {
+                  close();
+                  navigate(nodeHref(fid, hit.ref));
+                }}
+              />
+            )}
             {sections.map((section) => (
               <CommandGroup
                 key={section.group}
@@ -448,7 +515,7 @@ function PaletteBody({
         note={
           slash
             ? slashError(query, snapshot)
-            : sections.length === 0 && !search.loading && typed
+            : sections.length === 0 && !nodeHits.length && !search.loading && typed
               ? `Nothing matches “${query.trim()}”.${readOnlyVerb ? " Ask an operator to change this." : ""}`
               : null
         }
