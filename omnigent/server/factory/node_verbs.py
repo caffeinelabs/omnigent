@@ -2793,6 +2793,9 @@ async def _record(env: Env, plan: Plan, applied: Applied) -> dict[str, Any] | No
 
 async def _card(env: Env, plan: Plan, applied: Applied, undo: Mapping[str, Any] | None) -> None:
     meta: dict[str, Any] = {"verb": plan.verb, "label": plan.title, "by": env.by}
+    if env.user_id:
+        # Who may undo it from the card: this person, or an owner.
+        meta["by_user"] = env.user_id
     if applied.filed:
         meta["filed"] = applied.filed
     if undo:

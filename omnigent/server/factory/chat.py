@@ -869,7 +869,16 @@ def _meta_view(meta: object) -> dict[str, Any] | None:
             "kind": "preview_applied",
             **{
                 k: meta[k]
-                for k in ("verb", "label", "by", "undo_token", "undo_until", "filed", "undone")
+                for k in (
+                    "verb",
+                    "label",
+                    "by",
+                    "by_user",
+                    "undo_token",
+                    "undo_until",
+                    "filed",
+                    "undone",
+                )
                 if isinstance(meta.get(k), str | int | bool) and not isinstance(meta.get(k), float)
             },
         }

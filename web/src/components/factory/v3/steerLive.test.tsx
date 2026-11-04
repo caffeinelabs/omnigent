@@ -236,10 +236,10 @@ describe("cockpit v3 · an answer that applied a proposal can be taken back", ()
     expect(answerProposal(d45(), { id: "apply", label: "Apply" })).toBeNull();
   });
 
-  it("Apply on the status line offers its Undo beside the verbs, which takes the answer back", async () => {
+  it("Apply on the status line offers its Undo beside the verbs; Undo puts the ask back", async () => {
     const sample = sampleNodeSource();
     const undoAnswer = vi.fn(async (fid: string, decision: DecisionRef) =>
-      sample.undoAnswer!(fid, decision, decision.actions[0]!),
+      sample.undoAnswer!(fid, decision),
     );
     renderNode("assistant-core", { source: { ...sample, undoAnswer }, answers: true });
     await waitFor(() =>
@@ -254,11 +254,26 @@ describe("cockpit v3 · an answer that applied a proposal can be taken back", ()
     await userEvent.click(undo);
     await waitFor(() => expect(undoAnswer).toHaveBeenCalledTimes(1));
     expect(undoAnswer.mock.calls[0]![1]).toMatchObject({ id: "D-45" });
+    // As on the server: C-16 asks again under a fresh decision; D-45 stays answered.
     await waitFor(() =>
-      expect(screen.getByTestId("v3-status")).toHaveTextContent("needs you: Apply C-16 (D-45)"),
+      expect(screen.getByTestId("v3-status")).toHaveTextContent(/needs you: Apply C-16 \(D-52\)/),
     );
+    expect(screen.getByTestId("v3-status")).not.toHaveTextContent("D-45");
     expect(screen.queryByTestId("v3-undo-latest")).toBeNull();
     expect(sample.engine.writes).toContain("undo answer:D-45");
+    // What C-16 held waits again, and the ask is back in Needs you.
+    expect(sample.engine.node("T-16")!.status.decision?.id).toBe("D-52");
+    const needs = sample.engine.needsYou("product");
+    expect(needs.items.map((i) => i.decision.id)).toContain("D-52");
+  });
+
+  it("offers no Undo for an answer whose proposal keeps none (a rule)", async () => {
+    const engine = sampleNodeSource().engine;
+    engine.answer("D-51", "Apply");
+    expect(engine.answerOutcome("D-51", "Apply")).toEqual({});
+    engine.answer("D-45", "Apply");
+    expect(engine.answerOutcome("D-45", "Apply").undo).toMatchObject({ proposal: "C-16" });
+    expect(engine.answerOutcome("D-45", "Reject")).toEqual({});
   });
 
   it("a verb's Undo run from its card closes the one beside the verbs, and only that one", async () => {

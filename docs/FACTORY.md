@@ -291,6 +291,7 @@ if they stay silent the board is still right.
 | `GET …/{fid}/proposals?kind=&status=`, `GET …/proposals/{ref}`, `POST …/proposals/{ref}/apply` (`{changes?}`), `…/reject` (`{note?}`), `…/undo` | human (EDIT; MANAGE for an owner-class proposal) | Proposals `C-<n>`; apply and reject answer the mirrored decision, so one of two clicks wins. |
 | `POST /v1/factory/factories/{fid}/control` | human (EDIT; MANAGE for STOP, RESTART, RELAUNCH) | PAUSE, RESUME, STOP, RESTART, RELAUNCH, cadence, PREVIEW / PREVIEW_DOWN of a PR, ENV STATUS: a server-stamped `[Factory control …]` to the members. |
 | `GET /v1/factory/decisions`, `POST …/decisions/{id}/answer`, `…/withdraw` | human | Open decisions (also in `/inbox`); the answer is delivered to the asker as `[Factory decision · D-<n> answered …]`. |
+| `POST …/decisions/{id}/undo` | human (EDIT; MANAGE for an owner-class proposal) | Takes back an Apply on a projects proposal's decision within the proposal's Undo window: the proposal is undone and waits for a person again under a fresh decision (`{proposal, decision}`); the answered decision stays answered. |
 | `POST /v1/factory/prs/{id}/feedback`, `…/refresh` | human | Approve or request changes (`[Factory review …]` to the PL); re-poll GitHub now. |
 | `GET /v1/factory/prs/{id}/preview` | human | Stable live-preview link: 302 to the current preview app URL, or back to the cockpit when there is none. |
 | `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
@@ -1190,8 +1191,9 @@ only that plan (409 `stale`, with the new preview, when what it touches
 moved), then posts a `preview_applied` card and returns the node page with
 an Undo token; `POST …/undo/{token}` takes it back once within 10 minutes
 (the person who applied it, or an owner). The card carries the token
-(`meta.undo_token`, `undo_until`), so cockpit v3's chat offers the same Undo
-after a reload; the card an Undo posts (`meta.undone`) names the token it
+(`meta.undo_token`, `undo_until`) and who applied it (`meta.by_user`), so
+cockpit v3's chat offers the same Undo after a reload, to that person or an
+owner only; the card an Undo posts (`meta.undone`) names the token it
 undid, and the applied card stops offering it. The verbs run today's cores: `add`
 under a feature files the person's projects proposal extending it and
 applies it at once ("Plan X now" goes to the feature's thread; a title that
@@ -1241,8 +1243,16 @@ parents one level up. Plain words in the node's chat ("start the panel now",
 Team is the team editor in a panel (every member's vendor and model, nothing
 preselected, the $/h before and after) on the definition's own preview, a
 definition version and Undo by re-pinning the version before; the other
-verbs wait for `POST …/n/{ref}/preview|apply` and `POST …/undo/{token}`
-and until then say they cannot be previewed. Sheets open from the address:
+verbs preview and apply through `POST …/n/{ref}/preview|apply` and undo
+through `POST …/undo/{token}`. An answer that applied a projects proposal
+(Apply on D-45 applies C-16) keeps an Undo while the proposal's
+`undo_until` lasts (a rules, tuning or code change, a cancel, split or
+merge has none, so none is offered): `POST /v1/factory/decisions/{id}/undo`
+undoes the proposal and puts it back to pending under a fresh decision, so
+the work held for it waits again (a hold the sweep let lapse comes back,
+and its PL is told `[Factory notice · HOLD BACK …]`) and the ask is in Needs
+you again. An answer the server stored but whose proposal failed to apply
+says so ("D-50 answered; applying C-17 failed: …"), with no Undo. Sheets open from the address:
 `?peek=needs` (Needs you, ranked by what each ask holds, the asks that block
 nothing grouped with "Apply all", the closed alarms, the other tree's count;
 from `GET …/needs-you`), `?peek=env` (the base env), `?peek=try&at=<ref>`

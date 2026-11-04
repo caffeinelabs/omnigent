@@ -7,7 +7,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import type { ChatMessageView, FactorySnapshot } from "@/lib/factoryApi";
+import type { ChatMessageView, FactorySnapshot, ViewerBlock } from "@/lib/factoryApi";
 import type { PostChatRequest } from "@/lib/factoryRoomApi";
 import { useLocation, useParams } from "@/lib/routing";
 import type { StoryResponse, StoryRoutes } from "../../factoryStoryFixtures";
@@ -133,6 +133,8 @@ export function renderChat(
     source?: NodeSource;
     /** The server routes the per-node threads (preflight `node_threads`). */
     nodeThreads?: boolean;
+    /** Who looks (default: no viewer block, every lever open). */
+    viewer?: ViewerBlock;
     install: (fetch: FakeFetch) => void;
   },
 ) {
@@ -144,10 +146,12 @@ export function renderChat(
     sampleNodes = false,
     source,
     nodeThreads,
+    viewer,
     install,
     ...sample
   } = options;
   const snapshot = sampleRoomSnapshot();
+  if (viewer) snapshot.viewer = viewer;
   const fetch = fetchOf(
     sampleRoomRoutes({ snapshot, messages, nodeThreads, ...sample }),
     snapshot.factory.id,

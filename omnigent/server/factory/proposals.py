@@ -2815,7 +2815,6 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
         (cancel those projects instead).
     """
     deps = factory_deps(app_state)
-    store = deps.factory_store
     root = await control.load_factory_root(deps, user_id, factory_id)
     await control.require(deps, user_id, root.id, LEVEL_EDIT)
     row = await asyncio.to_thread(find_proposal, deps, root.id, ref)
@@ -2824,8 +2823,37 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
     if row.approval == "owner":
         await control.require(deps, user_id, root.id, LEVEL_MANAGE)
     label = proposal_ref(row.number)
-    now = now_s()
-    if row.status != "applied" or row.undo_until is None or now > row.undo_until:
+    created = await _undo_checks(deps, root, row)
+    actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
+    row, restored = await _take_back(app_state, root, row, created, actor)
+    by = projects.actor_name(actor)
+    await events.emit(
+        app_state,
+        root.id,
+        "proposal.undone",
+        severity="notice",
+        subject=f"{_SUBJECT_PREFIX}{label}",
+        summary=f"{label} undone by {by}",
+        data={
+            **actor.event_data(),
+            "proposal_id": row.id,
+            "dropped": created,
+            "restored": restored,
+        },
+    )
+    _tell_proposer(app_state, row, closed_text(label, "undone", by), None)
+    return await asyncio.to_thread(proposal_view, deps, row)
+
+
+async def _undo_checks(deps: FactoryDeps, root: Conversation, row: FactoryProposal) -> list[str]:
+    """
+    Whether *row*'s Undo may run now; :returns: the projects it created (Undo drops them).
+
+    :raises CockpitError: 409 ``undo_closed`` / ``undo_stale`` / ``already_spawned``.
+    """
+    store = deps.factory_store
+    label = proposal_ref(row.number)
+    if row.status != "applied" or row.undo_until is None or now_s() > row.undo_until:
         raise CockpitError(
             409, "undo_closed", f"{label} can no longer be undone", status=row.status
         )
@@ -2874,7 +2902,25 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
                 project=slug,
                 newer=newer,
             )
-    actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
+    return created
+
+
+async def _take_back(
+    app_state: Any,
+    root: Conversation,
+    row: FactoryProposal,
+    created: Sequence[str],
+    actor: Actor,
+) -> tuple[FactoryProposal, list[str]]:
+    """
+    Mark *row* undone (a compare-and-set on ``applied``), drop the projects it
+    created and put back the charters it changed.
+
+    :returns: The row as stored and the slugs whose charter was put back.
+    :raises CockpitError: 409 ``undo_closed`` when it was undone meanwhile.
+    """
+    store = factory_deps(app_state).factory_store
+    label = proposal_ref(row.number)
     try:
         row = (
             await asyncio.to_thread(
@@ -2882,7 +2928,7 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
                     row.id,
                     expect_status="applied",
                     status="undone",
-                    reverted_at=now,
+                    reverted_at=now_s(),
                     reverted_by=actor.id,
                 )
             )
@@ -2920,23 +2966,145 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
                 via=f"undo {label}",
             )
             restored.append(slug)
+    return row, restored
+
+
+def back_to_pending_text(ref: str, by: str, answer: str, decision: str) -> str:
+    """:returns: ``[Factory proposal · C-16 back to pending: …]`` for its proposer."""
+    return (
+        f"[Factory proposal · {ref} back to pending: {by} undid the Apply on {answer}; "
+        f"{decision} asks a person again] Record it in the ledger."
+    )
+
+
+def _applied_answer(decision: FactoryDecision) -> bool:
+    """Whether *decision* was answered with an option that applies its proposal."""
+    if decision.status != "answered" or not decision.answer_option_id:
+        return False
+    option = next(
+        (o for o in decision.options if str(o.get("id")) == decision.answer_option_id), None
+    )
+    return option is not None and option.get("action") == ACTION_APPLY_PROPOSAL
+
+
+async def undo_answer(app_state: Any, decision_id: str, *, user_id: str | None) -> dict:
+    """
+    Take back a person's Apply on a proposal's decision
+    (``POST /v1/factory/decisions/{id}/undo``), within the proposal's Undo window.
+
+    The proposal's own Undo runs (:func:`undo`'s checks; its created projects
+    dropped, its charters put back), and then it waits for a person again:
+    pending under a fresh decision, as :func:`reopen` leaves one. So the work held
+    for it waits again (a hold the sweep let lapse meanwhile comes back) and the
+    ask is in Needs you again. The answered decision stays as it was.
+
+    :returns: ``{proposal, decision}``: the proposal and its fresh decision.
+    :raises CockpitError: 404 ``unknown_decision``; 409 ``undo_closed`` (not an
+        applied proposal's Apply, or its window is over) and :func:`undo`'s refusals.
+    """
+    from omnigent.server.factory import decisions, tasks
+
+    deps = factory_deps(app_state)
+    store = deps.factory_store
+    try:
+        decision = await asyncio.to_thread(store.get_decision, decision_id)
+    except ValueError:
+        decision = None
+    if decision is None:
+        raise CockpitError(404, "unknown_decision", f"no decision {decision_id!r}")
+    root = await control.load_factory_root(deps, user_id, decision.factory_id)
+    await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    raw = (decision.subject or "").removeprefix(_SUBJECT_PREFIX)
+    row = (
+        await asyncio.to_thread(find_proposal, deps, root.id, raw) if is_mirror(decision) else None
+    )
+    if (
+        row is None
+        or row.kind != KIND_PROJECTS
+        or not _applied_answer(decision)
+        or not control.same_id(row.decision_id, decision.id)
+    ):
+        raise CockpitError(
+            409,
+            "undo_closed",
+            f"{decision.ref} did not apply a proposal that can be taken back",
+        )
+    if row.approval == "owner":
+        await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    label = proposal_ref(row.number)
+    applied_at = row.applied_at or row.decided_at or decision.answered_at or now_s()
+    created = await _undo_checks(deps, root, row)
+    actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
+    row, restored = await _take_back(app_state, root, row, created, actor)
     by = projects.actor_name(actor)
+    # Pending again, read against the factory as the Undo left it, with no grace
+    # timer: it waits for a person, as a reopened proposal does.
+    plan = await asyncio.to_thread(_cosign_plan, deps, root, row)
+    now = now_s()
+    reason = f"{by} undid the Apply on {decision.ref}"
+    try:
+        row = (
+            await asyncio.to_thread(
+                lambda: store.update_proposal(
+                    row.id,
+                    expect_status="undone",
+                    status="pending",
+                    decided_by=None,
+                    decided_at=None,
+                    applied_at=None,
+                    undo_until=None,
+                    before=None,
+                    after=None,
+                    based_on=plan.based_on or row.based_on,
+                    result={
+                        "reopened": {"by": actor.id, "at": now, "code": "undone", "reason": reason}
+                    },
+                )
+            )
+            or row
+        )
+    except ProposalStateConflict as exc:
+        raise CockpitError(
+            409, "undo_closed", f"{label} is already {exc.proposal.status}"
+        ) from None
+    author = (
+        await asyncio.to_thread(_title_of, deps, row.author)
+        if row.author_kind == "agent"
+        else control.human_name(row.author)
+    )
+    fresh = await _mirror(app_state, root, row, plan, author)
+    row = await asyncio.to_thread(store.update_proposal, row.id, decision_id=fresh.id) or row
+    held = await tasks.hold_again(
+        app_state,
+        root.id,
+        label,
+        since=int(applied_at),
+        why=f"{label} waits for a person again ({fresh.ref}): {reason}",
+        actor=actor,
+    )
     await events.emit(
         app_state,
         root.id,
         "proposal.undone",
         severity="notice",
         subject=f"{_SUBJECT_PREFIX}{label}",
-        summary=f"{label} undone by {by}",
+        summary=f"{label} undone by {by}: it waits for a person again in {fresh.ref}",
         data={
             **actor.event_data(),
             "proposal_id": row.id,
-            "dropped": created,
+            "dropped": list(created),
             "restored": restored,
+            "answer": decision.ref,
+            "decision": fresh.ref,
+            "back_to": "pending",
+            "held_again": held,
         },
     )
-    _tell_proposer(app_state, row, closed_text(label, "undone", by), None)
-    return await asyncio.to_thread(proposal_view, deps, row)
+    _tell_proposer(app_state, row, back_to_pending_text(label, by, decision.ref, fresh.ref), None)
+    return {
+        "proposal": await asyncio.to_thread(proposal_view, deps, row),
+        "decision": await asyncio.to_thread(decisions.decision_view, deps, fresh),
+    }
 
 
 def _changed_since(row: FactoryProposal, slug: str, current: FactoryProject) -> bool:
@@ -3443,6 +3611,7 @@ __all__ = [
     "apply_graceful",
     "apply_now",
     "ask_initiative",
+    "back_to_pending_text",
     "charter_hash",
     "check_based_on",
     "close_stale",
@@ -3471,6 +3640,7 @@ __all__ = [
     "sent_back_text",
     "stale_reason",
     "undo",
+    "undo_answer",
     "validate",
     "withdraw",
 ]

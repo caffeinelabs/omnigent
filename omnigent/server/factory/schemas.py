@@ -1603,6 +1603,7 @@ class PreviewAppliedMeta(_View):
     """
     A structural verb applied (or undone) from the cockpit, in its node's thread.
 
+    :param by_user: Who applied it (a user id): they, or an owner, may undo it.
     :param undo_token: ``POST …/undo/{token}`` takes it back until ``undo_until``.
     :param filed: The proposal it was filed as (``C-19``), when it was.
     """
@@ -1611,6 +1612,7 @@ class PreviewAppliedMeta(_View):
     verb: str
     label: str | None = None
     by: str | None = None
+    by_user: str | None = None
     undo_token: str | None = None
     undo_until: int | None = None
     filed: str | None = None

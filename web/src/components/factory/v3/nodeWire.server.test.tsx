@@ -249,9 +249,11 @@ describe("cockpit v3 · the server's node pages", () => {
     authenticatedFetch.mockResolvedValue(new Response("{}", { status: 200 }));
     const decision = PAGES["assistant-core"]!.status.decision!;
     await liveNodeSource.answer("f", decision, decision.actions[0]!);
-    const [url, init] = authenticatedFetch.mock.calls.at(-1)! as [string, RequestInit];
+    // Then the proposal it applied is read, for its Undo.
+    const [url, init] = authenticatedFetch.mock.calls.at(-2)! as [string, RequestInit];
     expect(decision.id).toBe("D-45");
     expect(url).toBe(`/v1/factory/decisions/${decision.row_id}/answer`);
     expect(JSON.parse(String(init.body))).toEqual({ option_id: "apply" });
+    expect(authenticatedFetch.mock.calls.at(-1)![0]).toBe("/v1/factory/factories/f/proposals/C-16");
   });
 });

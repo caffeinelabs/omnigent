@@ -61,6 +61,24 @@ export interface DecisionRef {
   row_id?: string;
 }
 
+/** An answer's Undo: the proposal it applied, which can be taken back until `until_s`. (client) */
+export interface AnswerUndo {
+  /** `C-16`. */
+  proposal: string;
+  /** Epoch seconds on the server's clock (the proposal's `undo_until`). */
+  until_s: number;
+}
+
+/** What an answer did: its Undo while the proposal it applied keeps one. (client) */
+export interface AnswerOutcome {
+  undo?: AnswerUndo | null;
+}
+
+/** What taking an answer back left: the proposal asks a person again in `decision` (`D-52`). (client) */
+export interface AnswerUndone {
+  decision?: string | null;
+}
+
 /** A path step: down into the child that blocks most (`›`), a hop or a hold (`→`), or the person. */
 export type Segment =
   | { sep: "›"; ref: string; title?: string }

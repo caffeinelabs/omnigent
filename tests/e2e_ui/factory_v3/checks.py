@@ -2,9 +2,11 @@
 What every cockpit v3 screen must hold, checked in the browser. Not a test module.
 
 - :data:`BODY_CHECKS` sweeps a node page and v3's own parts of its chat
-  column: no line, path or polygon drawn between nodes (icons are glyphs, not
-  links between nodes, and are left out), no leaf that says only "none", "0"
-  or "—", and no sideways scroll of the page.
+  column: no line, path or polygon drawn between nodes (an icon inside a
+  control, a button, a link or a chip, is a glyph and is left out; one anywhere
+  else counts, so a connector drawn with an icon is caught), no leaf that says
+  only "none", "0" or "—", and no sideways scroll of the page. In the chat
+  column the Room's answer cards and the chat's icons stay as they are.
 - :func:`node` is a node page by ref; :func:`api` reads the factory's API as
   the browser's user (single-user server: no header).
 """
@@ -22,12 +24,13 @@ BODY_CHECKS = """(node) => {
   )];
   const roots = new Set(chat);
   const room = '[data-testid^="decision-card-"], [data-testid^="proposal-card-"], '
-    + '[data-testid^="loop-card-"]';
+    + '[data-testid^="loop-card-"], svg.lucide';
   const own = (el) => {
     const part = el.closest('[data-testid^="v3-"]');
     return part !== null && !roots.has(part) && el.closest(room) === null;
   };
-  const icon = (el) => el.closest('svg.lucide') !== null;
+  const control = 'button, a, [role="button"], [data-testid="v3-chip"]';
+  const icon = (el) => el.closest('svg.lucide') !== null && el.closest(control) !== null;
   const body = (el) => !chat.some((c) => c.contains(el)) || own(el);
   const shown = (sel) => [...document.querySelectorAll(sel)]
     .filter((el) => node.contains(el) || chat.some((c) => c.contains(el)))

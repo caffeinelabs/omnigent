@@ -5,7 +5,9 @@ through the node API, in the browser.
 The server holds a factory shaped like a real one at 13:40 (``seed.py``). Each
 test seeds its own, so what one applies never leaks into another:
 
-- Apply on a decision answers it, and its Undo (the proposal's own) takes it back;
+- Apply on a decision answers it, and its Undo takes it back: the proposal asks
+  a person again (a fresh ask), what it held waits again, Needs you lists it;
+- Apply on a factory-tree rule makes a definition version, with no Undo offered;
 - Start now on the waiting panel: the preview moves it to First in its
   feature's columns, Apply relaxes its wait to the merged change, the status
   line changes, Undo restores it;
@@ -103,6 +105,18 @@ def _thread(v3_server: V3Server, factory: Seeded, key: str) -> list[str]:
 # ── Answer, then Undo ──────────────────────────────────────────
 
 
+def _needs_you(v3_server: V3Server, factory: Seeded, tree: str = "product") -> list[str]:
+    """The ids of the asks in *tree*'s Needs you, ranked."""
+    found = api(v3_server.base_url, factory.fid, "/needs-you", tree=tree)
+    return [i["decision"]["id"] for i in found["items"]]
+
+
+def _status_of(v3_server: V3Server, factory: Seeded, ref: str) -> dict[str, object]:
+    """Node *ref*'s status line as the API gives it, without the ask's id."""
+    status = api(v3_server.base_url, factory.fid, f"/n/{ref}")["status"]
+    return {"label": status.get("label"), "ends": status.get("ends")}
+
+
 def test_apply_on_a_decision_then_undo_takes_it_back(
     open_cockpit: Callable[[int, int, Theme], Cockpit],
     v3_server: V3Server,
@@ -110,6 +124,8 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
 ) -> None:
     cockpit = open_cockpit(1440, 900, "light")
     page = cockpit.page
+    held_before = _status_of(v3_server, factory, factory.held_task)
+    assert factory.apply_decision in _needs_you(v3_server, factory)
     cockpit.open(factory.project)
     status = _status(page, factory.project)
     expect(status).to_contain_text(
@@ -127,23 +143,69 @@ def test_apply_on_a_decision_then_undo_takes_it_back(
     expect(status).not_to_contain_text(factory.apply_decision, timeout=LOAD_MS)
     applied = api(v3_server.base_url, factory.fid, f"/proposals/{factory.proposal}")
     assert applied["proposal"]["status"] == "applied", applied
+    assert _status_of(v3_server, factory, factory.held_task) != held_before
 
-    # The answer applied C-16: its own Undo stays beside the verbs for 10 minutes.
+    # The answer applied C-16: its Undo stays beside the verbs while the server keeps one.
     undo = _undo_latest(page, factory.project, f"Apply {factory.proposal}")
     with page.expect_response(
-        lambda r: (
-            r.request.method == "POST" and r.url.endswith(f"/proposals/{factory.proposal}/undo")
-        )
+        lambda r: r.request.method == "POST" and r.url.endswith("/undo")
     ) as undone:
         undo.click()
     assert undone.value.status == 200, undone.value.text()
+    assert "/decisions/" in undone.value.url, undone.value.url
+    fresh = undone.value.json()["decision"]["ref"]
+    assert fresh != factory.apply_decision
     expect(page.locator("[data-factory-toast]")).to_contain_text(
-        f"Undone: Apply {factory.proposal} ({factory.apply_decision})."
+        f"Undone: Apply {factory.proposal} ({factory.apply_decision}). "
+        f"{factory.proposal} asks again in {fresh}."
     )
     expect(node(page, factory.project).get_by_test_id("v3-undo-latest")).to_have_count(0)
+    # Put back: C-16 waits for a person again, T-16 is held for it, and the ask is in Needs you.
+    expect(status).to_contain_text(
+        f"needs you: Apply {factory.proposal} ({fresh})", timeout=LOAD_MS
+    )
     after = api(v3_server.base_url, factory.fid, f"/proposals/{factory.proposal}")
-    assert after["proposal"]["status"] == "undone", after
+    assert after["proposal"]["status"] == "pending", after
+    assert after["proposal"]["decision_ref"] == fresh, after
+    assert _status_of(v3_server, factory, factory.held_task) == held_before
+    asks = _needs_you(v3_server, factory)
+    assert fresh in asks and factory.apply_decision not in asks, asks
     _clean(page, factory.project, "after undo")
+    assert cockpit.errors == [], cockpit.errors
+
+
+def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
+    open_cockpit: Callable[[int, int, Theme], Cockpit],
+    v3_server: V3Server,
+    factory: Seeded,
+) -> None:
+    cockpit = open_cockpit(1440, 900, "light")
+    page = cockpit.page
+    cockpit.open("product")
+    page.get_by_test_id("cockpit-needs-you").click()
+    sheet = page.get_by_test_id("v3-needs-sheet")
+    expect(sheet).to_be_visible(timeout=LOAD_MS)
+    sheet.get_by_test_id("v3-needs-other-tree").click()
+    items = sheet.get_by_test_id("v3-needs-item")
+    expect(items).to_have_count(2, timeout=LOAD_MS)
+    rule = items.filter(has_text="C-17")
+    ask = rule.get_attribute("data-decision")
+    assert ask, "C-17's ask has an id"
+
+    with page.expect_response(
+        lambda r: r.request.method == "POST" and r.url.endswith("/answer")
+    ) as answered:
+        rule.get_by_role("button", name="Apply", exact=True).click()
+    assert answered.value.status == 200, answered.value.text()
+    toast = page.locator("[data-factory-toast]")
+    expect(toast).to_contain_text(f"{ask}: Apply")
+    # A rule applies as a definition version: there is no proposal Undo to offer.
+    expect(page.locator("[data-factory-toast] [data-toast-undo]")).to_have_count(0)
+    applied = api(v3_server.base_url, factory.fid, "/proposals/C-17")["proposal"]
+    assert applied["status"] in ("applied", "trial"), applied
+    assert applied["undo_until"] is None, applied
+    expect(items).to_have_count(1, timeout=LOAD_MS)
+    assert ask not in _needs_you(v3_server, factory, "factory")
     assert cockpit.errors == [], cockpit.errors
 
 

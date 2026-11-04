@@ -11,9 +11,11 @@
 
 import { type ReactNode, createContext, createElement, useContext } from "react";
 import { answerDecision, factoryErrorFromResponse } from "@/lib/factoryApi";
-import { undoProposal } from "@/lib/factoryRoomApi";
 import { authenticatedFetch } from "@/lib/identity";
 import type {
+  AnswerOutcome,
+  AnswerUndo,
+  AnswerUndone,
   DecisionAction,
   DecisionRef,
   FindHit,
@@ -60,14 +62,20 @@ export interface NodeSource {
     signal?: AbortSignal,
     cursor?: string,
   ) => Promise<LevelView | null>;
-  /** Answer a decision with one of its actions. */
-  answer: (factoryId: string, decision: DecisionRef, action: DecisionAction) => Promise<void>;
   /**
-   * Take back an answer that applied a proposal ("Apply C-16"), within its
-   * window: the proposal's own Undo (`POST …/proposals/{C-n}/undo`). Only for
-   * answers `answerProposal` names.
+   * Answer a decision with one of its actions; the outcome carries the
+   * answer's Undo while the proposal it applied keeps one (`undo_until`).
    */
-  undoAnswer?: (factoryId: string, decision: DecisionRef, action: DecisionAction) => Promise<void>;
+  answer: (
+    factoryId: string,
+    decision: DecisionRef,
+    action: DecisionAction,
+  ) => Promise<AnswerOutcome | void>;
+  /**
+   * Take back an answer whose outcome had an Undo (`POST /decisions/{id}/undo`):
+   * the proposal it applied is undone and asks a person again, under a fresh decision.
+   */
+  undoAnswer?: (factoryId: string, decision: DecisionRef) => Promise<AnswerUndone | void>;
   /** A verb's dry run: nothing changes (`POST …/n/{ref}/preview`). */
   preview?: (
     factoryId: string,
@@ -233,24 +241,63 @@ export const liveNodeSource: NodeSource = {
     if (!res.ok) throw await factoryErrorFromResponse(res);
     return (await res.json()) as LevelsInfo;
   },
-  answer: async (_fid, decision, action) => {
+  answer: async (fid, decision, action) => {
     // The answer route takes the decision's row id; `id` is its ref ("D-45").
     await answerDecision(decision.row_id ?? decision.id, { option_id: action.id });
-  },
-  undoAnswer: async (fid, decision, action) => {
     const proposal = answerProposal(decision, action);
-    if (!proposal) throw new Error(`${decision.id}: ${action.label} cannot be undone here.`);
-    await undoProposal(fid, proposal);
+    return proposal ? { undo: await proposalUndo(fid, proposal) } : {};
+  },
+  undoAnswer: async (_fid, decision) => {
+    const res = await sendJson(
+      `/v1/factory/decisions/${enc(decision.row_id ?? decision.id)}/undo`,
+      "POST",
+      {},
+    );
+    const body = (await res.json()) as { decision?: { ref?: string | null } | null };
+    return { decision: body.decision?.ref ?? null };
   },
 };
 
 /**
- * The proposal an answer applies, which its own Undo takes back ("C-16" for
- * Apply on D-45, whose subject is C-16), else null: other answers stand.
+ * The proposal an answer may have applied ("C-16" for Apply on D-45, whose
+ * subject is C-16), else null: other answers apply nothing.
  */
 export function answerProposal(decision: DecisionRef, action: DecisionAction): string | null {
   const subject = decision.subject ?? "";
   return action.id === "apply" && /^C-\d+$/.test(subject) ? subject : null;
+}
+
+/** The parts of `GET …/proposals/{ref}` an answer's Undo reads. */
+interface ProposalUndoView {
+  status?: string;
+  kind?: string;
+  undo_until?: number | null;
+}
+
+/**
+ * The Undo a proposal still has once answered, as the server keeps it: only
+ * an applied projects change with an `undo_until` (a rules, tuning or code
+ * change, a cancel, split or merge has none). Null when it cannot be read.
+ */
+export function undoOfProposal(
+  ref: string,
+  view: ProposalUndoView | null | undefined,
+): AnswerUndo | null {
+  if (view?.status !== "applied" || view.kind !== "projects" || view.undo_until == null)
+    return null;
+  return { proposal: ref, until_s: view.undo_until };
+}
+
+async function proposalUndo(fid: string, ref: string): Promise<AnswerUndo | null> {
+  try {
+    const res = await authenticatedFetch(`${factoryPath(fid)}/proposals/${enc(ref)}`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { proposal?: ProposalUndoView | null };
+    return undoOfProposal(ref, body.proposal);
+  } catch {
+    // The answer stands; only its Undo is not offered.
+    return null;
+  }
 }
 
 const NodeSourceContext = createContext<NodeSource | null>(null);

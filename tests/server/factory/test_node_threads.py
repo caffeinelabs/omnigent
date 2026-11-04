@@ -464,7 +464,13 @@ async def test_each_node_card_is_a_valid_chat_message(env: RoomEnv) -> None:
         (
             "preview_applied",
             "alice added T-2.",
-            {"verb": "add", "label": "Add a task", "by": "alice", "undo_token": "0" * 24},
+            {
+                "verb": "add",
+                "label": "Add a task",
+                "by": "alice",
+                "by_user": "alice",
+                "undo_token": "0" * 24,
+            },
         ),
     ]
     for kind, line, meta in cards:
@@ -482,6 +488,7 @@ async def test_each_node_card_is_a_valid_chat_message(env: RoomEnv) -> None:
     assert set(shown) == {"why", "offer", "closed_alarm", "preview_applied"}
     assert shown["closed_alarm"] is not None and shown["closed_alarm"].cause == "held for C-1"
     assert shown["preview_applied"] is not None and shown["preview_applied"].verb == "add"
+    assert shown["preview_applied"].by_user == "alice"
 
 
 async def test_the_thread_list_names_each_threads_node(env: RoomEnv) -> None:
@@ -503,6 +510,23 @@ async def test_the_thread_list_names_each_threads_node(env: RoomEnv) -> None:
         "T-1",
         "PL · api-version",
     )
+
+
+async def test_the_thread_list_caps_the_node_threads_at_the_newest(
+    env: RoomEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory.api import chat as chat_api
+
+    await _post(env, "task:T-1", "A question about the route (sample)")
+    base = f"/v1/factory/factories/{env.cockpit.fid}/chat/threads"
+    monkeypatch.setattr(chat_api, "NODE_THREADS_MAX", 0)
+
+    capped = (
+        await env.cockpit.client.get(base, params={"nodes": "1"}, headers={"X-Test-User": "alice"})
+    ).json()["data"]
+
+    keys = {t["key"] for t in capped}
+    assert "task:T-1" not in keys and "factory" in keys
 
 
 async def test_preflight_says_the_server_routes_node_threads(env: RoomEnv) -> None:

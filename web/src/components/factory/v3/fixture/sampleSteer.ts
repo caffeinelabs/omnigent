@@ -7,6 +7,8 @@
 
 import { FactoryApiError } from "@/lib/factoryApi";
 import type {
+  AnswerOutcome,
+  AnswerUndone,
   ChildPage,
   FindHit,
   NeedsYouList,
@@ -846,9 +848,40 @@ export class SampleSteerEngine extends SampleLensEngine {
     return done;
   }
 
-  /** Take an answer back (the proposal it applied is undone): the factory as it was before it. */
-  unanswer(decisionId: string): void {
+  /**
+   * What an answer did, as the server says: Apply on a project change's ask
+   * keeps its Undo for 10 minutes; a rule's (the factory tree) has none.
+   */
+  answerOutcome(decisionId: string, actionLabel: string): AnswerOutcome {
+    const d = this.dec(decisionId);
+    const proposal = d?.subject ?? "";
+    const applied = actionLabel === "Apply" && /^C-\d+$/.test(proposal);
+    if (!d || !applied || this.N(d.node)?.tree === "factory") return {};
+    if (!this.undos.has(`answer:${decisionId}`)) return {};
+    return { undo: { proposal, until_s: Math.floor((Date.now() + SAMPLE_UNDO_MS) / 1000) } };
+  }
+
+  /**
+   * Take an answer back as the server does: what its proposal applied is
+   * undone, and the proposal asks a person again under a fresh ask, which what
+   * waited on the old one now waits on. The old ask stays answered.
+   */
+  unanswer(decisionId: string): AnswerUndone {
     this.undo(`answer:${decisionId}`);
+    const old = this.data.decisions.find((d) => d.id === decisionId)!;
+    const top = Math.max(
+      0,
+      ...this.data.decisions.map((d) => Number(/^D-(\d+)$/.exec(d.id)?.[1] ?? 0)),
+    );
+    const fresh: RawDecision = { ...old, id: `D-${top + 1}`, open: true, age: "just now" };
+    delete fresh.expires;
+    old.open = false;
+    this.data.decisions.push(fresh);
+    for (const n of this.data.nodes) {
+      for (const w of n.waits ?? []) if (w.decision === decisionId) w.decision = fresh.id;
+    }
+    this.changed();
+    return { decision: fresh.id };
   }
 
   undo(token: string): void {

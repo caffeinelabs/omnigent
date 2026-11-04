@@ -39,7 +39,7 @@ import { swallowEnter } from "../DecisionButtons";
 import { useNodeActions } from "../NodeContext";
 import { Avatar, Kbd } from "../nodeParts";
 import { useNode } from "../nodeQueries";
-import { useUndoToken } from "../nodeSteer";
+import { undoViewer, useUndoToken } from "../nodeSteer";
 import { nodeHref } from "../nodeRoutes";
 import { AMBER, STATE_WORDS } from "../nodeTokens";
 import type { DecisionRef, NodePage, StatusLine, VerbArgs } from "../nodeTypes";
@@ -153,19 +153,35 @@ function OfferOf({
   );
 }
 
-/**
- * The cards the Room leaves to the node chat: why, closed alarm, offer. One
- * it cannot draw (its node loading or gone, an alarm it knows nothing of)
- * shows `fallback`, the message's own line, so it never renders empty.
- */
-/** What a verb's card needs to offer its Undo: the tokens already undone, now, and how. */
+/** What a verb's card needs to offer its Undo: the tokens already undone, who looks, and how. */
 interface AppliedUndo {
   undone: ReadonlySet<string>;
-  nowS: number;
+  /** The server lets the person who applied it, or an owner, undo it. */
+  viewer: { userId: string | null | undefined; owner: boolean };
+  clockOffsetS: number;
   run: ((token: string, label: string) => Promise<void>) | null;
 }
 
-/** A verb's card: what it did, and its Undo while the token is open and not yet used. */
+/** "Now" on the server's clock, read every 15 s while `until` (epoch s) is ahead; no tick without it. */
+function useNowUntil(clockOffsetS: number, until: number | null): number {
+  const [nowS, setNowS] = useState(() => Math.floor(Date.now() / 1000 + clockOffsetS));
+  useEffect(() => {
+    if (until == null) return;
+    const read = () => Math.floor(Date.now() / 1000 + clockOffsetS);
+    const first = read();
+    setNowS(first);
+    if (first >= until) return;
+    const timer = setInterval(() => {
+      const at = read();
+      setNowS(at);
+      if (at >= until) clearInterval(timer);
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [clockOffsetS, until]);
+  return nowS;
+}
+
+/** A verb's card: what it did, and its Undo while the token is open, unused and this viewer's. */
 function AppliedOf({
   message,
   applied,
@@ -177,17 +193,22 @@ function AppliedOf({
 }) {
   const [busy, setBusy] = useState(false);
   const meta = message.card?.meta?.kind === "preview_applied" ? message.card.meta : null;
+  const token = meta && !meta.undone ? (meta.undo_token ?? null) : null;
+  const { viewer } = applied;
+  const theirs = viewer.owner || Boolean(viewer.userId && meta?.by_user === viewer.userId);
+  const open = Boolean(token && theirs && !applied.undone.has(token) && applied.run);
+  const until = open ? (meta?.undo_until ?? null) : null;
+  // Only an open Undo ticks, so the rest of the thread never re-renders for the clock.
+  const nowS = useNowUntil(applied.clockOffsetS, until);
   if (!meta) return fallback;
-  const token = meta.undone ? null : (meta.undo_token ?? null);
-  const open = token && !applied.undone.has(token) && applied.run;
-  const left = open && meta.undo_until ? meta.undo_until - applied.nowS : null;
+  const left = until != null ? until - nowS : null;
   return (
     <AppliedCard
       text={message.body}
       leftS={left}
       busy={busy}
       onUndo={
-        open && token
+        token && until != null
           ? () => {
               setBusy(true);
               void applied.run!(token, meta.label ?? meta.verb).finally(() => setBusy(false));
@@ -198,6 +219,11 @@ function AppliedOf({
   );
 }
 
+/**
+ * The cards the Room leaves to the node chat: why, closed alarm, offer, a
+ * verb's card. One it cannot draw (its node loading or gone, an alarm it knows
+ * nothing of) shows `fallback`, the message's own line, so it never renders empty.
+ */
 function NodeMessageCard({
   message,
   attached,
@@ -590,14 +616,8 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   // A verb's card offers its Undo until it ran: the server's "undone" card names its token.
   const messages = useRoomMessages(fid, thread.key);
   const undoToken = useUndoToken(fid);
-  // "Now" on the server's clock, every 15 s: "Undo (n min left)" counts down and goes at 0.
-  const [nowS, setNowS] = useState(() => Math.floor(Date.now() / 1000 + clockOffsetS));
-  useEffect(() => {
-    const read = () => setNowS(Math.floor(Date.now() / 1000 + clockOffsetS));
-    read();
-    const timer = setInterval(read, 15_000);
-    return () => clearInterval(timer);
-  }, [clockOffsetS]);
+  const viewerId = snapshot.viewer?.user_id;
+  const viewerOwner = undoViewer({ snapshot }).owner;
   const applied = useMemo<AppliedUndo>(() => {
     const undone = new Set<string>();
     for (const m of flattenPages(messages.data)) {
@@ -606,8 +626,13 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
         undone.add(meta.undo_token);
       }
     }
-    return { undone, nowS, run: undoToken };
-  }, [messages.data, nowS, undoToken]);
+    return {
+      undone,
+      viewer: { userId: viewerId, owner: viewerOwner },
+      clockOffsetS,
+      run: undoToken,
+    };
+  }, [clockOffsetS, messages.data, undoToken, viewerId, viewerOwner]);
 
   const renderCard = useCallback(
     (message: ChatMessageView, attached: boolean, fallback: ReactNode) => (

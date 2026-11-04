@@ -474,6 +474,69 @@ describe("cockpit v3 · the node chat column", () => {
     await waitFor(() => expect(undo).toHaveBeenCalledWith(expect.any(String), "tok-new"));
   });
 
+  it("offers a verb card's Undo only to the person who applied it, or an owner", async () => {
+    setWindow("desktop");
+    const base = sampleRoomMessages();
+    const like = base.find((m) => m.thread === "project:assistant-core")!;
+    const now = Math.floor(Date.now() / 1000);
+    const card = (id: string, seq: number, body: string, by_user: string) => ({
+      ...like,
+      id,
+      seq,
+      author_kind: "system" as const,
+      author: "server",
+      author_title: null,
+      body,
+      card: {
+        type: "preview_applied" as const,
+        ref: "assistant-core",
+        id: null,
+        meta: {
+          kind: "preview_applied" as const,
+          verb: "add",
+          by_user,
+          undo_token: `tok-${id}`,
+          undo_until: now + 400,
+        },
+      },
+    });
+    const can = {
+      post: true,
+      answer: true,
+      review: true,
+      control: true,
+      intervene: true,
+      apply_projects: true,
+      apply_tuning: false,
+      restart: true,
+      stop: true,
+      invite: false,
+      settings: false,
+      terminal: false,
+      start: true,
+    };
+    renderChat("assistant-core", {
+      install,
+      messages: [
+        ...base,
+        card("mine", 900, "Ana added Usage (C-30).", "ana@example.com"),
+        card("theirs", 901, "Bob added Docs (C-31).", "bob@example.com"),
+      ],
+      viewer: {
+        user_id: "ana@example.com",
+        role: "operator",
+        level: 3,
+        is_creator: false,
+        can,
+      },
+    });
+    const list = await screen.findByTestId("room-message-list", {}, { timeout: 4000 });
+    await waitFor(() => expect(within(list).getAllByTestId("v3-applied")).toHaveLength(2));
+    const open = within(list).getAllByTestId("v3-applied-undo");
+    expect(open).toHaveLength(1);
+    expect(open[0]!.closest('[data-testid="v3-applied"]')).toHaveTextContent("Ana added Usage");
+  });
+
   it("lists the node's verbs after / (the answer opens the card) and quick verbs above the box", async () => {
     setWindow("desktop");
     const onVerb = vi.fn();

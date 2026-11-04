@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import {
   type DefinitionVersionsResponse,
   type DefinitionView,
+  FactoryApiError,
   fetchDefinitionVersions,
 } from "@/lib/factoryApi";
 import { learnKey, useDefinitionVersions, usePinDefinition } from "../insights/learnQueries";
@@ -27,8 +28,9 @@ import { useDebounced } from "../team/teamQueries";
 import { useFactoryToast } from "../ui/Toast";
 import { useNodeActions } from "./NodeContext";
 import { NODE_STALE_MS, nodeQueryKeys, useAnswerDecision } from "./nodeQueries";
-import { answerProposal, useNodeSource } from "./nodeSource";
+import { useNodeSource } from "./nodeSource";
 import type {
+  AnswerOutcome,
   DecisionAction,
   DecisionRef,
   NodePage,
@@ -429,11 +431,27 @@ export function useUndoToken(factoryId?: string) {
 // ── Answers, with Undo when they applied a proposal ────────────
 
 /**
+ * The ask a refused answer still answered: the server stored the answer but
+ * applying its proposal failed (its error body carries the decision), with why.
+ */
+export function answeredAnyway(error: unknown): { ref: string; reason: string } | null {
+  if (!(error instanceof FactoryApiError)) return null;
+  const body = error.body as { decision?: { ref?: unknown } | null; reason?: unknown } | null;
+  const ref = body?.decision?.ref;
+  if (typeof ref !== "string" || !ref) return null;
+  const why = typeof body?.reason === "string" && body.reason ? body.reason : (error.code ?? "");
+  // "C-17: the definition already has these values" names the proposal the toast names already.
+  return { ref, reason: why.replace(/^C-\d+:\s*/, "") };
+}
+
+/**
  * Answer an ask (always a click). An answer that applied a proposal ("Apply
- * C-16") can be taken back with the proposal's own Undo for 10 minutes: the
- * toast offers it, and the node it was answered on (`at`) keeps "Apply C-16:
- * Undo (n min left)" beside its verbs. Every node page reads again after
- * either. `sample`: the toast says only the sample changed.
+ * C-16") can be taken back while the server keeps its Undo (the proposal's
+ * `undo_until`; a rules or tuning change has none): the toast offers it, and
+ * the node it was answered on (`at`) keeps "Apply C-16: Undo (n min left)"
+ * beside its verbs. Undo puts the proposal back: it asks a person again, so
+ * what it held waits again. Every node page reads again after either.
+ * `sample`: the toast says only the sample changed.
  */
 export function useAnswerAsk(
   at: string | null,
@@ -441,6 +459,7 @@ export function useAnswerAsk(
 ) {
   const fid = useFid(factoryId);
   const source = useNodeSource();
+  const shell = useOptionalFactoryShell();
   const toast = useFactoryToast();
   const refresh = useRefreshNodes(fid);
   const { mutate } = useAnswerDecision(fid);
@@ -449,27 +468,31 @@ export function useAnswerAsk(
       mutate(
         { decision, action },
         {
-          onSuccess: () => {
+          onSuccess: (outcome: AnswerOutcome | void) => {
             const message = sample
               ? `Sample data: nothing was answered. The sample shows what ${decision.id}: ${action.label} would do.`
               : `${decision.id}: ${action.label}`;
-            const proposal = answerProposal(decision, action);
+            const undo = outcome ? outcome.undo : null;
             const back = source?.undoAnswer;
-            if (!proposal || !back) {
+            // Its window on the server's clock, counted from now on this one.
+            const leftMs = undo ? (undo.until_s - serverNowS(shell)) * 1000 : 0;
+            if (!undo || !back || leftMs <= 0) {
               toast.show({ message });
               return;
             }
+            const label = `${action.label} ${undo.proposal}`;
             const entry: NodeUndo = {
-              label: `${action.label} ${proposal}`,
-              expiresAt: Date.now() + UNDO_WINDOW_S * 1000,
+              label,
+              expiresAt: Date.now() + leftMs,
               run: () =>
-                back(fid, decision, action).then(
-                  () => {
+                back(fid, decision).then(
+                  (undone) => {
                     if (at) forgetUndo(fid, at, entry);
                     void refresh();
-                    toast.show({
-                      message: `Undone: ${action.label} ${proposal} (${decision.id}).`,
-                    });
+                    const again = undone?.decision
+                      ? ` ${undo.proposal} asks again in ${undone.decision}.`
+                      : "";
+                    toast.show({ message: `Undone: ${label} (${decision.id}).${again}` });
                   },
                   (error: unknown) => {
                     // Its window closed, or what it changed moved on: it stays applied.
@@ -482,11 +505,22 @@ export function useAnswerAsk(
             if (at) rememberUndo(fid, at, entry);
             toast.show({ message, undo: () => void entry.run() });
           },
-          onError: (error) =>
-            toast.show({ message: `${decision.id} was not answered: ${errorWords(error)}` }),
+          onError: (error) => {
+            const answered = answeredAnyway(error);
+            if (answered) {
+              // Answered, but what it applies did not: nothing to undo.
+              void refresh();
+              const what = decision.subject ? `applying ${decision.subject}` : "applying it";
+              toast.show({
+                message: `${answered.ref} answered; ${what} failed: ${answered.reason}`,
+              });
+              return;
+            }
+            toast.show({ message: `${decision.id} was not answered: ${errorWords(error)}` });
+          },
         },
       ),
-    [at, fid, mutate, refresh, sample, source?.undoAnswer, toast],
+    [at, fid, mutate, refresh, sample, shell, source?.undoAnswer, toast],
   );
 }
 

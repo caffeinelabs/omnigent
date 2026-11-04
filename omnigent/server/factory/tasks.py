@@ -2182,6 +2182,87 @@ async def sweep_holds(
     return [row.ref for row, *_ in lapsed]
 
 
+HOLD_BACK_HEAD: Final = "[Factory notice · HOLD BACK"
+
+
+def hold_back_text(task: FactoryTask, hold: Mapping[str, Any], why: str) -> str:
+    """The ``[Factory notice · HOLD BACK · T-n · why]`` mail to the task's PL."""
+    on = waits.clip(str(hold.get("on") or "-"), 80)
+    return (
+        f"{HOLD_BACK_HEAD} · {task.ref}]\n"
+        f'Your hold on {task.ref} ({task.key}) on "{on}" is back: {waits.clip(why, 200)}. '
+        f"Keep {task.ref} waiting until it is answered; if its IC started on it meanwhile, "
+        "stop it at a clean point."
+    )
+
+
+async def hold_again(
+    app_state: Any,
+    factory_id: str,
+    ref: str,
+    *,
+    since: int,
+    why: str,
+    actor: Actor,
+) -> list[str]:
+    """
+    Put back the holds on *ref* (``C-n`` or ``D-n``) that lapsed since *since*
+    because it closed, now that it is open again (an Undo took its answer back).
+
+    Each comes back as it was, until its own ``until``; a task that closed or was
+    held on something else meanwhile is left alone. Logs ``task.held`` and tells
+    the PL. Never raises.
+
+    :param since: When *ref* closed (epoch seconds): older lapses are not its.
+    :returns: The refs of the tasks held again.
+    """
+    number = waits.ref_number(ref)
+    kind = waits.REF_KIND_PROPOSAL if ref.upper().startswith("C-") else waits.REF_KIND_DECISION
+    if number is None:
+        return []
+    deps = factory_deps(app_state)
+    store = deps.factory_store
+
+    def run() -> list[tuple[FactoryTask, dict[str, Any]]]:
+        now = int(time.time())
+        out: list[tuple[FactoryTask, dict[str, Any]]] = []
+        for event in store.find_events(factory_id, ["task.released"], since * 1000, limit=500):
+            data = event.data or {}
+            hold = data.get("hold")
+            if data.get("reason") != "lapsed" or not isinstance(hold, Mapping):
+                continue
+            if hold.get("kind") != kind or waits.ref_number(hold.get("ref")) != number:
+                continue
+            until = waits.hold_until(hold)
+            if until is not None and now >= until:
+                continue
+            try:
+                task = store.get_task(str(data.get("task_id") or ""))
+            except ValueError:
+                task = None
+            if task is None or task.hold or task.state in TASK_CLOSED_STATES:
+                continue
+            row = store.update_task(task.id, hold=dict(hold)) or task
+            out.append((row, dict(hold)))
+        return out
+
+    try:
+        async with lock(factory_id):
+            held = await asyncio.to_thread(run)
+    except Exception:  # noqa: BLE001 - the sweep's next tick reads the holds as they are
+        _logger.warning("factory tasks: holds on %s not put back", ref, exc_info=True)
+        return []
+    for row, hold in held:
+        try:
+            await _hold_event(
+                app_state, factory_id, row, hold, f"{row.ref} held again: {why}", actor
+            )
+            await _mail_pl(app_state, factory_id, row.project_slug, hold_back_text(row, hold, why))
+        except Exception:  # noqa: BLE001 - the hold is already back
+            _logger.warning("factory tasks: hold of %s back but not told", row.id, exc_info=True)
+    return [row.ref for row, _ in held]
+
+
 def reset() -> None:
     """Forget cached observations and locks (tests)."""
     _observed.clear()
@@ -2211,6 +2292,8 @@ __all__ = [
     "emit_all",
     "engine_mode",
     "get_view",
+    "hold_again",
+    "hold_back_text",
     "hold_lapsed_text",
     "hold_of_input",
     "hold_task",

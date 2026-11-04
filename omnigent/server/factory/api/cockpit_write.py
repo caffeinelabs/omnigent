@@ -3,6 +3,8 @@
 Routes (user JWT; access per route, see each module):
 
 - ``POST /v1/factory/decisions/{id}/answer`` / ``…/withdraw`` (:mod:`..decisions`)
+- ``POST /v1/factory/decisions/{id}/undo``: take back an Apply on a proposal's
+  decision (:func:`..proposals.undo_answer`)
 - ``POST /v1/factory/factories/{fid}/control`` (:mod:`..control`)
 - ``POST /v1/factory/prs/{id}/refresh`` / ``…/feedback`` (:mod:`..control`)
 - ``POST /v1/factory/factories``, ``POST …/{fid}/projects``,
@@ -24,7 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.factory import FactoryEvent, FactoryProject
-from omnigent.server.factory import control, decisions, feedback, start
+from omnigent.server.factory import control, decisions, feedback, proposals, start
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import display_title
@@ -125,6 +127,20 @@ async def answer_decision(
             delivered_to_title=display_title(to.title, to.id) if to is not None else None,
         )
         return {"decision": view}
+
+    return await _guard(run)
+
+
+@router.post("/decisions/{decision_id}/undo", response_model=None, dependencies=HUMAN_ORIGIN)
+async def undo_answer(request: Request, decision_id: str) -> dict[str, Any] | JSONResponse:
+    """
+    Take back an Apply on a proposal's decision within its Undo window: the
+    proposal is undone and waits for a person again under a fresh decision.
+    """
+    _, user_id = _caller(request)
+
+    async def run() -> dict[str, Any]:
+        return await proposals.undo_answer(request.app.state, decision_id, user_id=user_id)
 
     return await _guard(run)
 

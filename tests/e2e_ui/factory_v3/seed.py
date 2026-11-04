@@ -14,7 +14,8 @@ relative to now:
 - an Atlas proposal (C-12) made ``build-tier-drafts-3``, whose two PRs wait for
   a person to merge them into ``main``;
 - C-14 and C-15 ask things that block nothing; C-19 (D-49) proposes a follow-up
-  under I-1; C-17 and C-18 are rule proposals for the factory tree;
+  under I-1; C-17 and C-18 are rule proposals for the factory tree, each adding
+  a rule (Apply makes a definition version);
 - the server closed three alarms today (D-46, D-47, D-48);
 - the base env (the integration project ``base-env``) runs the base's head,
   which holds every merge, and answers its smoke checks;
@@ -625,11 +626,27 @@ def seed_factory_1340(
         )
 
     # ── C-17, C-18 (rules), C-19 (a follow-up under I-1); D-49…D-51 ──
+    # Each adds a real rule, so Apply makes a definition version (no Undo token).
     rules = [
-        _proposal(fs, fid, title, kind="rules", author=sentinel)
-        for title in (
-            "Spike unproven external capabilities first",
-            "Name pending scope decisions in READY posts",
+        _proposal(
+            fs,
+            fid,
+            title,
+            kind="rules",
+            author=sentinel,
+            ops=[{"op": "add", "path": "rules", "value": {"role": role, "text": text}}],
+        )
+        for title, role, text in (
+            (
+                "Spike unproven external capabilities first",
+                F.ROLE_LEAD,
+                "Spike an unproven external capability before planning work on it (sample).",
+            ),
+            (
+                "Name pending scope decisions in READY posts",
+                F.ROLE_PROJECT_LEAD,
+                "Name the pending scope decision a READY post waits on (sample).",
+            ),
         )
     ]
     follow_up = _proposal(
