@@ -871,7 +871,7 @@ export class SampleSteerEngine extends SampleLensEngine {
     const old = this.data.decisions.find((d) => d.id === decisionId)!;
     const top = Math.max(
       0,
-      ...this.data.decisions.map((d) => Number(/^D-(\d+)$/.exec(d.id)?.[1] ?? 0)),
+      ...this.data.decisions.map((d) => Number(d.id.match(/^D-(\d+)$/)?.[1] ?? 0)),
     );
     const fresh: RawDecision = { ...old, id: `D-${top + 1}`, open: true, age: "just now" };
     delete fresh.expires;

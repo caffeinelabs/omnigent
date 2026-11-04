@@ -171,7 +171,7 @@ const LABELLED = /^([A-Z][a-z]+(?: [a-z]+)?): (.+)$/s;
 
 function lineOf(value: WirePreviewLine): PreviewLine {
   if (typeof value === "string") {
-    const labelled = LABELLED.exec(value);
+    const labelled = value.match(LABELLED);
     return labelled
       ? { label: labelled[1]!, html: escText(labelled[2]!) }
       : { label: "", html: escText(value) };
