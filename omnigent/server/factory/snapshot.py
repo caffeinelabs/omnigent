@@ -634,6 +634,7 @@ class _Loaded:
     models: dict[str, str | None] = field(default_factory=dict)
     def_doc: dict[str, Any] = field(default_factory=dict)
     proposals: list[FactoryProposal] = field(default_factory=list)
+    merge_targets: auto_merge.Targets = field(default_factory=auto_merge.Targets)
 
 
 def notified_by_subject(rows: Iterable[FactoryEvent]) -> dict[str, list[dict[str, Any]]]:
@@ -776,6 +777,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         deadlines=deadlines,
         models={c.id: _model(c, deps, memo) for c in shown},
         def_doc=_def_doc(deps, factory_id),
+        merge_targets=auto_merge.factory_targets(deps, factory_id),
         **_spawn_limits(deps, factory_id, members),
     )
 
@@ -1256,7 +1258,7 @@ def _waiting_views(
     project_pl: Mapping[str, str | None],
     now: float,
     open_tasks: Sequence[FactoryTask],
-    targets: auto_merge.Targets = frozenset(),
+    targets: auto_merge.TargetsLike = frozenset(),
 ) -> None:
     """
     Each live project's ``waiting_on``: why it is not moving (in place; never raises).
@@ -1493,11 +1495,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     for demo in loaded.demos:  # newest first
         demos_by_pr.setdefault((demo.repo, demo.pr_number), []).append(demo)
     # Only while this server runs the merger: otherwise a person merges as before.
-    targets = (
-        auto_merge.targets_of(((loaded.product or {}).get("delivery")) or {})
-        if auto_merge.merger_on(app_state)
-        else frozenset()
-    )
+    targets = loaded.merge_targets if auto_merge.merger_on(app_state) else auto_merge.Targets()
     projects_by_slug = {p.slug: p for p in loaded.projects}
     pr_views = [
         _pr_view(

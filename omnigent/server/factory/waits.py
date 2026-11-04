@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         FactoryProposal,
         FactoryTask,
     )
+    from omnigent.server.factory.auto_merge import Targets, TargetsLike
     from omnigent.server.factory.context import FactoryDeps
 
 KINDS: Final = ("stall", "decision", "proposal", "hold", "merge", "dependency", "capacity")
@@ -157,8 +158,8 @@ class Facts:
     :param loops: Its bad loops (stalled, exhausted, thrashing).
     :param leads: Project slug -> its lead's session id (the lead-asked rule).
     :param targets: The owner-set auto-merge targets the server merges into now
-        (:func:`auto_targets`): a ready factory PR into one waits on the server,
-        not a person.
+        (:func:`auto_targets`), per subtree too: a ready factory PR into one waits
+        on the server, not a person.
     """
 
     projects: Mapping[str, FactoryProject] = field(default_factory=dict)
@@ -169,7 +170,7 @@ class Facts:
     loops: Sequence[FactoryLoop] = ()
     leads: Mapping[str, str | None] = field(default_factory=dict)
     now: float = 0.0
-    targets: frozenset[tuple[str, str]] = frozenset()
+    targets: TargetsLike = frozenset()
     _decisions_by_number: dict[int, FactoryDecision] = field(init=False, repr=False)
     _decisions_by_id: dict[str, FactoryDecision] = field(init=False, repr=False)
     _proposals_by_number: dict[int, FactoryProposal] = field(init=False, repr=False)
@@ -224,7 +225,7 @@ class Facts:
         now: float,
         *,
         tasks: Sequence[FactoryTask] | None = None,
-        targets: frozenset[tuple[str, str]] = frozenset(),
+        targets: TargetsLike = frozenset(),
     ) -> Facts:
         """
         Read what the waits need (synchronous; a handful of row reads).
@@ -344,19 +345,20 @@ def _norm_or_none(value: str | None) -> str | None:
         return None
 
 
-def auto_targets(app_state: Any, deps: FactoryDeps, factory_id: str) -> frozenset[tuple[str, str]]:
+def auto_targets(app_state: Any, deps: FactoryDeps, factory_id: str) -> Targets:
     """
-    The owner-set auto-merge targets the server merges into now: none while
-    this server runs no merger (a person merges, as before). Never raises.
+    The owner-set auto-merge targets the server merges into now, per subtree
+    too: none while this server runs no merger (a person merges, as before).
+    Synchronous; never raises.
     """
     from omnigent.server.factory import auto_merge
 
     try:
         if app_state is None or not auto_merge.merger_on(app_state):
-            return frozenset()
+            return auto_merge.Targets()
         return auto_merge.factory_targets(deps, factory_id)
     except Exception:  # noqa: BLE001 - a person merges: the waits say so
-        return frozenset()
+        return auto_merge.Targets()
 
 
 def project_leads(

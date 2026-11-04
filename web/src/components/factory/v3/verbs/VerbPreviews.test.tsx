@@ -221,6 +221,30 @@ describe("cockpit v3 · verb previews, apply and Undo", () => {
     );
   });
 
+  it("Autonomy & merge asks for an autonomy level only once one is picked", async () => {
+    const sample = sampleNodeSource();
+    const asked: Record<string, unknown>[] = [];
+    const source: NodeSource = {
+      ...sample,
+      preview: (fid, ref, request, signal) => {
+        asked.push(request.args);
+        return sample.preview!(fid, ref, request, signal);
+      },
+    };
+    renderNode("I-1", { source });
+    await shown("I-1");
+    await userEvent.click(verbButton(/Autonomy & merge/));
+    const panel = await screen.findByTestId("v3-preview");
+    await lines();
+    expect(asked.at(-1)).toEqual({ auto_merge: true });
+    const group = within(panel).getByRole("group", { name: "Autonomy here" });
+    await userEvent.click(within(group).getByRole("button", { name: "Tryout" }));
+    await waitFor(() => expect(asked.at(-1)).toEqual({ auto_merge: true, autonomy: "tryout" }));
+    await waitFor(async () =>
+      expect((await lines()).Autonomy).toBe("tryout here and everything under it"),
+    );
+  });
+
   it("Move offers only parents one level up and says both roll-ups change", async () => {
     renderNode("assistant-panel-ux");
     await shown("assistant-panel-ux");

@@ -87,6 +87,7 @@ from omnigent.stores.factory_store import norm_id
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import FactoryEvent, FactoryProject
+    from omnigent.server.factory.auto_merge import TargetsLike
 
 _logger = logging.getLogger(__name__)
 
@@ -486,7 +487,7 @@ class Ctx:
     """Tasks read with a hold this pass (the hold sweep re-checks them)."""
     facts: waits.Facts | None = None
     """What the pass read of the tasks' waits, when it read them."""
-    targets: frozenset[tuple[str, str]] = frozenset()
+    targets: TargetsLike = frozenset()
     """The auto-merge targets the server merges into now (merge waits name the server)."""
 
     @property

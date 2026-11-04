@@ -184,9 +184,24 @@ function StartNowPreview({ page, verb, onClose }: VerbProps) {
   );
 }
 
+/** The subtree's autonomy level: kept as it is unless picked ("As above" drops its own). */
+const AUTONOMY_CHOICES = [
+  { value: "", label: "Keep" },
+  { value: "careful", label: "Careful" },
+  { value: "standard", label: "Standard" },
+  { value: "tryout", label: "Tryout" },
+  { value: "inherit", label: "As above" },
+];
+
 function AutonomyPreview({ page, verb, onClose }: VerbProps) {
   const [on, setOn] = useState(!page.node.auto_merge);
-  const { panel } = useFlow(page, verb, { auto_merge: on }, onClose);
+  const [level, setLevel] = useState("");
+  const { panel } = useFlow(
+    page,
+    verb,
+    { auto_merge: on, ...(level ? { autonomy: level } : {}) },
+    onClose,
+  );
   return (
     <PreviewPanel
       {...panel}
@@ -226,6 +241,14 @@ function AutonomyPreview({ page, verb, onClose }: VerbProps) {
           </span>
         </span>
       </button>
+      <PreviewField label="Autonomy here">
+        <PreviewOptions
+          label="Autonomy here"
+          options={AUTONOMY_CHOICES}
+          value={level}
+          onChange={setLevel}
+        />
+      </PreviewField>
     </PreviewPanel>
   );
 }

@@ -531,6 +531,16 @@ export class SampleSteerEngine extends SampleLensEngine {
                 `${esc(p.base ?? "")} stays merged by people (${esc(p.title)} is outside this subtree)`,
               ),
             ),
+            ...(typeof request.args.autonomy === "string"
+              ? [
+                  line(
+                    "Autonomy",
+                    request.args.autonomy === "inherit"
+                      ? "as the node above"
+                      : `${esc(request.args.autonomy)} here and everything under it`,
+                  ),
+                ]
+              : []),
           ],
           apply_label: on ? "Turn on for this subtree" : "Turn off for this subtree",
         };

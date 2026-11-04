@@ -339,7 +339,10 @@ applied proposals call with the acting person, agent or the server.
   (`server/factory/autonomy.py`, root label `omnigent.factory.autonomy_projects`:
   `confirm`, `requested` by default, or `grace`) decides what applies at once
   (a create a person asked for, `reply_to` a Room message or the start
-  brief's mail id) with a 10-minute Undo; the rest waits on a `proposal`
+  brief's mail id) with a 10-minute Undo; owners may scope a level to a
+  subtree (`autonomy.scopes`, see "Autonomy and auto-merge per subtree"), and
+  each op is then decided at the level of the nearest scoped ancestor of the
+  projects it touches (the strictest of those); the rest waits on a `proposal`
   decision (Apply, Edit & apply, Reject) that re-checks `based_on` (409
   `stale_proposal`). Setting, raising or removing a USD `budgets` cap is the
   owners' (owner class; the cockpit add and charter PATCH need MANAGE for it).
@@ -1303,7 +1306,8 @@ server's `{nodes: [{ref, title, items: [{key, label, before, after}]}],
 text}` (one line per changed item, then the sentence; `null` when nothing in
 the roll-up changes). The arguments
 the web sends: add `{title, col, depends_on?, because?, held_for?}`, start,
-pause and resume `{}`, auto `{auto_merge}`, move `{to?}`, name
+pause and resume `{}`, auto `{auto_merge, autonomy?}` (the server also takes
+`base` and `repo`, and sends its effects as `{label, text}` lines), move `{to?}`, name
 `{title?, to?}`; a blocked form (Add child without a title, Team with
 nothing picked) asks no preview. The apply's one-line result is read from
 `message`, and its `undo.expires_at` is an ISO time.
@@ -2122,6 +2126,31 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   targets under their own top-level key (`auto_merge_targets`), so a server
   from before them drops only the targets on a rollback and keeps the rest of
   the profile (`protected_repos` included).
+- **Autonomy and auto-merge per subtree (owners only).** An owner scopes
+  either setting to one stored node of the product tree (a goal `G-n`, a need
+  `O-n`, a feature `I-n` or a project slug) with the node's "Autonomy &
+  merge" verb (`u`; preview, apply as a definition version, Undo for 10 min;
+  `server/factory/subtrees.py`). `product.delivery.auto_merge_scopes`
+  `[{ref, repo, base}]` makes the server merge the ready PRs of every project
+  under the node into `repo#base` (added to the factory-wide targets there);
+  `{ref, merge: false}` keeps them merged by people, whatever an ancestor or
+  the factory-wide targets say. `autonomy.scopes` `[{ref, level}]` sets the
+  autonomy level for proposals about the projects under it. The nearest
+  scoped ancestor decides, the node's own entry first; a project's ancestors
+  are read the way the node tree files them (its home feature, that
+  feature's need, the need's goal), so a project filed under the node later
+  is covered too. A scope always names its base: the verb takes the node's
+  projects' one base (or the factory's) but never `main`, `master` or a
+  protected branch unless an owner names it (`args.base`); the preview lists
+  what it covers now, its first effect and what it does not touch ("main
+  stays merged by people (… is outside this subtree)"). Both lists are class
+  B and in `AGENT_NEVER`: no agent proposes them, so no agent adds or widens a
+  scope. The merger records the scope it used (`pr.auto_merged` `data.scope`);
+  node pages show "auto-merge → `<base>` · this subtree / from `<node>`" (and
+  the autonomy level where it differs from the factory's) on the node and
+  everything under it. A version stores the lists under their own top-level
+  keys (`auto_merge_scopes`, `autonomy_scopes`): a server from before them
+  drops only them on a rollback (nothing merges by a scope then).
 - **Merge gate.** `python -m omnigent.factory_merge <pr-url> [--admin-fallback] [--dry-run]`
   is a verdict tool for agents: the guard admits it only with `--dry-run`
   (see Invariants). Run by a human, it
@@ -2153,7 +2182,7 @@ enforced in code.
 
 | Invariant | Enforced by |
 |---|---|
-| No agent merges (any repo, a test base included); only the server merges, into the owners' auto-merge targets. | The merger reads its targets only from `product.delivery.auto_merge`, which only an owner's edit changes (`AGENT_NEVER`: no agent proposal names it, and approving one never applies it). The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
+| No agent merges (any repo, a test base included); only the server merges, into the owners' auto-merge targets. | The merger reads its targets only from `product.delivery.auto_merge` and, per subtree, `product.delivery.auto_merge_scopes`, which only an owner's edit changes (`AGENT_NEVER`: no agent proposal names it, and approving one never applies it). The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
 | Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. Protected branches are `main`, `master` and `staging` plus the environment profile's `protected_branches`, which the server passes as `factory_protected_branches`. |
 | No writes to the always-deny repos; none to a protected repo of the product profile unless a human made it a project's repo (or under the `smith` profile). | The server passes the profile's `product.delivery.protected_repos` as `factory_protected_repos`; `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` (read at boot) is denied whatever a spec passes; an explicit spec `deny_repos` binds too. A project's repo is lifted from the protected repos and the default `deny_repos` (empty) for the members that write it (next row). The `smith` profile (no `write_repos` of its own: as a member it writes its project's repo, the deployment's omnigent fork; `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
 | A member writes only the repos of its factory projects: a PL and its sub-agents their own project's repo, a lead (and the planner) every project's. Pushes, `gh pr create/edit/comment/review/…`, `gh issue` writes, `gh api` writes and `GH_REPO` all check the same set. | The server resolves the set whenever it builds a member's policy engine (`server/factory/guard_repos.py`, registered in `runtime/policies/builder.SERVER_POLICY_ARGUMENTS`) and passes it as `factory_repos` to `factory_role_guard` and `factory_invariants`. It replaces the bundle's `write_repos` (bundles pass none; outside a factory the guard writes only the repos a spec names). It reads only the server-stamped membership labels (`id`, `role`, `project`) and the factory's project rows, never tool input, `session_state`, charters or other labels; a row reconcile backfilled from a PL's sandbox (its repo came from a lead's spawn) does not count, nor do cancelled or merged-away projects. An agent's project proposal on a repo outside the same set (plus the default repo) needs the owner, so no agent can grow it. Rows are read on every build, so a project added later extends the set at once. A store error, or a sub-agent whose root cannot be loaded, leaves the member no writable repo. The runner-side gate keeps the bundle defaults; no factory bundle declares an MCP server, so every GitHub write is a shell command the server decides. |

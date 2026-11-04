@@ -20,13 +20,21 @@ The merge names the head as the expected one, so a push after the read is
 refused by GitHub. Only owners change the targets (class B, a human edit);
 no agent proposal may name them (:data:`.definition_blocks.AGENT_NEVER`).
 Nothing here writes to GitHub; this module decides, the merger acts.
+
+Owners also scope auto-merge to a subtree (``product.delivery.auto_merge_scopes``,
+:mod:`.subtrees`): the nearest scoped ancestor of a PR's project decides. A
+scope that merges adds its ``repo#base`` to the factory-wide targets for the
+projects under it; one with ``merge: false`` keeps every PR under it merged by
+people. A scope always names its base: main is never auto-merged unless an
+owner names it.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 from omnigent.factory_gates import parse_time
 from omnigent.server.factory.stage import ready_for_human
@@ -34,8 +42,12 @@ from omnigent.server.factory.stage import ready_for_human
 if TYPE_CHECKING:
     from omnigent.entities.factory import FactoryPr, FactoryProject
     from omnigent.server.factory.context import FactoryDeps
+    from omnigent.server.factory.subtrees import Lineage
+
+_logger = logging.getLogger(__name__)
 
 AUTO_MERGE_PATH: Final = "product.delivery.auto_merge"
+SCOPES_PATH: Final = "product.delivery.auto_merge_scopes"
 NUDGE_TOPIC: Final = "auto_merge"
 """The merger's wake-up topic (:func:`nudge_merger`)."""
 GREEN_CHECKS: Final = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
@@ -53,7 +65,113 @@ WAITING_RULE: Final = "pr.auto_merge_waiting"
 """Incident: a ready PR into a target does not merge, for a reason that needs a person."""
 INCIDENT_RULES: Final = (FAILED_RULE, WAITING_RULE)
 
-Targets = frozenset[tuple[str, str]]
+Pair: TypeAlias = tuple[str, str]
+"""``(lowercase owner/repo, base)``."""
+
+
+@dataclass(frozen=True)
+class MergeScope:
+    """
+    One subtree's auto-merge (``product.delivery.auto_merge_scopes``).
+
+    :param ref: The node it covers with everything under it (``I-1``, a slug …).
+    :param pair: The target it adds there, or ``None``: people merge there.
+    """
+
+    ref: str
+    pair: Pair | None
+
+
+@dataclass(frozen=True)
+class Cover:
+    """
+    What the server merges a project's PRs into, and why.
+
+    :param pairs: The targets for its PRs.
+    :param scope: The scope that decided (``None``: the factory-wide targets).
+    """
+
+    pairs: frozenset[Pair]
+    scope: MergeScope | None = None
+
+
+@dataclass(frozen=True)
+class Targets:
+    """
+    The owner-set targets: factory-wide pairs and per-subtree scopes.
+
+    :param lineage: Where a project sits (:mod:`.subtrees`); without it a
+        project is placed by its slug and stored feature only.
+    """
+
+    pairs: frozenset[Pair] = frozenset()
+    scopes: Mapping[str, MergeScope] = field(default_factory=dict)
+    lineage: Lineage | None = None
+
+    def __bool__(self) -> bool:
+        """Whether anything merges by itself (a factory-wide target or a merging scope)."""
+        return bool(self.pairs) or any(s.pair for s in self.scopes.values())
+
+    def chain(self, project: FactoryProject) -> tuple[str, ...]:
+        """:returns: *project*'s slug, then its stored ancestors (nearest first)."""
+        if self.lineage is not None:
+            return self.lineage.chain(project)
+        return tuple(r for r in (project.slug, project.feature) if r)
+
+    def cover(self, project: FactoryProject | None) -> Cover:
+        """:returns: The targets *project*'s PRs merge into (the factory's for ``None``)."""
+        if project is None or not self.scopes:
+            return Cover(self.pairs)
+        from omnigent.server.factory.subtrees import nearest
+
+        hit = nearest(self.chain(project), self.scopes)
+        if hit is None:
+            return Cover(self.pairs)
+        scope = hit[1]
+        return Cover(self.pairs | {scope.pair} if scope.pair else frozenset(), scope)
+
+    def with_lineage(self, lineage: Lineage) -> Targets:
+        """:returns: These targets placing projects by *lineage*."""
+        return replace(self, lineage=lineage)
+
+
+TargetsLike: TypeAlias = "Targets | frozenset[Pair]"
+"""Targets, or bare factory-wide pairs (no scopes)."""
+
+
+def as_targets(value: TargetsLike | None) -> Targets:
+    """:returns: *value* as :class:`Targets` (bare pairs carry no scopes)."""
+    if isinstance(value, Targets):
+        return value
+    return Targets(frozenset(value or ()))
+
+
+def scopes_of(delivery: Mapping[str, Any] | None) -> dict[str, MergeScope]:
+    """
+    :param delivery: A ``product.delivery`` block (``None``: none).
+    :returns: Its ``auto_merge_scopes`` by ref; an entry that merges without
+        naming its repo and base is left out (nothing is inferred).
+    """
+    found = (delivery or {}).get("auto_merge_scopes") if isinstance(delivery, Mapping) else None
+    out: dict[str, MergeScope] = {}
+    for item in found if isinstance(found, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        ref = item.get("ref")
+        if not isinstance(ref, str) or not ref or ref in out:
+            continue
+        if item.get("merge") is False:
+            out[ref] = MergeScope(ref, None)
+            continue
+        repo, base = item.get("repo"), item.get("base")
+        if isinstance(repo, str) and repo and isinstance(base, str) and base:
+            out[ref] = MergeScope(ref, (repo.strip().lower(), base.strip()))
+    return out
+
+
+def targets_from(delivery: Mapping[str, Any] | None, lineage: Lineage | None = None) -> Targets:
+    """:returns: The targets of a ``product.delivery`` block, scopes included."""
+    return Targets(targets_of(delivery), scopes_of(delivery), lineage)
 
 
 @dataclass(frozen=True)
@@ -73,11 +191,11 @@ class Refusal:
     refresh: bool = False
 
 
-def targets_of(delivery: Mapping[str, Any] | None) -> Targets:
+def targets_of(delivery: Mapping[str, Any] | None) -> frozenset[Pair]:
     """
     :param delivery: A ``product.delivery`` block (``None``: none).
-    :returns: Its targets as ``(lowercase owner/repo, base)``, e.g.
-        ``frozenset({("acme/app", "staging")})``.
+    :returns: Its factory-wide targets as ``(lowercase owner/repo, base)``, e.g.
+        ``frozenset({("acme/app", "staging")})`` (the scopes: :func:`targets_from`).
     """
     found = (delivery or {}).get("auto_merge") if isinstance(delivery, Mapping) else None
     out: set[tuple[str, str]] = set()
@@ -90,32 +208,58 @@ def targets_of(delivery: Mapping[str, Any] | None) -> Targets:
     return frozenset(out)
 
 
-def is_target(targets: Targets, repo: str | None, base: str | None) -> bool:
-    """:returns: Whether a PR of *repo* into *base* is one of *targets*."""
+def is_target(
+    targets: TargetsLike,
+    repo: str | None,
+    base: str | None,
+    project: FactoryProject | None = None,
+) -> bool:
+    """
+    :param project: The PR's project: its subtree's scope decides (``None``:
+        the factory-wide targets).
+    :returns: Whether a PR of *repo* into *base* is one of *targets*.
+    """
     if not repo or not base:
         return False
-    return (repo.strip().lower(), base.strip()) in targets
+    return (repo.strip().lower(), base.strip()) in as_targets(targets).cover(project).pairs
 
 
 def factory_targets(
     deps: FactoryDeps | None, factory_id: str | None, *, fresh: bool = False
 ) -> Targets:
     """
+    The factory's targets, with the lineage its scopes need read from the store
+    (synchronous: call it in a worker thread).
+
     :param fresh: Read the definition in force now, past its short cache.
     :returns: The factory's targets (none when its definition is unresolved). Never raises.
     """
-    from omnigent.server.factory import definition, product_profile
+    from omnigent.server.factory import definition, product_profile, subtrees
 
-    if not fresh:
-        return targets_of(product_profile.delivery(deps, factory_id))
-    if deps is None or not factory_id:
-        return frozenset()
+    if fresh and (deps is None or not factory_id):
+        return Targets()
     try:
-        resolved = definition.definition_for(deps, factory_id, fresh=True)
+        if fresh:
+            assert deps is not None and factory_id
+            resolved = definition.definition_for(deps, factory_id, fresh=True)
+            found = resolved.get("product.delivery") if resolved is not None else None
+            goals = resolved.get("strategy.goals") if resolved is not None else None
+        else:
+            found = product_profile.delivery(deps, factory_id)
+            goals = definition.value(deps, factory_id, "strategy.goals")
+        targets = targets_from(found if isinstance(found, Mapping) else None)
+        if not targets.scopes or deps is None or not factory_id:
+            return targets
+        lineage = subtrees.load(
+            deps.factory_store,
+            factory_id,
+            targets.scopes,
+            goals if isinstance(goals, list) else (),
+        )
     except Exception:  # noqa: BLE001 - no targets: nothing merges
-        return frozenset()
-    found = resolved.get("product.delivery") if resolved is not None else None
-    return targets_of(found if isinstance(found, Mapping) else None)
+        _logger.warning("factory %s: could not read the auto-merge targets", factory_id)
+        return Targets()
+    return targets.with_lineage(lineage)
 
 
 def merger_on(app_state: Any) -> bool:
@@ -141,17 +285,23 @@ def policy_text(repo: str, base: str) -> str:
     )
 
 
-def scope_refusal(pr: FactoryPr, targets: Targets, project: FactoryProject | None) -> str | None:
+def scope_refusal(
+    pr: FactoryPr, targets: TargetsLike, project: FactoryProject | None
+) -> str | None:
     """
     Why the server would not merge *pr* even once it is ready (who merges it).
 
-    :param project: The PR's project row (``None``: it has none).
+    :param project: The PR's project row (``None``: it has none); the nearest
+        scoped ancestor of it decides (:meth:`Targets.cover`).
     :returns: A reason, e.g. ``"not an auto-merge target"``, or ``None`` when
         the server merges it once ready and green.
     """
     from omnigent.server.factory.prs import parse_factory_branch
 
-    if not is_target(targets, pr.repo, pr.base_ref):
+    if not is_target(targets, pr.repo, pr.base_ref, project):
+        cover = as_targets(targets).cover(project)
+        if cover.scope is not None and cover.scope.pair is None:
+            return f"people merge {cover.scope.ref} and everything under it"
         return "not an auto-merge target"
     if project is None or not pr.project_slug or project.slug != pr.project_slug:
         return "PR has no project"
@@ -162,12 +312,14 @@ def scope_refusal(pr: FactoryPr, targets: Targets, project: FactoryProject | Non
     return None
 
 
-def merges_itself(pr: FactoryPr, targets: Targets, project: FactoryProject | None) -> bool:
+def merges_itself(pr: FactoryPr, targets: TargetsLike, project: FactoryProject | None) -> bool:
     """:returns: Whether the server, not a person, merges *pr* once it is ready and green."""
     return scope_refusal(pr, targets, project) is None
 
 
-def local_refusal(pr: FactoryPr, targets: Targets, project: FactoryProject | None) -> str | None:
+def local_refusal(
+    pr: FactoryPr, targets: TargetsLike, project: FactoryProject | None
+) -> str | None:
     """
     Why the stored row of *pr* is not a merge candidate (no GitHub call).
 
@@ -343,8 +495,9 @@ def markers_refusal(
 def github_refusal(
     pr: FactoryPr,
     node: Mapping[str, Any] | None,
-    targets: Targets,
+    targets: TargetsLike,
     trusted_logins: Collection[str] = (),
+    project: FactoryProject | None = None,
 ) -> Refusal | None:
     """
     Why GitHub's view of *pr*, read just now, does not allow a merge.
@@ -352,6 +505,7 @@ def github_refusal(
     :param node: The PR from :func:`merge_query` (``None``: not found).
     :param trusted_logins: Lowercase logins whose markers count whatever their
         association (the factory owner's), see :func:`markers_refusal`.
+    :param project: The PR's project (its subtree's scope decides the targets).
     :returns: A reason, or ``None`` when it may merge at its stored head.
     """
     from omnigent.server.factory.prs import head_checks
@@ -365,7 +519,11 @@ def github_refusal(
     if node.get("isDraft") is True:
         return Refusal("PR is a draft", refresh=True)
     base = node.get("baseRefName")
-    if not isinstance(base, str) or not is_target(targets, pr.repo, base) or base != pr.base_ref:
+    if (
+        not isinstance(base, str)
+        or not is_target(targets, pr.repo, base, project)
+        or base != pr.base_ref
+    ):
         return Refusal(f"base is {base or 'unknown'} on GitHub", refresh=True)
     head = str(node.get("headRefOid") or "").lower()
     if head != (pr.head_sha or "").lower():
@@ -414,11 +572,17 @@ __all__ = [
     "GREEN_CHECKS",
     "INCIDENT_RULES",
     "NUDGE_TOPIC",
+    "SCOPES_PATH",
     "TRUSTED_ASSOCIATIONS",
     "WAITING_CHECKS",
     "WAITING_RULE",
+    "Cover",
+    "MergeScope",
+    "Pair",
     "Refusal",
     "Targets",
+    "TargetsLike",
+    "as_targets",
     "checks_refusal",
     "factory_targets",
     "github_refusal",
@@ -431,5 +595,7 @@ __all__ = [
     "nudge_merger",
     "policy_text",
     "scope_refusal",
+    "scopes_of",
+    "targets_from",
     "targets_of",
 ]

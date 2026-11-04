@@ -89,7 +89,7 @@ def _listed(rows: Sequence[FactoryInitiative]) -> dict[str, list[tuple[int, int,
     return out
 
 
-def _by_proposal(rows: Sequence[FactoryInitiative]) -> dict[str, str]:
+def by_proposal(rows: Sequence[FactoryInitiative]) -> dict[str, str]:
     """``C-n`` -> the initiative it started or extended (the lowest number on a tie)."""
     out: dict[str, str] = {}
     for row in sorted(rows, key=lambda r: r.number):
@@ -113,7 +113,7 @@ def homes(
     rows = [r for r in initiatives if r.status not in CLOSED]
     known = {r.ref for r in rows}
     listed = _listed(rows)
-    started = _by_proposal(rows)
+    started = by_proposal(rows)
     out: dict[str, Home] = {}
     for project in projects:
         found = [ref for _at, _n, ref in listed.get(project.slug, [])]
@@ -188,4 +188,4 @@ def backfill(
     return written
 
 
-__all__ = ["CLOSED", "Home", "Source", "backfill", "homes", "origin_proposal"]
+__all__ = ["CLOSED", "Home", "Source", "backfill", "by_proposal", "homes", "origin_proposal"]

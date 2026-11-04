@@ -52,6 +52,9 @@ close      a project or feature    cancels it (a feature: closes it)
 name       an implicit node        makes it a stored feature or need, or files
                                    its children under a real one
 team       a project               a team change (``PUT …/definition``)
+auto       a goal, need, feature   auto-merge into a named base and the
+           or project              autonomy level for it and everything under
+                                   it (owners; ``PUT …/definition``)
 =========  ======================  ==========================================
 
 A verb is served only where its node's level lists it in the definition's
@@ -83,6 +86,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from omnigent.factory import PROJECT_SLUG_RE, TASK_KEY_RE, THREAD_FACTORY
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import (
+    auto_merge,
+    autonomy,
     chat_cards,
     control,
     events,
@@ -94,9 +99,16 @@ from omnigent.server.factory import (
     projects,
     proposals,
     snapshot,
+    start,
+    subtrees,
 )
+from omnigent.server.factory import definition_blocks as blocks
 from omnigent.server.factory.actor import Actor, proposal_ref
-from omnigent.server.factory.charter import change_dependency, normalize_charter
+from omnigent.server.factory.charter import (
+    change_dependency,
+    normalize_charter,
+    project_base_branch,
+)
 from omnigent.server.factory.chat import derived_id
 from omnigent.server.factory.context import FactoryDeps
 from omnigent.server.factory.control import CockpitError
@@ -123,6 +135,7 @@ VERBS: Final = (
     "close",
     "name",
     "team",
+    "auto",
 )
 UNDO_WINDOW_S: Final = 600
 KIND_APPLIED: Final = "node.verb_applied"
@@ -193,7 +206,7 @@ class Plan:
     title: str
     args: dict[str, Any]
     touched: list[str]
-    effects: list[str]
+    effects: list[str] | list[dict[str, str]]
     run: Runner
     level: int = LEVEL_EDIT
     rollup_delta: dict[str, Any] | None = None
@@ -2137,6 +2150,376 @@ async def _plan_team(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]
     )
 
 
+# ── auto: autonomy and auto-merge for a subtree ───────────────
+
+NEVER_INFERRED: Final = frozenset({"main", "master"})
+"""Bases a subtree's auto-merge never defaults to (nor the environment profile's
+protected branches): an owner names them."""
+_LEVEL_TEXT: Final = {lv.level: lv for lv in autonomy.LEVELS}
+_NAMES_MAX: Final = 6
+_FACTORYS: Final = "the factory's"
+
+
+def _names(titles: Sequence[str]) -> str:
+    shown = ", ".join(titles[:_NAMES_MAX])
+    more = len(titles) - _NAMES_MAX
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
+def _line(label: str, text: str) -> dict[str, str]:
+    """One preview line, label and words (the web escapes ``text``)."""
+    return {"label": label, "text": text}
+
+
+def _level_words(level: str) -> str:
+    found = _LEVEL_TEXT.get(level)
+    return found.label if found is not None else level
+
+
+def _pair_of(row: FactoryProject) -> tuple[str, str]:
+    return (row.repo or "").lower(), project_base_branch(row)
+
+
+@dataclass(frozen=True)
+class _Under:
+    """
+    The live projects a scope at a node covers, as the merger places them.
+
+    :param covered: Their PRs merge into the scope's pair.
+    :param other_base: They target another repo or base: people merge them.
+    :param apart: A nearer scope of their own decides for them.
+    """
+
+    covered: list[FactoryProject]
+    other_base: list[FactoryProject]
+    apart: list[str]
+
+
+def _under(tree: nodes.Tree, ref: str, pair: tuple[str, str] | None) -> _Under:
+    """The projects under *ref* (:meth:`.subtrees.Lineage.chain`), by what a scope there does."""
+    covered: list[FactoryProject] = []
+    other: list[FactoryProject] = []
+    apart: list[str] = []
+    scopes = tree.facts.merge_scopes
+    for row in sorted(tree.project_rows.values(), key=lambda r: r.slug):
+        if row.status != projects.STATUS_ACTIVE:
+            continue
+        chain = tree.facts.lineage.chain(row)
+        if ref not in chain:
+            continue
+        if any(r in scopes for r in chain[: chain.index(ref)]):
+            apart.append(row.slug)
+        elif pair is not None and _pair_of(row) != pair:
+            other.append(row)
+        else:
+            covered.append(row)
+    return _Under(covered, other, apart)
+
+
+def _scope_pair(
+    env: Env, tree: nodes.Tree, node: Any, args: Mapping[str, Any], doc: Mapping[str, Any]
+) -> tuple[str, str]:
+    """
+    The repo and base a scope at *node* merges into: what *args* name, else the
+    project's own, else the one every live project under it targets, else the
+    factory's default. A base of :data:`NEVER_INFERRED` (or a protected branch)
+    is never chosen for the owner: 400 ``invalid_args`` until they name it.
+    """
+    base = _text(args, "base", 200)
+    repo = _text(args, "repo", 200)
+    named = bool(base)
+    if not base or not repo:
+        if node.level == "project":
+            found = _pair_of(_project_row(tree, node))
+        else:
+            pairs = {_pair_of(r) for r in _under(tree, node.ref, None).covered}
+            defaults = start.root_defaults(env.root)
+            found = (
+                next(iter(pairs))
+                if len(pairs) == 1
+                else (defaults.repo or "", defaults.base or "")
+            )
+        repo, base = repo or found[0], base or found[1]
+    if not repo:
+        raise _err(400, "invalid_args", "name the repo (owner/name)", field="args.repo")
+    protected = {str(b) for b in (doc.get("environment") or {}).get("protected_branches") or []}
+    if not base or (not named and base in NEVER_INFERRED | protected):
+        raise _err(
+            400,
+            "invalid_args",
+            f"name the base to auto-merge into: {base or 'none'} is never chosen for you "
+            "(main stays merged by people unless an owner names it)",
+            field="args.base",
+        )
+    try:
+        blocks.AutoMergeScopeDef(ref=node.ref, repo=repo, base=base)
+    except ValueError as exc:
+        raise _err(
+            400, "invalid_args", f"not a repo and branch: {repo}#{base}", field="args.base"
+        ) from exc
+    return repo.lower(), base
+
+
+def _where(tree: nodes.Tree, node: Any, ref: str | None, outside: str) -> str:
+    if ref is None:
+        return outside
+    if ref == node.ref:
+        return "here"
+    found = tree.nodes.get(ref)
+    return f"from {found.title if found is not None else ref}"
+
+
+def _merge_words(tree: nodes.Tree, node: Any, factory: frozenset[tuple[str, str]]) -> str:
+    """Auto-merge at *node* now, in words: ``→ tryout-base (from Sample outcome)``."""
+    hit = tree.merge_scope(node)
+    if hit is not None:
+        where = _where(tree, node, hit[0], "")
+        return f"→ {hit[1].pair[1]} ({where})" if hit[1].pair else f"off ({where})"
+    if factory:
+        return f"→ {', '.join(sorted({b for _, b in factory}))} ({_FACTORYS})"
+    return "off"
+
+
+async def _plan_auto(env: Env, tree: nodes.Tree, node: Any, args: dict[str, Any]) -> Plan:
+    """
+    Autonomy and auto-merge for *node* and everything under it (owners only).
+
+    ``args``: ``auto_merge`` (``true``: the server merges the ready PRs here into
+    ``repo#base``, see :func:`_scope_pair`; ``false``: people merge them),
+    ``base`` and ``repo``, ``autonomy`` (a level, or ``inherit``). What is left
+    out stays as it is. A node whose ancestors already give what is asked keeps
+    no entry of its own, so the lists stay as short as the owner's intent.
+    """
+    from omnigent.server.factory import definition, tuning
+
+    if (
+        node.tree != nodes.PRODUCT_TREE
+        or node.implicit
+        or node.ghost
+        or node.level not in subtrees.SCOPE_LEVELS
+        or not subtrees.is_scope_ref(node.ref)
+    ):
+        raise _not_here(
+            "auto",
+            node,
+            tree,
+            "only a stored goal, need, feature or project carries a subtree setting "
+            "(name an implicit one first)",
+        )
+    if tree.state(node.ref) == "done":
+        raise _not_here("auto", node, tree, "it is done")
+    want_merge = args.get("auto_merge")
+    if want_merge is not None and not isinstance(want_merge, bool):
+        raise _err(
+            400, "invalid_args", "args.auto_merge is true or false", field="args.auto_merge"
+        )
+    want_level = args.get("autonomy")
+    if want_level is not None and want_level not in (*autonomy.AUTONOMY_LEVELS, "inherit"):
+        raise _err(
+            400,
+            "invalid_args",
+            f"args.autonomy is one of {[*autonomy.AUTONOMY_LEVELS, 'inherit']}",
+            field="args.autonomy",
+        )
+    if want_merge is None and want_level is None:
+        raise _err(
+            400, "invalid_args", "args.auto_merge or args.autonomy is required", field="args"
+        )
+    resolved = await asyncio.to_thread(definition.definition_for, env.deps, env.fid, fresh=True)
+    version = resolved.version if resolved is not None else 0
+    doc = resolved.doc if resolved is not None else definition.default_doc()
+    delivery = (doc.get("product") or {}).get("delivery") or {}
+    own_autonomy = doc.get("autonomy") or {}
+    factory = auto_merge.targets_of(delivery)
+    shown: dict[str, Any] = {}
+    changes: list[dict[str, Any]] = []
+    items: list[tuple[str, str, Any, Any]] = []
+    effects: list[dict[str, str]] = []
+    pair: tuple[str, str] | None = None
+    level: str | None = None
+
+    if want_merge is not None:
+        shown["auto_merge"] = want_merge
+        above = tree.merge_scope(node, own=False)
+        if want_merge:
+            pair = _scope_pair(env, tree, node, args, doc)
+            shown.update(repo=pair[0], base=pair[1])
+            given = above[1].pair == pair if above is not None else pair in factory
+            entry = None if given else {"ref": node.ref, "repo": pair[0], "base": pair[1]}
+            source = node.ref if not given else above[0] if above is not None else None
+            after = f"→ {pair[1]} ({_where(tree, node, source, _FACTORYS)})"
+        else:
+            stops = above[1].pair is not None if above is not None else bool(factory)
+            entry = {"ref": node.ref, "merge": False} if stops else None
+            after = "off (here)" if entry is not None else "off"
+        listed = [dict(i) for i in delivery.get("auto_merge_scopes") or []]
+        updated = [i for i in listed if i.get("ref") != node.ref] + ([entry] if entry else [])
+        if updated != listed:
+            changes.append({"op": "replace", "path": auto_merge.SCOPES_PATH, "value": updated})
+        items.append(("auto_merge", "Auto-merge", _merge_words(tree, node, factory), after))
+        under = _under(tree, node.ref, pair)
+        if pair is not None:
+            covered = [r.slug for r in under.covered]
+            effects.append(
+                _line(
+                    "Merges into",
+                    f"{pair[0]}#{pair[1]} once gates, review and demo pass and every check is "
+                    "green; agents still never merge",
+                )
+            )
+            effects.append(
+                _line(
+                    "Covers",
+                    f"{len(covered)} project{'' if len(covered) == 1 else 's'} now"
+                    f"{f' ({_names(covered)})' if covered else ''} and any added under it later"
+                    if node.level != "project"
+                    else f"{node.title}'s PRs into {pair[1]}, now and later",
+                )
+            )
+            waiting = [
+                pr
+                for row in under.covered
+                for pr in tree.wfacts.prs_of(row.slug)
+                if pr.state == "open"
+                and (pr.repo or "").lower() == pair[0]
+                and pr.base_ref == pair[1]
+            ]
+            ready = [f"#{pr.number}" for pr in waiting if pr.ready]
+            numbers = ready or [f"#{pr.number}" for pr in waiting]
+            when = "checks are green" if ready else "ready and green"
+            first = (
+                f"{_names(numbers)} merge{'s' if len(numbers) == 1 else ''} once {when}"
+                if numbers
+                else "the next PR here merges itself once it is ready and green"
+            )
+            effects.append(_line("First effect", first))
+            skipped = [f"{r.slug} (into {project_base_branch(r)})" for r in under.other_base]
+            skipped += [f"{slug} (its own setting)" for slug in under.apart]
+            inside = {r.slug for r in (*under.covered, *under.other_base)} | set(under.apart)
+            now = auto_merge.targets_from(delivery, tree.facts.lineage)
+            kept: dict[str, list[str]] = {}
+            for row in sorted(tree.project_rows.values(), key=lambda r: r.slug):
+                base = project_base_branch(row)
+                if (
+                    row.status == projects.STATUS_ACTIVE
+                    and row.slug not in inside
+                    and base in NEVER_INFERRED
+                    and _pair_of(row) not in now.cover(row).pairs
+                ):
+                    kept.setdefault(base, []).append(row.slug)
+            for base, slugs in sorted(kept.items()):
+                verb = "is" if len(slugs) == 1 else "are"
+                skipped.append(
+                    f"{base} stays merged by people ({_names(slugs)} {verb} outside this subtree)"
+                )
+            if skipped:
+                effects.append(_line("Not affected", "; ".join(skipped)))
+        else:
+            effects.append(
+                _line(
+                    "People merge",
+                    "every PR here, also of the work added later"
+                    + ("; the factory's targets too" if factory else ""),
+                )
+            )
+            if under.apart:
+                effects.append(_line("Not affected", f"{_names(under.apart)} (its own setting)"))
+
+    if want_level is not None:
+        shown["autonomy"] = want_level
+        hit = tree.autonomy_scope(node)
+        above_level = tree.autonomy_scope(node, own=False)
+        inherited = (
+            above_level[1]
+            if above_level is not None
+            else str(own_autonomy.get("level") or autonomy.DEFAULT_LEVEL)
+        )
+        level = inherited if want_level == "inherit" else str(want_level)
+        entry_level = None if level == inherited else {"ref": node.ref, "level": level}
+        listed = [dict(i) for i in own_autonomy.get("scopes") or []]
+        updated = [i for i in listed if i.get("ref") != node.ref] + (
+            [entry_level] if entry_level else []
+        )
+        if updated != listed:
+            changes.append({"op": "replace", "path": autonomy.SCOPES_PATH, "value": updated})
+        items.append(
+            (
+                "autonomy",
+                "Autonomy",
+                _level_words(hit[1] if hit is not None else inherited),
+                _level_words(level),
+            )
+        )
+        text = _LEVEL_TEXT[level]
+        where = _where(
+            tree,
+            node,
+            node.ref if entry_level else above_level[0] if above_level else None,
+            _FACTORYS,
+        )
+        effects.append(_line("Autonomy", f"{text.label} ({where}). {text.summary}"))
+
+    if not changes:
+        raise _err(409, "nothing_to_do", "this subtree already has these settings")
+    warnings: list[str] = []
+    if pair is not None and not auto_merge.merger_on(env.app_state):
+        warnings.append(
+            "This server runs no merger (OMNIGENT_FACTORY_AUTO_MERGE_S is 0): people still "
+            "merge until it runs."
+        )
+    note = _text(args, "note", 2000)
+    said = []
+    if want_merge is not None:
+        said.append(f"auto-merge into {pair[1]} on" if pair is not None else "auto-merge off")
+    if level is not None:
+        said.append(f"autonomy {_level_words(level)}")
+
+    async def run() -> Applied:
+        made = await tuning.human_edit(
+            env.app_state,
+            env.fid,
+            env.user_id,
+            {
+                "changes": changes,
+                "base_version": version,
+                "note": note or f"Autonomy and merge for {node.title} and everything under it.",
+            },
+        )
+        return Applied(
+            {
+                "kind": "definition",
+                "version": version,
+                "made": made.get("def_version"),
+                "back": f"set {node.title}'s autonomy and merge again",
+            },
+            f"{env.by} set {' and '.join(said)} for {node.title} and everything under it "
+            f"({made.get('proposal')}, v{made.get('def_version')}).",
+            filed=made.get("proposal"),
+        )
+
+    label = (
+        "Turn on for this subtree"
+        if want_merge
+        else "Turn off for this subtree"
+        if want_merge is False
+        else "Apply to this subtree"
+    )
+    return Plan(
+        "auto",
+        node.ref,
+        f"Autonomy for {node.title} and everything under it",
+        shown,
+        [f"definition:{version}"],
+        effects,
+        run,
+        level=LEVEL_MANAGE,
+        rollup_delta=_rollup(_delta(node.ref, node.title, *items), text=""),
+        warnings=warnings,
+        filed="a definition version",
+        extra={"apply_label": label},
+    )
+
+
 # ── Planning, preview, apply, undo ─────────────────────────────
 
 
@@ -2246,6 +2629,8 @@ async def plan_verb(env: Env, tree: nodes.Tree, ref: str, body: VerbIn) -> Plan:
         plan = await _plan_structural(env, tree, node, args, verb)
     elif verb == "name":
         plan = await _plan_name(env, tree, node, args)
+    elif verb == "auto":
+        plan = await _plan_auto(env, tree, node, args)
     else:
         plan = await _plan_team(env, tree, node, args)
     _check_authority(tree, node, plan)
@@ -2590,11 +2975,11 @@ async def _undo(env: Env, record: Mapping[str, Any]) -> str:
         # Only while the version this verb made is in force: an older pin would
         # throw away every change made to the definition since.
         if made is None or now_version != int(made):
+            back = str(record.get("back") or "change the team back in the team editor")
             raise _err(
                 409,
                 "undo_closed",
-                f"the definition changed since (v{now_version} is in force, not v{made}); "
-                "change the team back in the team editor",
+                f"the definition changed since (v{now_version} is in force, not v{made}); {back}",
             )
         await tuning.pin_version(env.app_state, fid, env.user_id, version)
         return f"definition v{version} back in force"

@@ -320,7 +320,8 @@ class AutoMerger:
             return False
         repository = result.data.get("repository")
         node = repository.get(pr_alias(pr.number)) if isinstance(repository, dict) else None
-        refusal = auto_merge.github_refusal(pr, node, targets, logins)
+        project = scope.projects.get(pr.project_slug or "")
+        refusal = auto_merge.github_refusal(pr, node, targets, logins, project)
         if refusal is None:
             stale = await self._recheck(deps, scope, pr)
             refusal = Refusal(stale) if stale is not None else None
@@ -332,7 +333,7 @@ class AutoMerger:
         except _CALL_ERRORS as exc:
             await self._failed(scope, pr, f"the merge failed: {exc}", exc, now)
             return False
-        await self._merged(scope, pr, node or {}, answer)
+        await self._merged(scope, pr, node or {}, answer, targets.cover(project).scope)
         return True
 
     async def _recheck(self, deps: FactoryDeps, scope: FactoryScope, pr: FactoryPr) -> str | None:
@@ -481,15 +482,30 @@ class AutoMerger:
                 self._raised.pop(row.id, None)
 
     async def _merged(
-        self, scope: FactoryScope, pr: FactoryPr, node: dict[str, Any], answer: dict[str, Any]
+        self,
+        scope: FactoryScope,
+        pr: FactoryPr,
+        node: dict[str, Any],
+        answer: dict[str, Any],
+        by_scope: auto_merge.MergeScope | None = None,
     ) -> None:
-        """Record the merge, clear its incidents and let the poller run the merged flow."""
+        """
+        Record the merge, clear its incidents and let the poller run the merged flow.
+
+        :param by_scope: The subtree scope that made the base a target (``None``:
+            a factory-wide target); the event names it.
+        """
         self._forget(pr.id)
         merged_sha = str(answer.get("sha") or "").lower() or None
         gates = {name: (pr.gates or {}).get(name) for name in (*READY_GATES, "demo")}
+        target = (
+            f"auto-merge for {by_scope.ref} and everything under it"
+            if by_scope is not None
+            else "an auto-merge target"
+        )
         summary = (
-            f"PR #{pr.number} merged by the factory into {pr.base_ref}: an auto-merge "
-            "target, every gate passed and every check is green"
+            f"PR #{pr.number} merged by the factory into {pr.base_ref}: {target}, "
+            "every gate passed and every check is green"
         )
         await events.emit(
             self._app_state,
@@ -504,6 +520,7 @@ class AutoMerger:
                 "by": "server",
                 "by_kind": "server",
                 "target": {"repo": pr.repo, "base": pr.base_ref},
+                "scope": by_scope.ref if by_scope is not None else None,
                 "head_sha": pr.head_sha,
                 "merged_sha": merged_sha,
                 "method": "squash",
@@ -522,12 +539,13 @@ class AutoMerger:
         await refresh_now(self._app_state, pr.id)
         live.announce_factory_changed(self._app_state, scope.factory_id, ("snapshot",))
         _logger.info(
-            "factory %s: auto-merged %s#%s into %s as %s",
+            "factory %s: auto-merged %s#%s into %s as %s (scope %s)",
             scope.factory_id,
             pr.repo,
             pr.number,
             pr.base_ref,
             (merged_sha or "?")[:7],
+            by_scope.ref if by_scope is not None else "factory-wide",
         )
 
 

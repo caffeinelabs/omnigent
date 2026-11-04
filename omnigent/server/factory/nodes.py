@@ -76,9 +76,24 @@ from omnigent.factory import (
     STAGE_QUEUED,
     STAGE_READY,
 )
-from omnigent.server.factory import alarms, features, levels, node_refs, node_status, waits
+from omnigent.server.factory import (
+    alarms,
+    auto_merge,
+    autonomy,
+    features,
+    levels,
+    node_refs,
+    node_status,
+    subtrees,
+    waits,
+)
 from omnigent.server.factory.base import DeployedHead, contains, same_commit
-from omnigent.server.factory.charter import change_dependency, normalize_charter, project_kind
+from omnigent.server.factory.charter import (
+    change_dependency,
+    normalize_charter,
+    project_base_branch,
+    project_kind,
+)
 from omnigent.server.factory.definition_blocks import (
     FACTORY_TREE,
     KIND_IS_LEVEL,
@@ -258,6 +273,12 @@ class NodeFacts:
     :param loops: The bad loops (stalled, exhausted, thrashing): stall waits.
     :param leads: Project slug -> its lead's session (questions its lead asked).
     :param targets: The owner-set auto-merge targets the server merges into now.
+    :param merge_scopes: The definition's auto-merge per subtree (``auto_merge_scopes``),
+        whether or not this server runs the merger: what the owners set.
+    :param autonomy_scopes: ``autonomy.scopes`` as ``{ref: level}``; *level* the
+        factory's own ``autonomy.level``.
+    :param lineage: Where each project sits (feature, need, goal), as the
+        merger and the autonomy decision read it.
     :param observed: Task kind -> observed p50 minutes (kinds with at least five
         samples): the only inputs an ETA is computed from.
     :param turns: Recent ``turn`` spans (the cost of the last hour: burn).
@@ -287,7 +308,11 @@ class NodeFacts:
     now: float = 0.0
     loops: Sequence[FactoryLoop] = ()
     leads: Mapping[str, str | None] = field(default_factory=dict)
-    targets: frozenset[tuple[str, str]] = frozenset()
+    targets: auto_merge.TargetsLike = frozenset()
+    merge_scopes: Mapping[str, auto_merge.MergeScope] = field(default_factory=dict)
+    autonomy_scopes: Mapping[str, str] = field(default_factory=dict)
+    level: str = autonomy.DEFAULT_LEVEL
+    lineage: subtrees.Lineage = field(default_factory=subtrees.Lineage)
     observed: Mapping[str, float] = field(default_factory=dict)
     turns: Sequence[FactorySpan] = ()
     closed_alarms: Sequence[alarms.ClosedAlarm] = ()
@@ -355,7 +380,7 @@ def load_facts(
     readable: Iterable[str] | None = None,
     now: float | None = None,
     leads: Mapping[str, str | None] | None = None,
-    targets: frozenset[tuple[str, str]] = frozenset(),
+    targets: auto_merge.TargetsLike = frozenset(),
 ) -> NodeFacts:
     """
     Read what the projection needs (synchronous; a handful of row reads).
@@ -380,6 +405,14 @@ def load_facts(
     factory = body.get("factory") or {}
     base = factory.get("base") or {}
     initiatives = store.list_initiatives(fid, limit=5000)
+    opportunities = store.list_opportunities(fid, limit=5000)
+    goals = list((doc.get("strategy") or {}).get("goals") or [])
+    lineage = subtrees.lineage_of(initiatives, opportunities, goals)
+    found_targets = auto_merge.as_targets(targets)
+    if found_targets.scopes:
+        found_targets = found_targets.with_lineage(lineage)
+    delivery = (doc.get("product") or {}).get("delivery") or {}
+    own = doc.get("autonomy") or {}
     proposals = store.list_proposals(fid, status=list(READ_PROPOSALS), limit=5000)
     projects = store.list_projects(fid)
     asks: dict[str, tuple[str, str]] = {}
@@ -409,8 +442,8 @@ def load_facts(
         base=base.get("branch"),
         structure=doc.get("structure") or {},
         definition_version=resolved.version if resolved is not None else 0,
-        goals=list((doc.get("strategy") or {}).get("goals") or []),
-        opportunities=store.list_opportunities(fid, limit=5000),
+        goals=goals,
+        opportunities=opportunities,
         initiatives=initiatives,
         proposals=proposals,
         projects=projects,
@@ -426,7 +459,11 @@ def load_facts(
         now=clock,
         loops=store.list_loops(fid, states=sorted(waits.BAD_LOOP_STATES)),
         leads=dict(leads) if leads is not None else {p.slug: p.pl_session_id for p in projects},
-        targets=targets,
+        targets=found_targets,
+        merge_scopes=auto_merge.scopes_of(delivery),
+        autonomy_scopes=autonomy.scopes_of(own.get("scopes")),
+        level=str(own.get("level") or autonomy.DEFAULT_LEVEL),
+        lineage=lineage,
         observed=observed_weights(deps, fid),
         turns=turns,
         closed_alarms=alarms.load(store, fid, clock),
@@ -1981,6 +2018,8 @@ class Tree:
             out["in_base_env"] = True
         if self.try_it(node):
             out["try_ready"] = True
+        if node.level in subtrees.SCOPE_LEVELS and self.auto_merged(node):
+            out["auto_merge"] = True
         if (grand := self._grandchildren(node)) is not None:
             out["grandchildren"] = grand
         if owner := self._owner(node):
@@ -2462,6 +2501,96 @@ class Tree:
                     "state": _clip(closed[0].cause, 60),
                 }
             )
+        out += self._scope_chips(node)
+        return out
+
+    # ── Autonomy and auto-merge per subtree ────────────────────
+
+    def project_of(self, node: _N) -> FactoryProject | None:
+        """The stored project *node* is or sits in (a task, change or run), else ``None``."""
+        if node.tree != PRODUCT_TREE:
+            return None
+        if node.level == "project":
+            return self.project_rows.get(node.order or "")
+        if node.level not in ("task", "change", "run"):
+            return None
+        found = next((a for a in reversed(self.ancestors(node.ref)) if a.level == "project"), None)
+        return self.project_rows.get(found.order or "") if found is not None else None
+
+    def scope_chain(self, node: _N, *, own: bool = True) -> tuple[str, ...]:
+        """
+        *node*'s ref (with *own*), then its ancestors' (nearest first): a project
+        and what is under it as the merger places the project (:mod:`.subtrees`).
+        """
+        project = self.project_of(node)
+        if project is not None:
+            chain = self.facts.lineage.chain(project)
+            if node.level != "project":
+                chain = (node.ref, *chain)
+        else:
+            chain = (node.ref, *(a.ref for a in reversed(self.ancestors(node.ref))))
+        return chain if own else chain[1:]
+
+    def merge_scope(
+        self, node: _N, *, own: bool = True
+    ) -> tuple[str, auto_merge.MergeScope] | None:
+        """The auto-merge scope covering *node* (its own first, with *own*), else ``None``."""
+        if not self.facts.merge_scopes or node.tree != PRODUCT_TREE or node.ghost:
+            return None
+        return subtrees.nearest(self.scope_chain(node, own=own), self.facts.merge_scopes)
+
+    def autonomy_scope(self, node: _N, *, own: bool = True) -> tuple[str, str] | None:
+        """``(ref, level)`` of the autonomy scope covering *node*, else ``None``."""
+        if not self.facts.autonomy_scopes or node.tree != PRODUCT_TREE or node.ghost:
+            return None
+        return subtrees.nearest(self.scope_chain(node, own=own), self.facts.autonomy_scopes)
+
+    def auto_merged(self, node: _N) -> bool:
+        """Whether a scope makes the server merge *node*'s PRs (a project's: into its base)."""
+        hit = self.merge_scope(node)
+        if hit is None or hit[1].pair is None:
+            return False
+        project = self.project_of(node)
+        if project is None:
+            return node.level in subtrees.SCOPE_LEVELS
+        return hit[1].pair == ((project.repo or "").lower(), project_base_branch(project))
+
+    def _overrides(self, ref: str) -> bool:
+        """Whether an off scope at *ref* stops a merge: an ancestor's scope or a factory target."""
+        at = self.nodes.get(ref)
+        above = self.merge_scope(at, own=False) if at is not None else None
+        if above is not None:
+            return above[1].pair is not None
+        return bool(auto_merge.as_targets(self.facts.targets).pairs)
+
+    def _scope_title(self, ref: str) -> str:
+        found = self.nodes.get(ref)
+        return found.title if found is not None else ref
+
+    def _scope_chips(self, node: _N) -> list[dict[str, Any]]:
+        """``auto-merge → <base> · this subtree / from <node>``; autonomy when it differs."""
+        out: list[dict[str, Any]] = []
+        hit = self.merge_scope(node)
+        if hit is not None and node.level not in ("change", "run"):
+            ref, scope = hit
+            where = "this subtree" if ref == node.ref else f"from {self._scope_title(ref)}"
+            if scope.pair is not None and self.auto_merged(node):
+                out.append(
+                    {"kind": "auto-merge →", "ref": ref, "title": scope.pair[1], "state": where}
+                )
+            elif scope.pair is None and self._overrides(ref):
+                out.append({"kind": "auto-merge", "ref": ref, "title": "off", "state": where})
+        found = self.autonomy_scope(node)
+        if (
+            found is not None
+            and found[1] != self.facts.level
+            and node.level in subtrees.SCOPE_LEVELS
+        ):
+            ref, level = found
+            where = "this subtree" if ref == node.ref else f"from {self._scope_title(ref)}"
+            out.append(
+                {"kind": "autonomy", "ref": ref, "title": level.capitalize(), "state": where}
+            )
         return out
 
     def _change_chip(self, node: _N, dep: str) -> dict[str, Any] | None:
@@ -2652,7 +2781,13 @@ class Tree:
             ),
             "research": lambda: node.kind == "study",
             "team": lambda: node.level == "project" and not node.later and not node.ghost,
-            "auto": lambda: state != "done" and not node.ghost,
+            "auto": lambda: (
+                stored
+                and state != "done"
+                and node.tree == PRODUCT_TREE
+                and node.level in subtrees.SCOPE_LEVELS
+                and subtrees.is_scope_ref(node.ref)
+            ),
             "pause": lambda: state not in ("done", "later", "offered") and not node.ghost,
             "move": lambda: stored and self._seats(self.moves(node), "move"),
             "name": lambda: node.implicit and self._nameable(node),
