@@ -1076,6 +1076,65 @@ today's closed alarms as items (`D-n`) with `closed_alarms` on its page, the
 node each was about carries an "alarm closed" chip, and the root's roll-up
 counts them (`alarms_closed`).
 
+**Steering at the node (cockpit v3).** Every structural verb on a node page
+(Add child, Start now, Team, Autonomy & merge, Pause / Resume, Move, Name it /
+file under; their keys `a s t u p m n`) opens a preview under the header
+before anything changes: the parent's First / Then / Later columns with the
+change as a dashed ghost (and its old place struck through), the roll-up
+change, the effects and who approves. Apply sends the preview's id and the
+page's facts version (`based_on`); the toast offers Undo, and the node keeps
+"Undo (n min left)" for the rest of its 10 minutes. Add child pulls a held
+child whose title matches forward instead of copying it; Move offers only
+parents one level up. Plain words in the node's chat ("start the panel now",
+"also plan …", "swap luz to codex") open the same previews, never an apply.
+Team is the team editor in a panel (every member's vendor and model, nothing
+preselected, the $/h before and after) on the definition's own preview, a
+definition version and Undo by re-pinning the version before; the other
+verbs wait for `POST …/n/{ref}/preview|apply` and `POST …/undo/{token}`
+and until then say they cannot be previewed. Sheets open from the address:
+`?peek=needs` (Needs you, ranked by what each ask holds, the asks that block
+nothing grouped with "Apply all", the closed alarms, the other tree's count;
+from `GET …/needs-you`), `?peek=env` (the base env), `?peek=try&at=<ref>`
+(Try it: the passing steps by name, the flag and the sign-in note) and
+`?peek=keys`; ⌘K finds nodes by ref or title (`GET …/find`), and the
+search's projects, PRs and tasks open their node pages. Three seconds on a
+page marks this person's last look (`PUT …/n/{ref}/seen`); the "since" line
+and each child's changes it showed stay for the whole visit (an apply or an
+answer reads the page again, counted from the new mark), and the next visit
+starts from the new mark. A refused apply (409 `stale`, 422, 403) reads the
+page and its preview again, so Apply works on what is there now. The Team
+Undo re-pins the version before only while the version it made is still the
+one in force (read again first); a later version says "undo from Versions".
+
+**What cockpit v3 reads from a preview beyond `api.md` §4 (the S12
+contract).** `POST …/n/{ref}/preview` answers `{preview_id, columns_after?,
+rollup_delta, effects, approver, warnings}`; the web also reads these
+optional fields, each with a fallback when absent (`CLIENT_PREVIEW_FIELDS`
+in `web/src/components/factory/v3/nodeWire.ts`, checked against this list
+by `nodeSteer.test.tsx`):
+
+- `title`: the panel's heading ("Start assistant-panel-ux now"); else the
+  verb's own words.
+- `moved_from` (`{ref, col}`): where the changed node sits now, struck
+  through in the mini columns.
+- `approver_note`: "Who approves" in words ("You, as owner. Applies now;
+  Undo for 10 min."); else words for `approver`.
+- `pulls_forward` (`{ref, title, held_for?, note?}`): the held child a new
+  child's title matched; Add child then says it pulls it forward.
+- `parents` (`[{ref, title}]`): the parents one level up a node may go
+  under. Move and Name it / file under ask the preview with no `to` (the
+  form's first read) and offer only these; a server that answers that read
+  with an error offers none and says so.
+- `apply_label`: Apply's words ("Pull forward and plan").
+
+`rollup_delta` and `effects` are read as `[{label, html}]` lines, as
+sentences, or (`rollup_delta`) as `{field: {before, after}}`. The arguments
+the web sends: add `{title, col, depends_on?, because?, held_for?}`, start,
+pause and resume `{}`, auto `{auto_merge}`, move `{to?}`, name
+`{title?, to?}`; a blocked form (Add child without a title, Team with
+nothing picked) asks no preview. The apply's one-line result is read from
+`message`.
+
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to
 carry: `repo` (the repo whose projects run it; unset: every project's),

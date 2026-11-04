@@ -10,10 +10,12 @@
  *
  * Cockpit v3 has no Room drawer: every node page carries its chat, so `/`,
  * `r`, the Room button and a `?room=` link focus (or go to) the chat of the
- * node a thread is about.
+ * node a thread is about. Its sheets open by the address too: Needs you
+ * (`?peek=needs`, ranked, once the node source serves it), the base env,
+ * Try it and the keys; ⌘K finds nodes.
  */
 
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AddProjectDialog } from "@/components/factory/controls/AddProjectDialog";
 import { CockpitPalette } from "@/components/factory/cmdk/CockpitPalette";
@@ -59,7 +61,9 @@ import {
   createNodeChatSlot,
 } from "@/components/factory/v3/chat/chatLayout";
 import { DISCOVERY_THREAD, chatNodeRef } from "@/components/factory/v3/chat/nodeThread";
-import { NODE_STALE_MS, nodeQueryKeys } from "@/components/factory/v3/nodeQueries";
+import { NODE_STALE_MS, nodeQueryKeys, useNode } from "@/components/factory/v3/nodeQueries";
+import { useNeedsYou } from "@/components/factory/v3/nodeSteer";
+import { V3Sheets } from "@/components/factory/v3/sheets/V3Sheets";
 import { PRODUCT_REF, nodeHref } from "@/components/factory/v3/nodeRoutes";
 import { useNodeSource } from "@/components/factory/v3/nodeSource";
 import { DecisionsPage } from "./DecisionsPage";
@@ -124,7 +128,7 @@ export function CockpitShell({
   // Home's own read of the list, from the cache only: the shell never fetches it.
   const asks = useCachedFactoryAsks(fid);
   // One count: the rows of Needs you (older servers: what waits on the viewer).
-  const needsYou = shellNeedsCount(
+  const shellNeeds = shellNeedsCount(
     {
       count:
         summary?.counts.needs_you ??
@@ -149,6 +153,39 @@ export function CockpitShell({
   const [chatSlot] = useState(createNodeChatSlot);
   const queryClient = useQueryClient();
   const nodeSource = useNodeSource(v3);
+  // v3 with a ranked Needs you: its count is the sheet's (every ask, also those that block nothing).
+  const ranked = useNeedsYou("product", v3 && Boolean(nodeSource?.needsYou), fid).data;
+  const needsYou = ranked ? ranked.items.length + ranked.blocks_nothing.length : shellNeeds;
+  // The ranked list and the base env chip (the product's page) move with the
+  // factory: read them again whenever the snapshot's open asks change (a push
+  // frame re-read it) or the summary's poll answers, as the polled count did.
+  const liveMark = useMemo(
+    () =>
+      [
+        snapshot.decisions
+          .filter((d) => d.status === "open")
+          .map((d) => d.id)
+          .sort()
+          .join(","),
+        summary?.counts.needs_you ?? summary?.counts.waiting_for_you ?? "",
+        summary?.generated_at ?? "",
+      ].join("|"),
+    [snapshot.decisions, summary],
+  );
+  const sourceKind = nodeSource?.kind;
+  const markRead = useRef(liveMark);
+  useEffect(() => {
+    if (liveMark === markRead.current) return;
+    markRead.current = liveMark;
+    if (!v3 || !sourceKind) return;
+    void queryClient.invalidateQueries({
+      queryKey: [...nodeQueryKeys.all(fid), sourceKind, "needs-you"],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: nodeQueryKeys.node(fid, sourceKind, PRODUCT_REF),
+      exact: true,
+    });
+  }, [fid, liveMark, queryClient, sourceKind, v3]);
   /**
    * v3: the node page whose chat shows a thread, with its chat open (on
    * sample data, the product's: sample nodes have no threads). #discovery
@@ -203,11 +240,14 @@ export function CockpitShell({
       ),
     [setParams],
   );
+  // v3: the base env the top bar names (the product's node page, read again with the live mark above).
+  const root = useNode(v3 ? PRODUCT_REF : "", fid).data;
+  const env = root?.node.env;
   useCockpitKeys({
     onPalette: () => {
       if (!(v3 && chatSlot.focus())) setPalette(true);
     },
-    onHelp: () => setKeys(true),
+    onHelp: () => (v3 ? setParam(PEEK_PARAM, "keys") : setKeys(true)),
     onRoom: v3 ? openChat : () => setParam(ROOM_PARAM, room ?? ""),
     onGo: (place) => navigate(PLACE_HREF[place](fid)),
   });
@@ -266,6 +306,18 @@ export function CockpitShell({
           onAddProject={() => setAdding({ title: null })}
           onClassic={onClassic}
           onV2={onV2}
+          {...(v3
+            ? {
+                onNeedsYou: () => setParam(PEEK_PARAM, "needs"),
+                baseEnv: env
+                  ? {
+                      label: `${env.name} ${env.branch}${env.sha ? ` @${env.sha}` : ""}`,
+                      ok: env.smoke?.ok ?? null,
+                      onOpen: () => setParam(PEEK_PARAM, "env"),
+                    }
+                  : null,
+              }
+            : {})}
         />
         {viewer?.role === "viewer" && <ViewerBanner factoryId={fid} />}
         <main
@@ -287,8 +339,13 @@ export function CockpitShell({
               onShare={() => setSharing(true)}
               onAddProject={() => setAdding({ title: null })}
               onRoom={(thread) => (v3 ? openThreadChat(thread) : setParam(ROOM_PARAM, thread))}
+              nodes={v3}
             />
-            <KeyboardHelp open={keys} onOpenChange={setKeys} nodes={variant === "v3"} />
+            {v3 ? (
+              <V3Sheets factoryId={fid} keys />
+            ) : (
+              <KeyboardHelp open={keys} onOpenChange={setKeys} />
+            )}
           </FactoryToastProvider>
         </main>
       </div>
@@ -312,7 +369,7 @@ export function CockpitShell({
         spend={summary?.spend ?? null}
       />
       <Peek
-        open={peek === "needs"}
+        open={peek === "needs" && !(v3 && nodeSource?.needsYou)}
         onOpenChange={(open) => !open && setParam(PEEK_PARAM, null)}
         title="Needs you"
         description="Everything the factory asked a person, answered and expired included."

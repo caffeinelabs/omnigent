@@ -240,7 +240,11 @@ export interface BaseEnv {
   smoke?: { ok: boolean; checks?: string };
   app_url?: string;
   api_url?: string;
+  /** How to sign in there (api.md also names it `signin_note`). */
   note?: string;
+  signin_note?: string;
+  /** What it follows and how fast ("moves about 72 s after each merge"). */
+  follows?: string;
   /** The project that keeps it, in the factory tree. */
   ref?: string;
 }
@@ -262,6 +266,8 @@ export interface NodeFull extends NodeSummary {
   why_html: string;
   budget?: number;
   try_it?: TryStep[];
+  /** The flag a person turns on to try what passes ("assistant, for a flag-on user"). (client) */
+  try_flag?: string;
   /** On the product root. */
   env?: BaseEnv;
   /** On the factory tree's Health area: today's alarms the server closed. */
@@ -394,4 +400,117 @@ export interface LevelView {
   tiles?: boolean;
   /** (client) */
   via_fold?: number;
+}
+
+// ── Steering: verb previews, apply and Undo (api.md §4) ─────────
+
+/** What a verb's preview and apply send: the verb, its arguments and the facts version read. */
+export interface VerbRequest {
+  verb: string;
+  /** The verb's own arguments (a new child's title and column, a parent to move under …). */
+  args: Record<string, string | number | boolean | null>;
+  /** The page's `version`: a write based on older facts is refused (409 stale). */
+  based_on: string;
+}
+
+/** One line of a preview, in words: "Burn" · "about +$19/h while its team works". */
+export interface PreviewLine {
+  label: string;
+  /** Limited markup, as `why_html` (see `RichText`). */
+  html: string;
+}
+
+/** A verb's dry run (`POST …/n/{ref}/preview`): what would change, and who approves. Nothing changed yet. */
+export interface VerbPreview {
+  preview_id: string;
+  /** The heading ("Start assistant-panel-ux now"). (client) */
+  title?: string;
+  /** The parent's children after the change; the changed node is a ghost (`state: "ghost"`). */
+  columns_after?: ChildPage;
+  /** Where the changed node sits now: struck through there in the mini columns. (client) */
+  moved_from?: { ref: string; col: number | "later" };
+  /** How the roll-ups change, line by line (api.md's object form is read too, see `nodeWire`). */
+  rollup_delta: PreviewLine[];
+  /** What else changes: the wait, the order, the team, the burn, what it unlocks, the risk. */
+  effects: PreviewLine[];
+  /** Who approves: "you", "owner", "atlas" … */
+  approver: string;
+  /** Who approves, in words ("You, as owner. Applies now; Undo for 10 min."). (client) */
+  approver_note?: string;
+  warnings: string[];
+  /** The held child a new child's title matched: adding pulls it forward instead of copying it. (client) */
+  pulls_forward?: { ref: string; title: string; held_for?: string; note?: string };
+  /** Parents one level up this node may go under (Move, Name it / file under). (client) */
+  parents?: NodeLink[];
+  /** The apply button's words ("Pull forward and plan"). (client) */
+  apply_label?: string;
+}
+
+/** What `POST …/n/{ref}/apply` returns: the page after, and the Undo for 10 minutes. */
+export interface VerbApplied {
+  result?: NodePage;
+  undo?: { token: string; expires_at: string };
+  /** The proposal filed for the record ("C-19"). */
+  filed?: string;
+  /** What happened, in one line (the toast). (client) */
+  message?: string;
+}
+
+// ── Sheets: Needs you, Find (api.md §3.8) ───────────────────────
+
+/** One ask in Needs you: its breadcrumb, what it holds, its weight (the rank). */
+export interface NeedsYouItem {
+  decision: DecisionRef;
+  /** Root first, ending at the node the ask is on. */
+  breadcrumb: Crumb[];
+  /** What answering it frees ("T-16", "assistant-panel-ux"). */
+  holds: string[];
+  weight: number;
+}
+
+/** An ask that blocks nothing, with the node it is on and its breadcrumb (they are grouped). */
+export type QuietAsk = DecisionRef & { node?: NodeLink; breadcrumb?: Crumb[] };
+
+/** `GET /factories/{fid}/needs-you?tree=`: ranked by what each ask holds. */
+export interface NeedsYouList {
+  items: NeedsYouItem[];
+  blocks_nothing: QuietAsk[];
+  closed_alarms: ClosedAlarm[];
+  /** Asks in the other tree (the Factory's, from the Product). */
+  other_tree: number;
+}
+
+/** One node `GET /factories/{fid}/find?q=` found: its ref, title and breadcrumb. */
+export interface FindHit {
+  ref: string;
+  title: string;
+  level: string;
+  level_name?: string;
+  state?: NodeState;
+  tag?: string;
+  /** The ancestors' titles, root first (the root left out). */
+  breadcrumb: string[];
+}
+
+// ── The team behind the Team verb (sample source; live reads the team editor's routes) ──
+
+/** One member of a node's team, as the Team panel lists it. */
+export interface TeamSeat {
+  id: string;
+  name: string;
+  role: string;
+  vendor: string;
+  model: string | null;
+  /** "idle · held", "not started". */
+  state?: string;
+  cost?: number;
+}
+
+/** A node's team with what each member could run instead (the Team panel). */
+export interface TeamSheet {
+  members: TeamSeat[];
+  /** Vendor → its models, for every member. */
+  vendors: Record<string, string[]>;
+  /** $/h while the team works, now. */
+  rate?: number;
 }

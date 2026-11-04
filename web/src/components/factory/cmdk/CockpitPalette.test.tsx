@@ -10,6 +10,8 @@ import { TEAM_SLUG, teamCatalog, teamSnapshot } from "../team/__fixtures__/teamF
 import { readTeamStaging, resetTeamStaging } from "../team/teamStaging";
 import { FactoryViewerProvider } from "../shell/viewerCan";
 import { FactoryToastProvider } from "../ui/Toast";
+import { sampleNodeSource } from "../v3/fixture/sampleNodeSource";
+import { type NodeSource, NodeSourceProvider } from "../v3/nodeSource";
 import { CockpitPalette } from "./CockpitPalette";
 import { SEARCH_DEBOUNCE_MS } from "./paletteQueries";
 
@@ -140,8 +142,27 @@ function LocationProbe() {
 
 const onRoom = vi.fn();
 
-function renderPalette(snapshot: FactorySnapshot = SNAPSHOT) {
+function renderPalette(
+  snapshot: FactorySnapshot = SNAPSHOT,
+  { nodes }: { nodes?: NodeSource } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const palette = (
+    <FactoryViewerProvider viewer={snapshot.viewer}>
+      <FactoryToastProvider>
+        <CockpitPalette
+          snapshot={snapshot}
+          open
+          onOpenChange={() => undefined}
+          onShare={() => undefined}
+          onAddProject={() => undefined}
+          onRoom={onRoom}
+          nodes={Boolean(nodes)}
+        />
+        <LocationProbe />
+      </FactoryToastProvider>
+    </FactoryViewerProvider>
+  );
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[`/factory/${FID}`]}>
@@ -149,19 +170,7 @@ function renderPalette(snapshot: FactorySnapshot = SNAPSHOT) {
           <Route
             path="*"
             element={
-              <FactoryViewerProvider viewer={snapshot.viewer}>
-                <FactoryToastProvider>
-                  <CockpitPalette
-                    snapshot={snapshot}
-                    open
-                    onOpenChange={() => undefined}
-                    onShare={() => undefined}
-                    onAddProject={() => undefined}
-                    onRoom={onRoom}
-                  />
-                  <LocationProbe />
-                </FactoryToastProvider>
-              </FactoryViewerProvider>
+              nodes ? <NodeSourceProvider source={nodes}>{palette}</NodeSourceProvider> : palette
             }
           />
         </Routes>
@@ -456,5 +465,43 @@ describe("the new cockpit's palette", () => {
         `${BASE}/search?q=cus`,
       ]),
     );
+  });
+
+  it("cockpit v3 finds nodes first, by ref or title, with their breadcrumbs", async () => {
+    serve();
+    renderPalette(SNAPSHOT, { nodes: sampleNodeSource() });
+    await type("T-16");
+    const row = await screen.findByTestId("factory-palette-node-T-16", {}, { timeout: 3000 });
+    expect(row).toHaveTextContent("T-16Debit each turn");
+    expect(row).toHaveTextContent("Task · Agent assistant (sample) › assistant-core");
+    fireEvent.click(row);
+    await waitFor(() => expect(location).toBe(`/factory/${FID}/n/T-16`));
+  });
+
+  it("cockpit v3 opens node pages for the projects and PRs the search finds", async () => {
+    serve();
+    routes[`GET ${BASE}/search`] = (path) =>
+      json(
+        search(new URL(path, "http://x").searchParams.get("q") ?? "", [
+          {
+            kind: "project",
+            ref: `#${TEAM_SLUG}`,
+            title: "CSV export",
+            detail: null,
+            score: 6,
+            slug: TEAM_SLUG,
+          },
+        ]),
+      );
+    const { find: _find, ...noFind } = sampleNodeSource();
+    renderPalette(SNAPSHOT, { nodes: noFind });
+    await type("csv");
+    const hit = await screen.findByTestId(
+      `factory-palette-item-hit:project:#${TEAM_SLUG}`,
+      {},
+      { timeout: 3000 },
+    );
+    fireEvent.click(hit);
+    await waitFor(() => expect(location).toBe(`/factory/${FID}/n/${TEAM_SLUG}`));
   });
 });

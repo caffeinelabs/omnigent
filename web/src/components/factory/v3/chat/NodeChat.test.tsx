@@ -217,8 +217,9 @@ describe("cockpit v3 · the node chat column", () => {
     const user = userEvent.setup();
     await user.click(box);
     await user.keyboard("start it now{Enter}");
-    await waitFor(() => expect(onVerb).toHaveBeenCalledTimes(1));
-    expect(onVerb.mock.calls[0]![0]).toMatchObject({ verb: "start" });
+    // The page opens the preview itself; only Talk goes to the page's actions.
+    expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Start now");
+    expect(onVerb).not.toHaveBeenCalled();
     expect(view.fetch.posts.map((p) => p.body)).toEqual(["start it now"]);
     expect(changes(view)).toEqual([]);
     expect(screen.getAllByTestId("v3-chat-local").at(-1)).toHaveTextContent(
@@ -412,7 +413,8 @@ describe("cockpit v3 · the node chat column", () => {
     await user.keyboard("{Enter}");
     expect(await screen.findByTestId("v3-ask-card")).toBeInTheDocument();
     await user.keyboard("/tea{Enter}");
-    expect(onVerb).toHaveBeenCalledWith(expect.objectContaining({ verb: "team" }), undefined);
+    expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Team editor");
+    expect(onVerb).not.toHaveBeenCalled();
   });
 
   it("never runs the Room's structural commands: /pause opens the node's Pause preview", async () => {
@@ -435,12 +437,13 @@ describe("cockpit v3 · the node chat column", () => {
       "In this chat /pause opens Pause: a preview first",
     );
     await user.keyboard("{Enter}");
-    await waitFor(() =>
-      expect(onVerb).toHaveBeenCalledWith(expect.objectContaining({ verb: "pause" }), undefined),
-    );
+    expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Pause");
+    await user.click(box);
     await user.keyboard("/task #assistant-core Retry the debit{Enter}");
-    await waitFor(() => expect(onVerb).toHaveBeenCalledTimes(2));
-    expect(onVerb.mock.calls[1]![0]).toMatchObject({ verb: "add" });
+    await waitFor(() =>
+      expect(screen.getByTestId("v3-preview")).toHaveAttribute("data-label", "Add child"),
+    );
+    expect(onVerb).not.toHaveBeenCalled();
     await user.keyboard("/cadence demo{Enter}");
     expect(await screen.findByTestId("room-composer-hint")).toHaveTextContent(
       "/cadence is not a verb of this node",
@@ -458,7 +461,8 @@ describe("cockpit v3 · the node chat column", () => {
     expect(offer).toHaveTextContent("It can start now");
     const user = userEvent.setup();
     await user.click(within(offer).getByTestId("v3-offer-preview"));
-    expect(onVerb).toHaveBeenCalledWith(expect.objectContaining({ verb: "start" }), undefined);
+    expect(await screen.findByTestId("v3-preview")).toHaveAttribute("data-label", "Start now");
+    expect(onVerb).not.toHaveBeenCalled();
     await user.click(within(offer).getByRole("button", { name: "Keep waiting" }));
     expect(offer).toHaveAttribute("data-state", "kept");
     const thread = screen.getByTestId("room-message-list");

@@ -202,4 +202,50 @@ describe("cockpit v3 · levels, not spaghetti; nothing empty", () => {
     expect(sampleEngine().checkStructure()).toEqual([]);
     expect(sampleEngine({ scale: true }).checkStructure()).toEqual([]);
   });
+
+  it("no verb preview or sheet draws a line between nodes or shows an empty cell", async () => {
+    setPhone(false);
+    const engine = sampleEngine();
+    const seen = new Set<string>();
+    const opened: { ref: string; query: string }[] = [];
+    for (const ref of engine.refs()) {
+      for (const v of engine.node(ref)?.verbs ?? []) {
+        if (!v.enabled || v.verb === "talk" || seen.has(v.verb)) continue;
+        seen.add(v.verb);
+        opened.push({ ref, query: `?verb=${v.verb}` });
+      }
+    }
+    expect([...seen].sort()).toEqual([
+      "add",
+      "auto",
+      "move",
+      "name",
+      "pause",
+      "research",
+      "start",
+      "team",
+    ]);
+    for (const query of [
+      "?peek=needs",
+      "?peek=needs&tree=factory",
+      "?peek=env",
+      "?peek=try&at=I-1",
+    ]) {
+      opened.push({ ref: "product", query });
+    }
+    for (const { ref, query } of opened) {
+      const view = renderNode(ref, { query });
+      await settle(view.container);
+      await waitFor(() => expect(document.body.querySelector('[aria-busy="true"]')).toBeNull());
+      const shown = screen.queryByTestId("v3-preview") ?? screen.queryByRole("dialog");
+      expect({ ref, query, shown: Boolean(shown) }).toEqual({ ref, query, shown: true });
+      // Icons (close, open-in-a-tab) are glyphs inside one button, not drawings between nodes.
+      const lines = [
+        ...document.body.querySelectorAll("svg line, svg path, svg polyline, svg polygon"),
+      ].filter((el) => !el.closest("svg.lucide"));
+      expect({ ref, query, lines: lines.length }).toEqual({ ref, query, lines: 0 });
+      expect({ ref, query, empty: emptyCells(document.body) }).toEqual({ ref, query, empty: [] });
+      view.unmount();
+    }
+  });
 });

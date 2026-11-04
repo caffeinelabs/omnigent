@@ -4,12 +4,12 @@
  * product's node page, read from the server's node API. Someone on the
  * classic or v2 cockpit who opens a v3 link lands on the closest page of
  * their cockpit. A sample source (stories, tests) is labelled, and an answer
- * there changes only the sample and says so. Every node page carries its chat; a
- * verb named in the address (`?verb=start`, from words in another node's
- * chat) opens once the page is in.
+ * there changes only the sample and says so. Every node page carries its chat;
+ * the page itself opens verb previews (also one named in the address,
+ * `?verb=start`) and sheets.
  */
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate } from "react-router-dom";
 import {
@@ -24,13 +24,13 @@ import { useFactoryToast } from "@/components/factory/ui/Toast";
 import { useNodeChatSlot } from "@/components/factory/v3/chat/chatLayout";
 import type { NodeActions } from "@/components/factory/v3/NodeContext";
 import { NodePage } from "@/components/factory/v3/NodePage";
-import { useAnswerDecision, useNode } from "@/components/factory/v3/nodeQueries";
-import type { VerbArgs } from "@/components/factory/v3/nodeTypes";
+import { useAnswerDecision } from "@/components/factory/v3/nodeQueries";
 import { PRODUCT_REF } from "@/components/factory/v3/nodeRoutes";
 import { useNodeSource } from "@/components/factory/v3/nodeSource";
 import type { FactorySnapshot, TaskView } from "@/lib/factoryApi";
 import { fetchFactoryTasks } from "@/lib/factoryRoomApi";
-import { useParams, useSearchParams } from "@/lib/routing";
+import { useParams } from "@/lib/routing";
+import { useOpenSheet } from "@/components/factory/v3/sheets/V3Sheets";
 
 function Pending() {
   return (
@@ -94,9 +94,6 @@ function SampleNotice({ label, onBack }: { label: string; onBack: () => void }) 
   );
 }
 
-/** What a verb's preview starts from, as the address names it (`?verb=add&title=…`). */
-const VERB_ARGS: (keyof VerbArgs)[] = ["title", "member", "to"];
-
 function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
   const { factoryId } = useFactoryShell();
   const cockpit = useCockpitV2();
@@ -104,7 +101,7 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
   const toast = useFactoryToast();
   const chatSlot = useNodeChatSlot();
   const { mutate: answer } = useAnswerDecision(factoryId);
-  const [params, setParams] = useSearchParams();
+  const openSheet = useOpenSheet();
   const sample = source?.kind === "sample";
   const actions = useMemo<Omit<NodeActions, "factoryId" | "prefetch" | "aboveId">>(
     () => ({
@@ -123,54 +120,15 @@ function V3Node({ nodeRef, level }: { nodeRef: string; level: string | null }) {
           },
         );
       },
-      onOpenDecision: (decision) => {
-        if (sample) {
-          toast.show({
-            message: `${decision.title ?? decision.verb}. ${decision.text ?? ""}`.trim(),
-          });
-          return;
-        }
-        setParams(
-          (prev) => {
-            const next = new URLSearchParams(prev);
-            next.set("peek", "needs");
-            return next;
-          },
-          { replace: true },
-        );
-      },
-      onVerb: (verb, args) => {
-        if (verb.verb === "talk" && chatSlot?.focus()) return;
-        const named = args?.title ? ` “${args.title}”` : args?.member ? ` ${args.member}` : "";
-        toast.show({
-          message: `${verb.label}${named} shows a preview here soon; nothing changed.`,
-        });
+      // "Open C-16": the ask with its full text and its rank, in Needs you.
+      onOpenDecision: () => openSheet("needs"),
+      // Talk: the node's chat (the page opens every other verb's preview itself).
+      onVerb: (verb) => {
+        if (verb.verb === "talk") chatSlot?.focus();
       },
     }),
-    [answer, chatSlot, sample, setParams, toast],
+    [answer, chatSlot, openSheet, sample, toast],
   );
-  // `?verb=start`: words in another node's chat asked for this node's preview.
-  const page = useNode(nodeRef, factoryId).data;
-  const pending = params.get("verb");
-  useEffect(() => {
-    if (!pending || !page) return;
-    const args: VerbArgs = {};
-    for (const key of VERB_ARGS) {
-      const value = params.get(key);
-      if (value) args[key] = value;
-    }
-    setParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        for (const key of ["verb", ...VERB_ARGS]) next.delete(key);
-        return next;
-      },
-      { replace: true },
-    );
-    const verb = page.verbs.find((v) => v.verb === pending && v.enabled);
-    if (verb) actions.onVerb?.(verb, args);
-    else toast.show({ message: `${page.node.title} offers no “${pending}” here.` });
-  }, [actions, page, params, pending, setParams, toast]);
   return (
     <NodePage
       factoryId={factoryId}

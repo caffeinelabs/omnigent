@@ -78,7 +78,15 @@ export interface RawNode {
   agents?: RawAgent[];
   automerge?: boolean;
   offerNote?: string;
+  /** What Start now changes here, in words (the wait, team, burn, what it unlocks, the risk). */
   startNow?: Record<string, string>;
+  /** Words in a new child's title that name this held item (Add child pulls it forward). */
+  match?: string[];
+  /** The flag a person turns on to try what passes here. */
+  tryFlag?: string;
+  /** An alarm: the node it was about, and the real ask behind it. */
+  about?: string;
+  realAsk?: string;
 }
 
 export interface RawDecisionEffect {
@@ -119,7 +127,18 @@ export interface RawFactory {
   product: { name: string; repo: string; base: string };
   factory: { name: string; cost: number; burn: number; members: number; running: number };
   clock: { now: string; lastLook: string };
-  env: { name: string; branch: string; sha: string; age: string; smoke: string };
+  env: {
+    name: string;
+    branch: string;
+    sha: string;
+    age: string;
+    smoke: string;
+    checks: string;
+    url: string;
+    api: string;
+    signin: string;
+    follows: string;
+  };
   trees: Record<RawTree, { label: string; root: string; home: string; levels: RawLevel[] }>;
   order: { cols: string[]; later: string };
   kinds: Record<string, string>;
@@ -133,6 +152,11 @@ export interface RawFactory {
   unread: Record<string, number>;
   laterNote: Record<string, string>;
   alarmsClosed: number;
+  /** Who approves each verb, in words (a level's own words under `add`). */
+  authority: { add: Record<string, string> } & Record<string, string | Record<string, string>>;
+  /** What each team member could run instead, and the $/h of each vendor · model. */
+  vendors: Record<string, string[]>;
+  modelRate: Record<string, number>;
 }
 
 const BASE = "sample-main";
@@ -143,7 +167,18 @@ export function sampleFactory(): RawFactory {
     product: { name: "Sample app (sample)", repo: "sample-org/sample-app", base: BASE },
     factory: { name: "Cockpit demo (sample)", cost: 444, burn: 9.37, members: 48, running: 7 },
     clock: { now: "13:40", lastLook: "12:30" },
-    env: { name: "Base env", branch: BASE, sha: "817480d", age: "18 min ago", smoke: "smoke OK" },
+    env: {
+      name: "Base env",
+      branch: BASE,
+      sha: "817480d",
+      age: "18 min ago",
+      smoke: "smoke OK",
+      checks: "api /status 200 · db ok · app 200",
+      url: "https://app.example.com",
+      api: "https://api.example.com",
+      signin: "Sign-in uses a synthetic session: the app's own sign-in is not wired in envs.",
+      follows: `moves about 72 s after each merge to ${BASE}`,
+    },
     trees: {
       product: {
         label: "Product",
@@ -251,6 +286,30 @@ export function sampleFactory(): RawFactory {
     },
     laterNote: { "I-1": "Held in C-11 for later waves. Not counted in progress or cost." },
     alarmsClosed: 3,
+    authority: {
+      add: {
+        feature:
+          "You own this feature, so it applies now; Atlas files it as a projects proposal for the record.",
+        project: "The project lead adds tasks directly; you see them here with Undo.",
+        need: "Atlas files a feature with a bet; you approve it.",
+        root: "You add a goal; it becomes a definition version.",
+        goal: "Scout files the need through the discovery ledger.",
+      },
+      start: "You, as owner. Applies now; Undo for 10 min.",
+      team: "You, as owner. Applies from the member’s next task; Undo for 10 min.",
+      auto: "You, as owner. Covers this node and everything under it, including nodes added later.",
+      pause: "You. Applies now; Undo for 10 min.",
+      move: "Atlas files the move; the old and new parents both change their roll-ups.",
+      name: "You. Applies now; Undo for 10 min.",
+      research: "Automatic within the need’s research budget ($10).",
+    },
+    vendors: { claude: ["opus", "sonnet"], codex: ["default", "gpt-5-codex"] },
+    modelRate: {
+      "claude · opus": 9.6,
+      "claude · sonnet": 3.1,
+      "codex · gpt-5-codex": 2.1,
+      "codex · default": 1.9,
+    },
   };
 }
 
@@ -375,6 +434,7 @@ function sampleNodes(): RawNode[] {
         },
         { t: "A flag-off user gets 404", step: 3, api: true },
       ],
+      tryFlag: "assistant (a flag-on user for steps 2 and 4–6)",
     },
     {
       id: "R-1",
@@ -507,7 +567,15 @@ function sampleNodes(): RawNode[] {
       notStartedFor: "7 h",
       whyExtra:
         "Until 13:25 it also waited on 3 shortlist projects Atlas added without a reason. They merged, so those links are met and hidden; Sentinel counts links with no reason.",
-      startNow: { toRef: "PR-9876" },
+      startNow: {
+        toRef: "PR-9876",
+        what: "Its wait changes from “all of assistant-core” to <b>#9876</b> (sessions, tool registry, flagged chat API), which is merged and in the base env, so the wait is met.",
+        team: "+1 lead (Ori), +1 builder, reviewer and demo from the default bundle",
+        burn: "about +$19/h while working · budget $150",
+        unlocks: "acceptance step 1 (open the panel) can start passing",
+        risk: "Per-turn debit (T-16) is not in yet. If C-16 changes the API, one panel task may need rework.",
+        activity: "Ori plans the panel against #9876 · started 13:41",
+      },
       agents: [
         { n: "Ori", r: "lead", v: "claude", m: "opus", s: "not started" },
         { n: "Builder", r: "builder", v: "claude", m: "sonnet", s: "not started" },
@@ -540,6 +608,7 @@ function sampleNodes(): RawNode[] {
       state: "later",
       heldFor: "ad-network credentials and an ad-spend cap",
       why: "Held in C-11 for a later wave.",
+      match: ["ads network", "ads integration", "ad network", "ads"],
     },
     {
       id: "sales-skill",
@@ -551,6 +620,7 @@ function sampleNodes(): RawNode[] {
       state: "later",
       heldFor: "PII handling",
       why: "Held in C-11 for a later wave.",
+      match: ["sales"],
     },
     {
       id: "promotion-skill",
@@ -562,6 +632,7 @@ function sampleNodes(): RawNode[] {
       state: "later",
       heldFor: "ad spend and product copy",
       why: "Held in C-11 for a later wave.",
+      match: ["promotion", "promo"],
     },
     {
       id: "growth-seo",
@@ -573,6 +644,7 @@ function sampleNodes(): RawNode[] {
       state: "later",
       heldFor: "credentials",
       why: "Held in C-11 for a later wave.",
+      match: ["growth", "seo"],
     },
     {
       id: "build-tier-drafts-3",
@@ -829,17 +901,21 @@ function sampleNodes(): RawNode[] {
     item("D-48", "fx:health", "alarm", "“T-16 stalled, what next?”", {
       tag: "D-48",
       state: "done",
+      about: "assistant-core",
+      realAsk: "D-45",
       doneNote:
         "closed by the server: T-16 is held on purpose for C-16; a held task is not stalled. The real ask is D-45.",
     }),
     item("D-46", "fx:health", "alarm", "Stall alarm on skill-discovery", {
       tag: "D-46",
       state: "done",
+      about: "skill-discovery",
       doneNote: "closed by the server: the project merged #9881 at 13:03",
     }),
     item("D-47", "fx:health", "alarm", "Claim alarm on skill-discovery", {
       tag: "D-47",
       state: "done",
+      about: "skill-discovery",
       doneNote: "closed by the server: the project merged #9881 at 13:03",
     }),
     item("fx:levels", "fx:definition", "def", "Levels", {
