@@ -7,6 +7,9 @@
 // the parent fold into "…" so every cell keeps a readable title.
 
 import { cn } from "@/lib/utils";
+import { inProductTree } from "./lenses/lensModel";
+import { useLensSupport } from "./lenses/lensQueries";
+import { useNodeActions } from "./NodeContext";
 import { NodeLink, StateBar, StateDot } from "./nodeParts";
 import type { Crumb, LevelCount, NodePage, Results } from "./nodeTypes";
 import { levelName } from "./nodeWire";
@@ -69,7 +72,7 @@ export function resultsWords(r: Results): string {
   return `${r.merged} merged · ${inBase}`;
 }
 
-function readoutWords(r: Results): string {
+export function readoutWords(r: Results): string {
   if (r.readouts === "not measured") return "readouts: not measured";
   const parts = [
     r.readouts.day7 && `day 7 ${r.readouts.day7}`,
@@ -205,6 +208,8 @@ export function PhoneLevelRow({ page, shown }: { page: NodePage; shown?: string 
   const { node, breadcrumb, results } = page;
   const below = heldLevels(page.levels_below);
   const parent = [...breadcrumb].reverse().find((c) => !c.folded);
+  const { onSheet } = useNodeActions();
+  const lineage = useLensSupport().lineage && inProductTree(page);
   return (
     <div data-testid="v3-phone-levels" className="flex min-w-0 flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -219,6 +224,16 @@ export function PhoneLevelRow({ page, shown }: { page: NodePage; shown?: string 
           <span className="flex-1 py-1 text-[13.5px] text-muted-foreground">
             {levelName(node.level, node.level_name)}
           </span>
+        )}
+        {lineage && onSheet && (
+          <button
+            type="button"
+            data-testid="v3-phone-lineage"
+            onClick={() => onSheet("lineage", node.ref)}
+            className="shrink-0 rounded-[8px] border border-border px-2.5 py-1 text-[13px] text-muted-foreground hover:text-foreground"
+          >
+            Lineage
+          </button>
         )}
       </div>
       {(below.length > 0 || (results && results.merged > 0)) && (

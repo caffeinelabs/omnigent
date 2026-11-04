@@ -48,7 +48,7 @@ import {
   settingsPageHref,
 } from "../factoryRoutes";
 import { FOCUS_RING, MEANING } from "../ui/statusTokens";
-import { CockpitTabs } from "./FactoryTabs";
+import { CockpitTabs, TreeSwitch, type TreeSwitchProps } from "./FactoryTabs";
 import { useViewerCan } from "./viewerCan";
 import type { FactoryLocation } from "./shellRoutes";
 
@@ -428,6 +428,8 @@ export interface FactoryTopBarProps {
   onNeedsYou?: () => void;
   /** Cockpit v3: the base env in one chip ("Base env sample-main @817480d"), opening its sheet. */
   baseEnv?: { label: string; ok: boolean | null; onOpen: () => void } | null;
+  /** Cockpit v3: Product | Factory in place of the cockpit's places. */
+  trees?: Omit<TreeSwitchProps, "className"> | null;
 }
 
 export function FactoryTopBar({
@@ -447,6 +449,7 @@ export function FactoryTopBar({
   onV2,
   onNeedsYou,
   baseEnv,
+  trees,
 }: FactoryTopBarProps) {
   const fid = snapshot.factory.id;
   const mac = isMacPlatform();
@@ -466,15 +469,18 @@ export function FactoryTopBar({
         onAddProject={onAddProject}
       />
       <VerdictPill verdict={verdict} onOpen={onHealth} compact={phone} />
-      {!phone && (
-        <CockpitTabs
-          factoryId={fid}
-          location={location}
-          needsYou={needsYou}
-          proposals={proposals}
-          className="ml-1"
-        />
-      )}
+      {!phone &&
+        (trees ? (
+          <TreeSwitch {...trees} className="ml-1" />
+        ) : (
+          <CockpitTabs
+            factoryId={fid}
+            location={location}
+            needsYou={needsYou}
+            proposals={proposals}
+            className="ml-1"
+          />
+        ))}
       <span className="min-w-0 flex-1" />
       {baseEnv && !phone && (
         <button

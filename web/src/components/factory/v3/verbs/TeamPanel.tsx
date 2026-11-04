@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from "react";
 import { useOptionalFactoryShell } from "../../shell/FactoryShellContext";
-import { useDefinitionEdit, usePinDefinition } from "../../insights/learnQueries";
+import { useDefinitionEdit } from "../../insights/learnQueries";
 import { teamEditorHref } from "../../team/teamStaging";
 import {
   EMPTY_STAGING,
@@ -28,26 +28,21 @@ import {
 import { useTeamPreview } from "../../team/teamQueries";
 import { useProjectTeam } from "../../team/useProjectTeam";
 import { useFactoryToast } from "../../ui/Toast";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useNodeActions } from "../NodeContext";
 import { Avatar } from "../nodeParts";
 import { nodeQueryKeys } from "../nodeQueries";
 import { useNodeSource } from "../nodeSource";
-import { UNDO_WINDOW_S } from "../../steer/steerModel";
 import {
   type NodeUndo,
-  forgetUndo,
-  readDefinitionVersions,
   refusal,
   rememberUndo,
-  serverNowS,
-  undoViewer,
   useApplyVerb,
   useRefreshNodes,
   useVerbPreview,
-  versionUndoLeft,
+  useVersionUndo,
 } from "../nodeSteer";
 import type {
   NodePage,
@@ -333,7 +328,6 @@ function LiveTeamEditor({ page, verb, args, onClose }: PanelProps) {
   const [own, setOwn] = useState<TeamStaging | null>(null);
   const toast = useFactoryToast();
   const edit = useDefinitionEdit(fid);
-  const pin = usePinDefinition(fid);
   const refresh = useRefreshNodes(fid);
   const rows: SeatRow[] = useMemo(
     () =>
@@ -412,52 +406,15 @@ function LiveTeamEditor({ page, verb, args, onClose }: PanelProps) {
       : res?.blocked.length
         ? res.blocked.map((b) => b.message).join(" ")
         : null;
-  const client = useQueryClient();
   const ref = page.node.ref;
-  /**
-   * Undo of the version this apply made: it re-pins `parent` only while
-   * `version` is still the version in force (read again now), so a version
-   * someone landed after it is never dropped with it.
-   */
-  const undoOf = (version: number, parent: number): NodeUndo => {
-    const entry: NodeUndo = {
-      label: verb.label,
-      expiresAt: Date.now() + UNDO_WINDOW_S * 1000,
-      version: { version, parent },
-      run: async () => {
-        const versions = await readDefinitionVersions(client, fid).catch(() => null);
-        if (!versions) {
-          toast.show({ message: "Could not undo: the definition's versions could not be read." });
-          return;
-        }
-        const left = versionUndoLeft(
-          versions.data,
-          entry.version!,
-          serverNowS(shell),
-          undoViewer(shell),
-        );
-        if (left == null) {
-          forgetUndo(fid, ref, entry);
-          toast.show({ message: `v${version} is no longer in force; undo from Versions.` });
-          return;
-        }
-        try {
-          await pin.mutateAsync(parent);
-        } catch (error) {
-          toast.show({
-            message: `Could not undo: ${error instanceof Error ? error.message : String(error)}`,
-          });
-          return;
-        }
-        forgetUndo(fid, ref, entry);
-        void refresh();
-        toast.show({
-          message: `Undone. The team is back as in v${parent}; v${version} stays in history.`,
-        });
-      },
-    };
-    return entry;
-  };
+  const versionUndo = useVersionUndo(ref, fid);
+  const undoOf = (version: number, parent: number): NodeUndo =>
+    versionUndo(
+      verb.label,
+      version,
+      parent,
+      `Undone. The team is back as in v${parent}; v${version} stays in history.`,
+    );
   const applyNow = async () => {
     const baseVersion = res?.def_version ?? data.spec?.def_version ?? undefined;
     try {

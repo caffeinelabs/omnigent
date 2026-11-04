@@ -1,9 +1,10 @@
 """The lenses, sheets and last looks as the web will read them (S8, S9, S10).
 
-The JSON the web's lenses (W7), sheets (W8) and since lines (W10) render
-against is written from here to ``nodeLenses.server.json`` beside the node
-pages' fixture (``OMNIGENT_UPDATE_NODE_PAGES=1`` rewrites it; prettier in
-``web/`` then formats it), so the two sides change together. The check
+The JSON the web's lenses (W7), sheets (W8), since lines (W10) and the
+factory tree's levels block (W9) render against is written from here to
+``nodeLenses.server.json`` beside the node pages' fixture
+(``OMNIGENT_UPDATE_NODE_PAGES=1`` rewrites it; prettier in ``web/`` then
+formats it), so the two sides change together. The check
 compares the JSON, not its layout. Every name is sample data.
 """
 
@@ -14,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from omnigent.server.factory import last_look, node_lenses, node_sheets
+from omnigent.server.factory import last_look, levels, node_lenses, node_sheets
 from omnigent.server.factory.node_views import (
     FindView,
     LineageView,
@@ -25,7 +26,7 @@ from omnigent.server.factory.node_views import (
     validate_page,
 )
 from omnigent.server.factory.nodes import Tree, assert_levels
-from tests.server.factory.node_fixtures import NOW, factory_1340, spans_1340
+from tests.server.factory.node_fixtures import NOW, factory_1340, spans_1340, structure
 from tests.server.factory.test_last_look import LOOKED, events_since_1230
 
 WEB_FIXTURE = (
@@ -45,6 +46,13 @@ def _build() -> dict[str, Any]:
     return {
         "lineage/T-16": validate(LineageView, node_lenses.lineage(tree, "T-16") or {}),
         "lineage/I-1": validate(LineageView, node_lenses.lineage(tree, "I-1") or {}),
+        "lineage/fx:health": validate(LineageView, node_lenses.lineage(tree, "fx:health") or {}),
+        "timeline/assistant-core": validate(
+            TimelineView,
+            node_lenses.timeline(tree, "assistant-core", spans_1340(), last_look=NOW - 70 * 60)
+            or {},
+        ),
+        "money/product": validate(MoneyView, node_lenses.money(tree, "product") or {}),
         "timeline/I-1": validate(
             TimelineView,
             node_lenses.timeline(tree, "I-1", spans_1340(), last_look=NOW - 70 * 60) or {},
@@ -54,6 +62,8 @@ def _build() -> dict[str, Any]:
         "needs-you/factory": validate(NeedsYouView, node_sheets.needs_you(tree, "factory")),
         "find/C-16": validate(FindView, node_sheets.find(tree, "C-16")),
         "find/panel": validate(FindView, node_sheets.find(tree, "panel")),
+        # The sample has no goal yet: that level is hidden (the Definition's levels block).
+        "levels": levels.view(structure(), {"goal": 0}, 14),
         "since/I-1": {
             "since": page["rollup"]["since"],
             "changed": {

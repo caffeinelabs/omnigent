@@ -759,6 +759,7 @@ def test_results_and_the_base_env_on_the_root(tree: Tree) -> None:
         "app_url": "https://app.sample.test",
         "api_url": "https://api.sample.test",
         "ref": "base-env",
+        "area": "fx:environments",
     }
     assert _page(tree, "skill-discovery")["status"]["detail"] == "#9881 merged · in base env"
     # No smoke check ran, so none shows; the server's probe, when it ran, says whether it answers.

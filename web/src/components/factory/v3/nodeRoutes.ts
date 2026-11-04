@@ -7,6 +7,9 @@ import { factoryPageHref } from "../factoryRoutes";
 /** The root of the product tree. */
 export const PRODUCT_REF = "product";
 
+/** The root of the factory tree (how the factory itself runs). */
+export const FX_REF = "fx";
+
 export function nodeHref(factoryId: string, ref: string, level?: string | null): string {
   const base = `${factoryPageHref(factoryId)}/n/${encodeURIComponent(ref)}`;
   return level ? `${base}/${encodeURIComponent(level)}` : base;

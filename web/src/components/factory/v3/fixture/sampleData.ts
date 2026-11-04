@@ -21,6 +21,9 @@ export interface RawWait {
   toRef?: string;
 }
 
+/** A recorded stretch of a node's day (clock words on the sample's day): `[from, to, kind, label]`. */
+export type RawSpan = [string, string, "work" | "wait" | "you", string];
+
 export interface RawAgent {
   n: string;
   r: string;
@@ -87,6 +90,8 @@ export interface RawNode {
   /** An alarm: the node it was about, and the real ask behind it. */
   about?: string;
   realAsk?: string;
+  /** What it recorded today, for its parent's timeline. */
+  spans?: RawSpan[];
 }
 
 export interface RawDecisionEffect {
@@ -272,7 +277,7 @@ export function sampleFactory(): RawFactory {
       task: ["talk", "pause", "move"],
       change: ["talk"],
       run: [],
-      area: ["talk"],
+      area: ["talk", "rename"],
       item: ["talk"],
     },
     nodes: sampleNodes(),
@@ -302,6 +307,7 @@ export function sampleFactory(): RawFactory {
       move: "Atlas files the move; the old and new parents both change their roll-ups.",
       name: "You. Applies now; Undo for 10 min.",
       research: "Automatic within the need’s research budget ($10).",
+      rename: "You, as owner. A definition version; every view and agent uses the new names.",
     },
     vendors: { claude: ["opus", "sonnet"], codex: ["default", "gpt-5-codex"] },
     modelRate: {
@@ -482,6 +488,12 @@ function sampleNodes(): RawNode[] {
     // Projects of the assistant: their order comes from depends_on (columns).
     {
       id: "assistant-core",
+      spans: [
+        ["06:01", "06:12", "work", "planning"],
+        ["06:12", "06:55", "work", "T-15 · #9876 merged"],
+        ["06:55", "07:46", "work", "T-16"],
+        ["07:46", "13:40", "you", "held for C-16 · needs you"],
+      ],
       tree: "product",
       parent: "I-1",
       lvl: "project",
@@ -510,6 +522,10 @@ function sampleNodes(): RawNode[] {
     },
     {
       id: "connectors-core",
+      spans: [
+        ["06:01", "06:55", "wait", "waits on assistant-core’s #9876"],
+        ["06:55", "13:25", "work", "building · #9882 merged 13:25"],
+      ],
       tree: "product",
       parent: "I-1",
       lvl: "project",
@@ -528,6 +544,10 @@ function sampleNodes(): RawNode[] {
     },
     {
       id: "skill-discovery",
+      spans: [
+        ["06:01", "06:55", "wait", "waits on assistant-core’s #9876"],
+        ["06:55", "13:03", "work", "building · #9881 merged 13:03"],
+      ],
       tree: "product",
       parent: "I-1",
       lvl: "project",
@@ -546,6 +566,7 @@ function sampleNodes(): RawNode[] {
     },
     {
       id: "assistant-panel-ux",
+      spans: [["06:01", "13:40", "wait", "queued 7 h · waits on assistant-core"]],
       tree: "product",
       parent: "I-1",
       lvl: "project",
@@ -585,6 +606,7 @@ function sampleNodes(): RawNode[] {
     },
     {
       id: "live-search-fix",
+      spans: [["13:05", "13:40", "you", "proposed · D-49"]],
       tree: "product",
       parent: "I-1",
       lvl: "project",
@@ -665,6 +687,7 @@ function sampleNodes(): RawNode[] {
     // Tasks
     {
       id: "T-15",
+      spans: [["06:12", "06:55", "work", "Luz · #9876"]],
       tree: "product",
       parent: "assistant-core",
       lvl: "task",
@@ -680,6 +703,10 @@ function sampleNodes(): RawNode[] {
     },
     {
       id: "T-16",
+      spans: [
+        ["06:55", "07:46", "work", "Luz · a097437"],
+        ["07:46", "13:40", "you", "held for C-16"],
+      ],
       tree: "product",
       parent: "assistant-core",
       lvl: "task",
@@ -830,7 +857,7 @@ function sampleNodes(): RawNode[] {
       "48 members · 7 running",
     ),
     area(
-      "fx:env",
+      "fx:environments",
       "env",
       "Environments",
       `The base env on ${BASE}, previews, and the projects that set them up.`,
@@ -846,12 +873,16 @@ function sampleNodes(): RawNode[] {
       ),
       doneNote: "3 alarms closed by the server today, each with its cause; none reached you",
     },
-    area(
-      "fx:definition",
-      "def",
-      "Definition",
-      "The factory’s definition, versioned: levels, autonomy, budgets, gates. Level names come from here, not from code.",
-    ),
+    {
+      ...area(
+        "fx:definition",
+        "def",
+        "Definition",
+        "The factory’s definition, versioned: levels, autonomy, budgets, gates. Level names come from here, not from code.",
+      ),
+      state: "done",
+      doneNote: "the definition in force: levels, autonomy, budgets and gates",
+    },
     item("C-17", "fx:rules", "rule", "Spike unproven external capabilities before implementing", {
       state: "notstarted",
       why: `Proposed after skill-discovery shipped a live search that does not work on ${BASE}.`,
@@ -883,14 +914,7 @@ function sampleNodes(): RawNode[] {
       why: "Watches the factory and proposes rule changes.",
       short: "1 older ask (D-37)",
     }),
-    item("env:base", "fx:env", "env", `Base env · ${BASE}`, {
-      tag: "817480d",
-      state: "done",
-      inBase: true,
-      doneNote: "@817480d · deployed 18 min ago · smoke OK (api /status 200, db ok, app 200)",
-      why: `Follows ${BASE}; moves about 72 s after a merge. Sign-in uses a synthetic session.`,
-    }),
-    item("env:base-env", "fx:env", "env", "base-env (setup project)", {
+    item("env:base-env", "fx:environments", "env", "base-env (setup project)", {
       tag: "base-env",
       owner: "Mae",
       state: "waiting",
@@ -917,12 +941,6 @@ function sampleNodes(): RawNode[] {
       state: "done",
       about: "skill-discovery",
       doneNote: "closed by the server: the project merged #9881 at 13:03",
-    }),
-    item("fx:levels", "fx:definition", "def", "Levels", {
-      tag: "structure.levels",
-      state: "done",
-      doneNote: "7 levels · Goal hidden until a goal exists · Run shows only when debugging",
-      why: "The level ladder every view and agent uses. Names and visibility are data; renaming a level changes every page.",
     }),
   ];
 }

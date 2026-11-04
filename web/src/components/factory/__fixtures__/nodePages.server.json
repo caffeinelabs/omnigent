@@ -2495,12 +2495,6 @@
         "key": "/",
         "label": "Talk",
         "verb": "talk"
-      },
-      {
-        "enabled": true,
-        "key": "r",
-        "label": "Rename",
-        "verb": "rename"
       }
     ],
     "version": "bf03ded18b13b923"
@@ -3661,6 +3655,243 @@
     ],
     "version": "bf03ded18b13b923"
   },
+  "fx:definition": {
+    "breadcrumb": [
+      {
+        "level": "fx",
+        "level_name": "Factory",
+        "ref": "fx",
+        "state": "needs",
+        "title": "Factory"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [],
+      "later": [],
+      "level": "item",
+      "level_name": "Items",
+      "tiles": true,
+      "total": 0
+    },
+    "chips": [],
+    "levels_below": [],
+    "more_chips": 0,
+    "node": {
+      "glyph": "▦",
+      "kind": "area",
+      "kind_name": "Area",
+      "level": "area",
+      "level_name": "Area",
+      "levels": true,
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Sentinel",
+        "working": false
+      },
+      "ref": "fx:definition",
+      "short": "version 14",
+      "state": "done",
+      "status_compact": {
+        "ends": "other",
+        "kind": "done",
+        "label": "Done",
+        "segments": []
+      },
+      "title": "Definition",
+      "why_html": "The factory's definition, versioned: levels, autonomy, budgets and gates. Level names come from here, not from code."
+    },
+    "rollup": {
+      "cost": 0.0,
+      "moving_anywhere": false
+    },
+    "status": {
+      "ends": "other",
+      "kind": "done",
+      "label": "Done",
+      "segments": []
+    },
+    "thread": {
+      "key": "improvements",
+      "responder": "Sentinel",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "r",
+        "label": "Rename levels",
+        "verb": "rename"
+      }
+    ],
+    "version": "bf03ded18b13b923"
+  },
+  "fx:environments": {
+    "breadcrumb": [
+      {
+        "level": "fx",
+        "level_name": "Factory",
+        "ref": "fx",
+        "state": "needs",
+        "title": "Factory"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "glyph": "⌂",
+          "kind": "env",
+          "kind_name": "Environment",
+          "level": "item",
+          "level_name": "Item",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Mae",
+            "working": false
+          },
+          "ref": "base-env",
+          "state": "waiting",
+          "status_compact": {
+            "detail": "in planning · nobody is working on it",
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "title": "base-env"
+        }
+      ],
+      "later": [],
+      "level": "item",
+      "level_name": "Items",
+      "tiles": true,
+      "total": 1
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "waiting": 1
+        },
+        "count": 1,
+        "later": 0,
+        "level": "item",
+        "name": "Items",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "env": {
+        "api_url": "https://api.sample.test",
+        "app_url": "https://app.sample.test",
+        "area": "fx:environments",
+        "branch": "sample-main",
+        "deployed_at": "2026-11-03T13:27:00Z",
+        "name": "Base env",
+        "ref": "base-env",
+        "sha": "817480d",
+        "state": "ready"
+      },
+      "glyph": "▦",
+      "grandchildren": {
+        "by_state": {
+          "waiting": 1
+        },
+        "count": 1,
+        "later": 0,
+        "noun": "item"
+      },
+      "kind": "area",
+      "kind_name": "Area",
+      "level": "area",
+      "level_name": "Area",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Sentinel",
+        "working": false
+      },
+      "ref": "fx:environments",
+      "short": "Base env sample-main @817480d · ready",
+      "state": "waiting",
+      "status_compact": {
+        "detail": "waiting",
+        "ends": "other",
+        "kind": "waiting",
+        "label": "Waiting:",
+        "segments": [
+          {
+            "ref": "base-env",
+            "sep": "›",
+            "title": "base-env"
+          }
+        ]
+      },
+      "title": "Environments",
+      "why_html": "The base env, its previews, and the projects that set them up."
+    },
+    "rollup": {
+      "cost": 0.0,
+      "moving_anywhere": false
+    },
+    "status": {
+      "detail": "waiting",
+      "ends": "other",
+      "kind": "waiting",
+      "label": "Waiting:",
+      "segments": [
+        {
+          "ref": "base-env",
+          "sep": "›",
+          "title": "base-env"
+        }
+      ],
+      "why": [
+        {
+          "html": "Environments is not moving."
+        },
+        {
+          "html": "The item that holds it is <a data-ref=\"base-env\">base-env</a>."
+        },
+        {
+          "html": "base-env is waiting."
+        }
+      ],
+      "why_title": "Why Environments is not moving"
+    },
+    "thread": {
+      "key": "improvements",
+      "responder": "Sentinel",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      }
+    ],
+    "version": "bf03ded18b13b923"
+  },
   "fx:health": {
     "breadcrumb": [
       {
@@ -4529,6 +4760,7 @@
       "env": {
         "api_url": "https://api.sample.test",
         "app_url": "https://app.sample.test",
+        "area": "fx:environments",
         "branch": "sample-main",
         "deployed_at": "2026-11-03T13:27:00Z",
         "name": "Base env",

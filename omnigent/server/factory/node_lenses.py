@@ -647,6 +647,20 @@ def timeline(
     return out
 
 
+def projection_spans(
+    tree: Tree, store: FactoryStore, factory_id: str, start: int, end: int
+) -> list[FactorySpan]:
+    """
+    :func:`timeline_spans`, read once per projection: every timeline drawn
+    from *tree* over the same window (each page asks whether it has lanes)
+    reuses one store read until the tree is rebuilt (``FACTS_TTL_S``, a write).
+    """
+    found: list[FactorySpan] = tree.memo(
+        "timeline_spans", f"{start}:{end}", lambda: timeline_spans(store, factory_id, start, end)
+    )
+    return found
+
+
 def timeline_spans(
     store: FactoryStore, factory_id: str, start: int, end: int
 ) -> list[FactorySpan]:
@@ -682,6 +696,7 @@ __all__ = [
     "line_words",
     "lineage",
     "money",
+    "projection_spans",
     "timeline",
     "timeline_spans",
 ]

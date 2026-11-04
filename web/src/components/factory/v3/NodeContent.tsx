@@ -1,10 +1,13 @@
 // A node's own content above its children, when it has some: a feature's
-// acceptance steps (what passes on the base env) and a need's evidence (the
-// ask verbatim, what is missing). Neither renders when the node has none.
+// acceptance steps (what passes on the base env), a need's evidence (the ask
+// verbatim, what is missing) and, in the factory tree, Health's closed alarms,
+// Environments' base env and Definition's levels. None renders when the node
+// has none.
 
 import { cn } from "@/lib/utils";
+import { BaseEnvBlock, ClosedAlarms, LevelsBlock } from "./factory/FactoryAreas";
 import { useNodeActions } from "./NodeContext";
-import type { NodeFull } from "./nodeTypes";
+import type { NodeFull, NodePage } from "./nodeTypes";
 
 const BLOCK = "rounded-[10px] bg-card-solid px-3.5 py-2.5 ring-1 ring-border";
 
@@ -99,9 +102,15 @@ function Evidence({ evidence }: { evidence: NonNullable<NodeFull["evidence"]> })
   );
 }
 
-export function NodeContent({ node }: { node: NodeFull }) {
+export function NodeContent({ page }: { page: NodePage }) {
   const { onSheet } = useNodeActions();
-  if (!node.acceptance?.steps.length && !node.evidence?.items.length) return null;
+  const node: NodeFull = page.node;
+  // A root carries the base env as a fact for the top bar; an area shows it as its content.
+  const env = page.breadcrumb.length > 0 ? node.env : undefined;
+  const levels = Boolean(node.levels);
+  const alarms = node.closed_alarms?.length ? node.closed_alarms : null;
+  if (!node.acceptance?.steps.length && !node.evidence?.items.length && !env && !levels && !alarms)
+    return null;
   const tryIt = node.try_it?.length && onSheet ? () => onSheet("try", node.ref) : undefined;
   return (
     <div className="flex flex-col gap-3">
@@ -109,6 +118,9 @@ export function NodeContent({ node }: { node: NodeFull }) {
         <Acceptance acceptance={node.acceptance} onTry={tryIt} />
       ) : null}
       {node.evidence?.items.length ? <Evidence evidence={node.evidence} /> : null}
+      {env && <BaseEnvBlock env={env} />}
+      {alarms && <ClosedAlarms alarms={alarms} />}
+      {levels && <LevelsBlock page={page} />}
     </div>
   );
 }

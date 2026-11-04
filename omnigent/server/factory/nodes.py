@@ -119,6 +119,10 @@ NO_GOAL: Final = "goal:no-goal"
 """The implicit goal of needs that name none, once the factory has goals."""
 _HEALTH: Final = f"{node_refs.FX}:health"
 """The factory area that lists the alarms the server closed."""
+_ENVIRONMENTS: Final = f"{node_refs.FX}:environments"
+"""The factory area that shows the base env (as the product root carries it)."""
+_DEFINITION: Final = f"{node_refs.FX}:definition"
+"""The factory area whose page renames the levels (``rename``)."""
 ROW_LEVELS: Final = frozenset({"task", "change", "run"})
 """Levels drawn only as rows (never tiles); their crumbs carry their code."""
 
@@ -207,7 +211,7 @@ _VERB_LABELS: Final[dict[str, tuple[str, str]]] = {
     "resume": ("Resume", "p"),
     "move": ("Move", "m"),
     "name": ("Name it / file under", "n"),
-    "rename": ("Rename", "r"),
+    "rename": ("Rename levels", "r"),
 }
 _READ_ONLY: Final = "You can read this factory; ask an owner for edit access to steer it."
 _AREA_WHY: Final[dict[str, str]] = {
@@ -1300,9 +1304,9 @@ class Tree:
             words = [f"Base env {base['branch']}" + (f" @{sha}" if sha else "")]
             if reported.get("state"):
                 words.append(str(reported["state"]))
-            self.nodes["fx:environments"].short = " · ".join(words)
+            self.nodes[_ENVIRONMENTS].short = " · ".join(words)
         if self.facts.definition_version:
-            self.nodes["fx:definition"].short = f"version {self.facts.definition_version}"
+            self.nodes[_DEFINITION].short = f"version {self.facts.definition_version}"
 
     # ── Levels, parents, columns ───────────────────────────────
 
@@ -1506,6 +1510,10 @@ class Tree:
         if key not in self._memo:
             self._memo[key] = make()
         return self._memo[key]
+
+    def memo(self, kind: str, key: str, make: Callable[[], Any]) -> Any:
+        """*make*'s value, made once while this projection is reused (a read beside it)."""
+        return self._cached(kind, key, make)
 
     def pr_refs_by_id(self) -> dict[str, str]:
         """:returns: PR row id (bare hex) -> its change's ref, for the PRs that are changes."""
@@ -2648,6 +2656,8 @@ class Tree:
             "pause": lambda: state not in ("done", "later", "offered") and not node.ghost,
             "move": lambda: stored and self._seats(self.moves(node), "move"),
             "name": lambda: node.implicit and self._nameable(node),
+            # The level names live in the definition: renamed from its area only.
+            "rename": lambda: node.ref == _DEFINITION,
         }
         check = checks.get(verb)
         return check() if check is not None else True
@@ -2728,10 +2738,13 @@ class Tree:
             out["evidence"] = node.evidence
         if tried := self.try_it(node):
             out["try_it"] = tried
-        if node.ref == node_refs.PRODUCT and (env := self.base_env_view()):
+        if node.ref in (node_refs.PRODUCT, _ENVIRONMENTS) and (env := self.base_env_view()):
             out["env"] = env
         if node.ref == _HEALTH and self.closed_alarms:
             out["closed_alarms"] = [a.to_json() for a in self.closed_alarms]
+        if node.ref == _DEFINITION:
+            # The levels every view names (GET …/levels), whether or not this viewer renames them.
+            out["levels"] = True
         return out
 
     def _smoke(self) -> dict[str, Any] | None:
@@ -2775,6 +2788,8 @@ class Tree:
             out["note"] = _clip(env["note"], _SHORT_MAX)
         if base.get("env_project") and _project_ref(base["env_project"]) in self.nodes:
             out["ref"] = _project_ref(base["env_project"])
+        # Where the factory shows it (``ref`` is the project that sets it up).
+        out["area"] = _ENVIRONMENTS
         return out
 
     def child_page(self, node: _N, offset: int = 0) -> dict[str, Any]:

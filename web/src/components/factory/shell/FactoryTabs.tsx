@@ -409,3 +409,64 @@ export function CockpitTabs({
     </nav>
   );
 }
+
+/** Cockpit v3's two trees: the product and the factory itself (with what waits on the viewer there). */
+export interface TreeSwitchProps {
+  current: "product" | "factory";
+  productHref: string;
+  factoryHref: string;
+  /** Asks in the factory tree (rules, team, environments): the grey count on Factory. */
+  factoryNeeds: number;
+  className?: string;
+}
+
+/** "Product | Factory 3": one tree at a time, never both on one page. */
+export function TreeSwitch({
+  current,
+  productHref,
+  factoryHref,
+  factoryNeeds,
+  className,
+}: TreeSwitchProps) {
+  const item = (key: "product" | "factory", label: string, href: string) => {
+    const on = key === current;
+    return (
+      <Link
+        to={href}
+        componentId={`factory.v3.tree.${key}`}
+        data-testid={`cockpit-tree-${key}`}
+        aria-current={on ? "page" : undefined}
+        className={cn(
+          "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-ui font-medium whitespace-nowrap",
+          FOCUS_RING,
+          on
+            ? "bg-card-solid text-foreground shadow-sm ring-1 ring-border"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        {label}
+        {key === "factory" && (
+          <PlaceCount
+            n={factoryNeeds}
+            tone="muted"
+            label={`${factoryNeeds} need${factoryNeeds === 1 ? "s" : ""} you in the factory`}
+            testId="cockpit-tree-factory-count"
+          />
+        )}
+      </Link>
+    );
+  };
+  return (
+    <nav
+      aria-label="Tree"
+      data-testid="cockpit-trees"
+      className={cn(
+        "inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5",
+        className,
+      )}
+    >
+      {item("product", "Product", productHref)}
+      {item("factory", "Factory", factoryHref)}
+    </nav>
+  );
+}

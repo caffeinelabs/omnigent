@@ -950,7 +950,11 @@ column titles), `tiles_max`, `fold_single_child` and `node_header` (which
 Room deliveries carry a node's header; see Threads per node). Owners rename a level,
 and the kind named after it, with one change
 (`structure.levels.feature.name`); the block is owner-only, never a trial,
-and no agent proposes it (403 `path_not_allowed`).
+and no agent proposes it (403 `path_not_allowed`). Cockpit v3 renames them
+from the factory tree's Definition area: its `rename` verb (Rename levels,
+`r`) is offered there and on no other node, and that page carries
+`levels: true` (it shows the levels to every viewer). A structure stored when
+items offered `rename` has it moved to `verbs.area` on read (`upgrade`).
 `GET …/factories/{fid}/levels` returns both trees with `hidden` computed for
 this factory (a level counts the implicit parents its nodes get), the maps
 above and the definition `version`.
@@ -1112,8 +1116,9 @@ project's remaining critical path; a feature's slowest project per column,
 summed), feature progress from acceptance on the base env with build
 progress second, Try it (the acceptance steps that pass there, on their
 feature and the project that owns each; "API only" while a user-facing
-project is not built) and, at the root, the base env (`env`) and the alarms
-the server closed (`alarms_closed`). A change is in the base env when the
+project is not built) and, at the root, the base env (`env`; the factory
+tree's Environments area carries the same) and the alarms the server closed
+(`alarms_closed`). A change is in the base env when the
 commit the env runs contains its merge (`base.contains`): the base watcher
 records that commit on the root (`omnigent.factory.base_env.<key>`, served
 as `factory.base.deployed`) when the integration project's env reports
@@ -1245,6 +1250,31 @@ starts from the new mark. A refused apply (409 `stale`, 422, 403) reads the
 page and its preview again, so Apply works on what is there now. The Team
 Undo re-pins the version before only while the version it made is still the
 one in force (read again first); a later version says "undo from Versions".
+
+**Lenses and the factory tree (cockpit v3).** Below a node's header its
+children show in one lens, kept in the address (`?lens=`; `v` steps to the
+next): Map (tiles) and List (rows), Lineage (the ancestors top to bottom with
+their one line, the node, the counts per level below and the results; in the
+product tree only; a node with nothing below folds it into one line, and on
+a phone the Lineage button opens it as a sheet, `?peek=lineage&at=<ref>`),
+Timeline (one lane per child from `…/timeline`: work solid, waits hatched,
+amber only when a person is the cause, the stretch since this viewer's last
+look shaded, nothing drawn between lanes) and Money (each child's cost
+against its budget from `…/money`, most first, the total and what no child
+holds). The bar offers a lens only when it has something to show: Timeline
+once the server drew a lane, Money when two or more children have a cost or
+a budget, neither on a level grouped under parents (Home). Every page asks
+`…/timeline` whether it has lanes, so the route reads the spans once per
+projection (the memoized tree) and the client never asks again on a refocus. No lens draws an
+SVG line or path. The top bar's Product | Factory switch (with the asks
+waiting in the factory tree) takes the place of v2's places; the factory
+tree's Health lists the alarms the server closed with their causes and the
+real ask, Environments shows the base env (what it runs, its health, its
+sign-in, a way to try it; the env's `area` names it, so the env sheet opens
+it, and `ref` the project that sets it up) and Definition the levels with Rename levels: the
+product's levels with their names and plurals, previewed through
+`POST …/definition/preview` and saved by `PUT …/definition` on the version
+read, with Undo by re-pinning the version before.
 
 **What cockpit v3 reads from a preview beyond `api.md` §4 (the S12
 contract).** `POST …/n/{ref}/preview` answers `{preview_id, columns_after?,

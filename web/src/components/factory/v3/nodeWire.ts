@@ -9,6 +9,9 @@ import type {
   Crumb,
   FindHit,
   LevelView,
+  LineageRow,
+  LineageView,
+  MoneyView,
   NeedsYouItem,
   NeedsYouList,
   NodeLink,
@@ -17,6 +20,7 @@ import type {
   PreviewLine,
   QuietAsk,
   StatusLine,
+  TimelineView,
   VerbPreview,
   WhyItem,
 } from "./nodeTypes";
@@ -90,6 +94,30 @@ export function normalizeLevelView(view: LevelView): LevelView {
     ...view,
     groups: (view.groups ?? []).map((g) => ({ ...g, items: (g.items ?? []).map(summary) })),
   };
+}
+
+function lineageRow(row: LineageRow): LineageRow {
+  return { ...row, line: normalizeStatus(row.line) };
+}
+
+/** A lineage from the server: each row's line as the page reads it. */
+export function normalizeLineage(view: LineageView): LineageView {
+  return {
+    ...view,
+    ancestors: (view.ancestors ?? []).map(lineageRow),
+    here: lineageRow(view.here),
+    below: view.below ?? [],
+  };
+}
+
+/** A timeline from the server: lanes with no bars are left out (nothing empty is drawn). */
+export function normalizeTimeline(view: TimelineView): TimelineView {
+  return { ...view, lanes: (view.lanes ?? []).filter((l) => l.bars?.length) };
+}
+
+/** Money from the server, as is (rows most first). */
+export function normalizeMoney(view: MoneyView): MoneyView {
+  return { ...view, rows: view.rows ?? [] };
 }
 
 const escText = (s: string) =>

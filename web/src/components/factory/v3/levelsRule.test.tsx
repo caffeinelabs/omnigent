@@ -221,6 +221,7 @@ describe("cockpit v3 · levels, not spaghetti; nothing empty", () => {
       "move",
       "name",
       "pause",
+      "rename",
       "research",
       "start",
       "team",
@@ -230,6 +231,7 @@ describe("cockpit v3 · levels, not spaghetti; nothing empty", () => {
       "?peek=needs&tree=factory",
       "?peek=env",
       "?peek=try&at=I-1",
+      "?peek=lineage&at=T-16",
     ]) {
       opened.push({ ref: "product", query });
     }

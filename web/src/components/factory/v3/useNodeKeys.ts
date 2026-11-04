@@ -1,7 +1,7 @@
 // The node page's keys. Tile and row titles are real links with a roving
 // tabindex (one Tab stop for the list); `j`/`k` move DOM focus over them,
-// Enter or `l` step into the focused one, `h` steps out to the parent and `w`
-// opens "why"; a verb's key (`a`, `s`, `t`, `u`, `p`, `m`, `n`) opens its
+// Enter or `l` step into the focused one, `h` steps out to the parent, `w`
+// opens "why" and `v` shows the next lens; a verb's key (`a`, `s`, `t`, `u`, `p`, `m`, `n`) opens its
 // preview. Keys never fire while someone types or works a menu or dialog,
 // Enter never answers a decision (the answer buttons swallow it), and `u`
 // stays the toast's Undo while one is offered.
@@ -60,6 +60,8 @@ export interface NodeKeys {
   onWhy?: () => void;
   /** Any other single letter: a verb's key; true when it opened something. */
   onVerbKey?: (key: string) => boolean;
+  /** `v`: the next lens. */
+  onLens?: () => void;
 }
 
 /** Binds j/k/l/h/w while mounted; `container` holds the roving stops. */
@@ -131,6 +133,11 @@ export function useNodeKeys(container: RefObject<HTMLElement | null>, keys: Node
           event.preventDefault();
           latest.current.onWhy();
           return;
+        case "v":
+          if (!free || !latest.current.onLens) return;
+          event.preventDefault();
+          latest.current.onLens();
+          return;
         default: {
           if (!free || event.shiftKey || !/^[a-z]$/.test(event.key)) return;
           if (event.key === "u" && document.querySelector(TOAST_UNDO_SELECTOR)) return;
@@ -138,7 +145,9 @@ export function useNodeKeys(container: RefObject<HTMLElement | null>, keys: Node
         }
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    // Capture: a verb key the page offers (Rename levels' `r`) wins over the
+    // shell's single keys; every key the page leaves alone still reaches them.
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   }, [container]);
 }
