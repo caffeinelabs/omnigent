@@ -25,6 +25,7 @@ from omnigent.db.db_models import (
     SqlFactoryFeedback,
     SqlFactoryIssue,
     SqlFactoryLoop,
+    SqlFactoryNodeRead,
     SqlFactoryPerson,
     SqlFactoryPr,
     SqlFactoryProject,
@@ -106,6 +107,7 @@ from omnigent.entities.factory import (
     FactoryFeedback,
     FactoryIssue,
     FactoryLoop,
+    FactoryNodeRead,
     FactoryPerson,
     FactoryPr,
     FactoryProject,
@@ -524,6 +526,16 @@ def _chat_read(row: SqlFactoryChatRead) -> FactoryChatRead:
         thread=row.thread,
         last_seq=row.last_seq,
         updated_at=row.updated_at,
+        workspace_id=row.workspace_id,
+    )
+
+
+def _node_read(row: SqlFactoryNodeRead) -> FactoryNodeRead:
+    return FactoryNodeRead(
+        factory_id=row.factory_id,
+        user_id=row.user_id,
+        node_ref=row.node_ref,
+        seen_at=row.seen_at,
         workspace_id=row.workspace_id,
     )
 
@@ -1807,6 +1819,55 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore
         )
         with self._session("list_factory_chat_reads") as session:
             return [_chat_read(r) for r in session.execute(stmt).scalars().all()]
+
+    # ── Last looks at nodes ─────────────────────────────────────
+
+    def mark_node_seen(
+        self, factory_id: str, user_id: str, node_ref: str, seen_at: int | None = None
+    ) -> FactoryNodeRead:
+        key = (current_workspace_id(), norm_id(factory_id), user_id, node_ref)
+        at = now_s() if seen_at is None else int(seen_at)
+        model = SqlFactoryNodeRead
+
+        def write(session: Session) -> FactoryNodeRead:
+            session.execute(
+                update(model)
+                .where(
+                    model.workspace_id == key[0],
+                    model.factory_id == key[1],
+                    model.user_id == user_id,
+                    model.node_ref == node_ref,
+                    model.seen_at < at,
+                )
+                .values(seen_at=at)
+                .execution_options(synchronize_session=False)
+            )
+            row = session.get(model, key, populate_existing=True)
+            if row is None:
+                row = model(factory_id=key[1], user_id=user_id, node_ref=node_ref, seen_at=at)
+                session.add(row)
+                session.flush()
+            return _node_read(row)
+
+        return self._write("mark_factory_node_seen", write)
+
+    def list_node_reads(
+        self, factory_id: str, user_id: str, node_refs: Sequence[str] | None = None
+    ) -> builtins.list[FactoryNodeRead]:
+        model = SqlFactoryNodeRead
+        stmt = select(model).where(
+            model.workspace_id == current_workspace_id(),
+            model.factory_id == norm_id(factory_id),
+            model.user_id == user_id,
+        )
+        if node_refs is not None:
+            wanted = sorted(set(node_refs))
+            if not wanted:
+                return []
+            stmt = stmt.where(model.node_ref.in_(wanted))
+        with self._session("list_factory_node_reads") as session:
+            rows = session.execute(stmt.order_by(model.node_ref)).scalars().all()
+            return [_node_read(r) for r in rows]
 
     # ── Proposals ───────────────────────────────────────────────
 

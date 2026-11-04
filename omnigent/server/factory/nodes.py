@@ -1428,6 +1428,37 @@ class Tree:
                 return found
         return node_refs.PRODUCT
 
+    def pr_node(self, pr_id: str | None) -> str | None:
+        """:returns: The change node of a PR row (``PR-n``, ``commit:<sha>``), if shown."""
+        ref = self._pr_ref.get(_bare(pr_id) or "")
+        return ref if ref in self.nodes else None
+
+    def proposal_nodes(self, ref: str) -> list[str]:
+        """
+        The nodes a proposal (``C-n``) is about, shown as they fold, highest
+        level first: a rule's own item, the features it started, the project
+        it changes or adds and the projects it created.
+        """
+        found: dict[str, None] = {}
+        if ref in self.nodes:
+            found[ref] = None
+        if (proposal := self._proposals.get(ref)) is not None and proposal.kind == "projects":
+            target = self._proposal_target(ref)
+            if target and target in self.nodes and target != node_refs.PRODUCT:
+                found[target] = None
+        for row in self.facts.initiatives:
+            if row.created_by == ref and row.ref in self.nodes:
+                found[row.ref] = None
+        for slug, origin in sorted(self._created_by.items()):
+            if origin == ref and (project := _project_ref(slug)) in self.nodes:
+                found[project] = None
+        if (implicit := f"feature:from-{ref}") in self.nodes:
+            found[implicit] = None
+        out: dict[str, None] = {}
+        for item in found:
+            out[self.fold(self.nodes[item]).ref] = None
+        return sorted(out, key=lambda r: self.level_index(self.nodes[r]))
+
     def _order_columns(self) -> None:
         """Siblings in columns by their dependencies on each other (``graph.layers``)."""
         for refs in self.kids.values():
@@ -2722,7 +2753,13 @@ class Tree:
         return out
 
     def level_view(
-        self, ref: str, level: str, *, cursor: str | None = None
+        self,
+        ref: str,
+        level: str,
+        *,
+        cursor: str | None = None,
+        state: str | None = None,
+        q: str | None = None,
     ) -> dict[str, Any] | None:
         """
         ``GET …/n/{ref}/level/{level}``: the nodes on *level* under *ref*,
@@ -2731,6 +2768,10 @@ class Tree:
         Groups whose work is all done fold; each group shows 60 items and hands
         out a cursor for its next 60 (with one, only that group comes back).
 
+        :param state: Only nodes in this state (``needs``, ``done``, ``later`` …).
+        :param q: Only nodes whose title or code holds these words (any case).
+            With either filter, groups left with nothing are left out; a
+            cursor pages the filtered group.
         :returns: The ``LevelView``, or ``None`` when *ref* names no node or
             *level* is not below it in its tree.
         :raises ValueError: On a cursor this tree never handed out.
@@ -2743,10 +2784,20 @@ class Tree:
         if level not in ladder or ladder.index(level) <= self.level_index(scope):
             return None
         want, offset = _group_cursor(cursor)
+        words = " ".join((q or "").lower().split())
+        filtered = state is not None or bool(words)
+
+        def keep(node: _N) -> bool:
+            if state is not None and self.state(node.ref) != state:
+                return False
+            return not words or words in node.title.lower() or words in (node.tag or "").lower()
+
         grouped: dict[str, list[_N]] = {}
         for raw in self._raw_at_level(scope.ref, level):
-            parent = raw.parent or scope.ref
-            grouped.setdefault(parent, []).append(self.fold(raw))
+            shown = self.fold(raw)
+            if filtered and not keep(shown):
+                continue
+            grouped.setdefault(raw.parent or scope.ref, []).append(shown)
         if want is not None and want not in grouped:
             raise ValueError(f"no group {want!r} under {scope.ref} at {level}")
         order = sorted(

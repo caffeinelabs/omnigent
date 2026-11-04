@@ -488,6 +488,26 @@ class FactoryChatRead:
 
 
 @dataclass(frozen=True)
+class FactoryNodeRead:
+    """
+    A person's last look at one node of the cockpit's level tree (``factory_node_reads``).
+
+    :param node_ref: The node's ref (``product``, ``I-1``, a project slug, ``T-16`` …).
+    :param seen_at: When they last looked (epoch seconds); only moves forward.
+    """
+
+    factory_id: str
+    user_id: str
+    node_ref: str
+    seen_at: int
+    workspace_id: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """:returns: A JSON-ready copy of the row."""
+        return _plain(self)
+
+
+@dataclass(frozen=True)
 class ChatThreadStats:
     """
     Aggregate of one thread's messages (not a table row).
