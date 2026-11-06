@@ -20,7 +20,7 @@ import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { getCurrentUserId } from "@/lib/identity";
 import { useActiveConversationId } from "@/hooks/useActiveConversationId";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
-import { factoryInvalidationKeys } from "@/hooks/useFactory";
+import { createFactoryFrameThrottle, factoryInvalidationKeys } from "@/hooks/useFactory";
 import { FACTORY_PARENT_LABEL_KEY } from "@/lib/factory";
 import {
   isSessionArchiving,
@@ -317,6 +317,12 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    // Busy factories send frames every half second: refresh each at most every 2 s.
+    const factoryFrames = createFactoryFrameThrottle((factoryId, scopes) => {
+      for (const queryKey of factoryInvalidationKeys(factoryId, scopes)) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
+    });
     const unsubscribeFrames = sessionUpdatesSocket.subscribe((frame: SessionUpdatesFrame) => {
       switch (frame.type) {
         case "heartbeat":
@@ -335,9 +341,7 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
         case "factory_changed":
           // A factory's board, activity or decisions moved; the snapshot
           // refetch is ETag-conditional, so a no-op change costs a 304.
-          for (const queryKey of factoryInvalidationKeys(frame.factory_id, frame.scopes)) {
-            void queryClient.invalidateQueries({ queryKey });
-          }
+          factoryFrames.push(frame.factory_id, frame.scopes);
           return;
         case "removed":
           for (const id of frame.ids) commentsFingerprintsRef.current.delete(id);
@@ -424,6 +428,7 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
 
     return () => {
       unsubscribeFrames();
+      factoryFrames.dispose();
       unsubscribeCache();
       if (invalidateTimer !== null) clearTimeout(invalidateTimer);
       if (watchTimer !== null) clearTimeout(watchTimer);

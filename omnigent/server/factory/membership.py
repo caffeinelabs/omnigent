@@ -9,7 +9,10 @@ async callers run it under :func:`asyncio.to_thread`.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -142,6 +145,30 @@ def resolve_factory_id(conv: Conversation, store: ConversationStore) -> str | No
     return root.labels.get(LABEL_ID) or None
 
 
+_agent_rows: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "factory_agent_rows", default=None
+)
+
+
+@contextlib.contextmanager
+def agent_rows_memo() -> Iterator[None]:
+    """Read each agent row once while one view of a factory is built (its worker threads too)."""
+    token = _agent_rows.set({})
+    try:
+        yield
+    finally:
+        _agent_rows.reset(token)
+
+
+def _agent_row(deps: FactoryDeps, agent_id: str) -> Any:
+    memo = _agent_rows.get()
+    if memo is None:
+        return deps.agent_store.get(agent_id)
+    if agent_id not in memo:
+        memo[agent_id] = deps.agent_store.get(agent_id)
+    return memo[agent_id]
+
+
 def load_session_spec(conv: Conversation, deps: FactoryDeps) -> AgentSpec | None:
     """
     Load the spec *conv* runs: its agent's, or the named sub-agent within it.
@@ -152,7 +179,7 @@ def load_session_spec(conv: Conversation, deps: FactoryDeps) -> AgentSpec | None
     """
     if conv.agent_id is None or deps.agent_cache is None:
         return None
-    agent = deps.agent_store.get(conv.agent_id)
+    agent = _agent_row(deps, conv.agent_id)
     if agent is None:
         return None
     try:

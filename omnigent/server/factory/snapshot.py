@@ -16,14 +16,17 @@ fit is dropped, never the whole snapshot.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import functools
 import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -59,6 +62,7 @@ from omnigent.factory import (
     STATE_ACTIVE,
     STATES,
 )
+from omnigent.server.auth import LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.factory import (
     activity_now,
     auto_merge,
@@ -88,7 +92,11 @@ from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.gating import unmet_dependencies
 from omnigent.server.factory.issues import counts_open, visible_to
 from omnigent.server.factory.launch import launch_drift
-from omnigent.server.factory.membership import factory_members, load_session_spec
+from omnigent.server.factory.membership import (
+    agent_rows_memo,
+    factory_members,
+    load_session_spec,
+)
 from omnigent.server.factory.notify import parse_iso
 from omnigent.server.factory.roster import build_roster, session_url
 from omnigent.server.factory.slackdm import rules as slack_rules
@@ -115,7 +123,11 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 SNAPSHOT_TTL_S: Final = 2.0
+SNAPSHOT_STALE_S: Final = 60.0
+"""A snapshot older than the TTL but younger than this is served while one rebuild runs."""
 COST_TTL_S: Final = 60.0
+_COST_READERS: Final = 4
+"""Members whose spend is read at once on a cold cache (each read is a few queries)."""
 MAIL_WINDOW_S: Final = 6 * 3600
 NOTIFIED_WINDOW_S: Final = 30 * 86400
 """How far back the snapshot reads Slack DM receipts (``notify.slack``)."""
@@ -124,6 +136,8 @@ NOTIFIED_ROWS: Final = 5000
 CONTROL_WINDOW_S: Final = 7 * 86400
 ANSWERED_DECISIONS: Final = 10
 PL_TITLE_PREFIX: Final = "PL · "
+_MAX_PARENT_HOPS: Final = 16
+"""Sub-agent -> parent hops :func:`readable_set` follows to a top-level session."""
 
 SANDBOX_STAGE_LABELS: Final = {
     "provisioning": "Provisioning sandbox",
@@ -253,6 +267,25 @@ def subtree_cost(conv: Conversation, store: ConversationStore) -> float | None:
         value = None
     _cost_cache[conv.id] = (now, value)
     return value
+
+
+def _subtree_costs(
+    members: Sequence[Conversation], store: ConversationStore
+) -> dict[str, float | None]:
+    """:func:`subtree_cost` of each member; the uncached ones read side by side."""
+    now = time.monotonic()
+    stale = [
+        m for m in members if (hit := _cost_cache.get(m.id)) is None or now - hit[0] >= COST_TTL_S
+    ]
+    if len(stale) > 1:
+        with ThreadPoolExecutor(max_workers=min(_COST_READERS, len(stale))) as pool:
+            # Each read runs in this thread's context (the workspace scope, for one).
+            reads = [
+                pool.submit(contextvars.copy_context().run, subtree_cost, m, store) for m in stale
+            ]
+            for read in reads:
+                read.result()
+    return {m.id: subtree_cost(m, store) for m in members}
 
 
 def _own_cost(conv: Conversation) -> float | None:
@@ -719,13 +752,8 @@ def _load(deps: FactoryDeps, factory_id: str, now: float, *, merger: bool = Fals
     )
     members = [m for m in everyone if not is_session_closed(m.labels, m.title)]
     closed = [m for m in everyone if is_session_closed(m.labels, m.title)]
-    children: dict[str, list[Conversation]] = {}
-    for member in members:
-        # The newest 200 (re-dispatches must not fall off the page), shown oldest first.
-        page = store.list_conversations(
-            limit=200, kind="sub_agent", parent_conversation_id=member.id, order="desc"
-        )
-        children[member.id] = list(reversed(page.data))
+    # The newest 200 of each (re-dispatches must not fall off the page), shown oldest first.
+    children = store.list_sub_agents_by_parent([m.id for m in members], 200)
     now_ms = int(now * 1000)
     open_decisions = fstore.list_decisions(factory_id=factory_id, status="open", limit=500)
     # One read of the open proposals: deadlines, Steer's counts and Needs you share it.
@@ -771,7 +799,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float, *, merger: bool = Fals
         ),
         harness=harness,
         drift={m.id: launch_drift(m, deps) for m in members},
-        costs={m.id: subtree_cost(m, store) for m in members},
+        costs=_subtree_costs(members, store),
         proposals_pending=len(pending),
         # Steer's count: changes to how the factory works (plans and bets wait in Needs you).
         definition_proposals_pending=sum(1 for p in pending if p.kind != "projects"),
@@ -1407,7 +1435,9 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         functools.partial(_load, merger=auto_merge.merger_on(app_state)), deps, factory_id, now
     )
     loaded.now = activity_now.now_states(factory_id)
-    roster = await build_roster(factory_id, loaded.members, deps, app_state)
+    roster = await build_roster(
+        factory_id, loaded.members, deps, app_state, children=loaded.children
+    )
     rows = {r["session_id"]: r for r in roster["members"]}
     child_rows = {c["session_id"]: c for r in roster["members"] for c in r.get("children", [])}
 
@@ -1660,36 +1690,125 @@ _snapshots: dict[str, RawSnapshot] = {}
 _locks: dict[tuple[int, str], asyncio.Lock] = {}
 _viewers: dict[tuple[str | None, str], tuple[float, set[str]]] = {}
 _VIEWER_CACHE_MAX: Final = 1000
+_generation: dict[str, int] = {}
+"""Factory -> how many times it was forgotten (a build started before a forget is not kept)."""
+_refreshes: dict[tuple[int, str], asyncio.Task[None]] = {}
+_epoch: list[int] = [0]
+"""Bumped by :func:`reset_cache`: no build started before it is kept."""
 
 
 async def get_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
-    """The unfiltered snapshot of *root*'s factory, rebuilt at most every 2 s."""
+    """
+    The unfiltered snapshot of *root*'s factory, rebuilt at most every 2 s.
+
+    A snapshot older than that but younger than :data:`SNAPSHOT_STALE_S` is
+    answered at once while one rebuild runs in the background; after
+    :func:`forget` (or with none cached) the read waits for a fresh build.
+    """
     key = bare_id(root.id)
     cached = _snapshots.get(key)
-    if cached is not None and time.monotonic() - cached.built_at < SNAPSHOT_TTL_S:
-        return cached
+    if cached is not None:
+        age = time.monotonic() - cached.built_at
+        if age < SNAPSHOT_TTL_S:
+            return cached
+        if age < SNAPSHOT_STALE_S:
+            _refresh_in_background(app_state, root, key)
+            return cached
     lock = _locks.setdefault((id(asyncio.get_running_loop()), key), asyncio.Lock())
     async with lock:
         cached = _snapshots.get(key)
         if cached is not None and time.monotonic() - cached.built_at < SNAPSHOT_TTL_S:
             return cached
+        return await _build_and_keep(app_state, root, key)
+
+
+def _generation_of(key: str) -> tuple[int, int]:
+    return _epoch[0], _generation.get(key, 0)
+
+
+async def _build_and_keep(app_state: Any, root: Conversation, key: str) -> RawSnapshot:
+    generation = _generation_of(key)
+    with agent_rows_memo():
         raw = await build_snapshot(app_state, root)
+    if _generation_of(key) == generation:
         _snapshots[key] = raw
-        return raw
+    return raw
+
+
+def _refresh_in_background(app_state: Any, root: Conversation, key: str) -> None:
+    """Start one rebuild of *key* unless one runs already (on this loop)."""
+    loop = asyncio.get_running_loop()
+    task_key = (id(loop), key)
+    running = _refreshes.get(task_key)
+    if running is not None and not running.done():
+        return
+
+    async def refresh() -> None:
+        lock = _locks.setdefault(task_key, asyncio.Lock())
+        try:
+            async with lock:
+                cached = _snapshots.get(key)
+                if cached is not None and time.monotonic() - cached.built_at < SNAPSHOT_TTL_S:
+                    return
+                await _build_and_keep(app_state, root, key)
+        except Exception:  # noqa: BLE001 - the next read builds it in the open
+            _logger.warning("factory: background snapshot of %s failed", key, exc_info=True)
+        finally:
+            if _refreshes.get(task_key) is task:
+                _refreshes.pop(task_key, None)
+
+    task = loop.create_task(refresh(), name=f"factory-snapshot-{key}")
+    _refreshes[task_key] = task
 
 
 def forget(factory_id: str) -> None:
     """Drop one factory's cached snapshot (a write the next read must see)."""
-    _snapshots.pop(bare_id(factory_id), None)
+    key = bare_id(factory_id)
+    _generation[key] = _generation.get(key, 0) + 1
+    _snapshots.pop(key, None)
+    with _views_lock:
+        _views.pop(key, None)
 
 
 def reset_cache() -> None:
     """Forget cached snapshots, viewer permissions, costs and handles (tests)."""
+    _epoch[0] += 1
     _snapshots.clear()
     _cost_cache.clear()
     _locks.clear()
     _viewers.clear()
+    with _views_lock:
+        _views.clear()
     identity.reset_cache()
+
+
+# ── One viewer's cut, kept with the snapshot it was cut from ───
+
+_views: dict[str, dict[frozenset[str], tuple[RawSnapshot, dict[str, Any], str]]] = {}
+_VIEWS_PER_FACTORY: Final = 32
+_views_lock = threading.Lock()
+
+
+def filtered_view(raw: RawSnapshot, readable: Iterable[str]) -> tuple[dict[str, Any], str]:
+    """
+    :func:`filter_snapshot` of *raw* for *readable*, with a digest of it,
+    computed once per snapshot and set of readable sessions.
+
+    :returns: ``(body, digest)``; the body is shared: callers copy before changing it.
+    """
+    who = frozenset(readable)
+    with _views_lock:
+        hit = _views.get(raw.factory_id, {}).get(who)
+    if hit is not None and hit[0] is raw:
+        return hit[1], hit[2]
+    body = filter_snapshot(raw, set(who))
+    digest = _stable_digest(body)
+    with _views_lock:
+        per = _views.setdefault(raw.factory_id, {})
+        if len(per) >= _VIEWS_PER_FACTORY or any(r is not raw for r, _, _ in per.values()):
+            per.clear()
+        per[who] = (raw, body, digest)
+    return body, digest
 
 
 def readable_set(
@@ -1702,16 +1821,44 @@ def readable_set(
 
     Synchronous (run it in a worker thread).
     """
-    from omnigent.server.factory.org_chart import _may_read
-
     ids = set(session_ids)
-    if deps.permission_store is None:
+    perms = deps.permission_store
+    if perms is None:
         return ids
-    return {
-        sid
-        for sid in ids
-        if _may_read(user_id, sid, deps.conversation_store, deps.permission_store)
+    if user_id is None or not ids:
+        return set()
+    # check_session_access for every id, in a few batched reads: admin bypass,
+    # a sub-agent reads as its top-level session, then a direct or public grant.
+    if perms.is_admin(user_id):
+        return ids
+    store = deps.conversation_store
+    top_of: dict[str, str] = {}
+    pending = {sid: sid for sid in ids}
+    for _ in range(_MAX_PARENT_HOPS):
+        if not pending:
+            break
+        rows = store.get_conversations(list(set(pending.values())))
+        nxt: dict[str, str] = {}
+        for sid, at in pending.items():
+            conv = rows.get(at)
+            if conv is None:
+                continue
+            if conv.parent_conversation_id is None:
+                top_of[sid] = at
+            else:
+                nxt[sid] = conv.parent_conversation_id
+        pending = nxt
+    if not top_of:
+        return set()
+    grants = perms.list_for_sessions(sorted(set(top_of.values())))
+    allowed = {
+        cid
+        for cid, rows in grants.items()
+        if any(
+            g.user_id in (user_id, RESERVED_USER_PUBLIC) and g.level >= LEVEL_READ for g in rows
+        )
     }
+    return {sid for sid, top in top_of.items() if top in allowed}
 
 
 def viewer_readable(raw: RawSnapshot, readable_top: set[str]) -> set[str]:
@@ -1832,15 +1979,24 @@ def snapshot_etag(body: Mapping[str, Any]) -> str:
     ``elapsed_s`` counters, which the cockpit ticks itself), so an unchanged
     factory answers 304.
     """
+    return f'W/"{_stable_digest(body)[:32]}"'
+
+
+def view_etag(digest: str, extras: Mapping[str, Any]) -> str:
+    """A weak ETag over a cut's digest (:func:`filtered_view`) and the viewer's own fields."""
+    tail = json.dumps(extras, sort_keys=True, separators=(",", ":"), default=str)
+    return f'W/"{hashlib.sha256((digest + tail).encode()).hexdigest()[:32]}"'
+
+
+def _stable_digest(body: Mapping[str, Any]) -> str:
     stable = {k: v for k, v in body.items() if k != "server_time"}
     stable["factory"] = {k: v for k, v in body["factory"].items() if k != "elapsed_s"}
     stable["projects"] = [
         {k: v for k, v in p.items() if k != "elapsed_s"} for p in body["projects"]
     ]
-    digest = hashlib.sha256(
+    return hashlib.sha256(
         json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
-    return f'W/"{digest[:32]}"'
 
 
 def summary_from(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -1885,6 +2041,7 @@ __all__ = [
     "decision_view",
     "delivered_brief_targets",
     "filter_snapshot",
+    "filtered_view",
     "forget",
     "get_snapshot",
     "is_factory_root",
@@ -1903,5 +2060,6 @@ __all__ = [
     "start_view",
     "subtree_cost",
     "summary_from",
+    "view_etag",
     "viewer_readable",
 ]

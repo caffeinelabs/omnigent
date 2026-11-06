@@ -135,6 +135,72 @@ export function factoryInvalidationKeys(
   ];
 }
 
+/**
+ * At most one refresh per factory this often while frames keep coming: the
+ * first frame applies at once, later ones merge their scopes into one refresh
+ * at the end of the window (agents record several events a second).
+ */
+export const FACTORY_FRAME_MIN_MS = 2_000;
+
+export interface FactoryFrameThrottle {
+  push(factoryId: string, scopes: readonly string[] | null | undefined): void;
+  dispose(): void;
+}
+
+/**
+ * Coalesce `factory_changed` frames per factory (leading and trailing edge).
+ *
+ * @param apply - Refreshes one factory; `null` scopes mean everything.
+ */
+export function createFactoryFrameThrottle(
+  apply: (factoryId: string, scopes: readonly string[] | null) => void,
+  minMs: number = FACTORY_FRAME_MIN_MS,
+): FactoryFrameThrottle {
+  interface Slot {
+    last: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    // `undefined`: nothing waiting; `null`: a frame without scopes (everything).
+    waiting: Set<string> | null | undefined;
+  }
+  const slots = new Map<string, Slot>();
+  const flush = (factoryId: string, slot: Slot) => {
+    slot.timer = null;
+    const waiting = slot.waiting;
+    slot.waiting = undefined;
+    if (waiting === undefined) return;
+    slot.last = Date.now();
+    apply(factoryId, waiting === null ? null : [...waiting]);
+  };
+  return {
+    push(factoryId, scopes) {
+      const now = Date.now();
+      let slot = slots.get(factoryId);
+      if (!slot) {
+        slot = { last: -Infinity, timer: null, waiting: undefined };
+        slots.set(factoryId, slot);
+      }
+      if (slot.timer === null && now - slot.last >= minMs) {
+        slot.last = now;
+        apply(factoryId, scopes?.length ? [...scopes] : null);
+        return;
+      }
+      if (!scopes?.length || slot.waiting === null) slot.waiting = null;
+      else slot.waiting = new Set([...(slot.waiting ?? []), ...scopes]);
+      if (slot.timer === null) {
+        const current = slot;
+        current.timer = setTimeout(
+          () => flush(factoryId, current),
+          Math.max(0, minMs - (now - slot.last)),
+        );
+      }
+    },
+    dispose() {
+      for (const slot of slots.values()) if (slot.timer !== null) clearTimeout(slot.timer);
+      slots.clear();
+    },
+  };
+}
+
 // One quick retry for a blip; a 4xx (no access, no such factory, routes not
 // deployed) won't heal, and the fallback poll or next frame retries anyway.
 function retryTransient(failureCount: number, error: unknown): boolean {
