@@ -33,6 +33,7 @@ vi.mock("@/lib/sessionUpdatesSocket", () => ({
 }));
 
 import { SessionUpdatesProvider } from "./SessionUpdatesProvider";
+import { FACTORY_FRAME_MIN_MS } from "./useFactory";
 
 function conv(id: string): Conversation {
   return {
@@ -433,6 +434,37 @@ describe("SessionUpdatesProvider projects_changed frames", () => {
 });
 
 describe("SessionUpdatesProvider factory_changed frames", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  // Frames further apart than the throttle window each refresh at once.
+  const later = () => act(() => vi.advanceTimersByTime(FACTORY_FRAME_MIN_MS));
+
+  it("coalesces a burst of frames into one more refresh at the end of the window", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const keys = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    const frame = (scopes: string[]) =>
+      act(() => frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes }));
+
+    frame(["now"]);
+    expect(keys()).toEqual([["factory", "f4f4ba9c"]]);
+    invalidate.mockClear();
+    frame(["now"]);
+    frame(["presence"]);
+    frame(["snapshot", "events", "definition"]);
+    expect(keys()).toEqual([]);
+    later();
+    expect(keys()).toContainEqual(["factory-events", "f4f4ba9c"]);
+    expect(keys()).toContainEqual(["factory-team", "f4f4ba9c"]);
+    expect(keys().filter((k) => k[0] === "factory")).toHaveLength(1);
+  });
+
   it("invalidates the factory snapshot, its events, the factory list and decisions", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);
@@ -475,6 +507,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       }),
     );
     expect(keys()).not.toContainEqual(["factory-team", "f4f4ba9c"]);
+    later();
 
     act(() =>
       frameHandler()({
@@ -496,9 +529,11 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       act(() => frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes }));
 
     frame(["snapshot", "events", "tasks"]);
+    later();
     frame(["snapshot", "events", "chat"]);
     expect(keys()).not.toContainEqual(["factory-discovery", "f4f4ba9c"]);
     for (const scope of ["discovery", "proposals", "definition"]) {
+      later();
       invalidate.mockClear();
       frame(["snapshot", "events", scope]);
       expect(keys()).toContainEqual(["factory-discovery", "f4f4ba9c"]);
@@ -512,6 +547,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     act(() => frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["now"] }));
+    later();
     act(() =>
       frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["presence"] }),
     );

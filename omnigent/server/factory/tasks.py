@@ -28,12 +28,13 @@ import logging
 import re
 import time
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProject, FactoryTask
 from omnigent.factory import (
     LABEL_PREFIX,
@@ -421,24 +422,32 @@ def _decision_met(decision: FactoryDecision | None) -> bool:
     return decision is not None and decision.status in ("answered", "withdrawn")
 
 
-def _is_paused(deps: FactoryDeps, factory_id: str, project: FactoryProject | None) -> bool:
-    store = deps.conversation_store
-    root = store.get_conversation(factory_id)
+ConvGetter = Callable[[str], "Conversation | None"]
+
+
+def _is_paused(
+    deps: FactoryDeps,
+    factory_id: str,
+    project: FactoryProject | None,
+    get: ConvGetter | None = None,
+) -> bool:
+    get = get or deps.conversation_store.get_conversation
+    root = get(factory_id)
     if root is not None and root.labels.get(LABEL_STATE) == STATE_PAUSED:
         return True
     if project is not None and project.pl_session_id:
-        pl = store.get_conversation(project.pl_session_id)
+        pl = get(project.pl_session_id)
         return pl is not None and pl.labels.get(LABEL_STATE) == STATE_PAUSED
     return False
 
 
-def _worker_running(deps: FactoryDeps, task: FactoryTask) -> bool:
+def _worker_running(deps: FactoryDeps, task: FactoryTask, get: ConvGetter | None = None) -> bool:
     """:returns: Whether one of the task's bound sessions is running now."""
     from omnigent.server.routes._sessions.helpers import _session_status_from_cache
 
-    store = deps.conversation_store
+    get = get or deps.conversation_store.get_conversation
     for session_id in task.session_ids or ():
-        conv = store.get_conversation(session_id)
+        conv = get(session_id)
         if conv is not None and _session_status_from_cache(conv.id, conv.live_status) == "running":
             return True
     return False
@@ -503,6 +512,26 @@ class FactoryData:
     others: list[FactoryTask] = field(default_factory=list)
     """Other projects' open tasks, when only one project's tasks were read (a
     ``project:<slug>`` dependency is not met while its project still works)."""
+    convs: dict[str, Conversation | None] = field(default_factory=dict, repr=False)
+    """Sessions read for this load (paused labels, bound workers), each once."""
+
+    def conv(self, deps: FactoryDeps, session_id: str) -> Conversation | None:
+        """:returns: The session, read once per load."""
+        if session_id not in self.convs:
+            self.convs[session_id] = deps.conversation_store.get_conversation(session_id)
+        return self.convs[session_id]
+
+    def prefetch(self, deps: FactoryDeps) -> None:
+        """Read the root, the PLs and the tasks' workers in one batch."""
+        ids = {self.factory_id}
+        ids |= {p.pl_session_id for p in self.projects.values() if p.pl_session_id}
+        ids |= {sid for t in self.tasks for sid in t.session_ids or ()}
+        ids -= set(self.convs)
+        if not ids:
+            return
+        found = deps.conversation_store.get_conversations(sorted(ids))
+        for sid in ids:
+            self.convs[sid] = found.get(sid)
 
     def project_ctx(self, deps: FactoryDeps, slug: str) -> ProjectCtx:
         """:returns: The context of one project (paused state read from labels)."""
@@ -523,12 +552,16 @@ class FactoryData:
                     ref = dep.removeprefix(DECISION_DEP_PREFIX)
                     external[dep] = _decision_met(self.decisions.get(ref))
         active = project is None or project.status in (None, "active")
+
+        def get(session_id: str) -> Conversation | None:
+            return self.conv(deps, session_id)
+
         # Ad-hoc work holds an IC slot only while one of its workers runs (the
         # PL never started it, so nothing else closes it).
         idle = {
             t.id
             for t in tasks
-            if t.kind == "adhoc" and t.state in OCCUPYING and not _worker_running(deps, t)
+            if t.kind == "adhoc" and t.state in OCCUPYING and not _worker_running(deps, t, get)
         }
         return ProjectCtx(
             factory_id=self.factory_id,
@@ -537,7 +570,7 @@ class FactoryData:
             tasks=tasks,
             charter=charter,
             external_met=external,
-            paused=_is_paused(deps, self.factory_id, project),
+            paused=_is_paused(deps, self.factory_id, project, get),
             active=active,
             slots=_slots(charter, tasks, self.prs, slug, idle, _team_builders(deps, self, slug)),
             observed=self.observed,
@@ -726,6 +759,7 @@ def snapshot_fields(
         return {}, {}, []
     open_tasks = [t for t in data.tasks if t.state not in TASK_CLOSED_STATES]
     try:
+        data.prefetch(deps)
         out: dict[str, dict[str, Any]] = {}
         for slug in sorted({t.project_slug for t in data.tasks}):
             ctx = data.project_ctx(deps, slug)

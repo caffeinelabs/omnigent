@@ -127,6 +127,8 @@ _logger = logging.getLogger(__name__)
 
 FACTS_TTL_S: Final = 5.0
 """How long one factory's projection is reused (any recorded write drops it sooner)."""
+FACTS_STALE_S: Final = 60.0
+"""A projection older than the TTL but younger than this is served while one rebuild runs."""
 BURN_WINDOW_S: Final = 3600
 """Burn is the spend of the last hour."""
 TURNS_LOOKBACK_S: Final = 3 * 3600
@@ -3625,6 +3627,11 @@ def assert_levels(tree: Tree) -> Tree:
 _trees: dict[tuple[str, str], tuple[float, Tree]] = {}
 _locks: dict[tuple[int, str], asyncio.Lock] = {}
 _TREES_MAX: Final = 64
+_generation: dict[str, int] = {}
+"""Factory -> projections dropped so far (a build started before a drop is not kept)."""
+_refreshes: dict[tuple[int, str, str], asyncio.Task[None]] = {}
+_epoch: list[int] = [0]
+"""Bumped by :func:`reset_cache`: no build started before it is kept."""
 
 
 def viewer_key(readable: Iterable[str]) -> str:
@@ -3652,59 +3659,115 @@ async def tree_for(
     The factory as a viewer who may read the sessions *readable* sees it, built
     from the cached snapshot cut to that viewer (``snapshot.filter_snapshot``:
     members, team chips, cost and burn, the base env) and from the store rows
-    of the projects they may read; reused for :data:`FACTS_TTL_S`.
+    of the projects they may read; reused for :data:`FACTS_TTL_S`, then served
+    while one rebuild runs (up to :data:`FACTS_STALE_S`). A recorded write
+    drops it: the next read waits for a fresh one.
 
     :param app_state: The server's state, read on a rebuild for the auto-merge
         targets the server merges into now (a ready PR into one waits on the
         server, not a person); ``None``: a person merges every PR.
     """
-    from omnigent.server.factory.snapshot import filter_snapshot
-
     fid = norm_id(root.id)
     sessions = set(readable)
     key = (fid, viewer_key(sessions))
     cached = _trees.get(key)
-    if cached is not None and time.monotonic() - cached[0] < FACTS_TTL_S:
-        return cached[1]
+    if cached is not None:
+        age = time.monotonic() - cached[0]
+        if age < FACTS_TTL_S:
+            return cached[1]
+        if age < FACTS_STALE_S:
+            _rebuild_in_background(deps, root, raw, sessions, app_state, key)
+            return cached[1]
     lock = _locks.setdefault((id(asyncio.get_running_loop()), fid), asyncio.Lock())
     async with lock:
         cached = _trees.get(key)
         if cached is not None and time.monotonic() - cached[0] < FACTS_TTL_S:
             return cached[1]
+        return await _build_and_keep(deps, root, raw, sessions, app_state, key)
 
-        def build() -> Tree:
-            body = filter_snapshot(raw, sessions)
-            targets = waits.auto_targets(app_state, deps, root.id, lineage=False)
-            facts = load_facts(
-                deps, root, body, readable=sessions, leads=raw.project_pl, targets=targets
-            )
-            tree = Tree(facts, hidden=hidden_projects(raw, sessions))
-            if bad := check_levels(tree):
-                _logger.warning(
-                    "factory %s: the level projection breaks the rule: %s", fid, bad[:5]
-                )
-            return tree
 
-        tree = await asyncio.to_thread(build)
+async def _build_and_keep(
+    deps: FactoryDeps,
+    root: Conversation,
+    raw: RawSnapshot,
+    sessions: set[str],
+    app_state: Any,
+    key: tuple[str, str],
+) -> Tree:
+    from omnigent.server.factory.snapshot import filter_snapshot
+
+    fid = key[0]
+    generation = (_epoch[0], _generation.get(fid, 0))
+
+    def build() -> Tree:
+        body = filter_snapshot(raw, sessions)
+        targets = waits.auto_targets(app_state, deps, root.id, lineage=False)
+        facts = load_facts(
+            deps, root, body, readable=sessions, leads=raw.project_pl, targets=targets
+        )
+        tree = Tree(facts, hidden=hidden_projects(raw, sessions))
+        if bad := check_levels(tree):
+            _logger.warning("factory %s: the level projection breaks the rule: %s", fid, bad[:5])
+        return tree
+
+    tree = await asyncio.to_thread(build)
+    if (_epoch[0], _generation.get(fid, 0)) == generation:
         if len(_trees) >= _TREES_MAX:
             _trees.clear()
         _trees[key] = (time.monotonic(), tree)
-        # Raw asks, machine labels and long titles get the factory's short names
-        # in the background; the page shows their first words until then.
-        node_names.schedule(app_state, deps, root, tree.unnamed)
-        return tree
+    # Raw asks, machine labels and long titles get the factory's short names
+    # in the background; the page shows their first words until then.
+    node_names.schedule(app_state, deps, root, tree.unnamed)
+    return tree
+
+
+def _rebuild_in_background(
+    deps: FactoryDeps,
+    root: Conversation,
+    raw: RawSnapshot,
+    sessions: set[str],
+    app_state: Any,
+    key: tuple[str, str],
+) -> None:
+    """Start one rebuild of the projection *key* unless one runs already (on this loop)."""
+    loop = asyncio.get_running_loop()
+    task_key = (id(loop), *key)
+    running = _refreshes.get(task_key)
+    if running is not None and not running.done():
+        return
+
+    async def refresh() -> None:
+        lock = _locks.setdefault((id(loop), key[0]), asyncio.Lock())
+        try:
+            async with lock:
+                cached = _trees.get(key)
+                if cached is not None and time.monotonic() - cached[0] < FACTS_TTL_S:
+                    return
+                await _build_and_keep(deps, root, raw, sessions, app_state, key)
+        except Exception:  # noqa: BLE001 - the next read builds it in the open
+            _logger.warning("factory %s: background projection failed", key[0], exc_info=True)
+        finally:
+            if _refreshes.get(task_key) is task:
+                _refreshes.pop(task_key, None)
+
+    task = loop.create_task(refresh(), name=f"factory-nodes-{key[0]}")
+    _refreshes[task_key] = task
 
 
 def invalidate(factory_id: str) -> None:
     """Forget a factory's projections (a write changed what they read)."""
     fid = _bare(factory_id)
+    if fid is not None:
+        _generation[fid] = _generation.get(fid, 0) + 1
     for key in [k for k in _trees if k[0] == fid]:
         _trees.pop(key, None)
 
 
 def reset_cache() -> None:
     """Forget every projection (tests)."""
+    _epoch[0] += 1
     _trees.clear()
+    _refreshes.clear()
     _locks.clear()
 
 

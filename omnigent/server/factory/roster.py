@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from omnigent.factory import (
@@ -18,14 +19,18 @@ from omnigent.factory import (
 from omnigent.server.factory.context import FactoryDeps
 from omnigent.server.factory.delivery import member_last_error
 from omnigent.server.factory.membership import load_session_spec, sub_agent_role
-from omnigent.server.routes._sessions.helpers import _session_status_from_cache
+from omnigent.server.routes._sessions.helpers import (
+    _child_session_summary_from_conversation,
+    _latest_message_preview,
+    _session_status_from_cache,
+)
 from omnigent.server.routes._sessions.orchestration import (
     _child_session_summaries_from_conversations,
 )
 from omnigent.stores.conversation_store import runner_seen_is_fresh
 
 if TYPE_CHECKING:
-    from omnigent.entities import Conversation
+    from omnigent.entities import Conversation, ConversationItem
     from omnigent.server.schemas import ChildSessionSummary
 
 # Sub-agents listed per member; a PL runs well under this many.
@@ -88,6 +93,44 @@ async def _children(
     roles = await asyncio.to_thread(
         lambda: {c.id: sub_agent_role(load_session_spec(c, deps)) for c in children}
     )
+    return _child_rows(children, summaries, roles)
+
+
+async def _known_children(
+    members: list[Conversation],
+    known: Mapping[str, list[Conversation]],
+    deps: FactoryDeps,
+) -> list[list[dict[str, Any]]]:
+    """Every member's child rows from children already read: one message read for all."""
+    store = deps.conversation_store
+    flat = [(m.id, c) for m in members for c in known.get(m.id, [])]
+    if not flat:
+        return [[] for _ in members]
+
+    def read() -> tuple[dict[str, list[ConversationItem]], dict[str, str]]:
+        items = store.list_latest_message_items_for_conversations([c.id for _, c in flat], 10)
+        roles = {c.id: sub_agent_role(load_session_spec(c, deps)) for _, c in flat}
+        return items, roles
+
+    items, roles = await asyncio.to_thread(read)
+    out: list[list[dict[str, Any]]] = []
+    for member in members:
+        kids = known.get(member.id, [])
+        summaries = [
+            _child_session_summary_from_conversation(
+                c, member.id, _latest_message_preview(items.get(c.id, []))
+            )
+            for c in kids
+        ]
+        out.append(_child_rows(kids, summaries, roles) if kids else [])
+    return out
+
+
+def _child_rows(
+    children: list[Conversation],
+    summaries: list[ChildSessionSummary],
+    roles: Mapping[str, str],
+) -> list[dict[str, Any]]:
     return [
         {
             "session_id": child.id,
@@ -112,6 +155,7 @@ async def build_roster(
     app_state: Any,
     *,
     humans: bool = False,
+    children: Mapping[str, list[Conversation]] | None = None,
 ) -> dict[str, Any]:
     """
     Build the ``GET /v1/factory/roster`` body.
@@ -121,9 +165,11 @@ async def build_roster(
     :param deps: Factory stores.
     :param app_state: ``app.state`` (runner tunnel registry).
     :param humans: Add ``humans``: the people on the factory roster.
+    :param children: Each member's sub-agents, already read (oldest first);
+        ``None`` reads the oldest 200 of each.
     :returns: ``{factory_id, members: [{…, children: [{…}]}], humans?: [{…}]}``.
     """
-    body = await _members_body(factory_id, members, deps, app_state)
+    body = await _members_body(factory_id, members, deps, app_state, children)
     if humans:
         from omnigent.server.factory.people import roster_humans
 
@@ -136,6 +182,7 @@ async def _members_body(
     members: list[Conversation],
     deps: FactoryDeps,
     app_state: Any,
+    known: Mapping[str, list[Conversation]] | None = None,
 ) -> dict[str, Any]:
     store = deps.conversation_store
     if not members:
@@ -143,7 +190,10 @@ async def _members_body(
     summaries = await _child_session_summaries_from_conversations(members, factory_id, store)
     connectivity = await asyncio.to_thread(store.get_session_connectivity, [m.id for m in members])
     tunnel_registry = getattr(app_state, "tunnel_registry", None)
-    children = await asyncio.gather(*(_children(m, deps) for m in members))
+    if known is not None:
+        children = await _known_children(members, known, deps)
+    else:
+        children = await asyncio.gather(*(_children(m, deps) for m in members))
     rows: list[dict[str, Any]] = []
     for member, summary, kids in zip(members, summaries, children, strict=True):
         labels = member.labels

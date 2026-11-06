@@ -580,6 +580,27 @@ class ConversationStore(ABC):
         """
         ...
 
+    def list_sub_agents_by_parent(
+        self, parent_conversation_ids: list[str], limit: int = 200
+    ) -> dict[str, list[Conversation]]:
+        """
+        The newest *limit* unarchived sub-agents of each parent, oldest first.
+
+        Batched counterpart to ``list_conversations(kind="sub_agent",
+        parent_conversation_id=p, order="desc", limit=limit)`` per parent
+        (reversed). This default runs exactly that; stores override it with a
+        constant number of queries.
+
+        :returns: Every unique input parent id mapped to its children.
+        """
+        out: dict[str, list[Conversation]] = {}
+        for parent_id in dict.fromkeys(parent_conversation_ids):
+            page = self.list_conversations(
+                limit=limit, kind="sub_agent", parent_conversation_id=parent_id, order="desc"
+            )
+            out[parent_id] = list(reversed(page.data))
+        return out
+
     @abstractmethod
     def list_items(
         self,

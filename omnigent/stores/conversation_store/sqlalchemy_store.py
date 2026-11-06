@@ -1326,6 +1326,35 @@ class SqlAlchemyConversationStore(ConversationStore):
                 result[parent_id].append(child_id)
         return result
 
+    def list_sub_agents_by_parent(
+        self, parent_conversation_ids: list[str], limit: int = 200
+    ) -> dict[str, list[Conversation]]:
+        """One id query plus :meth:`get_conversations`. See base class for contract."""
+        unique_ids = list(dict.fromkeys(parent_conversation_ids))
+        result: dict[str, list[Conversation]] = {parent_id: [] for parent_id in unique_ids}
+        if not unique_ids:
+            return result
+        with self._conv_session("list_sub_agents_by_parent") as ap_sess:
+            rows = ap_sess.execute(
+                select(SqlConversation.parent_conversation_id, SqlConversation.id)
+                .where(SqlConversation.workspace_id == current_workspace_id())
+                .where(SqlConversation.parent_conversation_id.in_(unique_ids))
+                .where(SqlConversation.archived.is_(False))
+                .order_by(
+                    SqlConversation.parent_conversation_id,
+                    desc(SqlConversation.created_at),
+                    desc(self._tiebreaker_col),
+                )
+            ).all()
+        newest: dict[str, list[str]] = {parent_id: [] for parent_id in unique_ids}
+        for parent_id, child_id in rows:
+            if parent_id is not None and len(newest[parent_id]) < limit:
+                newest[parent_id].append(child_id)
+        convs = self.get_conversations([cid for ids in newest.values() for cid in ids])
+        for parent_id, ids in newest.items():
+            result[parent_id] = [convs[cid] for cid in reversed(ids) if cid in convs]
+        return result
+
     def set_labels(
         self,
         conversation_id: str,

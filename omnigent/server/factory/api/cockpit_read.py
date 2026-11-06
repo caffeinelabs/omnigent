@@ -10,11 +10,12 @@ are filtered out with their projects, events, decisions and demos.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Final
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
@@ -30,15 +31,15 @@ from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.factory.snapshot import (
     bare_id,
     decision_view,
-    filter_snapshot,
+    filtered_view,
     get_snapshot,
     is_factory_root,
     list_factory_roots,
     project_demo_view,
     readable_for,
     readable_set,
-    snapshot_etag,
     summary_from,
+    view_etag,
 )
 from omnigent.server.factory.start import max_projects
 from omnigent.server.routes._auth_helpers import require_access, require_user
@@ -76,18 +77,24 @@ async def _root(user_id: str | None, factory_id: str, deps: FactoryDeps) -> Conv
 
 async def _view(
     request: Request, user_id: str | None, root: Conversation, *, viewer: bool = True
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
+    """:returns: The snapshot as this viewer may see it (a shallow copy) and its weak ETag."""
     deps = factory_deps(request.app.state)
     raw = await get_snapshot(request.app.state, root)
     readable = await readable_for(user_id, raw, deps)
-    body = filter_snapshot(raw, readable)
+    shared, digest = await asyncio.to_thread(filtered_view, raw, readable)
+    body = dict(shared)
+    extras: dict[str, Any] = {}
     if viewer:
         # Per viewer and never cached: role, levers, roster size and who is here.
         block, count = await asyncio.to_thread(_viewer_fields, deps, root.id, user_id)
-        body["viewer"] = block
-        body["people_count"] = count
-        body["presence"] = entries_for(root.id, raw.top_level_of, readable)
-    return body
+        extras = {
+            "viewer": block,
+            "people_count": count,
+            "presence": entries_for(root.id, raw.top_level_of, readable),
+        }
+        body.update(extras)
+    return body, view_etag(digest, extras)
 
 
 def _viewer_fields(
@@ -104,6 +111,13 @@ def _etag_matches(header: str | None, etag: str) -> bool:
         return True
     wanted = etag.removeprefix("W/")
     return any(tag.strip().removeprefix("W/") == wanted for tag in header.split(","))
+
+
+def _render(body: Any) -> bytes:
+    """``body`` as :class:`JSONResponse` renders it."""
+    return json.dumps(
+        body, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":")
+    ).encode("utf-8")
 
 
 def _factory_name(root: Conversation) -> str:
@@ -165,7 +179,7 @@ async def list_factories(request: Request) -> dict[str, Any]:
         if root.id not in readable:
             continue
         try:
-            body = await _view(request, user_id, root, viewer=False)
+            body, _ = await _view(request, user_id, root, viewer=False)
             extras = await asyncio.to_thread(_summary_extras, deps, root.id, user_id, body)
             summaries.append({**summary_from(body), **extras})
         except Exception:  # one broken factory must not hide the others
@@ -201,12 +215,13 @@ async def get_factory(request: Request, factory_id: str) -> Response:
     deps = factory_deps(request.app.state)
     user_id = require_user(request, deps.auth_provider)
     root = await _root(user_id, factory_id, deps)
-    body = await _view(request, user_id, root)
-    etag = snapshot_etag(body)
+    body, etag = await _view(request, user_id, root)
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     if _etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
-    return JSONResponse(content=body, headers=headers)
+    # ~0.5 MB on a big factory: rendered off the event loop.
+    content = await asyncio.to_thread(_render, body)
+    return Response(content=content, media_type="application/json", headers=headers)
 
 
 def _event_view(event: Any, titles: dict[str, str], readable: set[str]) -> dict[str, Any]:
