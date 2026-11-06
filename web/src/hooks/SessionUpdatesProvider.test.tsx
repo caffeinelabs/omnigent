@@ -462,7 +462,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     later();
     expect(keys()).toContainEqual(["factory-events", "f4f4ba9c"]);
     expect(keys()).toContainEqual(["factory-team", "f4f4ba9c"]);
-    expect(keys().filter((k) => k[0] === "factory")).toHaveLength(1);
+    expect(keys().filter((k) => k?.[0] === "factory")).toHaveLength(1);
   });
 
   it("invalidates the factory snapshot, its events, the factory list and decisions", () => {

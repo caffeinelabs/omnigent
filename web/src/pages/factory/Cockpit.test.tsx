@@ -221,6 +221,21 @@ describe("the cockpit · Chats", () => {
   });
 });
 
+describe("the cockpit · a chat", () => {
+  it("opens a thread as a messenger page: back to Chats, who answers, the box at the bottom", async () => {
+    serve([thread("factory", { responder_title: "Atlas" })]);
+    renderAt("/chats");
+    fireEvent.click(await screen.findByTestId("cockpit-chat-row"));
+    await waitFor(() => expect(location).toBe(`${BASE}/chats/factory`));
+    const page = await screen.findByTestId("cockpit-chat-thread");
+    expect(within(page).getByRole("heading")).toHaveTextContent(/^Factory chat\s*with Atlas$/);
+    const chat = await within(page).findByTestId("v3-chat");
+    expect(chat).toHaveAttribute("data-layout", "page");
+    expect(await within(chat).findByTestId("room-composer-input")).toBeInTheDocument();
+    expect(within(page).getByTestId("cockpit-chat-back")).toHaveAttribute("href", `${BASE}/chats`);
+  });
+});
+
 describe("the cockpit · older addresses", () => {
   it.each([
     ["/projects/db-version", "/n/db-version"],

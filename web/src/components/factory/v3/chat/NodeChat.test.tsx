@@ -675,6 +675,91 @@ describe("cockpit v3 · the node chat column", () => {
   });
 });
 
+describe("cockpit v3 · the chat is a messenger", () => {
+  /** Hold every post to the chat until `release` (or refuse it with `status`). */
+  function gated(status = 200) {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const wrap = (f: FakeFetch) => {
+      const held = (async (path: string, init?: RequestInit) => {
+        if (init?.method === "POST" && path.split("?")[0]!.endsWith("/chat")) {
+          await gate;
+          if (status !== 200) {
+            return new Response(
+              JSON.stringify({ error: { code: "forbidden", message: "you may only read here" } }),
+              { status, headers: { "Content-Type": "application/json" } },
+            );
+          }
+        }
+        return f(path, init);
+      }) as FakeFetch;
+      held.posts = f.posts;
+      held.writes = f.writes;
+      fake = held;
+    };
+    return { wrap, release: () => release() };
+  }
+
+  it("shows a sent message at once, marked as sending, and empties the box", async () => {
+    setWindow("desktop");
+    const { wrap, release } = gated();
+    const view = renderChat("assistant-core", { install: wrap });
+    const box = await composer();
+    const user = userEvent.setup();
+    await user.click(box);
+    await user.keyboard("is the debit test green yet{Enter}");
+    expect(box.value).toBe("");
+    const list = screen.getByTestId("room-message-list");
+    await waitFor(() => expect(within(list).getByTestId("room-sending")).toBeInTheDocument());
+    expect(list).toHaveTextContent("is the debit test green yet");
+    release();
+    // The server's row takes its place (this fake does not keep it for the re-read).
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("room-message-list")).queryByTestId("room-sending"),
+      ).toBeNull(),
+    );
+    expect(view.fetch.posts.map((p) => p.body)).toEqual([
+      expect.stringContaining("is the debit test green yet"),
+    ]);
+    expect(box.value).toBe("");
+  });
+
+  it("puts a refused message back in the box with the server's reason", async () => {
+    setWindow("desktop");
+    const { wrap, release } = gated(403);
+    renderChat("assistant-core", { install: wrap });
+    const box = await composer();
+    const user = userEvent.setup();
+    await user.click(box);
+    await user.keyboard("ship it{Enter}");
+    release();
+    await waitFor(() => expect(box.value).toBe("ship it"));
+    expect(await screen.findByText(/Not sent: .*read/)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("room-message-list")).queryByTestId("room-sending"),
+    ).toBeNull();
+  });
+
+  it("folds an agent's long message under more", async () => {
+    setWindow("desktop");
+    const tall = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(600);
+    try {
+      renderChat("assistant-core", { install });
+      const list = await screen.findByTestId("room-message-list");
+      const folded = await within(list).findAllByTestId(/^room-fold-/);
+      expect(folded[0]).toHaveAttribute("data-folded", "true");
+      const more = within(list).getAllByRole("button", { name: "more" })[0]!;
+      await userEvent.setup().click(more);
+      expect(folded[0]).toHaveAttribute("data-folded", "false");
+    } finally {
+      tall.mockRestore();
+    }
+  });
+});
+
 describe("cockpit v3 · the node chat on a phone", () => {
   it("names #factory's Atlas on the pinned box of a sample node", async () => {
     setWindow("phone");

@@ -367,18 +367,32 @@ export interface NodeChatProps {
   page: NodePage;
   /** The page shows sample data: the chat is this factory's own root thread. */
   sample?: boolean;
+  /**
+   * `auto`: beside the page from 1180 px, else a pinned box that opens it full
+   * screen. `page`: the conversation is the page (Chats), as tall as the window.
+   */
+  layout?: "auto" | "page";
+  /** The thread to show when it is not the node's own (Chats opens any thread). */
+  threadKey?: string;
 }
 
 let localSeq = 0;
 
-export function NodeChat({ page: here, sample = false }: NodeChatProps) {
+export function NodeChat({
+  page: here,
+  sample = false,
+  layout = "auto",
+  threadKey,
+}: NodeChatProps) {
   const { factoryId: fid, snapshot, clockOffsetS } = useFactoryShell();
   const actions = useNodeActions();
   const slot = useNodeChatSlot();
   const navigate = useNavigate();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const beside = useMediaQuery(CHAT_BESIDE_QUERY, true);
+  const asPage = layout === "page";
+  const wide = useMediaQuery(CHAT_BESIDE_QUERY, true);
+  const beside = wide || asPage;
   const phone = useIsMobileViewport();
   const full = !beside && params.get(CHAT_PARAM) === "1";
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -390,7 +404,8 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
   const perNode = usePreflight().data?.node_threads === true;
   // With the per-node threads (`?nodes=1`): a child's own thread can have news.
   const threads = useRoomThreads(fid, { nodes: perNode }).data?.data ?? null;
-  const thread = nodeThread(chat, { snapshot, threads, perNode, sample });
+  const nodeOwn = nodeThread(chat, { snapshot, threads, perNode, sample });
+  const thread = threadKey && threadKey !== nodeOwn.key ? { key: threadKey, about: null } : nodeOwn;
   const room = threads?.find((t) => t.key === thread.key) ?? null;
   // Who answers the thread the chat actually posts to: the node's own
   // responder only when that thread is the node's own (else a borrowed
@@ -720,9 +735,10 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
         visible={beside || full}
         className="min-h-0 flex-1"
         node={{
-          title,
+          // Chats names the conversation in its own header; the children's news is the node page's.
+          title: asPage ? <span className="flex-1" /> : title,
           lead,
-          top,
+          top: asPage ? null : top,
           bottom,
           bottomCount: cards.length,
           card: renderCard,
@@ -759,6 +775,19 @@ export function NodeChat({ page: here, sample = false }: NodeChatProps) {
     </div>
   );
 
+  if (asPage) {
+    return (
+      <section
+        aria-label={`Chat · ${nodeName(here.node)}`}
+        data-testid="v3-chat"
+        data-layout="page"
+        className="flex min-h-0 min-w-0 flex-col"
+        style={{ height: phone ? PAGE_HEIGHT_PHONE : PAGE_HEIGHT }}
+      >
+        {threadView(false, "flex-1")}
+      </section>
+    );
+  }
   if (beside) return <ChatColumn here={here}>{threadView(false, "flex-1")}</ChatColumn>;
   return (
     <>
@@ -830,6 +859,13 @@ function ChatColumn({ here, children }: { here: NodePage; children: ReactNode })
     </aside>
   );
 }
+
+/** Chats: the conversation fills the window under the page's header. */
+const PAGE_HEIGHT =
+  "calc(100dvh - var(--omnigent-header-height, 0px) - var(--omnigent-inset-top, 0px) - var(--omnigent-inset-bottom, 0px) - 7.5rem)";
+/** A phone also keeps its tab bar and the factory's name above. */
+const PAGE_HEIGHT_PHONE =
+  "calc(100dvh - var(--omnigent-header-height, 0px) - var(--omnigent-inset-top, 0px) - var(--omnigent-inset-bottom, 0px) - 13rem)";
 
 const STUCK_HEIGHT =
   "calc(100dvh - var(--omnigent-header-height, 0px) - var(--omnigent-inset-top, 0px) - var(--omnigent-inset-bottom, 0px) - 2rem)";

@@ -6,6 +6,7 @@
  * quiet line. Consecutive messages of one author fold under one header.
  */
 
+import { useLayoutEffect, useRef, useState } from "react";
 import { BotIcon, CornerDownRightIcon } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import type { ChatMessageView } from "@/lib/factoryApi";
@@ -76,6 +77,58 @@ function Delivery({ message }: { message: ChatMessageView }) {
   );
 }
 
+/** An agent's message taller than this many lines folds under "more". */
+export const FOLD_LINES = 6;
+
+/** An agent's long message: its first lines, and "more" to read the rest in place. */
+function Folded({ children, testId }: { children: React.ReactNode; testId: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [tall, setTall] = useState(false);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => {
+      const line = Number.parseFloat(getComputedStyle(el).lineHeight) || 21;
+      setTall(el.scrollHeight > line * (FOLD_LINES + 1));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+  return (
+    <div className="min-w-0">
+      <div
+        ref={box}
+        data-testid={testId}
+        data-folded={tall && !open ? "true" : "false"}
+        className={cn("relative min-w-0 leading-[1.5]", tall && !open && "overflow-hidden")}
+        style={tall && !open ? { maxHeight: `${FOLD_LINES * 1.5}em` } : undefined}
+      >
+        {children}
+        {tall && !open && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-background to-transparent"
+          />
+        )}
+      </div>
+      {tall && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="mt-0.5 cursor-pointer text-xs font-medium text-status-blue-fg hover:underline"
+        >
+          {open ? "less" : "more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function RoomMessage({
   message,
   sources,
@@ -101,8 +154,10 @@ export function RoomMessage({
     <li
       data-testid={`room-message-${message.seq}`}
       data-kind={message.author_kind}
+      data-pending={message.pending ? "true" : undefined}
       className={cn(
         "group/msg grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] gap-x-2",
+        message.pending && "opacity-70",
         continued ? "pt-0.5" : "pt-2.5",
       )}
     >
@@ -135,7 +190,18 @@ export function RoomMessage({
             <span className="min-w-0 truncate">{replyTo.body}</span>
           </p>
         )}
-        <RoomText body={message.body} sources={sources} testId={`room-body-${message.seq}`} />
+        {message.author_kind === "agent" ? (
+          <Folded testId={`room-fold-${message.seq}`}>
+            <RoomText body={message.body} sources={sources} testId={`room-body-${message.seq}`} />
+          </Folded>
+        ) : (
+          <RoomText body={message.body} sources={sources} testId={`room-body-${message.seq}`} />
+        )}
+        {message.pending && (
+          <p data-testid="room-sending" className="text-xs text-muted-foreground">
+            Sending…
+          </p>
+        )}
         {message.card && message.card.type !== "system" && (
           <div className="mt-1 min-w-0">
             <RoomCard message={message} sources={sources} attached />

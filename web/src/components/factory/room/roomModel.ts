@@ -299,7 +299,8 @@ export function busFilterFor(snapshot: FactorySnapshot, thread: string): { proje
 
 /** The highest seq on screen (what reading the thread marks). */
 export function lastSeq(messages: readonly ChatMessageView[]): number {
-  return messages.reduce((max, m) => Math.max(max, m.seq), 0);
+  // A message still on its way has no seq of its own yet.
+  return messages.reduce((max, m) => (m.pending ? max : Math.max(max, m.seq)), 0);
 }
 
 /** How a message's author reads: a person's name, an agent's title, or "system". */
