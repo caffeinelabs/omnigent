@@ -39,13 +39,13 @@ describe("jumpItems", () => {
     const kinds = new Set(items.map((i) => i.kind));
     expect([...kinds]).toEqual(["page", "project", "pr", "task", "decision", "agent"]);
     expect(items.find((i) => i.id === "project:db-version")!.href).toBe(
-      `/factory/${FID}/projects/db-version`,
+      `/factory/${FID}/n/db-version`,
     );
     const pr = items.find((i) => i.ref === "!9631")!;
     expect(pr.href).toBe(`/factory/${FID}/prs/${snapshot.prs.find((p) => p.number === 9631)!.id}`);
     expect(items.some((i) => i.kind === "task" && i.ref?.startsWith("T-"))).toBe(true);
     const decision = items.find((i) => i.ref === "D-2")!;
-    expect(decision.href).toBe(`/factory/${FID}/projects/db-version?decision=D-2`);
+    expect(decision.href).toBe(`/factory/${FID}/n/db-version?decision=D-2`);
     expect(items.filter((i) => i.kind === "decision").every((i) => i.ref !== "D-1")).toBe(true);
     expect(items.filter((i) => i.kind === "agent")).toHaveLength(snapshot.members.length);
   });
@@ -205,15 +205,13 @@ describe("hitItems", () => {
     expect(hitTarget(TFID, hit("goal", "G-1", "x"), { discoveryOn: false })).toEqual({
       href: `/factory/${TFID}/steer/strategy`,
     });
-    expect(href(hit("project", "#csv-export", "x", { slug: "csv-export" }))).toBe(
-      "/projects/csv-export",
-    );
+    expect(href(hit("project", "#csv-export", "x", { slug: "csv-export" }))).toBe("/n/csv-export");
     expect(href(hit("pr", "!9631", "x", { id: "abc" }))).toBe("/prs/abc");
     expect(href(hit("agent", "@rex", "Rex", { id: "s1", handle: "rex" }))).toBe("/agents/rex");
     expect(href(hit("bet", "C-31", "x"))).toBe("/steer/versions?peek=C-31");
     expect(href(hit("proposal", "C-32", "x"))).toBe("/steer/versions?peek=C-32");
     expect(href(hit("decision", "D-2", "x", { slug: "csv-export" }))).toBe(
-      "/projects/csv-export?decision=D-2",
+      "/n/csv-export?decision=D-2",
     );
     expect(href(hit("task", "T-7", "x", { slug: "csv-export", pr_id: "abc" }))).toBe("/prs/abc");
     expect(href(hit("incident", "INC-4", "x"))).toBe("/debug/incidents/4");

@@ -147,6 +147,13 @@ class DemoStepsView(_View):
     total: int
 
 
+class NodeNameView(_View):
+    """A node by its ref and short name."""
+
+    ref: str
+    title: str
+
+
 class DemoRefView(_View):
     """One recorded demo as a page row or a Demos list line shows it (:mod:`.node_proof`)."""
 
@@ -172,6 +179,12 @@ class DemoRefView(_View):
     steps: DemoStepsView | None = None
     partial_note: str | None = None
     """What did not pass, in one line (PARTIAL, FAIL)."""
+    feature: NodeNameView | None = None
+    """The feature it sits under (the Demos list; ``…/demos`` only)."""
+    project: NodeNameView | None = None
+    """The project it sits under (the Demos list; ``…/demos`` only)."""
+    merged_at: int | None = None
+    """Its PR merged then (epoch seconds; ``…/demos`` only)."""
 
 
 class ProofView(_View):

@@ -179,6 +179,24 @@ def test_the_demos_list_is_the_subtree_newest_first_in_pages(tree: Tree) -> None
         node_proof.demos_page(tree, node, cursor="99")
 
 
+def test_the_demos_list_says_where_each_demo_sits(tree: Tree) -> None:
+    node = tree.lookup("product")
+    assert node is not None
+
+    page = validate(NodeDemosView, node_proof.demos_page(tree, node, limit=100))
+
+    by_id = {d["id"]: d for d in page["items"]}
+    accepted = by_id[hex_id(901)]
+    assert accepted["feature"]["ref"] == "I-1" and "project" not in accepted
+    core = next(d for d in page["items"] if d.get("pr_number") == 9876)
+    assert core["feature"]["ref"] == "I-1"
+    title = tree.nodes["assistant-core"].title
+    assert core["project"] == {"ref": "assistant-core", "title": title}
+    assert core["merged_at"] > 0
+    # A page's own row carries none of it (only the list does).
+    assert "feature" not in (_proof(tree, "assistant-core") or {}).get("latest", {})
+
+
 def test_a_partial_note_names_what_did_not_pass() -> None:
     demo = demos_1340()[0]
     skipped = dataclasses.replace(

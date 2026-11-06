@@ -87,7 +87,7 @@ CALM_CHECKS = """(node) => {
   const proofs = [...node.querySelectorAll('[data-testid="v3-proof"]')];
   const proofText = proofs.map((el) => el.innerText).join(' ');
   const outside = [
-    node.querySelector('[data-testid="v3-level-strip"], [data-testid="v3-phone-levels"]'),
+    node.querySelector('[data-testid="v3-breadcrumb"]'),
     node.querySelector('[data-testid="v3-main"]'),
   ].filter(Boolean).map((el) => el.innerText).join(' ');
   const titleSel = [
@@ -95,7 +95,6 @@ CALM_CHECKS = """(node) => {
     '[data-testid="v3-row"] a[data-node-link]',
     '[data-testid="v3-tile"] a[data-node-link]',
     '[data-testid="v3-group-head"] a',
-    '[data-testid="v3-level-strip"] [data-cv]',
   ].join(', ');
   const titles = [...node.querySelectorAll(titleSel)]
     .filter((el) => !el.closest(chatSel))

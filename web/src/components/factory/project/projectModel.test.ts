@@ -123,10 +123,10 @@ describe("demoGroupsFrom (the server's per-PR groups)", () => {
 
 describe("project page links", () => {
   it("encodes the factory and slug; a section is an anchor, Overview is the top", () => {
-    expect(projectPageHref("f 1", "a/b")).toBe("/factory/f%201/projects/a%2Fb");
-    expect(projectPageHref("f1", "api", { section: "overview" })).toBe("/factory/f1/projects/api");
+    expect(projectPageHref("f 1", "a/b")).toBe("/factory/f%201/n/a%2Fb");
+    expect(projectPageHref("f1", "api", { section: "overview" })).toBe("/factory/f1/n/api");
     expect(projectPageHref("f1", "api", { section: "demos", params: { decision: "D-2" } })).toBe(
-      "/factory/f1/projects/api?decision=D-2#demos",
+      "/factory/f1/n/api?decision=D-2",
     );
     expect(projectSection("demos")).toBe("demos");
     expect(projectSection("#prs")).toBe("prs");

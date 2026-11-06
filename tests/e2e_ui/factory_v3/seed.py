@@ -1032,7 +1032,7 @@ def main() -> None:
     parser.add_argument("--owner", required=True, help="the X-Forwarded-Email that owns it")
     args = parser.parse_args()
     seeded = seed_factory_1340(args.db, args.base_url, args.owner)
-    print(f"{args.base_url}/factory/{seeded.fid}?cockpit=v3")
+    print(f"{args.base_url}/factory/{seeded.fid}")
     print(f"apply {seeded.apply_decision} ({seeded.proposal}); held task {seeded.held_task}")
 
 

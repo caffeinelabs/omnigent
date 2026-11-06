@@ -6,7 +6,7 @@
 // and "add a reviewer to …", the agent panel's "Change model…").
 
 import { useCallback, useSyncExternalStore } from "react";
-import { projectPageHref } from "@/components/factory/factoryRoutes";
+import { teamEditorPageHref } from "@/components/factory/factoryRoutes";
 import { useOptionalFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { useNavigate } from "@/lib/routing";
 import {
@@ -128,7 +128,7 @@ export function useTeamStaging(
 
 /** `/factory/<fid>/projects/<slug>/team`: the team editor. */
 export function teamEditorHref(factoryId: string, slug: string): string {
-  return `${projectPageHref(factoryId, slug)}/team`;
+  return teamEditorPageHref(factoryId, slug);
 }
 
 /**

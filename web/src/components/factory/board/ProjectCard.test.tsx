@@ -303,7 +303,7 @@ describe("ProjectCard", () => {
 
   it("shows team, dev env, demos, cost and elapsed in the footer and links to the page", () => {
     const { card, snapshot } = renderCard("ready");
-    const page = `/factory/${snapshot.factory.id}/projects/api-version`;
+    const page = `/factory/${snapshot.factory.id}/n/api-version`;
     expect(within(card).getByTestId("team-strip")).toHaveTextContent("PL");
     expect(within(card).getByTestId("dev-env-pill")).toHaveTextContent("main@8c1d2e0");
     expect(card).toHaveTextContent("$7.10");
@@ -311,7 +311,7 @@ describe("ProjectCard", () => {
     expect(within(card).getByTestId("project-details-api-version")).toHaveAttribute("href", page);
     const demos = within(card).getByTestId("project-demos-api-version");
     expect(demos).toHaveTextContent("2 demos");
-    expect(demos).toHaveAttribute("href", `${page}#demos`);
+    expect(demos).toHaveAttribute("href", page);
   });
 
   it("leaves the demos link out while no PR has a demo", () => {
@@ -324,9 +324,6 @@ describe("ProjectCard", () => {
     renderBoard(<DoneProjectRow snapshot={snapshot} project={project} nowS={LIVE_RUN_NOW_S} />);
     const row = screen.getByTestId("project-card-docs-factory-envs");
     expect(row).toHaveTextContent("merged #9632 by @lena");
-    expect(row).toHaveAttribute(
-      "href",
-      `/factory/${snapshot.factory.id}/projects/docs-factory-envs`,
-    );
+    expect(row).toHaveAttribute("href", `/factory/${snapshot.factory.id}/n/docs-factory-envs`);
   });
 });

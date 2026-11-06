@@ -126,7 +126,7 @@ function OutLink({
  * rest): short names, what each unblocks, one filled answer on the first row
  * and outlined ones after. Closed alarms live under Factory › Health.
  */
-function NeedsList({
+export function NeedsList({
   rows,
   list,
   tree,
@@ -169,7 +169,7 @@ function NeedsList({
 }
 
 /** A tree's asks in Your move's order: its root's rows, then every other ask it holds. */
-function useSheetRows(
+export function useSheetRows(
   tree: string,
   list: NeedsYouList | undefined,
   open: boolean,

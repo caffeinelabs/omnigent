@@ -17,11 +17,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from playwright.sync_api import Page, expect
+import pytest
+from playwright.sync_api import Locator, Page, expect
 
 from tests.e2e_ui.factory_v3.checks import CALM_CHECKS, api, assert_calm, node
 from tests.e2e_ui.factory_v3.conftest import LOAD_MS, Cockpit, Theme, V3Server
 from tests.e2e_ui.factory_v3.seed import Seeded
+
+
+def _in_view(page: Page, player: Locator) -> None:
+    """The player sits in the viewport, clear of a bar fixed at the bottom (a phone's tabs)."""
+    page.wait_for_timeout(700)  # the smooth scroll ends
+    box = player.bounding_box()
+    viewport = page.viewport_size
+    assert box is not None and viewport is not None
+    bottom_bar = 56 if viewport["width"] < 768 else 0
+    assert box["y"] >= 0, box
+    assert box["y"] + min(box["height"], 120) <= viewport["height"] - bottom_bar, (box, viewport)
 
 
 def _poster_loads(page: Page, row_selector: str) -> None:
@@ -83,18 +95,13 @@ def test_home_links_each_features_newest_demo_and_the_chat_keeps_the_card(
     cockpit = open_cockpit(1440, 900, "dark")
     page = cockpit.page
 
-    cockpit.open("product")
-    home = node(page, "product")
-    expect(home.get_by_test_id("v3-proof")).to_have_count(0)
-    chip = home.locator(f'[data-ref="{factory.feature}"] [data-testid="v3-demo-chip"]')
-    expect(chip).to_have_text("PARTIAL 0:42")
+    cockpit.open_place()
+    row = page.locator(f'[data-testid="cockpit-home-feature"][data-ref="{factory.feature}"]')
+    chip = row.get_by_test_id("cockpit-home-play")
+    expect(chip).to_contain_text("0:42", timeout=LOAD_MS)
     chip.click()
-    sheet = page.get_by_test_id("v3-demos-sheet")
-    expect(sheet).to_be_visible(timeout=LOAD_MS)
-    expect(
-        sheet.get_by_test_id("v3-demo-line").first.get_by_test_id("v3-proof-player")
-    ).to_be_visible()
-    page.keyboard.press("Escape")
+    expect(row.get_by_test_id("v3-proof-player")).to_be_visible(timeout=LOAD_MS)
+    _in_view(page, row.get_by_test_id("v3-proof-player"))
 
     cockpit.open("PR-9876")
     expect(node(page, "PR-9876").get_by_test_id("v3-proof")).to_have_attribute(
@@ -103,4 +110,42 @@ def test_home_links_each_features_newest_demo_and_the_chat_keeps_the_card(
     chat = page.get_by_test_id("v3-chat")
     expect(chat.locator('[data-testid="demo-card-9876"]')).to_be_visible(timeout=LOAD_MS)
     assert_calm(node(page, "PR-9876").evaluate(CALM_CHECKS), "change with its demo card")
+    assert cockpit.errors == [], cockpit.errors
+
+
+@pytest.mark.parametrize(("width", "height"), [(1440, 900), (390, 844)], ids=["1440", "390"])
+def test_the_demos_page_lists_every_demo_and_plays_it_in_view(
+    open_cockpit: Callable[[int, int, Theme], Cockpit],
+    v3_server: V3Server,
+    factory: Seeded,
+    width: int,
+    height: int,
+) -> None:
+    cockpit = open_cockpit(width, height, "light")
+    page = cockpit.page
+    demos = api(v3_server.base_url, factory.fid, "/n/product/demos", limit=100)
+    cockpit.open_place()
+    nav = "cockpit-tab-demos" if width < 768 else "cockpit-nav-demos"
+    page.get_by_test_id(nav).click()
+    cards = page.get_by_test_id("cockpit-demo")
+    expect(cards).to_have_count(demos["total"], timeout=LOAD_MS)
+    expect(cards.first).to_have_attribute("data-verdict", "PARTIAL")
+    expect(cards.first.get_by_test_id("cockpit-demo-note")).to_have_text(
+        "Step 6: live search fails on the base env"
+    )
+    # Where each sits, in short names; no PR numbers or commits on the card.
+    expect(cards.nth(1)).to_contain_text("Agent assistant (sample)")
+    expect(page.get_by_test_id("cockpit-demos")).not_to_contain_text("#98")
+    page.get_by_role("button", name="Failed").click()
+    expect(cards).to_have_count(sum(d["verdict"] in ("FAIL", "ERROR") for d in demos["items"]))
+    page.get_by_role("button", name="All", exact=True).click()
+    last = cards.last
+    last.get_by_test_id("cockpit-demo-play").click()
+    player = last.get_by_test_id("v3-proof-player")
+    expect(player).to_be_visible(timeout=LOAD_MS)
+    _in_view(page, player)
+    if all(d.get("video_url") for d in demos["items"]):
+        page.wait_for_function(
+            "(v) => v.currentTime > 0.3", arg=player.locator("video").element_handle()
+        )
     assert cockpit.errors == [], cockpit.errors

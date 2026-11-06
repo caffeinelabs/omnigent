@@ -155,7 +155,7 @@ describe("cockpit v3 · calm gate", () => {
       vi.stubGlobal(
         "matchMedia",
         vi.fn((query: string) => ({
-          matches: query.includes("min-width: 1024px"),
+          matches: query.includes("min-width: 1180px"),
           media: query,
           addEventListener: vi.fn(),
           removeEventListener: vi.fn(),

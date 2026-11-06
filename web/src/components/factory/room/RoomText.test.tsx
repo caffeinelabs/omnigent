@@ -50,7 +50,7 @@ describe("RoomText refs", () => {
     );
     expect(screen.getByTestId("room-ref-#api-version")).toHaveAttribute(
       "href",
-      expect.stringContaining("/projects/api-version"),
+      expect.stringContaining("/n/api-version"),
     );
   });
 

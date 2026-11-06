@@ -74,11 +74,17 @@ export function ProofThumb({
   );
 }
 
-/** The recording, playing as soon as it opens (a click asked for it), else its still. */
+/**
+ * The recording, playing as soon as it opens (a click asked for it), else its
+ * still. It scrolls into view, clear of a sticky composer or tab bar below.
+ */
 export function ProofPlayer({ demo }: { demo: DemoRef }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const video = box.current?.querySelector("video");
+    const el = box.current;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    el?.scrollIntoView?.({ behavior: reduce ? "auto" : "smooth", block: "center" });
+    const video = el?.querySelector("video");
     try {
       const started = video?.play?.();
       if (started && typeof started.catch === "function") started.catch(() => undefined);
@@ -87,7 +93,7 @@ export function ProofPlayer({ demo }: { demo: DemoRef }) {
     }
   }, []);
   return (
-    <div ref={box} data-testid="v3-proof-player" className="max-w-[640px]">
+    <div ref={box} data-testid="v3-proof-player" className="max-w-[720px] scroll-my-32">
       <DemoMedia demo={asDemoView(demo)} />
     </div>
   );

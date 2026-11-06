@@ -110,6 +110,8 @@ export interface NodeSource {
     ref: string,
     signal?: AbortSignal,
     cursor?: string,
+    /** A page's size (the server's default when absent; at most 100). */
+    limit?: number,
   ) => Promise<NodeDemos | null>;
   /** Both trees' levels as the definition names them (`GET …/levels`). */
   levels?: (factoryId: string, signal?: AbortSignal) => Promise<LevelsInfo>;
@@ -244,8 +246,12 @@ export const liveNodeSource: NodeSource = {
     );
     return view && normalizeMoney(view);
   },
-  demos: async (fid, ref, signal, cursor) => {
-    const url = `${nodePath(fid, ref)}/demos${query("cursor", cursor)}`;
+  demos: async (fid, ref, signal, cursor, limit) => {
+    const params = new URLSearchParams();
+    if (cursor) params.set("cursor", cursor);
+    if (limit) params.set("limit", String(limit));
+    const qs = params.toString();
+    const url = `${nodePath(fid, ref)}/demos${qs ? `?${qs}` : ""}`;
     return readOrNull<NodeDemos>(await authenticatedFetch(url, { signal }));
   },
   levels: async (fid, signal) => {

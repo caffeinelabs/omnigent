@@ -295,8 +295,32 @@ def _media(demo: FactoryDemo) -> tuple[str | None, str | None]:
     )
 
 
-def view(demo: Demo) -> dict[str, Any]:
-    """A ``DemoRef``: one demo as a page row or a list line shows it."""
+def _where(tree: Tree, demo: Demo) -> dict[str, Any]:
+    """
+    Where a demo sits, for the factory's Demos list: its feature and project
+    (``{ref, title}``, short names) and, for a PR demo, whether the PR merged
+    (``merged_at``, epoch seconds).
+    """
+    out: dict[str, Any] = {}
+    home = tree.nodes.get(demo.home)
+    chain = [*tree.ancestors(demo.home), *([home] if home is not None else [])]
+    for level in ("feature", "project"):
+        hit = next((n for n in reversed(chain) if n.level == level), None)
+        if hit is not None:
+            shown = tree.fold(hit)
+            out[level] = {"ref": shown.ref, "title": shown.title}
+    pr = tree.pr_rows.get(_bare(demo.row.pr_id) or "")
+    if pr is not None and pr.state == "merged" and pr.merged_at:
+        out["merged_at"] = int(pr.merged_at)
+    return out
+
+
+def view(demo: Demo, tree: Tree | None = None) -> dict[str, Any]:
+    """
+    A ``DemoRef``: one demo as a page row or a list line shows it.
+
+    :param tree: When given, also where it sits (:func:`_where`), for the Demos list.
+    """
     row = demo.row
     manifest = row.manifest or {}
     seconds = manifest.get("duration_s")
@@ -333,6 +357,8 @@ def view(demo: Demo) -> dict[str, Any]:
         out["steps"] = {"passed": steps.count("pass"), "total": len(steps)}
     if note := partial_note(row):
         out["partial_note"] = note
+    if tree is not None:
+        out.update(_where(tree, demo))
     return out
 
 
@@ -384,7 +410,7 @@ def demos_page(
     shown = demos[offset : offset + size]
     out: dict[str, Any] = {
         "ref": node.ref,
-        "items": [view(d) for d in shown],
+        "items": [view(d, tree) for d in shown],
         "total": len(demos),
     }
     if (shown_latest := latest(tree, node)) is not None:

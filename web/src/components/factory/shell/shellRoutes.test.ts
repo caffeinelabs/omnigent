@@ -104,10 +104,10 @@ describe("legacyFactoryRedirect", () => {
 
   it("sends the old drawer's ?project= to the project page, keeping decision and preview", () => {
     expect(redirect("", "project=api-version")).toEqual({
-      to: `/factory/${FID}/projects/api-version`,
+      to: `/factory/${FID}/n/api-version`,
     });
     expect(redirect("", "project=db-version&decision=D-2")).toEqual({
-      to: `/factory/${FID}/projects/db-version?decision=D-2`,
+      to: `/factory/${FID}/n/db-version?decision=D-2`,
     });
     // A review stacked on the project drawer wins: the PR has its own page.
     expect(redirect("", "project=api-version&review=9630")).toEqual({
@@ -125,10 +125,10 @@ describe("legacyFactoryRedirect", () => {
 
   it("turns a project page's ?tab= into its section anchor", () => {
     expect(redirect("projects/api-version", "tab=demos")).toEqual({
-      to: `/factory/${FID}/projects/api-version#demos`,
+      to: `/factory/${FID}/n/api-version`,
     });
     expect(redirect("projects/api-version", "tab=overview&decision=D-4")).toEqual({
-      to: `/factory/${FID}/projects/api-version?decision=D-4`,
+      to: `/factory/${FID}/n/api-version?decision=D-4`,
     });
     expect(redirect("projects/api-version", "review=9630")).toEqual({
       to: `/factory/${FID}/prs/${PR_9630}`,
@@ -217,8 +217,8 @@ describe("cockpitRedirect", () => {
     expect(land("room/factory", "", "v2", `${BASE}/projects?view=board`)).toBe(
       `${BASE}/projects?view=board&room=factory`,
     );
-    expect(land("room", "", "v2", `${BASE}/projects/db-version?room=old`)).toBe(
-      `${BASE}/projects/db-version?room=`,
+    expect(land("room", "", "v2", `${BASE}/n/db-version?room=old`)).toBe(
+      `${BASE}/n/db-version?room=`,
     );
     expect(land("room/factory", "", "v2", `${BASE}?view=board`)).toBe(
       `${BASE}?view=board&room=factory`,
@@ -277,10 +277,10 @@ describe("cockpitRedirect", () => {
     ["steer/versions", "peek=C-14", `${BASE}/improvements/C-14`],
     ["steer/versions", "peek=F-3", `${BASE}/improvements/F-3`],
     // The Room drawer over any page opens the classic Room page on that thread.
-    ["projects/db-version", "room=project%3Adb-version", `${BASE}/room/project%3Adb-version`],
-    ["", "room=factory", `${BASE}/room/factory`],
-    ["projects", "room=", `${BASE}/room`],
-    ["teams", "room=factory&q=x", `${BASE}/room/factory?q=x`],
+    ["projects/db-version", "room=project%3Adb-version", `${BASE}/chats/project%3Adb-version`],
+    ["", "room=factory", `${BASE}/chats/factory`],
+    ["projects", "room=", `${BASE}/chats`],
+    ["teams", "room=factory&q=x", `${BASE}/chats/factory?q=x`],
     ["steer/budgets", "", `${BASE}/settings/budgets`],
     ["steer/alerts", "", `${BASE}/settings/alerts`],
     ["steer/definition", "", `${BASE}/settings/definition`],

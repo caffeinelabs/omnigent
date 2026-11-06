@@ -86,15 +86,16 @@ class Cockpit:
     errors: list[str] = field(default_factory=list)
 
     def open(self, ref: str, level: str | None = None) -> None:
-        """Open node *ref* (or one *level* under it) in cockpit v3 and wait for its page."""
-        path = f"/factory/{self.factory.fid}"
-        if level:
-            self.page.goto(f"{path}/n/{ref}/{level}?cockpit=v3")
-        elif ref == "product":
-            self.page.goto(f"{path}?cockpit=v3")
-        else:
-            self.page.goto(f"{path}/n/{ref}?cockpit=v3")
+        """Open node *ref*'s page (or one *level* under it) and wait for it."""
+        path = f"/factory/{self.factory.fid}/n/{ref}"
+        self.page.goto(f"{path}/{level}" if level else path)
         self.wait_for(ref)
+
+    def open_place(self, place: str = "") -> None:
+        """Open one of the cockpit's places: Home (``""``), ``demos``, ``chats``, ``decisions``."""
+        path = f"/factory/{self.factory.fid}"
+        self.page.goto(f"{path}/{place}" if place else path)
+        expect(self.page.get_by_test_id("factory-shell")).to_be_visible(timeout=LOAD_MS)
 
     def wait_for(self, ref: str) -> None:
         """Wait for node *ref*'s page, its children and its chat to have loaded."""
@@ -124,10 +125,7 @@ def open_cockpit(
             viewport={"width": width, "height": height},
             color_scheme=theme,
         )
-        context.add_init_script(
-            f"localStorage.setItem('web-theme', '{theme}');"
-            "localStorage.setItem('omnigent.factory.cockpit', 'v3');"
-        )
+        context.add_init_script(f"localStorage.setItem('web-theme', '{theme}');")
         contexts.append(context)
         page = context.new_page()
         cockpit = Cockpit(page=page, factory=factory)

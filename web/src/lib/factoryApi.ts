@@ -1330,6 +1330,19 @@ export interface ThreadView {
   unread: number;
   /** The newest unread message that @mentions the reader. */
   mention?: ThreadMentionView | null;
+  /** The reader posted in this thread (the Chats list puts these first). */
+  mine?: boolean;
+  /** The newest thing a person or an agent said here (system lines left out). */
+  last?: ThreadLastView | null;
+}
+
+export interface ThreadLastView {
+  /** "You", an agent's name, a person's id. */
+  who: string;
+  kind: "human" | "agent";
+  text: string;
+  /** Epoch seconds. */
+  at: number;
 }
 
 export interface ThreadMentionView {

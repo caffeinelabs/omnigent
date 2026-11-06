@@ -26,7 +26,7 @@ function setWindow(kind: "phone" | "desktop") {
       matches:
         kind === "phone"
           ? query.includes("max-width: 767.98px")
-          : query.includes("min-width: 1024px"),
+          : query.includes("min-width: 1180px"),
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -642,21 +642,21 @@ describe("cockpit v3 · the node chat column", () => {
     expect(within(why).getByRole("button", { name: "Start it now instead" })).toBeInTheDocument();
   });
 
-  it("keeps the column at most 60 % of the window, also after the window narrows", async () => {
+  it("keeps the column at most 45 % of the window, also after the window narrows", async () => {
     setWindow("desktop");
     resizeTo(1600);
-    window.localStorage.setItem(CHAT_WIDTH_KEY, "960");
+    window.localStorage.setItem(CHAT_WIDTH_KEY, "700");
     renderChat("assistant-core", { install });
     const column = await screen.findByTestId("v3-chat");
     const handle = screen.getByRole("separator", { name: "Resize the chat" });
-    expect(column.style.width).toBe("960px");
-    resizeTo(1100);
-    expect(column.style.width).toBe("660px");
-    expect(Number(handle.getAttribute("aria-valuenow"))).toBe(660);
+    expect(column.style.width).toBe("700px");
+    resizeTo(1200);
+    expect(column.style.width).toBe("540px");
+    expect(Number(handle.getAttribute("aria-valuenow"))).toBe(540);
     // A wider window gives the kept width back.
     resizeTo(1600);
-    expect(column.style.width).toBe("960px");
-    resizeTo(1024);
+    expect(column.style.width).toBe("700px");
+    resizeTo(1280);
   });
 
   it("keeps the column's width in this browser", async () => {

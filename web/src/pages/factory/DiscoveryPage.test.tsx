@@ -286,7 +286,7 @@ describe("Discovery on", () => {
     expect(screen.getByTestId("opportunity-row-O-3")).toHaveAttribute("data-selected", "true");
     fireEvent.keyDown(document.body, { key: "g" });
     fireEvent.keyDown(document.body, { key: "p" });
-    await waitFor(() => expect(location).toBe(`${BASE}/projects`));
+    await waitFor(() => expect(location).toBe(BASE));
     expect(sent("PATCH", "/opportunities/O-3")).toEqual([]);
   });
 

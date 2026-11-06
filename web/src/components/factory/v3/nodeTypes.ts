@@ -752,6 +752,11 @@ export interface DemoRef {
   steps?: { passed: number; total: number };
   /** What did not pass, in one line (PARTIAL, FAIL). */
   partial_note?: string;
+  /** The feature and project it sits under (`…/demos` only). */
+  feature?: { ref: string; title: string };
+  project?: { ref: string; title: string };
+  /** Its PR merged then (epoch seconds; `…/demos` only). */
+  merged_at?: number;
 }
 
 /** `NodePage.proof`: the latest demo (where the level shows one) and the subtree's count. */

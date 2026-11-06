@@ -128,7 +128,7 @@ const EXPECTED: Record<string, string[]> = {
   "claim.mismatch": [`link:/factory/${FID}/prs/${PR_9631}`, "intervene:message→PL · db-version"],
   "ci.flaky": [],
   "ask.unneeded": [`link:/factory/${FID}/improvements?tab=findings`],
-  "task.unplanned": [`link:/factory/${FID}/projects/db-version#tasks`],
+  "task.unplanned": [`link:/factory/${FID}/n/db-version`],
   "heartbeat.waste": [`link:/factory/${FID}/improvements?tab=findings`],
   "human.report": [`link:/factory/${FID}/agents/${IC_ROUTE_R2}`],
 };

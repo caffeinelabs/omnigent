@@ -154,19 +154,16 @@ def test_needs_you_is_your_move_for_the_whole_tree(
 ) -> None:
     cockpit = open_cockpit(1440, 900, "light")
     page = cockpit.page
-    cockpit.open("product")
-    _settled(page, "product")
-    pill = page.get_by_test_id("cockpit-needs-you")
-    expect(pill).to_have_text(re.compile(r"^\d+ need you$"), timeout=LOAD_MS)
-    total = int(pill.inner_text().split()[0])
-    pill.click()
+    cockpit.open_place()
+    count = page.get_by_test_id("cockpit-nav-decisions-count")
+    expect(count).to_have_text(re.compile(r"^\d+$"), timeout=LOAD_MS)
+    total = int(count.inner_text())
+    page.get_by_test_id("cockpit-nav-decisions").click()
     sheet = page.get_by_test_id("v3-needs-sheet")
     items = sheet.get_by_test_id("v3-needs-item")
     expect(items.first).to_have_attribute("data-decision", factory.apply_decision, timeout=LOAD_MS)
-    # One count: the pill is this tree's rows and the other tree's.
-    other = sheet.get_by_test_id("v3-needs-other-tree")
-    more = int(other.inner_text().split()[0]) if other.count() else 0
-    assert items.count() + more == total, (items.count(), more, total)
+    # One count: the sidebar's is the product's rows.
+    expect(items).to_have_count(total)
     # Rows as Your move draws them: one filled answer, short words, no closed alarms.
     filled = sheet.locator('[data-testid="v3-answer"].bg-status-yellow')
     expect(filled).to_have_count(1)
@@ -231,13 +228,10 @@ def test_the_phone_chat_is_a_conversation_too(
     expect(full.get_by_test_id("v3-chat-activity")).to_be_visible()
     _shot(page, "chat-390-dark")
     page.keyboard.press("Escape")
-    # The bottom bar never leaves v3: its two trees and the chat.
+    # The bottom bar holds the four places and Search, and fits the phone.
     tabs = page.get_by_test_id("cockpit-phone-tabs")
-    expect(tabs).to_have_attribute("data-cockpit", "v3")
-    expect(tabs.get_by_test_id("cockpit-phone-discovery")).to_have_count(0)
-    # The top bar fits: search, the theme and you wait in one menu.
-    bar = page.get_by_test_id("cockpit-topbar")
-    expect(bar.get_by_test_id("cockpit-more")).to_be_visible()
-    box = bar.bounding_box()
+    for place in ("home", "demos", "chats", "decisions", "search"):
+        expect(tabs.get_by_test_id(f"cockpit-tab-{place}")).to_be_visible()
+    box = tabs.bounding_box()
     assert box is not None and box["x"] + box["width"] <= 390, box
     assert cockpit.errors == [], cockpit.errors

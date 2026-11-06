@@ -1786,6 +1786,37 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore
             for t, seq, n, at in rows
         ]
 
+    def chat_thread_said(
+        self, factory_id: str, user_id: str | None
+    ) -> builtins.dict[str, tuple[FactoryChatMessage, bool]]:
+        model = SqlFactoryChatMessage
+        ws, fid = current_workspace_id(), norm_id(factory_id)
+        scope = (model.workspace_id == ws, model.factory_id == fid)
+        said = (
+            select(model.thread, func.max(model.seq).label("seq"))
+            .where(
+                *scope,
+                model.author_kind.in_(
+                    [encode_factory_chat_author_kind(k) for k in ("human", "agent")]
+                ),
+            )
+            .group_by(model.thread)
+            .subquery()
+        )
+        stmt = select(model).join(said, and_(*scope, model.seq == said.c.seq))
+        with self._session("list_factory_chat_said") as session:
+            rows = [_chat(r) for r in session.execute(stmt).scalars().all()]
+            mine: set[str] = set()
+            if user_id:
+                mine = set(
+                    session.execute(
+                        select(model.thread).where(*scope, model.author == user_id).distinct()
+                    )
+                    .scalars()
+                    .all()
+                )
+        return {r.thread: (r, r.thread in mine) for r in rows}
+
     def upsert_chat_read(
         self, factory_id: str, user_id: str, thread: str, last_seq: int
     ) -> FactoryChatRead:

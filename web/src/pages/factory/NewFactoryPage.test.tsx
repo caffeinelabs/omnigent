@@ -98,7 +98,7 @@ function renderPage(info: ServerInfo | "loading" = "loading", path = "/factory/n
           <Routes>
             <Route path="/factory/new" element={<NewFactoryPage />} />
             <Route path="/factory/:factoryId" element={<CockpitStub />} />
-            <Route path="/factory/:factoryId/room/:thread" element={<RoomStub />} />
+            <Route path="/factory/:factoryId/chats/:thread" element={<RoomStub />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
