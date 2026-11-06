@@ -127,33 +127,40 @@ export function projectsPageHref(factoryId: string): string {
   return `${factoryPageHref(factoryId)}/projects`;
 }
 
-/** `/factory/<fid>/projects/<slug>[/<tab>]`: a tab of the new cockpit's project page. */
+/**
+ * A project's page: its node page (`/factory/<fid>/n/<slug>`). The earlier
+ * cockpit's tabs are gone; the tab is ignored.
+ */
 export function projectTabHref(
   factoryId: string,
   slug: string,
-  tab: ProjectTab = "overview",
+  _tab: ProjectTab = "overview",
   params?: Record<string, string | number>,
 ): string {
-  const tail = tab === "overview" ? "" : `/${tab}`;
-  return withQuery(`${projectsPageHref(factoryId)}/${enc(slug)}${tail}`, params);
+  return withQuery(`${factoryPageHref(factoryId)}/n/${enc(slug)}`, params);
 }
 
 /**
- * `/factory/<fid>/projects/<slug>`, scrolled to `section` (the top when
- * omitted), with any extra query parameters (e.g. `decision`).
+ * A project's page: its node page (`/factory/<fid>/n/<slug>`), with any
+ * extra query parameters (e.g. `decision`). The earlier page's sections are
+ * gone; `section` is ignored.
  */
 export function projectPageHref(
   factoryId: string,
   slug: string,
   options: { section?: ProjectSection; params?: Record<string, string | number> } = {},
 ): string {
-  const path = withQuery(`${projectsPageHref(factoryId)}/${enc(slug)}`, options.params);
-  return options.section && options.section !== "overview" ? `${path}#${options.section}` : path;
+  return withQuery(`${factoryPageHref(factoryId)}/n/${enc(slug)}`, options.params);
 }
 
-/** `/factory/<fid>/initiatives/<I-n>`: one outcome several projects build. */
+/** `/factory/<fid>/projects/<slug>/team`: a project's team editor. */
+export function teamEditorPageHref(factoryId: string, slug: string): string {
+  return `${projectsPageHref(factoryId)}/${enc(slug)}/team`;
+}
+
+/** A feature's page: its node page (`/factory/<fid>/n/<I-n>`). */
 export function initiativePageHref(factoryId: string, ref: string): string {
-  return `${factoryPageHref(factoryId)}/initiatives/${enc(ref)}`;
+  return `${factoryPageHref(factoryId)}/n/${enc(ref)}`;
 }
 
 /** `/factory/<fid>/prs/<pr id>` (a PR number also resolves there). */
@@ -278,9 +285,9 @@ export function debugPageHref(
   return withQuery(`${factoryPageHref(factoryId)}/debug/${view}${tail}`, options.params);
 }
 
-/** `/factory/<fid>/room/<thread>` (the Room page; the thread is optional). */
+/** `/factory/<fid>/chats/<thread>` (Chats; the thread is optional). */
 export function roomPageHref(factoryId: string, thread?: string | null): string {
-  return `${factoryPageHref(factoryId)}/room${thread ? `/${enc(thread)}` : ""}`;
+  return `${factoryPageHref(factoryId)}/chats${thread ? `/${enc(thread)}` : ""}`;
 }
 
 /** `/factory/<fid>/decisions` (open first; `?decision=D-7` highlights one). */

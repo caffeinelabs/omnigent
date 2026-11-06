@@ -216,13 +216,12 @@ describe("cockpit v3 · the server's node pages", () => {
     expect(within(openVerbs()).queryByRole("menuitem", { name: /Rename levels/ })).toBeNull();
   });
 
-  it("the product page shows the server's strip and results", async () => {
+  it("the product page shows a plain breadcrumb, no level strip", async () => {
     serve();
-    renderNode("product", { source: liveNodeSource });
-    await waitFor(() => expect(screen.getByTestId("v3-results")).toBeInTheDocument());
-    expect(screen.getByTestId("v3-results")).toHaveTextContent("7 merged · all in base env");
-    const strip = screen.getByTestId("v3-results").parentElement!;
-    expect(within(strip).queryByText(/^Goals?$/)).toBeNull();
+    renderNode("PR-9876", { source: liveNodeSource });
+    const crumbs = await screen.findByTestId("v3-breadcrumb");
+    expect(crumbs).toHaveTextContent(/^Home/);
+    expect(screen.queryByTestId("v3-level-strip")).toBeNull();
   });
 
   it("Home lists every feature under the need it came from, from the level view", async () => {

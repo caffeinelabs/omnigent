@@ -232,6 +232,8 @@ def thread_views(
         if thread.project not in hidden:
             threads.append(thread)
     members = chat.members_of(deps, root, threads)
+    said = store.chat_thread_said(root.id, user_id)
+    names = _author_names(deps, [m for m, _ in said.values()])
     views: list[dict[str, Any]] = []
     for thread in threads:
         key = thread.key
@@ -252,9 +254,41 @@ def thread_views(
                 "last_at": stat.last_at if stat else None,
                 "messages": stat.messages if stat else 0,
                 **_unread(deps, root.id, key, reads.get(key, 0), stat, user_id),
+                **_said(said.get(key), names, user_id),
             }
         )
     return views
+
+
+LAST_LINE_CHARS = 160
+"""How much of a thread's newest line the Chats list shows."""
+
+
+def _author_names(deps: FactoryDeps, rows: list[Any]) -> dict[str, str]:
+    """Message author -> the name a list shows (an agent's session title, a person's id)."""
+    out: dict[str, str] = {}
+    for row, view in zip(rows, chat.message_views(deps, rows), strict=True):
+        out[row.author] = str(view.get("author_title") or row.author)
+    return out
+
+
+def _said(found: Any, names: Mapping[str, str], user_id: str | None) -> dict[str, Any]:
+    """:returns: ``{mine, last}``: whether the reader posted here, and the newest line said."""
+    if found is None:
+        return {"mine": False, "last": None}
+    row, mine = found
+    line = " ".join(row.body.split())
+    return {
+        "mine": mine,
+        "last": {
+            "who": "You"
+            if user_id and row.author == user_id
+            else names.get(row.author, row.author),
+            "kind": row.author_kind,
+            "text": line[:LAST_LINE_CHARS],
+            "at": row.created_at,
+        },
+    }
 
 
 def _unread(

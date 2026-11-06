@@ -31,6 +31,7 @@ StatusKind = Literal[
     "moving", "needs", "waiting", "done", "later", "offered", "proposed", "paused", "idle"
 ]
 StatusEnd = Literal["person", "server", "moving", "cycle", "cut", "other"]
+DemoVerdict = Literal["PASS", "PARTIAL", "FAIL", "ERROR"]
 
 
 class _View(BaseModel):
@@ -133,6 +134,77 @@ class ChangeLinkView(_View):
     label: str
 
 
+class DemoChipView(_View):
+    """A feature row's "▶": its latest demo (``GET …/n/{ref}/demos`` plays it)."""
+
+    id: str
+    verdict: DemoVerdict
+    duration: str | None = None
+
+
+class DemoStepsView(_View):
+    passed: int
+    total: int
+
+
+class NodeNameView(_View):
+    """A node by its ref and short name."""
+
+    ref: str
+    title: str
+
+
+class DemoRefView(_View):
+    """One recorded demo as a page row or a Demos list line shows it (:mod:`.node_proof`)."""
+
+    id: str
+    verdict: DemoVerdict
+    title: str
+    """A few words; an acceptance run's recording is "Acceptance run 2"."""
+    ref: str
+    """The node it belongs to: a change, a feature (an acceptance run) or a project."""
+    at: str
+    full_title: str | None = None
+    duration_s: float | None = None
+    duration: str | None = None
+    """``0:14``."""
+    poster_url: str | None = None
+    video_url: str | None = None
+    """The demo file routes (``/v1/factory/demos/{id}/files/{file}``), authenticated."""
+    pr_number: int | None = None
+    pr_tag: str | None = None
+    acceptance_run: int | None = None
+    stale: bool | None = None
+    """Recorded at an earlier commit than its PR's head."""
+    steps: DemoStepsView | None = None
+    partial_note: str | None = None
+    """What did not pass, in one line (PARTIAL, FAIL)."""
+    feature: NodeNameView | None = None
+    """The feature it sits under (the Demos list; ``…/demos`` only)."""
+    project: NodeNameView | None = None
+    """The project it sits under (the Demos list; ``…/demos`` only)."""
+    merged_at: int | None = None
+    """Its PR merged then (epoch seconds; ``…/demos`` only)."""
+
+
+class ProofView(_View):
+    """``NodePage.proof``: the latest demo (where the level shows one) and the subtree's count."""
+
+    count: int
+    latest: DemoRefView | None = None
+
+
+class NodeDemosView(_View):
+    """``GET …/n/{ref}/demos``: the subtree's demos, newest first."""
+
+    ref: str
+    items: list[DemoRefView]
+    total: int
+    latest: str | None = None
+    """The id of the one the page shows as its row."""
+    next: str | None = None
+
+
 class NodeSummaryView(_View):
     ref: str
     level: str
@@ -168,6 +240,7 @@ class NodeSummaryView(_View):
     working: list[ActorView] | None = None
     idle: int | None = None
     change: ChangeLinkView | None = None
+    demo: DemoChipView | None = None
 
 
 class AcceptanceStepView(_View):
@@ -460,6 +533,7 @@ class NodePageView(_View):
     thread: ThreadRefView
     version: str
     home: str | None = None
+    proof: ProofView | None = None
 
 
 class GroupParentView(CrumbView):

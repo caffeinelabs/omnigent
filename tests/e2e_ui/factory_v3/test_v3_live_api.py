@@ -1,5 +1,5 @@
 """
-Cockpit v3 on a real server: ``?cockpit=v3`` reads the node API, not a sample.
+Cockpit v3 on a real server: the cockpit reads the node API, not a sample.
 
 The server holds a factory shaped like a real one at 13:40 (``seed.py``): a
 person's ask planned as the feature I-1, ``assistant-core`` holding T-16 for

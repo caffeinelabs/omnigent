@@ -4,10 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IC_ROUTE_R2,
-  PL_CACHE,
-  PL_CACHE_DEAD_REASON,
   PR_9631,
-  agentDetail,
   opsRoutes,
   round3IssueList,
   spansResponse,
@@ -81,132 +78,7 @@ beforeEach(() => {
   location = "";
 });
 
-describe("two clicks from a symptom to the lever", () => {
-  it("goes from the Overview's repeating-IC chip to the Agent page and interrupts it", async () => {
-    serve();
-    renderAt("");
-    let clicks = 0;
-    const chip = await screen.findByTestId("needs-issue-agent-INC-13");
-    expect(chip).toHaveTextContent("ic:route-r2");
-    fireEvent.click(chip);
-    clicks += 1;
-    expect(location).toBe(`${BASE}/agents/${IC_ROUTE_R2}`);
-    const interrupt = await screen.findByTestId("agent-interrupt");
-    expect(screen.getByTestId("agent-header")).toHaveTextContent("same failing command 7×");
-    fireEvent.click(interrupt);
-    clicks += 1;
-    await waitFor(() => expect(server.controls).toHaveLength(1));
-    expect(server.controls[0]).toEqual({ action: "interrupt", target: `member:${IC_ROUTE_R2}` });
-    expect(clicks).toBe(2);
-  });
-});
-
-describe("AgentsPage", () => {
-  it("lists the fleet grouped by project and narrows it by the query", async () => {
-    serve();
-    renderAt("/agents");
-    expect(await screen.findByTestId("fleet-table")).toBeInTheDocument();
-    expect(screen.getByTestId("fleet-counts")).toHaveTextContent("1 dead");
-    expect(screen.getByTestId("fleet-group-project:db-version")).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId("fleet-query"), {
-      target: { value: "state:running tool:Bash cost>2 project:db-*" },
-    });
-    await waitFor(() => expect(screen.getAllByTestId(/^fleet-row-/)).toHaveLength(1));
-    expect(screen.getByTestId(`fleet-row-${IC_ROUTE_R2}`)).toBeInTheDocument();
-    expect(location).toContain("q=state%3Arunning");
-  });
-
-  it("toggles a saved view into the query", async () => {
-    serve();
-    renderAt("/agents");
-    fireEvent.click(await screen.findByTestId("fleet-view-looping"));
-    await waitFor(() => expect(screen.getByTestId("fleet-query")).toHaveValue("is:looping"));
-    expect(screen.getByTestId(`fleet-row-${IC_ROUTE_R2}`)).toBeInTheDocument();
-  });
-
-  it("bulk-interrupts the selected agents behind a confirmation", async () => {
-    serve();
-    renderAt("/agents?q=task:T-4");
-    await screen.findByTestId(`fleet-row-${IC_ROUTE_R2}`);
-    for (const row of screen.getAllByTestId(/^fleet-row-/)) {
-      fireEvent.click(within(row).getByRole("checkbox"));
-    }
-    expect(screen.getByTestId("fleet-bulk-bar")).toHaveTextContent("3 agents selected");
-    fireEvent.click(screen.getByTestId("fleet-bulk-redispatch"));
-    const dialog = await screen.findByTestId("intervention-dialog");
-    expect(within(dialog).getByTestId("intervention-targets")).toHaveTextContent("T-4");
-    fireEvent.click(within(dialog).getByTestId("intervention-confirm"));
-    await waitFor(() => expect(server.controls).toHaveLength(1));
-    expect(server.controls[0]).toEqual({ action: "redispatch", target: "task:T-4" });
-  });
-
-  it("leaves selected agents the query hides out of the bulk levers", async () => {
-    serve();
-    renderAt("/agents?q=task:T-4");
-    await screen.findByTestId(`fleet-row-${IC_ROUTE_R2}`);
-    for (const row of screen.getAllByTestId(/^fleet-row-/)) {
-      fireEvent.click(within(row).getByRole("checkbox"));
-    }
-    fireEvent.change(screen.getByTestId("fleet-query"), { target: { value: "flag:repeat" } });
-    await waitFor(() => expect(screen.getAllByTestId(/^fleet-row-/)).toHaveLength(1));
-    expect(screen.getByTestId("fleet-bulk-count")).toHaveTextContent(
-      "1 agent selected (2 hidden by the filter)",
-    );
-    fireEvent.click(screen.getByTestId("fleet-bulk-interrupt"));
-    const dialog = await screen.findByTestId("intervention-dialog");
-    fireEvent.click(within(dialog).getByTestId("intervention-confirm"));
-    await waitFor(() => expect(server.controls).toHaveLength(1));
-    expect(server.controls[0]).toEqual({ action: "interrupt", target: `member:${IC_ROUTE_R2}` });
-  });
-
-  it("shows Show on Timeline for a selection", async () => {
-    serve();
-    renderAt("/agents?q=flag:repeat");
-    const row = await screen.findByTestId(`fleet-row-${IC_ROUTE_R2}`);
-    fireEvent.click(within(row).getByRole("checkbox"));
-    fireEvent.click(screen.getByTestId("fleet-bulk-timeline"));
-    expect(location).toBe(`${BASE}/timeline?agents=${IC_ROUTE_R2}`);
-  });
-
-  it("disables every lever for a viewer", async () => {
-    serve("viewer");
-    renderAt("/agents?q=flag:repeat");
-    const row = await screen.findByTestId(`fleet-row-${IC_ROUTE_R2}`);
-    fireEvent.click(within(row).getByRole("checkbox"));
-    for (const kind of ["message", "interrupt", "redispatch", "reassign"]) {
-      expect(screen.getByTestId(`fleet-bulk-${kind}`)).toBeDisabled();
-    }
-  });
-});
-
 describe("AgentPage", () => {
-  it("shows the now line, the issue's runbook, tabs and a composer that messages as the viewer", async () => {
-    serve();
-    renderAt(`/agents/${IC_ROUTE_R2}`);
-    const now = await screen.findByTestId("agent-now");
-    expect(now).toHaveTextContent("Bash pnpm -F sample-api test");
-    expect(screen.getByTestId("agent-meta")).toHaveTextContent("attempt 3/3 ⛔");
-    expect(screen.getByTestId("agent-issue-INC-13")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-panel-live")).toHaveTextContent(
-      'relation "knex_migrations" does not exist',
-    );
-    fireEvent.click(screen.getByTestId("agent-tab-mail"));
-    expect(await screen.findByTestId("agent-panel-mail")).toHaveTextContent(
-      "re-run with knex seed",
-    );
-    expect(location).toContain("tab=mail");
-    fireEvent.change(screen.getByTestId("agent-composer-input"), {
-      target: { value: "seed it in setup" },
-    });
-    fireEvent.click(screen.getByTestId("agent-composer-send"));
-    await waitFor(() => expect(server.controls).toHaveLength(1));
-    expect(server.controls[0]).toEqual({
-      action: "message",
-      target: `member:${IC_ROUTE_R2}`,
-      note: "seed it in setup",
-    });
-  });
-
   it("marks the moment the Timeline opened it at", async () => {
     serve();
     renderAt(`/agents/${IC_ROUTE_R2}?tab=tools&at=${(1793017800 - 7 * 60) * 1000}`);
@@ -215,34 +87,6 @@ describe("AgentPage", () => {
       .getAllByTestId("agent-tool-call")
       .filter((li) => li.className.includes("ring-1"));
     expect(marked).toHaveLength(1);
-  });
-
-  it("shows why a dead agent failed: the runner's error beside its incident", async () => {
-    serve();
-    renderAt(`/agents/${PL_CACHE}`);
-    expect(await screen.findByTestId("agent-last-error")).toHaveTextContent(PL_CACHE_DEAD_REASON);
-    expect(screen.getByTestId("agent-header")).toHaveAttribute("data-state", "dead");
-    expect(screen.getByTestId("agent-issue-INC-12")).toBeInTheDocument();
-  });
-
-  it("leaves the error to the incident banner when its summary already quotes it", async () => {
-    const detail = agentDetail(PL_CACHE)!;
-    detail.issues = detail.issues.map((i) =>
-      i.ref === "INC-12" ? { ...i, summary: `PL · cache-warm dead · ${PL_CACHE_DEAD_REASON}` } : i,
-    );
-    serve("creator", { [`GET ${SNAPSHOT}/agents/${PL_CACHE}`]: () => json(detail) });
-    renderAt(`/agents/${PL_CACHE}`);
-    expect(await screen.findByTestId("agent-issue-INC-12")).toHaveTextContent(PL_CACHE_DEAD_REASON);
-    expect(screen.queryByTestId("agent-last-error")).not.toBeInTheDocument();
-  });
-
-  it("says when the agent isn't in this factory", async () => {
-    serve("creator", {
-      [`GET ${SNAPSHOT}/agents/00000000000000000000000000000000`]: () =>
-        json({ error: { code: "not_found", message: "agent not found" } }, 404),
-    });
-    renderAt("/agents/00000000000000000000000000000000");
-    expect(await screen.findByTestId("agent-missing")).toBeInTheDocument();
   });
 });
 
@@ -353,41 +197,5 @@ describe("TimelinePage", () => {
     expect(screen.getByTestId("timeline-scope")).toHaveTextContent("Replaying as of");
     fireEvent.click(screen.getByTestId("timeline-now"));
     await waitFor(() => expect(location).not.toContain("at="));
-  });
-});
-
-describe("Loop UI", () => {
-  it("draws the PR's loop strip with attempts, budget and remedies", async () => {
-    serve();
-    renderAt(`/prs/${PR_9631}`);
-    const strip = await screen.findByTestId("pr-loop-strip");
-    const impl = within(strip).getByTestId("loop-line-implement");
-    expect(impl).toHaveAttribute("data-state", "exhausted");
-    expect(within(impl).getByTestId("loop-state-implement")).toHaveTextContent("⛔ exhausted 3/3");
-    expect(within(strip).getByTestId("loop-line-review")).toHaveAttribute(
-      "data-state",
-      "converged",
-    );
-    expect(within(strip).getByTestId("loop-flake")).toHaveTextContent("F-7");
-  });
-
-  it("shows the project's loops on its Loops tab", async () => {
-    serve();
-    renderAt("/projects/db-version#loops");
-    const loops = await screen.findByTestId("project-loops");
-    expect(within(loops).getByTestId("project-loops-pr-9631")).toBeInTheDocument();
-    expect(within(loops).getByTestId("project-loops-rest")).toHaveTextContent("plan");
-  });
-
-  it("falls back to the snapshot's loop counts on a server without the loops route", async () => {
-    serve("creator", {
-      [`GET ${SNAPSHOT}/loops`]: () =>
-        json({ error: { code: "not_found", message: "no route" } }, 404),
-    });
-    renderAt("/projects/db-version#loops");
-    const summary = await screen.findByTestId("project-loops-summary");
-    expect(summary).toHaveTextContent("3 running");
-    expect(summary).toHaveTextContent("1 exhausted");
-    expect(screen.queryByTestId("project-loops-empty")).not.toBeInTheDocument();
   });
 });

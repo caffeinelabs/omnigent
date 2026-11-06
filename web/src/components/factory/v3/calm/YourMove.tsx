@@ -219,7 +219,14 @@ function WaveLines({ waves }: { waves?: WaveLine[] }) {
   );
 }
 
-export function YourMove({ view }: { view: MoveView }) {
+export function YourMove({
+  view,
+  heading = true,
+}: {
+  view: MoveView;
+  /** The "Your move" heading (Home names the section itself). */
+  heading?: boolean;
+}) {
   const { onSheet } = useNodeActions();
   const [more, setMore] = useState(false);
   if (!view.rows.length) {
@@ -250,9 +257,11 @@ export function YourMove({ view }: { view: MoveView }) {
   const unseen = view.more - (more ? view.rest.length : 0);
   return (
     <section aria-label="Your move" data-testid="v3-your-move" className="mb-5">
-      <h2 className="mb-1.5 px-0.5 text-[11px] tracking-[0.07em] text-foreground-tertiary uppercase">
-        Your move
-      </h2>
+      {heading && (
+        <h2 className="mb-1.5 px-0.5 text-[11px] tracking-[0.07em] text-foreground-tertiary uppercase">
+          Your move
+        </h2>
+      )}
       <ul role="list" className="overflow-hidden rounded-xl bg-card-solid ring-1 ring-border">
         {rows.map((row, i) => (
           <MoveRowItem key={row.id} row={row} primary={i === 0} />

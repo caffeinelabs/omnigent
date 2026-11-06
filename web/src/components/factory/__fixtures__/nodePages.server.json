@@ -530,6 +530,11 @@
       },
       "burn": 2.5,
       "cost": 51.13,
+      "demo": {
+        "duration": "0:42",
+        "id": "00000000000000000000000000000385",
+        "verdict": "PARTIAL"
+      },
       "grandchildren": {
         "by_state": {
           "done": 2,
@@ -654,6 +659,27 @@
       ],
       "try_ready": true,
       "why_html": "An assistant inside the app that helps users build"
+    },
+    "proof": {
+      "count": 5,
+      "latest": {
+        "acceptance_run": 1,
+        "at": "2026-11-03T13:22:00Z",
+        "duration": "0:42",
+        "duration_s": 42.0,
+        "full_title": "Acceptance I-1 run 1 PARTIAL",
+        "id": "00000000000000000000000000000385",
+        "partial_note": "Step 6: live search fails on the base env",
+        "poster_url": "/v1/factory/demos/00000000000000000000000000000385/files/poster1",
+        "ref": "I-1",
+        "steps": {
+          "passed": 2,
+          "total": 3
+        },
+        "title": "Acceptance run 1",
+        "verdict": "PARTIAL",
+        "video_url": "/v1/factory/demos/00000000000000000000000000000385/files/video1"
+      }
     },
     "results": {
       "in_base_env": 3,
@@ -1061,6 +1087,26 @@
       "title": "Assistant core",
       "why_html": ""
     },
+    "proof": {
+      "count": 2,
+      "latest": {
+        "at": "2026-11-03T06:45:00Z",
+        "duration": "0:14",
+        "duration_s": 14.0,
+        "id": "0000000000000000000000000000038a",
+        "poster_url": "/v1/factory/demos/0000000000000000000000000000038a/files/poster6",
+        "pr_number": 9876,
+        "pr_tag": "#9876",
+        "ref": "PR-9876",
+        "steps": {
+          "passed": 5,
+          "total": 5
+        },
+        "title": "Sessions, tool registry, flagged chat API",
+        "verdict": "PASS",
+        "video_url": "/v1/factory/demos/0000000000000000000000000000038a/files/video6"
+      }
+    },
     "results": {
       "in_base_env": 1,
       "merged": 1,
@@ -1416,6 +1462,11 @@
         {
           "burn": 2.5,
           "cost": 51.13,
+          "demo": {
+            "duration": "0:42",
+            "id": "00000000000000000000000000000385",
+            "verdict": "PARTIAL"
+          },
           "grandchildren": {
             "by_state": {
               "done": 2,
@@ -1706,6 +1757,9 @@
       },
       "title": "An assistant in the app",
       "why_html": "<b>“I want an assistant in the app that helps with building, and later with discovery and sales too.”</b>"
+    },
+    "proof": {
+      "count": 5
     },
     "results": {
       "in_base_env": 3,
@@ -2304,6 +2358,26 @@
       "try_ready": true,
       "why_html": "The shared core the panel, connectors and skills build on <b>Wave 1 of Agent assistant (sample).</b>",
       "working": []
+    },
+    "proof": {
+      "count": 2,
+      "latest": {
+        "at": "2026-11-03T06:45:00Z",
+        "duration": "0:14",
+        "duration_s": 14.0,
+        "id": "0000000000000000000000000000038a",
+        "poster_url": "/v1/factory/demos/0000000000000000000000000000038a/files/poster6",
+        "pr_number": 9876,
+        "pr_tag": "#9876",
+        "ref": "PR-9876",
+        "steps": {
+          "passed": 5,
+          "total": 5
+        },
+        "title": "Sessions, tool registry, flagged chat API",
+        "verdict": "PASS",
+        "video_url": "/v1/factory/demos/0000000000000000000000000000038a/files/video6"
+      }
     },
     "results": {
       "in_base_env": 1,
@@ -2999,6 +3073,11 @@
       "items": [
         {
           "base": "main",
+          "demo": {
+            "duration": "0:09",
+            "id": "00000000000000000000000000000389",
+            "verdict": "PASS"
+          },
           "folded_from": ["adhoc:00000000000000000000000000002680"],
           "full_title": "build-tier-drafts-3, part 1",
           "glyph": "PR",
@@ -3063,6 +3142,11 @@
         },
         {
           "base": "main",
+          "demo": {
+            "duration": "0:11",
+            "id": "00000000000000000000000000000388",
+            "verdict": "PASS"
+          },
           "folded_from": ["adhoc:00000000000000000000000000002681"],
           "full_title": "build-tier-drafts-3, part 2",
           "glyph": "PR",
@@ -3160,6 +3244,11 @@
     "node": {
       "base": "main",
       "cost": 38.4,
+      "demo": {
+        "duration": "0:11",
+        "id": "00000000000000000000000000000388",
+        "verdict": "PASS"
+      },
       "folded_from": ["feature:from-C-12", "need:from-C-12"],
       "full_title": "build-tier-drafts-3",
       "grandchildren": {
@@ -3237,6 +3326,22 @@
       },
       "title": "Build tier drafts 3",
       "why_html": ""
+    },
+    "proof": {
+      "count": 2,
+      "latest": {
+        "at": "2026-11-03T11:55:00Z",
+        "duration": "0:11",
+        "duration_s": 11.0,
+        "id": "00000000000000000000000000000388",
+        "poster_url": "/v1/factory/demos/00000000000000000000000000000388/files/poster4",
+        "pr_number": 9857,
+        "pr_tag": "#9857",
+        "ref": "PR-9857",
+        "title": "Part 2",
+        "verdict": "PASS",
+        "video_url": "/v1/factory/demos/00000000000000000000000000000388/files/video4"
+      }
     },
     "results": {
       "in_base_env": 0,
@@ -5303,6 +5408,11 @@
         {
           "base": "main",
           "cost": 38.4,
+          "demo": {
+            "duration": "0:11",
+            "id": "00000000000000000000000000000388",
+            "verdict": "PASS"
+          },
           "folded_from": ["feature:from-C-12", "need:from-C-12"],
           "full_title": "build-tier-drafts-3",
           "grandchildren": {
@@ -5611,6 +5721,9 @@
       },
       "title": "Sample app (sample)",
       "why_html": "Builds <b>sample-org/sample-app</b> into <b>sample-main</b>. No goals are set yet, so that level is hidden and needs hang off the product."
+    },
+    "proof": {
+      "count": 7
     },
     "results": {
       "in_base_env": 7,

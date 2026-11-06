@@ -183,9 +183,7 @@ describe("the team editor", () => {
     expect(screen.getByTestId("team-no-trial")).toHaveTextContent("No trial for one project.");
     await waitFor(() => expect(screen.getByTestId("team-apply")).toBeEnabled());
     fireEvent.click(screen.getByTestId("team-apply"));
-    await waitFor(() =>
-      expect(location).toBe(`/factory/${snapshot.factory.id}/projects/${TEAM_SLUG}`),
-    );
+    await waitFor(() => expect(location).toBe(`/factory/${snapshot.factory.id}/n/${TEAM_SLUG}`));
     expect(sent(calls, "PUT", "/definition")).toEqual([
       {
         changes: [
@@ -285,9 +283,7 @@ describe("the team editor", () => {
     renderAt(snapshot, EDITOR);
     await waitFor(() => expect(screen.getByTestId("team-apply")).toBeEnabled());
     fireEvent.click(screen.getByTestId("team-apply"));
-    await waitFor(() =>
-      expect(location).toBe(`/factory/${snapshot.factory.id}/projects/${TEAM_SLUG}`),
-    );
+    await waitFor(() => expect(location).toBe(`/factory/${snapshot.factory.id}/n/${TEAM_SLUG}`));
     expect(readTeamStaging(snapshot.factory.id, TEAM_SLUG)).toEqual({
       changes: [],
       when: "after_current",
@@ -355,49 +351,6 @@ describe("the team editor", () => {
     expect(screen.getByTestId("staged-team-panel")).toHaveTextContent("Staged changes");
   });
 
-  it("lands on the project's Team section without the new cockpit", async () => {
-    window.localStorage.clear();
-    const { snapshot } = serve({ cockpitV2: false });
-    renderAt(snapshot, EDITOR);
-    await waitFor(() =>
-      expect(location).toBe(`/factory/${snapshot.factory.id}/projects/${TEAM_SLUG}#team`),
-    );
-  });
-});
-
-describe("the project page's team", () => {
-  it("draws the team as a chart with each member's model, state and spend", async () => {
-    const { snapshot, calls } = serve();
-    renderAt(snapshot, `/projects/${TEAM_SLUG}`);
-    const section = await screen.findByTestId("team-section");
-    await waitFor(() =>
-      expect(within(section).getByTestId("team-summary")).toHaveTextContent(
-        "6 members · 2 builders at once · changed in definition v12",
-      ),
-    );
-    // One Team region: the chart is the page's Team section (`#team`).
-    expect(screen.getAllByRole("region", { name: "Team" })).toHaveLength(1);
-    expect(section).toHaveAttribute("id", "team");
-    // The chart reads the snapshot's sessions, not the fleet.
-    expect(calls.filter((c) => c.path.endsWith("/agents"))).toEqual([]);
-    await waitFor(() =>
-      expect(within(section).getByTestId("team-tile-M-6")).toHaveTextContent("Dot"),
-    );
-    const dot = within(section).getByTestId("team-tile-M-6");
-    expect(dot).toHaveTextContent("Dot");
-    expect(dot).toHaveTextContent("claude · sonnet");
-    expect(dot).toHaveTextContent("Stuck");
-    expect(within(section).getByTestId("team-group-build")).toHaveTextContent("Ivy");
-    fireEvent.click(dot);
-    await waitFor(() => expect(location).toContain("peek=agent%3Adot"));
-    const panel = await screen.findByTestId("agent-panel");
-    // "Change model…" on an agent opens its project's team editor.
-    expect(within(panel).getByRole("link", { name: /Change model/ })).toHaveAttribute(
-      "href",
-      `/factory/${snapshot.factory.id}${EDITOR}`,
-    );
-  });
-
   it("links each project team on Teams to its editor", async () => {
     const { snapshot } = serve();
     renderAt(snapshot, "/teams");
@@ -406,49 +359,5 @@ describe("the project page's team", () => {
       "href",
       `/factory/${snapshot.factory.id}${EDITOR}`,
     );
-  });
-
-  it("restores an earlier team from History as a staged change in the editor", async () => {
-    const { snapshot } = serve();
-    renderAt(snapshot, `/projects/${TEAM_SLUG}`);
-    await screen.findByTestId("team-section");
-    fireEvent.click(screen.getByRole("button", { name: "History" }));
-    const v10 = await screen.findByTestId("team-history-v10");
-    expect(screen.getByTestId("team-history-v12")).toHaveTextContent("current");
-    fireEvent.click(within(v10).getByRole("button", { name: "Restore" }));
-    await waitFor(() => expect(location).toBe(`/factory/${snapshot.factory.id}${EDITOR}`));
-    expect(readTeamStaging(snapshot.factory.id, TEAM_SLUG).changes).toMatchObject([
-      { kind: "restore", version: 10 },
-    ]);
-    await screen.findByTestId("team-editor");
-  });
-
-  it("goes to the editor on `e`", async () => {
-    const { snapshot } = serve();
-    renderAt(snapshot, `/projects/${TEAM_SLUG}`);
-    await screen.findByTestId("team-section");
-    fireEvent.keyDown(window, { key: "e" });
-    await waitFor(() => expect(location).toBe(`/factory/${snapshot.factory.id}${EDITOR}`));
-  });
-
-  it("names the version in force after an Undo, not the undone one", async () => {
-    const { snapshot } = serve({ undone: true });
-    renderAt(snapshot, `/projects/${TEAM_SLUG}`);
-    const section = await screen.findByTestId("team-section");
-    await waitFor(() =>
-      expect(within(section).getByTestId("team-summary")).toHaveTextContent(
-        "changed in definition v12",
-      ),
-    );
-    expect(screen.queryByTestId("team-undo")).toBeNull();
-  });
-
-  it("offers Undo in the header while the last team change is fresh", async () => {
-    const { snapshot, calls } = serve({ justApplied: true });
-    renderAt(snapshot, `/projects/${TEAM_SLUG}`);
-    const undo = await screen.findByTestId("team-undo");
-    expect(undo).toHaveTextContent("Undo v13");
-    fireEvent.click(undo);
-    await waitFor(() => expect(sent(calls, "POST", "/definition/pin")).toEqual([{ version: 12 }]));
   });
 });

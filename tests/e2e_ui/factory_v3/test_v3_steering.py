@@ -193,8 +193,8 @@ def test_apply_on_a_factory_tree_rule_makes_a_version_with_no_undo(
 ) -> None:
     cockpit = open_cockpit(1440, 900, "light")
     page = cockpit.page
-    cockpit.open("product")
-    page.get_by_test_id("cockpit-needs-you").click()
+    cockpit.open_place()
+    page.get_by_test_id("cockpit-nav-decisions").click()
     sheet = page.get_by_test_id("v3-needs-sheet")
     expect(sheet).to_be_visible(timeout=LOAD_MS)
     sheet.get_by_test_id("v3-needs-other-tree").click()
@@ -436,8 +436,8 @@ def test_needs_you_ranks_each_ask_by_what_it_holds(
 ) -> None:
     cockpit = open_cockpit(1440, 900, "light")
     page = cockpit.page
-    cockpit.open("product")
-    page.get_by_test_id("cockpit-needs-you").click()
+    cockpit.open_place()
+    page.get_by_test_id("cockpit-nav-decisions").click()
     sheet = page.get_by_test_id("v3-needs-sheet")
     expect(sheet).to_be_visible(timeout=LOAD_MS)
     items = sheet.get_by_test_id("v3-needs-item")
@@ -476,7 +476,7 @@ def test_find_opens_nodes_by_task_change_and_proposal_refs(
         ("#9876", "PR-9876"),
         (factory.proposal, factory.project),
     ):
-        page.get_by_test_id("cockpit-search").click()
+        page.get_by_test_id("cockpit-nav-search").click()
         page.get_by_test_id("factory-palette-input").fill(query)
         hit = page.get_by_test_id(f"factory-palette-node-{ref}")
         expect(hit).to_be_visible(timeout=LOAD_MS)
@@ -499,7 +499,7 @@ def test_the_factory_tree_shows_the_base_env_and_the_closed_alarms(
     cockpit = open_cockpit(1440, 900, "dark")
     page = cockpit.page
     cockpit.open("product")
-    page.get_by_test_id("cockpit-tree-factory").click()
+    page.get_by_test_id("cockpit-nav-factory").click()
     cockpit.wait_for("fx")
     _clean(page, "fx", "factory root")
     node(page, "fx").locator('[data-node-link="fx:environments"]').first.click()
@@ -516,9 +516,6 @@ def test_the_factory_tree_shows_the_base_env_and_the_closed_alarms(
     for alarm in ("D-46", "D-47", "D-48"):
         expect(alarms).to_contain_text(alarm)
     _clean(page, "fx:health", "health")
-    # The root's roll-up says where the product's changes are: all in the base env.
-    cockpit.open("product")
-    expect(node(page, "product").get_by_test_id("v3-results")).to_contain_text("all in base env")
     assert cockpit.errors == [], cockpit.errors
 
 

@@ -38,7 +38,7 @@ describe("FactoryRoomBanner", () => {
     expect(banner).toHaveTextContent(`This is ${pl.title}’s machine channel.`);
     expect(screen.getByRole("link", { name: /Talk to the factory in the Room/ })).toHaveAttribute(
       "href",
-      `/factory/${LIVE_RUN_FACTORY_ID}/room/project%3Aapi-version`,
+      `/factory/${LIVE_RUN_FACTORY_ID}/chats/project%3Aapi-version`,
     );
   });
 
@@ -46,7 +46,7 @@ describe("FactoryRoomBanner", () => {
     renderBanner(atlasSession());
     expect(screen.getByRole("link", { name: /Talk to the factory/ })).toHaveAttribute(
       "href",
-      `/factory/${LIVE_RUN_FACTORY_ID}/room/factory`,
+      `/factory/${LIVE_RUN_FACTORY_ID}/chats/factory`,
     );
   });
 

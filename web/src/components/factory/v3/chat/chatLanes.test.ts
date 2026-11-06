@@ -66,6 +66,13 @@ describe("calm chat · conversation and activity", () => {
     ).toBe("activity");
   });
 
+  it("keeps a recorded demo in the conversation: proof is never activity", () => {
+    const demo = msg({ card: { type: "demo", ref: "!9876", id: "d1" } as ChatMessageView["card"] });
+    expect(messageLane(demo, ctx)).toBe("conversation");
+    // The server's lane wins when it sends one.
+    expect(messageLane({ ...demo, lane: "conversation" }, ctx)).toBe("conversation");
+  });
+
   it("keeps live cards that need the viewer, and never repeats an ask Your move shows", () => {
     const card = (type: string, ref: string, id: string) =>
       msg({ card: { type, ref, id } as ChatMessageView["card"] });

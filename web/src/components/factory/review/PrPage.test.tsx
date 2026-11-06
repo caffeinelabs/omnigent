@@ -371,7 +371,7 @@ describe("PR page · header", () => {
     expect(within(drawer).getByTestId("pr-breadcrumb")).toHaveTextContent("api-version");
     expect(within(drawer).getByTestId("pr-breadcrumb-project")).toHaveAttribute(
       "href",
-      `/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version#prs`,
+      `/factory/${LIVE_RUN_FACTORY_ID}/n/api-version`,
     );
     expect(within(drawer).getByTestId("pr-gates")).toBeInTheDocument();
     expect(within(drawer).getByTestId("pr-loops")).toBeInTheDocument();

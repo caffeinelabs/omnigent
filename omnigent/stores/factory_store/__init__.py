@@ -1154,6 +1154,27 @@ class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
             Consumer: R3-08 ``GET …/chat/threads``.
         """
 
+    def chat_thread_said(
+        self, factory_id: str, user_id: str | None
+    ) -> builtins.dict[str, tuple[FactoryChatMessage, bool]]:
+        """
+        Per thread, the newest message a person or an agent said (system lines
+        and empty bodies left out) and whether *user_id* ever posted there.
+
+        Consumer: the cockpit's Chats list (``GET …/chat/threads``: ``last``, ``mine``).
+        The default reads each thread's messages; stores override it with one query.
+
+        :returns: Thread key -> ``(newest said, user posted there)``.
+        """
+        out: dict[str, tuple[FactoryChatMessage, bool]] = {}
+        for stat in self.chat_thread_stats(factory_id):
+            rows = self.list_chat(factory_id, stat.thread, limit=200)
+            said = [r for r in rows if r.author_kind in ("human", "agent") and r.body.strip()]
+            if said:
+                mine = bool(user_id) and any(r.author == user_id for r in rows)
+                out[stat.thread] = (said[-1], mine)
+        return out
+
     @abstractmethod
     def upsert_chat_read(
         self, factory_id: str, user_id: str, thread: str, last_seq: int

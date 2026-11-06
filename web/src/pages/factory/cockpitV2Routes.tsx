@@ -16,23 +16,12 @@ import { TeamEditor } from "@/components/factory/team/TeamEditor";
 import { useParams, useSearchParams } from "@/lib/routing";
 import { AgentPage } from "./AgentPage";
 import { AgentProfilePage } from "./AgentProfilePage";
-import { HomePage } from "./HomePage";
-import { NodeRoute } from "./NodeRoute";
-import { OverviewPage } from "./OverviewPage";
 import { TeamsPage } from "./TeamsPage";
 
 function Pending() {
   return (
     <div aria-busy="true" aria-label="Loading" className="h-96 animate-pulse rounded-xl bg-muted" />
   );
-}
-
-/** `/`: the product's node page with cockpit v3, Home with the new cockpit, else the Overview. */
-export function HomeRoute() {
-  const cockpit = useCockpitV2();
-  if (cockpit.loading) return <Pending />;
-  if (cockpit.v3) return <NodeRoute home />;
-  return cockpit.on ? <HomePage /> : <OverviewPage />;
 }
 
 /** `/teams[/:tab]`: Teams with the new cockpit, else the fleet. */

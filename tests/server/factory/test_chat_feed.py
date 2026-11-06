@@ -291,6 +291,8 @@ async def test_live_cards_stay_while_they_need_the_reader(cockpit: Cockpit) -> N
             },
         ),
         "closed_alarm": _system(cockpit, "Closed", {"type": "closed_alarm", "ref": "D-9"}),
+        # A recorded demo is proof, never activity: even of a merged PR.
+        "demo": _system(cockpit, "Demo PASS", {"type": "demo", "ref": "!9102", "id": "d" * 32}),
     }
 
     said = {m["id"]: m for m in (await _feed(cockpit, "conversation"))["data"]}
@@ -299,7 +301,8 @@ async def test_live_cards_stay_while_they_need_the_reader(cockpit: Cockpit) -> N
     assert said[rows["proposal"]]["ask"] == applying.ref and said[rows["proposal"]]["needs_you"]
     assert said[rows["pr"]]["ask"] == "merge:main"
     assert said[rows["offer"]]["needs_you"] is True
-    assert {rows[k] for k in ("why", "note", "undo")} <= said.keys()
+    assert {rows[k] for k in ("why", "note", "undo", "demo")} <= said.keys()
+    assert "needs_you" not in said[rows["demo"]]
     assert moved[rows["merged"]]["activity"] == {"kind": "pr", "closed": True}
     assert moved[rows["answered"]]["activity"] == {"kind": "decision", "closed": True}
     assert moved[rows["closed_alarm"]]["activity"]["closed"] is True

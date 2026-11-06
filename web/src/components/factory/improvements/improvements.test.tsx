@@ -154,7 +154,7 @@ describe("improvements model", () => {
     expect(evidenceHref(FID, "D-2")).toBe(`/factory/${FID}/decisions?decision=D-2`);
     expect(evidenceHref(FID, "C-11")).toBe(`/factory/${FID}/improvements/C-11`);
     expect(evidenceHref(FID, "!9631")).toBe(`/factory/${FID}/prs/9631`);
-    expect(evidenceHref(FID, "#db-version")).toBe(`/factory/${FID}/projects/db-version`);
+    expect(evidenceHref(FID, "#db-version")).toBe(`/factory/${FID}/n/db-version`);
     expect(evidenceHref(FID, "span:abc")).toBeNull();
   });
 

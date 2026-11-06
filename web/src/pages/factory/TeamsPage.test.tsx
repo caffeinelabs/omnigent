@@ -71,44 +71,6 @@ beforeEach(() => {
   location = "";
 });
 
-describe("the new cockpit switch", () => {
-  it("keeps Teams dark: without the server flag /teams lands on the fleet", async () => {
-    serve(false);
-    renderAt("/teams?cockpit=v2");
-    await screen.findByTestId("factory-agents-page");
-    expect(location).toBe(`${BASE}/agents`);
-    expect(screen.queryByTestId("try-teams-view")).toBeNull();
-  });
-
-  it("offers the new view on the fleet, and a link switches this person to it", async () => {
-    serve(true);
-    renderAt("/agents");
-    const link = await screen.findByTestId("try-teams-view");
-    fireEvent.click(link);
-    await screen.findByTestId("factory-teams-page");
-    expect(window.localStorage.getItem(COCKPIT_STORAGE_KEY)).toBe("v2");
-  });
-
-  it("links back to Teams from the fleet once this person switched", async () => {
-    window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
-    serve(true);
-    // The new cockpit keeps the fleet table in Debug (`/agents` lands on Teams › All agents).
-    renderAt("/debug/fleet");
-    fireEvent.click(await screen.findByTestId("back-to-teams"));
-    await screen.findByTestId("factory-teams-page");
-    expect(location).toBe(`${BASE}/teams`);
-  });
-
-  it("switches back to the classic view", async () => {
-    window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
-    serve(true);
-    renderAt("/teams");
-    fireEvent.click(await screen.findByRole("button", { name: "Back to the classic view" }));
-    await screen.findByTestId("factory-agents-page");
-    expect(window.localStorage.getItem(COCKPIT_STORAGE_KEY)).toBe("v1");
-  });
-});
-
 describe("Teams", () => {
   beforeEach(() => {
     window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");

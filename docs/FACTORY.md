@@ -54,7 +54,7 @@ SERVER: FactorySupervisor — keepalive, heartbeats, alerts, reply notices
 | `OMNIGENT_FACTORY_POST_RATE_PER_HOUR` | `60,20` | Posts per hour per sender, and per (sender, target) pair. A single number sets the sender limit and a pair limit of a third of it. |
 | `OMNIGENT_FACTORY_MERGE_REPOS` | empty | `owner/repo` list (comma or space separated) the merge gate may merge in. Empty means the gate merges nowhere. Read by the gate inside the sandbox. |
 | `OMNIGENT_FACTORY_ARTIFACT_LOCATION` | unset | Where demo files (video, screenshots, `api.json`, HAR, traces) are written: `s3://<bucket>[/<prefix>]` (credentials from the standard AWS chain, IRSA included; `AWS_REGION` must be set for AWS S3; `AWS_ENDPOINT_URL_S3` for MinIO or R2) or a directory. Unset keeps them session files of the PL in the server's artifact store, shown in its Files panel. Each demo file records the location it was written to and is always read from there, so demos stored before a change keep playing. Files are still served only through `/v1/factory/demos/…` behind omnigent auth (a Range is a ranged read of the store, at most 4 MiB per response; no presigned links). A store that fails (unreachable, throttled, denied) answers 503 `artifact_store_unavailable` with `Retry-After`. A malformed location fails server start. |
-| `OMNIGENT_FACTORY_COCKPIT_V2` | unset | `1` lets each person switch to the new cockpit (Teams and the agent panel; `?cockpit=v2`, remembered per browser). Unset, every page and API behaves as before. |
+| `OMNIGENT_FACTORY_COCKPIT_V2` | unset | `1` turns on the team editor's staged changes and the agent panel's routes. The web cockpit no longer reads it: everyone sees the one cockpit (Home, Demos, Chats, Decisions and the node pages); `?cockpit=` links are dropped. |
 | `OMNIGENT_FACTORY_DISCOVERY` | unset | `1` runs discovery on this server: the discovery ledger's routes, Room hunches as team signals, the ledger's upkeep (retention, daily score snapshots), the definition preview's re-rank, readouts and the prediction ledger, and trials of discovery's method on discovery guards. A factory also needs its own `discovery.enabled` (owners, off by default); until both are on every discovery route answers `404 discovery_off`. |
 | `OMNIGENT_FACTORY_WEB_SEARCH` | unset | The keyless search backend of `web` sources: `keenable` (its public, keyless endpoint; no key, no account). Unset or `none`, `web` sources fetch only (their `search` tool is not offered). Turn one on only where the server can reach it. |
 | `OMNIGENT_FACTORY_STATE_SEGMENTS` | follows `OMNIGENT_FACTORY_COCKPIT_V2` | `1` records each agent's working and waiting stretches (the agent panel's strip); any other value turns recording off. Segments older than 30 days are pruned. One server process is assumed to see all of a session's status edges. |
@@ -1063,14 +1063,26 @@ under their task's PR; a task with runs and no PR yet has no run page
 viewer (`filter_snapshot`: members, team chips, decisions, cost and burn,
 the base env), memoized for 5 s per factory and set of sessions the viewer
 may read, and dropped on any recorded write; open asks come from one
-batched read of the messages live nodes quote. Cockpit v3 (`?cockpit=v3`)
-always reads these pages; its sample factory lives only in Storybook and
+batched read of the messages live nodes quote. The cockpit always reads
+these pages; its sample factory lives only in Storybook and
 the web tests. `GET …/n/{ref}/level/{level}` lists one level under a node
 grouped under each item's parent (Home lists the features under the needs
 they came from), all-done groups folded, 60 a group with a cursor each;
 `state` and `q` keep only the nodes in one state or whose title or code
 holds the words (`state=later` or `ghost` lists the held or proposed nodes
 as the items); a group with nothing to show is left out.
+
+**The cockpit** is one shell for everyone: a sidebar with Home, Demos,
+Chats, Decisions and Search, then an outline of the work (features opening
+to their projects, the page's node marked); a phone has the places in a
+bottom tab bar. Home is what needs you (three asks), the features one line
+each with a ▶ for their latest demo, and what shipped lately. Demos reads
+`GET …/n/product/demos?limit=100`, whose items also say where each sits
+(`feature`, `project`, `merged_at`). Chats reads `GET …/chat/threads?nodes=1`,
+whose threads also say whether the reader wrote there (`mine`) and the newest
+thing a person or agent said (`last`). Older addresses (`/projects/<slug>`,
+`/prs/<id>`, `/initiatives/<ref>`, `/room`, `?review=`, `?peek=needs`) land
+on the place that shows the same thing now.
 
 **Lenses** (`node_lenses.py`) are the other ways to read one node.
 `GET …/n/{ref}/lineage` reads top to bottom: each ancestor with its one
@@ -1093,6 +1105,26 @@ works while any of them does (one bar); the alarms the server closed never
 count, and lanes never join. `GET …/n/{ref}/money` lists the children's cost against
 their budgets (the roll-ups' numbers), most first, the total, and `rest`:
 what the node spent that no child holds (its leads and agents).
+
+**Proof** (`node_proof.py`; calm rule 10, "proof is never hidden"). Every
+recorded demo the viewer may play belongs to one node: a PR's demo to its
+change, an acceptance run's recording to its feature, a demo of a PR the tree
+has no change for to its project. A node page carries `proof: {latest?,
+count}`: `count` is its subtree's demos, and `latest` (the one row the page
+shows by default, "Latest demo · PASS · 0:14 ▶") is, for a change and the task
+that owns it, the demo at the PR's current head (else its newest, `stale`);
+for a project its newest across its PRs, current heads first; for a feature
+its newest acceptance-run recording, else its newest project demo. Each is
+`{id, verdict, title (a few words), duration, poster_url, video_url (the demo
+file routes), pr_number, at, partial_note}`; `partial_note` says in one line
+what did not pass ("Step 6: live search fails on the base env"). A feature's
+row (and a project shown in place of its folded implicit feature) carries
+`demo: {id, verdict, duration}`, Home's "▶". `GET …/n/{ref}/demos?cursor=
+&limit=` lists the subtree's demos newest first (what "n more demos" opens).
+A viewer reads what they may of the PRs: demos of a project whose lead they
+cannot read are left out, and so are demos whose files belong to a session
+they cannot read. In the node chat a demo card is conversation, never
+Activity.
 
 **Needs you and Find** (`node_sheets.py`). `GET …/factories/{fid}/needs-you
 ?tree=product|factory` lists every ask a person owes in one tree, ranked by

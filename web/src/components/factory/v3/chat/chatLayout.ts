@@ -1,5 +1,5 @@
-// The node chat's place on the page: a column beside the node from 1024 px
-// (40 % of the window by default; dragged wider or narrower and kept in this
+// The node chat's place on the page: a column beside the node from 1180 px
+// (30 % of the window by default; dragged wider or narrower and kept in this
 // browser), else a composer pinned at the bottom that opens the thread full
 // screen (`?chat=1`, so Back closes it). The shell reaches the chat through a
 // slot: `/`, `r` and the top bar's Room button focus it.
@@ -7,7 +7,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 /** Wide enough for the chat beside the page. */
-export const CHAT_BESIDE_QUERY = "(min-width: 1024px)";
+export const CHAT_BESIDE_QUERY = "(min-width: 1180px)";
 /** `?chat=1`: the thread is open full screen (narrow windows), or the box takes focus. */
 export const CHAT_PARAM = "chat";
 
@@ -18,9 +18,9 @@ function viewportWidth(): number {
   return typeof window === "undefined" ? 1440 : window.innerWidth || 1440;
 }
 
-/** The widest the column gets: 60 % of the window. */
+/** The widest the column gets: 45 % of the window (the page keeps the rest beside the sidebar). */
 export function chatMaxPx(viewport: number): number {
-  return Math.max(CHAT_MIN_PX + 40, Math.round(viewport * 0.6));
+  return Math.max(CHAT_MIN_PX + 40, Math.round(viewport * 0.45));
 }
 
 export function clampChatWidth(px: number, viewport: number): number {
@@ -29,9 +29,9 @@ export function clampChatWidth(px: number, viewport: number): number {
   return Math.round(Math.min(chatMaxPx(viewport), Math.max(CHAT_MIN_PX, px)));
 }
 
-/** 40 % of the window (the page is at most 1600 px wide). */
+/** 30 % of the window, at most 480 px (the page is at most 1600 px wide). */
 export function defaultChatWidth(viewport: number): number {
-  const px = Math.round(Math.min(viewport, 1600) * 0.4);
+  const px = Math.min(480, Math.round(Math.min(viewport, 1600) * 0.3));
   return Math.min(chatMaxPx(viewport), Math.max(CHAT_MIN_PX, px));
 }
 

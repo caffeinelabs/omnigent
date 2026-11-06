@@ -512,6 +512,26 @@ async def test_the_thread_list_names_each_threads_node(env: RoomEnv) -> None:
     )
 
 
+async def test_the_thread_list_says_who_wrote_where_and_the_last_line(env: RoomEnv) -> None:
+    await _post(env, "task:T-1", "A question about the route (sample)", user="alice")
+    await _post(env, "factory", "Something for the whole factory (sample)", user="bob")
+    base = f"/v1/factory/factories/{env.cockpit.fid}/chat/threads"
+
+    data = (
+        await env.cockpit.client.get(base, params={"nodes": "1"}, headers={"X-Test-User": "alice"})
+    ).json()["data"]
+
+    by_key = {t["key"]: t for t in data}
+    task, factory = by_key["task:T-1"], by_key["factory"]
+    assert task["mine"] is True and factory["mine"] is False
+    assert task["last"]["who"] == "You" and task["last"]["kind"] == "human"
+    assert task["last"]["text"] == "A question about the route (sample)"
+    assert factory["last"]["who"] == "bob"
+    # A thread nobody said anything in has no last line.
+    assert by_key["project:api-version"]["last"] is None
+    assert by_key["project:api-version"]["mine"] is False
+
+
 async def test_the_thread_list_caps_the_node_threads_at_the_newest(
     env: RoomEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -4,8 +4,9 @@
 // `?peek=env` (the base env: what it runs, its health, how to sign in),
 // `?peek=try&at=<ref>` (what can be tried there: the passing steps by name,
 // the flag and the sign-in note) and `?peek=lineage&at=<ref>` (where a node
-// came from, the phone's Lineage). Keys are `KeyboardHelp`; Find is the ⌘K
-// palette. A sheet never draws a line between nodes.
+// came from, the phone's Lineage) and `?peek=demos&at=<ref>` (the subtree's
+// recorded demos, `&demo=<id>` playing one). Keys are `KeyboardHelp`; Find is
+// the ⌘K palette. A sheet never draws a line between nodes.
 
 import { ExternalLinkIcon } from "lucide-react";
 import { KeyboardHelp } from "../../cmdk/KeyboardHelp";
@@ -16,6 +17,7 @@ import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { ago, envLines } from "../envWords";
 import { LineageBody } from "../lenses/LensBodies";
+import { DemosSheet } from "../proof/DemosSheet";
 import { type NodeActions, NodeContextProvider, type SheetKind } from "../NodeContext";
 import { NodeLink } from "../nodeParts";
 import { useNode } from "../nodeQueries";
@@ -31,6 +33,8 @@ import { MoveRowItem } from "../calm/YourMove";
 export const SHEET_PARAM = "peek";
 export const SHEET_AT_PARAM = "at";
 export const SHEET_TREE_PARAM = "tree";
+/** The demo the Demos sheet plays as it opens. */
+export const SHEET_PLAY_PARAM = "demo";
 
 /** The history state of an entry a sheet pushed (its close goes back over it). */
 const SHEET_PUSHED = "v3SheetPushed";
@@ -46,13 +50,13 @@ function pushedBySheet(state: unknown): boolean {
  * entry (or replaces the address when the top bar opened it in place), so
  * Back after Esc never reopens it.
  */
-export function useOpenSheet(): (sheet: SheetKind | null, at?: string) => void {
+export function useOpenSheet(): (sheet: SheetKind | null, at?: string, play?: string) => void {
   const [, setParams] = useSearchParams();
   const { state } = useLocation();
   const navigate = useNavigate();
   const pushed = pushedBySheet(state);
   return useCallback(
-    (sheet, at) => {
+    (sheet, at, play) => {
       if (!sheet && pushed) {
         navigate(-1);
         return;
@@ -60,9 +64,11 @@ export function useOpenSheet(): (sheet: SheetKind | null, at?: string) => void {
       setParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          for (const key of [SHEET_PARAM, SHEET_AT_PARAM, SHEET_TREE_PARAM]) next.delete(key);
+          for (const key of [SHEET_PARAM, SHEET_AT_PARAM, SHEET_TREE_PARAM, SHEET_PLAY_PARAM])
+            next.delete(key);
           if (sheet) next.set(SHEET_PARAM, sheet);
           if (sheet && at) next.set(SHEET_AT_PARAM, at);
+          if (sheet && play) next.set(SHEET_PLAY_PARAM, play);
           return next;
         },
         sheet ? { state: { [SHEET_PUSHED]: true } } : { replace: true },
@@ -120,7 +126,7 @@ function OutLink({
  * rest): short names, what each unblocks, one filled answer on the first row
  * and outlined ones after. Closed alarms live under Factory › Health.
  */
-function NeedsList({
+export function NeedsList({
   rows,
   list,
   tree,
@@ -163,7 +169,7 @@ function NeedsList({
 }
 
 /** A tree's asks in Your move's order: its root's rows, then every other ask it holds. */
-function useSheetRows(
+export function useSheetRows(
   tree: string,
   list: NeedsYouList | undefined,
   open: boolean,
@@ -425,6 +431,15 @@ export function V3Sheets({
       {source?.lineage && (
         <LineageSheet factoryId={factoryId} open={sheet === "lineage"} at={at} onClose={close} />
       )}
+      {source?.demos && (
+        <DemosSheet
+          factoryId={factoryId}
+          open={sheet === "demos"}
+          at={at}
+          play={params.get(SHEET_PLAY_PARAM)}
+          onClose={close}
+        />
+      )}
       {keys && (
         <KeyboardHelp open={sheet === "keys"} onOpenChange={(next) => !next && close()} nodes />
       )}
@@ -435,5 +450,10 @@ export function V3Sheets({
 /** What a node page needs to open a sheet from a badge or a chip. */
 export function useSheetActions(): Pick<NodeActions, "onSheet"> {
   const open = useOpenSheet();
-  return useMemo(() => ({ onSheet: (sheet: SheetKind, at?: string) => open(sheet, at) }), [open]);
+  return useMemo(
+    () => ({
+      onSheet: (sheet: SheetKind, at?: string, play?: string) => open(sheet, at, play),
+    }),
+    [open],
+  );
 }

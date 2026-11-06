@@ -61,6 +61,7 @@ describe("cockpit v3 · Your move, Details and answers", () => {
     expect(within(status).queryByTestId("v3-answer")).toBeNull();
   });
 
+  // A sweep over every page of the sample (as the calm gate's): over 5 s on a busy runner.
   it("never places one decision's answer in two places, on any node page", async () => {
     for (const ref of sampleEngine().refs()) {
       const view = renderNode(ref);
@@ -79,7 +80,7 @@ describe("cockpit v3 · Your move, Details and answers", () => {
         expect({ ref, id, places: where.size }).toEqual({ ref, id, places: 1 });
       view.unmount();
     }
-  });
+  }, 60_000);
 
   it("answers on a click, never on Enter", async () => {
     const onAnswer = vi.fn();
@@ -179,63 +180,25 @@ describe("cockpit v3 · Your move, Details and answers", () => {
   });
 });
 
-describe("cockpit v3 · the level strip", () => {
-  it("counts come from levels_below, “you” counts the asks Your move ranks under each level; empty levels are left out", async () => {
-    const source = sampleNodeSource();
-    const node = source.node;
-    source.node = async (fid, ref) => {
-      const page = (await node(fid, ref)) as Page;
-      return {
-        ...page,
-        levels_below: [
-          {
-            level: "project",
-            name: "Workstreams",
-            count: 7,
-            later: 2,
-            needs: 3,
-            by_state: { needs: 3, done: 4 },
-          },
-          { level: "task", name: "Tasks", count: 0, later: 5, needs: 0, by_state: {} },
-          { level: "change", name: "Changes", count: 0, later: 0, needs: 0, by_state: {} },
-        ],
-      };
-    };
-    renderNode("I-1", { source });
-    await shown("I-1");
-    const strip = screen.getByTestId("v3-level-strip");
-    // One ask (C-16) sits under a project of I-1: the strip says 1, as Your move counts it.
-    expect(screen.getByTestId("v3-level-project")).toHaveTextContent("7+2 later1 you");
-    // A level holding only later work says so; it never shows a 0.
-    expect(screen.getByTestId("v3-level-task")).toHaveTextContent("5 later");
-    // A level with nothing in it is left out, even when the data lists it.
-    expect(within(strip).queryByText("Changes")).toBeNull();
-    expect(screen.queryByTestId("v3-level-change")).toBeNull();
-    expect(within(strip).getByText("Workstreams")).toBeInTheDocument();
-  });
-
-  it("names the node by its short name in the strip; codes and priorities are Details", async () => {
-    const view = renderNode("T-16");
+describe("cockpit v3 · the breadcrumb", () => {
+  it("is a plain breadcrumb from Home down to the parent, never a level strip", async () => {
+    renderNode("T-16");
     await shown("T-16");
-    const strip = screen.getByTestId("v3-level-strip");
-    expect(
-      within(strip).getByRole("link", { name: /^Task.*Debit each turn$/ }),
-    ).toBeInTheDocument();
-    expect(within(strip).queryByText(/T-16 ·/)).toBeNull();
-    view.unmount();
-    renderNode("assistant-core");
-    await shown("assistant-core");
-    expect(within(screen.getByTestId("v3-level-strip")).queryByText(/P0/)).toBeNull();
+    expect(screen.queryByTestId("v3-level-strip")).toBeNull();
+    const crumbs = screen.getByTestId("v3-breadcrumb");
+    const links = within(crumbs).getAllByRole("link");
+    expect(links[0]).toHaveTextContent("Home");
+    expect(links[0]).toHaveAttribute("href", "/factory/f-sample");
+    // Short names only: no codes, no level names, no need's raw ask.
+    expect(crumbs).not.toHaveTextContent(/T-16|I-1|Feature|Project/);
+    expect(links.at(-1)).toHaveTextContent("Assistant core");
   });
 
-  it("folds implicit ancestors into their only child, in italics without a state dot", async () => {
+  it("leaves folded implicit ancestors out", async () => {
     renderNode("build-tier-drafts-3");
     await shown("build-tier-drafts-3");
-    const strip = screen.getByTestId("v3-level-strip");
-    const folded = within(strip).getAllByTitle(/implicit, folded/);
-    expect(folded).toHaveLength(2);
-    // Nothing merged yet: no Results cell (nothing renders empty).
-    expect(within(strip).queryByTestId("v3-results")).toBeNull();
+    const crumbs = screen.getByTestId("v3-breadcrumb");
+    expect(within(crumbs).getAllByRole("link")).toHaveLength(1);
   });
 
   it("an implicit parent's address shows its only child", async () => {
@@ -244,16 +207,12 @@ describe("cockpit v3 · the level strip", () => {
     expect(view.path()).toBe("/factory/f-sample/n/build-tier-drafts-3");
   });
 
-  it("on a phone: back to the parent and a row of level cells that scrolls inside itself", async () => {
+  it("is the same on a phone", async () => {
     setPhone(true);
     renderNode("I-1");
     await shown("I-1");
-    expect(screen.queryByTestId("v3-level-strip")).toBeNull();
-    const row = screen.getByTestId("v3-phone-levels");
-    expect(within(row).getByRole("link", { name: /‹ Agents that also do/ })).toBeInTheDocument();
-    const cells = within(row).getByRole("navigation", { name: "Levels below" });
-    expect(cells.className).toContain("overflow-x-auto");
-    expect(screen.getByTestId("v3-phone-level-project")).toHaveTextContent("4+41 you");
+    expect(screen.queryByTestId("v3-phone-levels")).toBeNull();
+    expect(screen.getByTestId("v3-breadcrumb")).toHaveTextContent(/^Home/);
   });
 });
 

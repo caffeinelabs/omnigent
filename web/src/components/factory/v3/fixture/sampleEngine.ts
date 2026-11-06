@@ -10,11 +10,15 @@ import type {
   ClosedAlarm,
   Crumb,
   DecisionRef,
+  DemoChip,
+  DemoRef,
   LevelCount,
   LevelGroup,
   LevelView,
+  NodeDemos,
   NodeFull,
   NodePage,
+  NodeProof,
   NodeState,
   NodeSummary,
   Progress,
@@ -26,6 +30,7 @@ import type {
   WhyItem,
 } from "../nodeTypes";
 import type { RawDecision, RawFactory, RawLevel, RawNode, RawTree, RawWait } from "./sampleData";
+import { type RawDemo, samplePoster } from "./sampleDemos";
 
 type RawState = NodeState | "held";
 
@@ -1045,6 +1050,7 @@ export class SampleEngine {
         ? this.kids(n.id).find((k) => k.lvl === "change")
         : undefined;
     const kindName = this.data.kinds[n.kind];
+    const demo = this.demoChip(n);
     return {
       ref: n.id,
       level: this.levelKey(n),
@@ -1077,6 +1083,86 @@ export class SampleEngine {
       ...(owner ? { owner: { name: owner, working: n.lvl === "project" && s === "moving" } } : {}),
       ...(team ? { working: team.working, idle: team.idle } : {}),
       ...(chg?.tag ? { change: { ref: chg.id, label: chg.tag } } : {}),
+      ...(demo ? { demo } : {}),
+    };
+  }
+
+  // ── Proof: recorded demos (calm rule 10) ─────────────────────
+
+  /** The demos of a node's subtree, newest first. */
+  protected demosUnder(id: string): RawDemo[] {
+    return (this.data.demos ?? [])
+      .filter((d) => d.at === id || this.ancestors(d.at).some((a) => a.id === id))
+      .sort((a, b) => b.when.localeCompare(a.when));
+  }
+
+  protected demoRef(d: RawDemo): DemoRef {
+    const variant = [...d.id].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 4;
+    return {
+      id: d.id,
+      verdict: d.verdict,
+      title: d.title,
+      ref: d.at,
+      at: d.when,
+      ...(d.full ? { full_title: d.full } : {}),
+      duration_s: d.seconds,
+      duration: `${Math.floor(d.seconds / 60)}:${String(d.seconds % 60).padStart(2, "0")}`,
+      poster_url: samplePoster(d.accent, variant),
+      video_url: `/v1/factory/demos/${d.id}/files/recording`,
+      ...(d.pr ? { pr_number: d.pr, pr_tag: `#${d.pr}` } : {}),
+      ...(d.run != null ? { acceptance_run: d.run } : {}),
+      ...(d.stale ? { stale: true } : {}),
+      ...(d.steps ? { steps: { passed: d.steps[0], total: d.steps[1] } } : {}),
+      ...(d.note ? { partial_note: d.note } : {}),
+    };
+  }
+
+  /** What a page shows: a feature its acceptance run, else the newest at its PRs' current heads. */
+  protected latestDemo(n: RawNode): RawDemo | undefined {
+    if (!["feature", "project", "task", "change"].includes(n.lvl)) return undefined;
+    const demos = this.demosUnder(n.id);
+    const runs = demos.filter((d) => d.run != null);
+    if (n.lvl === "feature" && runs.length) return runs[0];
+    const prs = demos.filter((d) => d.run == null);
+    return prs.find((d) => !d.stale) ?? prs[0];
+  }
+
+  protected proofOf(n: RawNode): NodeProof | undefined {
+    const count = this.demosUnder(n.id).length;
+    if (!count) return undefined;
+    const latest = this.latestDemo(n);
+    return { count, ...(latest ? { latest: this.demoRef(latest) } : {}) };
+  }
+
+  /** A feature row's "▶" (and a node shown in place of its folded feature). */
+  protected demoChip(n: RawNode): DemoChip | undefined {
+    const feature =
+      n.lvl === "feature" ||
+      this.ancestors(n.id).some((a) => a.lvl === "feature" && this.isFolded(a));
+    const latest = feature ? this.latestDemo(n) : undefined;
+    if (!latest) return undefined;
+    const ref = this.demoRef(latest);
+    return {
+      id: ref.id,
+      verdict: ref.verdict,
+      ...(ref.duration ? { duration: ref.duration } : {}),
+    };
+  }
+
+  /** `GET …/n/{ref}/demos`: the subtree's demos, newest first, `size` a page. */
+  demos(ref: string, cursor?: string, size = 20): NodeDemos | null {
+    const raw = this.N(ref);
+    if (!raw || raw.closed) return null;
+    const n = this.fold(raw);
+    const all = this.demosUnder(n.id);
+    const offset = cursor ? Number(cursor) || 0 : 0;
+    const latest = this.latestDemo(n);
+    return {
+      ref: n.id,
+      items: all.slice(offset, offset + size).map((d) => this.demoRef(d)),
+      total: all.length,
+      ...(latest ? { latest: latest.id } : {}),
+      ...(offset + size < all.length ? { next: String(offset + size) } : {}),
     };
   }
 
@@ -1403,6 +1489,7 @@ export class SampleEngine {
     };
     const chips = this.chipsOf(n);
     const responder = this.responder(n);
+    const proof = this.proofOf(n);
     return {
       node,
       breadcrumb: this.ancestors(n.id).map((a) => this.crumb(a)),
@@ -1422,6 +1509,7 @@ export class SampleEngine {
       },
       version: `sample-${this.version}`,
       ...(n.lvl === "root" ? { home: this.data.trees[n.tree].home } : {}),
+      ...(proof ? { proof } : {}),
     };
   }
 

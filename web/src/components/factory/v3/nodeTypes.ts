@@ -245,6 +245,8 @@ export interface NodeSummary {
   idle?: number;
   /** The node's one change, shown inline in a task row ("#9876 · merged"). (client) */
   change?: { ref: string; label: string };
+  /** A feature row's "▶" (calm rule 10): its latest demo, played from the Demos sheet. */
+  demo?: DemoChip;
 }
 
 export interface AcceptanceStep {
@@ -416,6 +418,8 @@ export interface NodePage {
    * Absent on older servers: the page derives it from the status line and Needs you.
    */
   your_move?: YourMove;
+  /** The subtree's recorded demos (calm rule 10): the one the page shows and how many. */
+  proof?: NodeProof;
 }
 
 // ── Your move (calm rule 1) ─────────────────────────────────────
@@ -714,4 +718,67 @@ export interface LevelsInfo {
   tiles_max?: number;
   fold_single_child?: string;
   version: number;
+}
+
+// ── Proof: recorded demos (calm rule 10) ──────────────────────────
+
+/** A demo's verdict, as the demo agent recorded it. */
+export type DemoVerdict = "PASS" | "PARTIAL" | "FAIL" | "ERROR";
+
+/** One recorded demo as a page row or a Demos list line shows it. */
+export interface DemoRef {
+  id: string;
+  verdict: DemoVerdict;
+  /** A few words ("Sessions, tool registry, flagged chat API", "Acceptance run 1"). */
+  title: string;
+  /** The node it belongs to: its change, its feature (an acceptance run) or its project. */
+  ref: string;
+  /** When it was recorded (ISO). */
+  at: string;
+  full_title?: string;
+  duration_s?: number;
+  /** "0:14". */
+  duration?: string;
+  /** The demo file routes (authenticated); absent when the demo recorded none. */
+  poster_url?: string;
+  video_url?: string;
+  pr_number?: number;
+  /** "#9876". */
+  pr_tag?: string;
+  /** The acceptance run it records. */
+  acceptance_run?: number;
+  /** Recorded at an earlier commit than its PR's head. */
+  stale?: boolean;
+  steps?: { passed: number; total: number };
+  /** What did not pass, in one line (PARTIAL, FAIL). */
+  partial_note?: string;
+  /** The feature and project it sits under (`…/demos` only). */
+  feature?: { ref: string; title: string };
+  project?: { ref: string; title: string };
+  /** Its PR merged then (epoch seconds; `…/demos` only). */
+  merged_at?: number;
+}
+
+/** `NodePage.proof`: the latest demo (where the level shows one) and the subtree's count. */
+export interface NodeProof {
+  count: number;
+  latest?: DemoRef;
+}
+
+/** `NodeSummary.demo`: a feature row's "▶". */
+export interface DemoChip {
+  id: string;
+  verdict: DemoVerdict;
+  duration?: string;
+}
+
+/** `GET …/n/{ref}/demos`: the subtree's demos, newest first. */
+export interface NodeDemos {
+  ref: string;
+  items: DemoRef[];
+  total: number;
+  /** The id of the demo the page shows as its row. */
+  latest?: string;
+  /** Cursor of the next page. */
+  next?: string;
 }

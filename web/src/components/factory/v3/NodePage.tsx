@@ -1,6 +1,6 @@
-// One node's page in cockpit v3, calm: the level strip (or the phone's level
-// row), the short title with Details and the ⋯ verbs, Your move, then its
-// children one line each (or one level under it, grouped under parents).
+// One node's page in cockpit v3, calm: a plain breadcrumb, the short title with Details and the ⋯ verbs, Your move, its latest
+// demo (proof is never hidden), then its children one line each (or one level
+// under it, grouped under parents).
 // Nothing is drawn between nodes. The node's chat is the page's right column.
 
 import {
@@ -13,12 +13,11 @@ import {
   useState,
 } from "react";
 import { Navigate } from "react-router-dom";
-import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { useLocation, useNavigate, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { NodeChat } from "./chat/NodeChat";
 import { ChildrenView } from "./Children";
-import { LevelStrip, PhoneLevelRow } from "./LevelStrip";
+import { Breadcrumb } from "./Breadcrumb";
 import { LevelView } from "./LevelView";
 import {
   AboveProvider,
@@ -36,6 +35,7 @@ import { useMarkSeen, useVisitSince } from "./nodeSteer";
 import { DEFAULT_OVERLAYS, ParentNameContext } from "./NodeTile";
 import { movedAsks, nodeName } from "./calm/calmModel";
 import { YourMove, useYourMove } from "./calm/YourMove";
+import { ProofRow } from "./proof/ProofRow";
 import { LensMenu } from "./calm/NodeMenu";
 import type { ChildPage, NodePage as Page, TimelineView, VerbArgs, VerbAvail } from "./nodeTypes";
 import { timelineSub } from "./lenses/TimelineLens";
@@ -324,7 +324,6 @@ function LoadedNodePage({
   // This visit's "since" stays while the page reads again (the mark moved, a verb applied).
   const page = useVisitSince(read);
   const prefetch = usePrefetchNode(factoryId);
-  const phone = useIsMobileViewport();
   const navigate = useNavigate();
   const body = useRef<HTMLDivElement>(null);
   const [whyOpen, setWhyOpen] = useState(false);
@@ -363,22 +362,14 @@ function LoadedNodePage({
     [actions, factoryId, prefetch, sheets, verbs.onVerb, openVerb],
   );
   const shown = level ?? page.home ?? (page.children.level || null);
-  const { view: move, you } = useYourMove(page, shown, factoryId);
+  const { view: move } = useYourMove(page, shown, factoryId);
   // Every ask Your move holds: tiles, rows, Details and the chat never repeat it.
   const above = useMemo(() => movedAsks(move), [move]);
   return (
     <NodeContextProvider value={value}>
       <AboveProvider aboveId={above}>
         <div data-testid="v3-node-page" data-ref={page.node.ref} className="flex min-w-0 flex-col">
-          {phone ? (
-            <div className="mb-3">
-              <PhoneLevelRow page={page} shown={shown} you={you} />
-            </div>
-          ) : (
-            <div className="-mx-4 -mt-1 mb-[18px] md:-mx-6">
-              <LevelStrip page={page} shown={shown} you={you} />
-            </div>
-          )}
+          <Breadcrumb page={page} />
           <div className={cn("grid min-w-0 gap-6", chat && "lg:grid-cols-[minmax(0,1fr)_auto]")}>
             <div ref={body} className="min-w-0" data-testid="v3-main">
               {notice}
@@ -400,6 +391,7 @@ function LoadedNodePage({
                 </div>
               )}
               <YourMove view={move} />
+              {!level && <ProofRow key={page.node.ref} page={page} />}
               {!level && <NodeContent page={page} part="body" />}
               <Below page={page} level={shown} explicit={Boolean(level)} lensKey={lensKey} />
             </div>

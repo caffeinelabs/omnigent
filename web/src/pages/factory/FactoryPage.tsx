@@ -1,15 +1,10 @@
 /**
- * Everything under `/factory/:factoryId/*`: the factory shell (header, tabs,
- * dock, presence) around one page. Overview at the root, then Projects, a
- * project, a PR, Agents and an agent, the Timeline, Alerts and an incident,
- * Activity, the Room, Decisions, the Graph, Insights, Improvements and a
- * change, and Settings. Old cockpit links
- * (`?project=`, `?review=`, `?pr=…&preview=unavailable`, `?tab=activity`)
- * are sent to their pages by the shell.
- *
- * The new cockpit's places (Discovery, Teams, Steer) and Debug live here too;
- * the shell sends each cockpit's addresses to the other's pages. Cockpit v3's
- * node pages are `n/<ref>` and `n/<ref>/<level>`.
+ * Everything under `/factory/:factoryId/*`: the cockpit (sidebar, presence)
+ * around one page. Its places are Home at the root, Demos, Chats
+ * (`chats/<thread>` one conversation), Decisions and the node pages
+ * (`n/<ref>`, `n/<ref>/<level>`). Older addresses (a project or PR page, an
+ * initiative, the Room, `?review=`) are sent to the place that shows them now
+ * by the shell; the earlier cockpits' other pages stay reachable from Debug.
  */
 
 import { CompassIcon } from "lucide-react";
@@ -22,23 +17,21 @@ import { Link } from "@/lib/routing";
 import { AgentsPage } from "./AgentsPage";
 import { AlertsPage } from "./AlertsPage";
 import { DebugPage } from "./DebugPage";
-import { DecisionsPage } from "./DecisionsPage";
+import { CockpitDecisions } from "./CockpitDecisions";
 import { DiscoveryPage } from "./DiscoveryPage";
 import { FactoryLayout } from "./FactoryLayout";
 import { GraphPage } from "./GraphPage";
 import { ImprovementsPage } from "./ImprovementsPage";
 import { IncidentPage } from "./IncidentPage";
 import { InsightsPage } from "./InsightsPage";
-import { PrPage } from "./PrPage";
 import { ProposalPage } from "./ProposalPage";
-import { ProjectPage } from "./ProjectPage";
-import { ProjectsPage } from "./ProjectsPage";
-import { RoomPage } from "./RoomPage";
 import { SettingsPage } from "./SettingsPage";
 import { SteerPage } from "./SteerPage";
 import { TimelinePage } from "./TimelinePage";
-import { AgentRoute, HomeRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
-import { InitiativePage } from "./InitiativePage";
+import { AgentRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
+import { ChatsPage } from "./ChatsPage";
+import { CockpitHome } from "./CockpitHome";
+import { DemosPage } from "./DemosPage";
 import { NodeRoute } from "./NodeRoute";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
@@ -81,13 +74,11 @@ export function FactoryPage() {
   return (
     <FactoryLayout>
       <Routes>
-        <Route index element={<HomeRoute />} />
-        <Route path="projects" element={<ProjectsPage />} />
-        <Route path="projects/:slug" element={<ProjectPage />} />
+        <Route index element={<CockpitHome />} />
+        <Route path="demos" element={<DemosPage />} />
+        <Route path="chats" element={<ChatsPage />} />
+        <Route path="chats/:thread" element={<ChatsPage />} />
         <Route path="projects/:slug/team" element={<ProjectTeamRoute />} />
-        <Route path="projects/:slug/:tab" element={<ProjectPage />} />
-        <Route path="initiatives/:ref" element={<InitiativePage />} />
-        <Route path="prs/:prId" element={<PrPage />} />
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:sid" element={<AgentRoute />} />
         <Route path="teams" element={<TeamsRoute />} />
@@ -96,9 +87,7 @@ export function FactoryPage() {
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="alerts/:ref" element={<IncidentPage />} />
         <Route path="activity" element={<ActivityPage />} />
-        <Route path="room" element={<RoomPage />} />
-        <Route path="room/:thread" element={<RoomPage />} />
-        <Route path="decisions" element={<DecisionsPage />} />
+        <Route path="decisions" element={<CockpitDecisions />} />
         <Route path="graph" element={<GraphPage />} />
         <Route path="insights" element={<InsightsPage />} />
         <Route path="improvements" element={<ImprovementsPage />} />

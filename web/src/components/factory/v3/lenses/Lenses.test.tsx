@@ -215,16 +215,6 @@ describe("cockpit v3 · the Lineage lens", () => {
       "/factory/f-sample/n/assistant-core",
     );
   });
-
-  it("on a phone the Lineage button opens it as a sheet", async () => {
-    setPhone(true);
-    const view = renderNode("T-16");
-    await settle(view.container);
-    fireEvent.click(screen.getByTestId("v3-phone-lineage"));
-    const sheet = await screen.findByRole("dialog");
-    expect(await within(sheet).findByTestId("v3-lineage")).toBeInTheDocument();
-    expect(view.search()).toBe("?peek=lineage&at=T-16");
-  });
 });
 
 describe("cockpit v3 · levels, not spaghetti, in every lens", () => {

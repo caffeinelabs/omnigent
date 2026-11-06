@@ -7,7 +7,8 @@ import { type SampleOptions, sampleEngine } from "../fixture/sampleNodeSource";
 import { TITLE_WORDS_MAX, holdsSlug, words } from "./calmModel";
 
 // The calm rules as a gate, over every node page of the sample factory: a
-// default page says little (about 120 words outside the chat), every title is
+// default page says little (about 120 words outside the chat, besides its one
+// short proof row), every title is
 // a short name (never a slug), no ask shows twice, Your move names what it
 // unblocks by name (never a slug or a bare id), and the chat holds the
 // conversation only.
@@ -23,8 +24,14 @@ afterEach(() => {
   fake = null;
 });
 
-/** Words a default page may show outside its chat. */
+/** Words a default page may show outside its chat (the proof row aside). */
 const PAGE_WORDS_MAX = 120;
+/**
+ * Rule 10 puts one proof row on a page that has demos; it is held to its own
+ * few words (verdict, length, title, what did not pass, "n more demos").
+ */
+const PROOF_WORDS_MAX = 24;
+const PROOF = '[data-testid="v3-proof"]';
 
 const CHAT = '[data-testid="v3-chat"], [data-testid="v3-chat-pinned"]';
 
@@ -38,6 +45,8 @@ const TITLES = [
 
 interface CalmFindings {
   words: number;
+  proofRows: number;
+  proofWords: number;
   longTitles: string[];
   slugTitles: string[];
   repeatedAsks: string[];
@@ -55,6 +64,9 @@ function text(el: Element): string {
 function calmFindings(page: Element): CalmFindings {
   const copy = page.cloneNode(true) as Element;
   for (const chat of copy.querySelectorAll(CHAT)) chat.remove();
+  const proofs = [...copy.querySelectorAll(PROOF)];
+  const proofWords = Math.max(0, ...proofs.map((p) => words(text(p)).length));
+  for (const proof of proofs) proof.remove();
   const titles = [...copy.querySelectorAll(TITLES)].map(text);
   const longTitles = titles.filter((t) => words(t).length > TITLE_WORDS_MAX);
   const slugTitles = titles.filter(holdsSlug);
@@ -65,7 +77,15 @@ function calmFindings(page: Element): CalmFindings {
   const repeatedAsks = [...page.querySelectorAll('[data-testid="v3-move-row"]')]
     .map((row) => row.getAttribute("data-ask") ?? "")
     .filter((ask) => ask && whole.split(ask).length - 1 > 1);
-  return { words: words(text(copy)).length, longTitles, slugTitles, repeatedAsks, machineMoves };
+  return {
+    words: words(text(copy)).length,
+    proofRows: proofs.length,
+    proofWords,
+    longTitles,
+    slugTitles,
+    repeatedAsks,
+    machineMoves,
+  };
 }
 
 async function settle(container: HTMLElement) {
@@ -88,6 +108,15 @@ async function sweep(options: SampleOptions) {
         ref,
         words: "ok",
       });
+      // One proof row at most, and a short one (rule 10).
+      expect({ ref, proofRows: found.proofRows <= 1 ? "ok" : found.proofRows }).toEqual({
+        ref,
+        proofRows: "ok",
+      });
+      expect({
+        ref,
+        proofWords: found.proofWords <= PROOF_WORDS_MAX ? "ok" : found.proofWords,
+      }).toEqual({ ref, proofWords: "ok" });
       expect({ ref, longTitles: found.longTitles }).toEqual({ ref, longTitles: [] });
       expect({ ref, slugTitles: found.slugTitles }).toEqual({ ref, slugTitles: [] });
       expect({ ref, machineMoves: found.machineMoves }).toEqual({ ref, machineMoves: [] });
@@ -126,7 +155,7 @@ describe("cockpit v3 · calm gate", () => {
       vi.stubGlobal(
         "matchMedia",
         vi.fn((query: string) => ({
-          matches: query.includes("min-width: 1024px"),
+          matches: query.includes("min-width: 1180px"),
           media: query,
           addEventListener: vi.fn(),
           removeEventListener: vi.fn(),
@@ -149,7 +178,9 @@ describe("cockpit v3 · calm gate", () => {
         const system = [...list.querySelectorAll(':scope > li[data-kind="system"]')].filter(
           (li) =>
             !li.querySelector(
-              '[data-testid="v3-why"], [data-testid="v3-offer"], [data-testid="v3-applied"]',
+              '[data-testid="v3-why"], [data-testid="v3-offer"], [data-testid="v3-applied"], ' +
+                // A recorded demo is proof: conversation, never Activity (rule 10).
+                '[data-testid^="demo-card-"]',
             ),
         );
         expect({ ref, system: system.map((li) => li.textContent) }).toEqual({ ref, system: [] });

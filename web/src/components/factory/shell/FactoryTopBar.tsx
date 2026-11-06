@@ -225,7 +225,7 @@ export function VerdictPill({
 
 // ── The switcher and you ───────────────────────────────────────
 
-function FactorySwitcher({
+export function FactorySwitcher({
   snapshot,
   productName,
   compact,

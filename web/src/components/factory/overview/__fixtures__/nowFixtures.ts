@@ -36,8 +36,12 @@ import {
   factoryPageHref,
   insightsPageHref,
   prPageHref,
-  projectPageHref,
 } from "../../factoryRoutes";
+
+/** The project link the server's status summary writes (its older address; the shell redirects it). */
+function projectPageHref(fid: string, slug: string): string {
+  return `${factoryPageHref(fid)}/projects/${encodeURIComponent(slug)}`;
+}
 
 const TEXT_MAX = 200;
 const NOTE_MAX = 140;
