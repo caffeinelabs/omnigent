@@ -59,8 +59,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from omnigent.entities.factory import FactoryInitiative, FactoryProject
+from omnigent.factory import PROJECT_SLUG_RE
 from omnigent.server.factory import events
-from omnigent.server.factory.charter import normalize_charter
+from omnigent.server.factory.charter import change_dependency, normalize_charter
 from omnigent.server.factory.control import CockpitError, human_name
 from omnigent.server.factory.initiative_view import (
     DONE_SHOWN_S,
@@ -137,6 +138,8 @@ class WaveIn(_In):
     :param held: Planned slug -> the person's input it is held for (credentials,
         spend, personal data, copy); it is built mock-first and that input turns it on.
     :param titles: Planned slug -> how people name it (``"Ads provider"``).
+    :param depends_on: Planned slug -> the projects (or ``PR-<n>`` changes) it
+        needs finished first; the wave does not start beside their open work.
     """
 
     n: int = Field(ge=1, le=WAVES_MAX)
@@ -144,11 +147,24 @@ class WaveIn(_In):
     projects: list[str] = Field(default_factory=list, max_length=12)
     held: dict[str, str] = Field(default_factory=dict, max_length=12)
     titles: dict[str, str] = Field(default_factory=dict, max_length=12)
+    depends_on: dict[str, list[str]] = Field(default_factory=dict, max_length=12)
 
     @field_validator("held", "titles")
     @classmethod
     def _short(cls, value: dict[str, str]) -> dict[str, str]:
         return {str(k)[:64]: " ".join(str(v).split())[:REASON_MAX] for k, v in value.items()}
+
+    @field_validator("depends_on")
+    @classmethod
+    def _needs(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        """Each item's project slugs and ``PR-<n>`` refs (anything else is dropped)."""
+        out: dict[str, list[str]] = {}
+        for slug, items in value.items():
+            refs = [s.strip() for s in items]
+            kept = [s for s in refs if PROJECT_SLUG_RE.match(s) or change_dependency(s)]
+            if kept:
+                out[str(slug)[:64]] = list(dict.fromkeys(kept))[:12]
+        return out
 
 
 class InitiativeIn(_In):
@@ -662,10 +678,14 @@ def _stamp(
     return stored or project
 
 
+_PER_SLUG: Final = ("held", "titles", "depends_on")
+"""A planned wave's keys that map its planned slugs to something."""
+
+
 def _wave_dump(wave: WaveIn) -> dict[str, Any]:
-    """A planned wave as the plan stores it (no empty ``held`` or ``titles``)."""
+    """A planned wave as the plan stores it (no empty ``held``, ``titles`` or ``depends_on``)."""
     out = wave.model_dump()
-    for key in ("held", "titles"):
+    for key in _PER_SLUG:
         if not out.get(key):
             out.pop(key, None)
     return out
@@ -697,7 +717,7 @@ def carried_forward(
             continue
         left["projects"] = list(dict.fromkeys([*left["projects"], *rest]))
         left["goal"] = left["goal"] or str(wave.get("goal") or "")
-        for key in ("held", "titles"):
+        for key in _PER_SLUG:
             kept = {k: v for k, v in (wave.get(key) or {}).items() if k in rest}
             if kept:
                 left[key] = {**left.get(key, {}), **kept}
@@ -707,7 +727,7 @@ def carried_forward(
     if same is None:
         return sorted([left, *out], key=lambda w: int(w.get("n") or 0))
     same["projects"] = list(dict.fromkeys([*left["projects"], *(same.get("projects") or [])]))
-    for key in ("held", "titles"):
+    for key in _PER_SLUG:
         if left.get(key):
             same[key] = {**left[key], **(same.get(key) or {})}
     return out

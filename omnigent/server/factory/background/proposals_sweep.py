@@ -11,8 +11,9 @@
 5. Initiatives' acceptance runs: a due run whose base env never reported
    ready is sent anyway, and a requested run with no result expires.
 6. Initiatives' waves: once every project of an initiative's current wave is
-   finished and a later wave is planned, the lead is told once
-   (:func:`.initiative_waves.sweep`).
+   finished, or delivered its main work while follow-ups the next wave does
+   not depend on still run, and a later wave is planned, the lead is told
+   once (:func:`.initiative_waves.sweep`).
 """
 
 from __future__ import annotations

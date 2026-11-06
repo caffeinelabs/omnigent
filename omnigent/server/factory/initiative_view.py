@@ -261,6 +261,11 @@ def _next_wave(plan: Mapping[str, Any]) -> dict[str, Any] | None:
         }
         if isinstance(wave.get("held"), Mapping) and wave["held"]:
             out["held"] = {str(k): str(v) for k, v in wave["held"].items()}
+        needs = wave.get("depends_on")
+        if isinstance(needs, Mapping):
+            named = {str(k): [str(d) for d in v] for k, v in needs.items() if isinstance(v, list)}
+            if any(named.values()):
+                out["depends_on"] = {k: v for k, v in named.items() if v}
         if wave.get("if_any") and not out["projects"]:
             out["if_any"] = True
         return out
@@ -296,7 +301,7 @@ class WaveState:
     :param done_upto: The highest wave that, with every wave before it, is finished.
     :param projects: The current wave's projects.
     :param live: The current wave's projects still being built.
-    :param next: The next planned wave (``{n, goal, projects, held?}``), if any.
+    :param next: The next planned wave (``{n, goal, projects, held?, depends_on?}``), if any.
     """
 
     current: int

@@ -132,6 +132,13 @@ to the planner's analysis:
 An initiative is done when the person has what they asked for, not when one
 wave lands. `[Factory initiative · I-<n> wave <k> done]` lists what remains:
 the planned waves, what each item is held for, the acceptance and the ask.
+`[Factory initiative · I-<n> wave <k> ready for the next]` comes instead
+when wave <k>'s main work is delivered (each project it was planned with is
+finished or merged its PR) and only follow-ups of it still run (tasks or
+fixes on merged work, small adds) that the next wave does not depend on; it
+names them. Start the next wave now, in parallel with those follow-ups:
+their PLs finish them, so do not wait for them, plan them again or hold a
+wave back for work it does not need. Either notice comes once per wave.
 In that same turn, do one of two things:
 
 1. **Propose the next wave**: one `sys_factory_project` whose analysis
@@ -144,7 +151,11 @@ In that same turn, do one of two things:
    by default), and steps "drafted from the plan" do not run until you
    restate them with `"acceptance": [...]`. It applies at once for the
    person who asked (no second approval; Undo stays open). Then one line in
-   `feature:I-<n>`: `I-<n> wave <k+1> planned as C-<m>: …`.
+   `feature:I-<n>`: `I-<n> wave <k+1> planned as C-<m>: …`. When an item of
+   a later wave truly needs a project's work first (a code or API
+   dependency), name it in that wave, `"depends_on": {"<planned slug>":
+   ["<slug>"]}`: that wave then waits for the open work of that project
+   alone. Name nothing else; independent items start beside follow-ups.
 2. **Or say exactly what blocks it**, in ONE line:
    `sys_factory_chat(thread="feature:I-<n>", message="I-<n> wave <k+1>: blocked on <exactly what>")`.
    Missing credentials, spend or copy is no block (build mock-first); a
