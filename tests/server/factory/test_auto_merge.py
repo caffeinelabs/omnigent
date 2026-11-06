@@ -334,10 +334,10 @@ async def test_the_auto_merge_seed_skips_another_repo_and_adds_no_main(
     assert root is not None and product_profile.LABEL_AUTO_MERGE_SEED not in root.labels
 
     # The seed names a test base only: the repo's default branch is never added with it.
-    _seed_targets(monkeypatch, {REPO: [{"base": "temp-main"}]})
+    _seed_targets(monkeypatch, {REPO: [{"base": "preview-main"}]})
     assert _seed_now(cockpit) is not None
     targets = auto_merge.factory_targets(cockpit.deps, cockpit.fid)
-    assert targets.pairs == {(REPO, "temp-main")}
+    assert targets.pairs == {(REPO, "preview-main")}
     assert not auto_merge.is_target(targets, REPO, "main")
 
 
