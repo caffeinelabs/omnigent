@@ -36,6 +36,17 @@ reaches only that repo's projects. So is the autonomy level
 (:data:`AUTONOMY_SEED_ENV`, ``{"<owner/repo>": {"level": "standard"}}``): a
 factory on that repo starts at that level, or gets it once as a seed version
 while no version ever set ``autonomy.level``; owners change it in Steer.
+
+The auto-merge targets have their own seed (:data:`AUTO_MERGE_SEED_ENV`,
+``{"<owner/repo>": [{"base": "staging"}]}``), so a deployment can hand them to
+a factory whose delivery profile was seeded or set long ago: a factory on that
+repo starts with them, or gets them once as a seed version (by the server,
+never an agent) while no version ever set ``product.delivery.auto_merge``. A
+factory whose owners set or cleared targets is never touched. Each target
+names its base (a target without one seeds nothing), so a human-merged
+default branch such as ``main`` is a target only when the seed says so; its
+``repo`` is the key unless it names another. Owners change the targets in
+Steer afterwards; agents never do.
 """
 
 from __future__ import annotations
@@ -72,6 +83,10 @@ AUTONOMY_SEED_ENV: Final = "OMNIGENT_FACTORY_AUTONOMY_SEED"
 """JSON ``{"<owner/repo>": {"level": "standard"}}``: the level that repo's factories start at."""
 LABEL_AUTONOMY_SEED: Final = f"{LABEL_PREFIX}autonomy_seed"
 """On a factory root once its autonomy level was seeded (``v<n>``) or found set (``set``)."""
+AUTO_MERGE_SEED_ENV: Final = "OMNIGENT_FACTORY_AUTO_MERGE_SEED"
+"""JSON ``{"<owner/repo>": [{"base": "staging"}]}``: that repo's factories' merge targets."""
+LABEL_AUTO_MERGE_SEED: Final = f"{LABEL_PREFIX}auto_merge_seed"
+"""On a factory root once its auto-merge targets were seeded (``v<n>``) or found set (``set``)."""
 _HISTORY_LIMIT: Final = 1000
 
 
@@ -87,6 +102,9 @@ class ProfileSeed:
     :param repo_field: A field set to the seed's repo when the seed leaves it out.
     :param fields: Only these fields of the block are seeded and checked for
         "ever set" (``None``: the whole block).
+    :param list_field: A repo's value is this field's list (a list of objects,
+        each given the seed's repo as ``repo`` when it names none); an empty
+        list seeds nothing.
     """
 
     env: str
@@ -95,6 +113,7 @@ class ProfileSeed:
     label: str
     repo_field: str | None = None
     fields: tuple[str, ...] | None = None
+    list_field: str | None = None
 
     def default(self) -> dict[str, Any]:
         """:returns: The block's defaults."""
@@ -108,7 +127,16 @@ ENVIRONMENT: Final = ProfileSeed(
 AUTONOMY: Final = ProfileSeed(
     AUTONOMY_SEED_ENV, "autonomy", AutonomyDef, LABEL_AUTONOMY_SEED, fields=("level",)
 )
-SEEDS: Final = (DELIVERY, ENVIRONMENT, AUTONOMY)
+AUTO_MERGE: Final = ProfileSeed(
+    AUTO_MERGE_SEED_ENV,
+    SEED_PATH,
+    DeliveryDef,
+    LABEL_AUTO_MERGE_SEED,
+    fields=("auto_merge",),
+    list_field="auto_merge",
+)
+SEEDS: Final = (DELIVERY, ENVIRONMENT, AUTONOMY, AUTO_MERGE)
+"""Applied in this order: a later seed's fields win in v1 (auto-merge over delivery)."""
 
 
 def _default_delivery() -> dict[str, Any]:
@@ -140,12 +168,16 @@ def deployment_seeds(seed: ProfileSeed = DELIVERY) -> dict[str, dict[str, Any]]:
         seeds: dict[str, dict[str, Any]] = {}
         for key, fields in parsed.items():
             repo = _norm_repo(key)
+            if seed.list_field is not None:
+                fields = _listed(seed.list_field, key, repo, fields)
             if not repo or not isinstance(fields, Mapping):
                 raise ValueError(f"{key!r}: keys are owner/repo, values {seed.path} objects")
             found = seed.model.model_validate(dict(fields))
             values = found.model_dump(mode="json", exclude_unset=True)
             if seed.fields is not None:
                 values = {k: v for k, v in values.items() if k in seed.fields}
+            if seed.list_field is not None and not values.get(seed.list_field):
+                continue
             if values:
                 if seed.repo_field and seed.repo_field not in values:
                     values[seed.repo_field] = repo
@@ -159,6 +191,13 @@ def deployment_seeds(seed: ProfileSeed = DELIVERY) -> dict[str, dict[str, Any]]:
             str(exc).splitlines()[0],
         )
         return {}
+
+
+def _listed(field: str, key: object, repo: str, value: object) -> dict[str, Any]:
+    """:returns: ``{field: value}``, each item given *key* as its ``repo`` when it names none."""
+    if not isinstance(value, list) or not all(isinstance(i, Mapping) for i in value):
+        raise ValueError(f"{key!r}: values are lists of {field} objects")
+    return {field: [{"repo": str(key).strip(), **item} if repo else dict(item) for item in value]}
 
 
 def seed_values(*repos: str, seed: ProfileSeed = DELIVERY) -> dict[str, Any]:
@@ -231,7 +270,7 @@ def seed_existing(
 
     :param deps: The factory stores.
     :param root: The factory root.
-    :param seed: The block to seed (:data:`DELIVERY` or :data:`ENVIRONMENT`).
+    :param seed: The block to seed (one of :data:`SEEDS`).
     :returns: The seed version, or ``None`` when nothing was stored.
     """
     from omnigent.factory import LABEL_DEFAULT_REPO
@@ -321,11 +360,14 @@ def preview_domain(deps: FactoryDeps | None, factory_id: str | None) -> str | No
 __all__ = [
     "AUTONOMY",
     "AUTONOMY_SEED_ENV",
+    "AUTO_MERGE",
+    "AUTO_MERGE_SEED_ENV",
     "DELIVERY",
     "DELIVERY_SEED_ENV",
     "ENVIRONMENT",
     "ENVIRONMENT_SEED_ENV",
     "LABEL_AUTONOMY_SEED",
+    "LABEL_AUTO_MERGE_SEED",
     "LABEL_DELIVERY_SEED",
     "LABEL_ENVIRONMENT_SEED",
     "SEEDS",

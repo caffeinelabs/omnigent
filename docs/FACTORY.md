@@ -857,6 +857,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | unset | The deployment's env domain: the only domain env and preview URLs may use (SSRF guard) for a factory whose product profile sets no `product.delivery.preview_domain`. `OMNIGENT_ENV_DOMAIN` (the sandboxes' env domain) is read when it is unset. With neither, no env URL is accepted. |
 | `OMNIGENT_FACTORY_PREVIEW_DOMAINS` | the env domain | Tier 0: comma-separated domains a product profile may name as its `product.delivery.preview_domain` (the env domain is always one). A definition change to any other domain is refused (422 `tier0`); a stored one the deployment no longer lists is ignored with a warning, and the env domain applies. |
 | `OMNIGENT_FACTORY_DELIVERY_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<product.delivery fields>}}` (`merge_policy`, `auto_merge`, `protected_repos`, `demo_paths`, `preview_domain`, `release`, `flags`): the profile a factory on that repo starts from. A new factory whose default repo is listed gets it in v1; a factory from before the product profile whose default or project repo is listed gets it once as a seed version at boot. A factory on another repo starts with an empty profile. Owners edit it afterwards; a factory whose profile was already seeded or set takes new `auto_merge` targets only from an owner in Steer. Example: `{"sample-org/sample-app": {"auto_merge": [{"repo": "sample-org/sample-app", "base": "staging"}]}}`. |
+| `OMNIGENT_FACTORY_AUTO_MERGE_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": [{"base": "<branch>", "repo"?: "<owner/repo>"}]}`: the auto-merge targets (`product.delivery.auto_merge`) a factory on that repo starts with, or gets once at boot as a seed version while no version of its definition ever set targets (one that set or cleared them is never touched). Every target names its base, so `main` is a target only when named; an invalid value seeds nothing (logged). See "Auto-merge targets". Example: `{"sample-org/sample-app": [{"base": "staging"}]}`. |
 | `OMNIGENT_FACTORY_ENVIRONMENT_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<environment fields>}}` (`summary`, `services`, `tooling`, `registry`, `base_image`, `pull_secret`, `notes`, `conventions`, `protected_branches`, `demo`): the environment profile a factory on that repo starts from, seeded like `OMNIGENT_FACTORY_DELIVERY_SEED` (in v1, or once at boot for a factory from before it). The seed's `repo` is its key unless it names one, so it reaches only that repo's projects. An invalid value seeds nothing (logged). |
 | `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` | unset | Tier 0: comma-separated `owner/repo` values no factory agent ever writes, whatever a spec, a project or a profile says. Read once at boot. Unset, the server logs an error at start and the cockpit health strip shows "Config: no always-deny repos configured". |
 | `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.example.com`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
@@ -2297,6 +2298,24 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   targets under their own top-level key (`auto_merge_targets`), so a server
   from before them drops only the targets on a rollback and keeps the rest of
   the profile (`protected_repos` included).
+
+  A deployment can set the targets so no one has to click:
+  `OMNIGENT_FACTORY_AUTO_MERGE_SEED`, e.g.
+  `{"sample-org/sample-app": [{"base": "staging"}]}` (each target's `repo` is
+  the key unless it names another). A new factory whose default repo is a key
+  starts with those targets in v1. A factory that already exists gets them
+  once, at boot, as a recorded definition version (`created_via: "seed"`, by
+  `server`: the deployment, not an agent), and only when its default repo or
+  a project repo a person gave it is a key and no version of its definition
+  ever set `product.delivery.auto_merge` (a factory whose owners set targets,
+  or set and later cleared them, is never touched). The root's
+  `omnigent.factory.auto_merge_seed` label (`v<n>` or `set`) keeps it from
+  running twice. Every target names its base: an entry without one makes the
+  whole value invalid (logged, nothing seeded), so a human-merged default
+  branch (`main`, `master`) becomes a target only when the seed names it.
+  Afterwards owners change the targets in Steer like any other; agents never
+  can. `auto_merge` inside `OMNIGENT_FACTORY_DELIVERY_SEED` still works for a
+  factory's first delivery seed; this seed wins in v1 when both name targets.
 - **Autonomy and auto-merge per subtree (owners only).** An owner scopes
   either setting to one stored node of the product tree (a goal `G-n`, a need
   `O-n`, a feature `I-n` or a project slug) with the node's "Autonomy &

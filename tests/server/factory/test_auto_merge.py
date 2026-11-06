@@ -220,6 +220,148 @@ async def test_an_agent_never_proposes_targets(
     assert not auto_merge.factory_targets(cockpit.deps, cockpit.fid)
 
 
+# ── The deployment's auto-merge seed ─────────────────────────────────────────
+
+
+def _seed_targets(monkeypatch: pytest.MonkeyPatch, value: Any) -> None:
+    monkeypatch.setenv(product_profile.AUTO_MERGE_SEED_ENV, json.dumps(value))
+
+
+def _seed_now(cockpit: Cockpit) -> int | None:
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    assert root is not None
+    found = product_profile.seed_existing(cockpit.deps, root, product_profile.AUTO_MERGE)
+    definition.invalidate()
+    return found
+
+
+def test_the_auto_merge_seed_names_each_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    other = "sample-org/sample-docs"
+    _seed_targets(monkeypatch, {REPO: [{"base": BASE}, {"repo": other, "base": "main"}]})
+    assert product_profile.deployment_seeds(product_profile.AUTO_MERGE) == {
+        REPO: {"auto_merge": [*TARGETS, {"repo": other, "base": "main"}]}
+    }
+    # A target without a base is never read as the default branch: nothing is seeded.
+    _seed_targets(monkeypatch, {REPO: [{"base": BASE}, {}]})
+    assert product_profile.deployment_seeds(product_profile.AUTO_MERGE) == {}
+    _seed_targets(monkeypatch, {REPO: {"base": BASE}})
+    assert product_profile.deployment_seeds(product_profile.AUTO_MERGE) == {}
+    # An empty list seeds nothing (never an empty version).
+    _seed_targets(monkeypatch, {REPO: []})
+    assert product_profile.deployment_seeds(product_profile.AUTO_MERGE) == {}
+
+
+def test_a_new_factory_starts_with_the_seeded_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from omnigent import factory as F
+
+    _seed_targets(monkeypatch, {REPO: [{"base": BASE}]})
+
+    doc = definition.seed_doc({F.LABEL_DEFAULT_REPO: REPO})
+    other = definition.seed_doc({F.LABEL_DEFAULT_REPO: "sample-org/other"})
+
+    assert doc["product"]["delivery"]["auto_merge"] == TARGETS
+    assert other["product"]["delivery"]["auto_merge"] == []
+
+
+async def test_the_auto_merge_seed_applies_once_as_the_server(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A factory from before the seed: its v1 exists already, its profile set otherwise.
+    resp = await put(
+        cockpit,
+        {"op": "replace", "path": "product.delivery.merge_policy", "value": "Owners (sample)"},
+    )
+    assert resp.status_code == 200, resp.text
+    _seed_targets(monkeypatch, {REPO: [{"base": BASE}]})
+
+    version = _seed_now(cockpit)
+    again = _seed_now(cockpit)
+
+    assert version is not None and again is None
+    row = cockpit.deps.factory_store.get_definition(cockpit.fid, version)
+    assert row is not None and (row.created_by, row.created_via) == ("server", "seed")
+    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid).pairs == {(REPO, BASE)}
+    # Only the targets are seeded; the rest of the profile stays the owners'.
+    assert definition.value(cockpit.deps, cockpit.fid, "product.delivery.merge_policy") == (
+        "Owners (sample)"
+    )
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    assert root is not None
+    assert root.labels[product_profile.LABEL_AUTO_MERGE_SEED] == f"v{version}"
+    # Idempotent across restarts too: the label stops the boot pass, and a
+    # changed seed never reaches a seeded factory.
+    _seed_targets(monkeypatch, {REPO: [{"base": "main"}]})
+    assert _seed_now(cockpit) is None
+    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid).pairs == {(REPO, BASE)}
+
+
+async def test_the_auto_merge_seed_skips_a_factory_that_set_targets(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resp = await put(cockpit, {"op": "replace", "path": PATH, "value": TARGETS})
+    assert resp.status_code == 200, resp.text
+    _seed_targets(monkeypatch, {REPO: [{"base": "main"}]})
+
+    assert _seed_now(cockpit) is None
+
+    assert auto_merge.factory_targets(cockpit.deps, cockpit.fid).pairs == {(REPO, BASE)}
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    assert root is not None and root.labels[product_profile.LABEL_AUTO_MERGE_SEED] == "set"
+
+
+async def test_the_auto_merge_seed_skips_a_factory_that_cleared_targets(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for value in (TARGETS, []):
+        resp = await put(cockpit, {"op": "replace", "path": PATH, "value": value})
+        assert resp.status_code == 200, resp.text
+    definition.invalidate()
+    assert not auto_merge.factory_targets(cockpit.deps, cockpit.fid)
+    _seed_targets(monkeypatch, {REPO: [{"base": BASE}]})
+
+    assert _seed_now(cockpit) is None
+
+    assert not auto_merge.factory_targets(cockpit.deps, cockpit.fid)
+
+
+async def test_the_auto_merge_seed_skips_another_repo_and_adds_no_main(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_targets(monkeypatch, {"sample-org/other": [{"base": BASE}]})
+    assert _seed_now(cockpit) is None
+    assert not auto_merge.factory_targets(cockpit.deps, cockpit.fid)
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    assert root is not None and product_profile.LABEL_AUTO_MERGE_SEED not in root.labels
+
+    # The seed names a test base only: the repo's default branch is never added with it.
+    _seed_targets(monkeypatch, {REPO: [{"base": "preview-main"}]})
+    assert _seed_now(cockpit) is not None
+    targets = auto_merge.factory_targets(cockpit.deps, cockpit.fid)
+    assert targets.pairs == {(REPO, "preview-main")}
+    assert not auto_merge.is_target(targets, REPO, "main")
+
+
+async def test_the_boot_seed_tells_each_live_pl_the_server_merges(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory.background import delivery_seed
+    from tests.server.factory.projects_helpers import BASE as PROJECT_BASE
+    from tests.server.factory.projects_helpers import seed as seed_cockpit
+
+    seed_cockpit(cockpit)
+    # A factory from before the seed: its v1 exists already.
+    assert definition.definition_for(cockpit.deps, cockpit.fid, fresh=True) is not None
+    _seed_targets(monkeypatch, {REPO: [{"base": PROJECT_BASE}]})
+
+    assert await delivery_seed.seed_all(cockpit.app.state) == [cockpit.fid]
+    assert await delivery_seed.seed_all(cockpit.app.state) == []
+
+    pl = cockpit.world.id("pl")
+    [text] = [t for t in cockpit.mailer.texts_to(pl) if "CHARTER UPDATE" in t]
+    assert "by server (seed v" in text
+    assert f"PRs into {REPO}#{PROJECT_BASE} are merged by the factory's server" in text
+
+
 async def test_approving_an_agent_proposal_never_widens_targets(cockpit: Cockpit) -> None:
     # A proposal stored past the propose check (an older server filed it) still never applies.
     row, _ = cockpit.store.create_proposal(
