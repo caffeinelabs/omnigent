@@ -6,11 +6,14 @@ gets the deployment's fields for its repo
 :data:`~omnigent.server.factory.product_profile.ENVIRONMENT_SEED_ENV`) as one
 seed version each, so what the server, the cockpit and the agents read from
 the profile matches what they did before
-(:func:`.product_profile.seed_existing`). A factory on a repo the seed does
+(:func:`.product_profile.seed_existing`). The autonomy level and the
+auto-merge targets (:data:`~omnigent.server.factory.product_profile.AUTO_MERGE_SEED_ENV`)
+are seeded the same way while no version ever set them. A factory on a repo the seed does
 not name is left alone. It runs in the background, one factory at a time
 under its definition lock, and never again for a factory it marked. Each
 live PL whose charter gains ``Environment`` lines gets them as a CHARTER
-UPDATE, since its playbook now points there.
+UPDATE, since its playbook now points there; so does each PL whose merge
+policy line now says the server merges its PRs.
 """
 
 from __future__ import annotations
@@ -59,7 +62,8 @@ async def seed_all(app_state: Any) -> list[str]:
                 continue
             if root.id not in seeded:
                 seeded.append(root.id)
-            if seed is product_profile.ENVIRONMENT:
+            if seed in (product_profile.ENVIRONMENT, product_profile.AUTO_MERGE):
+                # Charter lines: the environment, and who merges PRs into a target base.
                 await _announce(app_state, deps, root, version)
     return seeded
 
@@ -83,7 +87,7 @@ async def _announce(app_state: Any, deps: FactoryDeps, root: Any, version: int) 
         )
     except Exception:  # noqa: BLE001 - the seed stays; the PLs read it on their next brief
         _logger.warning(
-            "factory %s: could not announce the seeded environment", root.id, exc_info=True
+            "factory %s: could not announce the seeded profile", root.id, exc_info=True
         )
 
 
