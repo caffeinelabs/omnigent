@@ -1774,6 +1774,7 @@ def reset_cache() -> None:
     """Forget cached snapshots, viewer permissions, costs and handles (tests)."""
     _epoch[0] += 1
     _snapshots.clear()
+    _refreshes.clear()
     _cost_cache.clear()
     _locks.clear()
     _viewers.clear()

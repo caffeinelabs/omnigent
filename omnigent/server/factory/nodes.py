@@ -3767,6 +3767,7 @@ def reset_cache() -> None:
     """Forget every projection (tests)."""
     _epoch[0] += 1
     _trees.clear()
+    _refreshes.clear()
     _locks.clear()
 
 
