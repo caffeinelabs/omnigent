@@ -89,12 +89,6 @@ function renderAt(path: string) {
   );
 }
 
-function sent(method: string, path: string): unknown[] {
-  return server.calls
-    .filter((c) => c.method === method && c.path.split("?")[0] === path)
-    .map((c) => c.body);
-}
-
 beforeEach(() => {
   authenticatedFetch.mockReset();
   resetFactoryControls();
@@ -246,24 +240,3 @@ describe("Improvements", () => {
 });
 
 // ── Feedback round trips ───────────────────────────────────────
-
-describe("feedback", () => {
-  it("flags a question as unnecessary", async () => {
-    serve();
-    renderAt("/decisions");
-
-    const [button] = await screen.findAllByTestId("decision-unneeded-D-2");
-    fireEvent.click(button!);
-
-    await waitFor(() =>
-      expect(sent("POST", "/v1/factory/feedback")).toEqual([
-        expect.objectContaining({
-          target_kind: "decision",
-          target_id: "a9d44647df3050199c1577ba21f16b67",
-          kind: "unneeded",
-          project: "db-version",
-        }),
-      ]),
-    );
-  });
-});

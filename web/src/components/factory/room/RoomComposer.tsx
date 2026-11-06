@@ -322,12 +322,16 @@ export function RoomComposer({
     }
     setSending(true);
     setError(null);
+    // The box empties at once (the thread shows the message as sending); a
+    // refusal puts the words back with the server's reason.
+    const typed = text;
+    update("", 0);
     try {
       await onSend(node?.prepare ? node.prepare(body) : body, roomMentions(body));
-      update("", 0);
       intent?.run();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      update(typed, typed.length);
+      setError(`Not sent: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSending(false);
     }

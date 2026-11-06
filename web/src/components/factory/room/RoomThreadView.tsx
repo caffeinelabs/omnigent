@@ -134,6 +134,36 @@ function NoteRow({ note, onDismiss }: { note: LocalNote; onDismiss: () => void }
   );
 }
 
+/** A message on its way: the viewer's words, marked as sending until the server answers. */
+function pendingMessage(
+  id: string,
+  thread: string,
+  body: string,
+  author: string,
+  after: number,
+): ChatMessageView {
+  return {
+    id,
+    factory_id: "",
+    thread,
+    seq: after + 0.5,
+    author_kind: "human",
+    author,
+    author_title: null,
+    author_role: null,
+    body,
+    mentions: [],
+    refs: [],
+    reply_to: null,
+    card: null,
+    routed: [],
+    auto_reply: false,
+    created_at: Math.floor(Date.now() / 1000),
+    lane: "conversation",
+    pending: true,
+  };
+}
+
 function SkeletonRows() {
   return (
     <div aria-busy="true" aria-label="Loading messages" className="flex flex-col gap-4 p-3">
@@ -268,6 +298,7 @@ export function RoomThreadView({
   const here = peopleHere(snapshot.presence, snapshot, thread);
   const [notes, setNotes] = useState<LocalNote[]>([]);
   const noteSeq = useRef(0);
+  const pendingSeq = useRef(0);
   const [adding, setAdding] = useState<{ title: string | null } | null>(null);
   const [charter, setCharter] = useState<string | null>(null);
   const channel = useReadMarkSync();
@@ -383,21 +414,38 @@ export function RoomThreadView({
   };
 
   const send = async (body: string, mentions: string[]) => {
-    const res = await postRoomMessage(fid, { thread, body, mentions });
-    atBottom.current = true;
-    queryClient.setQueryData<typeof messagesQuery.data>(
-      messagesQueryKey(fid, thread, feed),
-      (prev) => {
+    // Shown at once as "sending", then swapped for the server's row (or dropped on a refusal).
+    const pendingId = `pending-${(pendingSeq.current += 1)}`;
+    const key = messagesQueryKey(fid, thread, feed);
+    type Pages = typeof messagesQuery.data;
+    const edit = (change: (rows: ChatMessageView[]) => ChatMessageView[]) =>
+      queryClient.setQueryData<Pages>(key, (prev) => {
         if (!prev || prev.pages.length === 0) return prev;
         const [first, ...rest] = prev.pages;
-        const fresh: ChatMessageView[] = [res.message, ...res.notes].filter(
-          (m) => !first!.data.some((d) => d.id === m.id),
-        );
-        return { ...prev, pages: [{ ...first!, data: [...first!.data, ...fresh] }, ...rest] };
-      },
-    );
+        return { ...prev, pages: [{ ...first!, data: change(first!.data) }, ...rest] };
+      });
+    atBottom.current = true;
+    edit((rows) => [
+      ...rows,
+      pendingMessage(pendingId, thread, body, snapshot.viewer?.user_id ?? "you", lastSeq(rows)),
+    ]);
+    let res: Awaited<ReturnType<typeof postRoomMessage>>;
+    try {
+      res = await postRoomMessage(fid, { thread, body, mentions });
+    } catch (error) {
+      edit((rows) => rows.filter((m) => m.id !== pendingId));
+      throw error;
+    }
+    atBottom.current = true;
+    edit((rows) => {
+      const kept = rows.filter((m) => m.id !== pendingId);
+      const fresh: ChatMessageView[] = [res.message, ...res.notes].filter(
+        (m) => !kept.some((d) => d.id === m.id),
+      );
+      return [...kept, ...fresh];
+    });
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(fid) });
-    void queryClient.invalidateQueries({ queryKey: messagesQueryKey(fid, thread, feed) });
+    void queryClient.invalidateQueries({ queryKey: key });
   };
 
   const renderItem = (item: FoldedItem, prev?: FoldedItem): ReactNode => {

@@ -143,8 +143,8 @@ export function factoryInvalidationKeys(
 export const FACTORY_FRAME_MIN_MS = 2_000;
 
 export interface FactoryFrameThrottle {
-  push(factoryId: string, scopes: readonly string[] | null | undefined): void;
-  dispose(): void;
+  push: (factoryId: string, scopes: readonly string[] | null | undefined) => void;
+  dispose: () => void;
 }
 
 /**

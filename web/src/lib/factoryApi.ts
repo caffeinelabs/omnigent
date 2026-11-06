@@ -1309,6 +1309,8 @@ export interface ChatMessageView {
   created_at: number;
   /** With `feed=all` (cockpit v3's node chat): what people and agents say, or the system's activity. */
   lane?: "conversation" | "activity";
+  /** (client) The viewer's message on its way to the server. */
+  pending?: boolean;
 }
 
 /** One Room thread: `factory`, `improvements`, `project:<slug>`, `pr:<id>` or a node's. */
