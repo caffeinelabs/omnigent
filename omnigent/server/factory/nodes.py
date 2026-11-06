@@ -102,6 +102,13 @@ from omnigent.server.factory.definition_blocks import (
     PRODUCT_TREE,
     TREES,
 )
+from omnigent.server.factory.done_review_view import (
+    PHRASE_FOLLOW_UPS,
+    PHRASE_IN_REVIEW,
+    ReviewState,
+    gap_live,
+    review_state,
+)
 from omnigent.server.factory.graph import DEFAULT_WEIGHT_MIN, TaskNode, critical_path, layers
 from omnigent.server.factory.initiative_view import RUN_DONE, plan_of
 from omnigent.stores.factory_store import norm_id
@@ -230,6 +237,9 @@ _VERB_LABELS: Final[dict[str, tuple[str, str]]] = {
     "move": ("Move", "m"),
     "name": ("Name it / file under", "n"),
     "rename": ("Rename levels", "r"),
+    "review": ("Is this done?", "d"),
+    "done": ("It is done", ""),
+    "drop": ("Drop a follow-up", ""),
 }
 _READ_ONLY: Final = "You can read this factory; ask an owner for edit access to steer it."
 _AREA_WHY: Final[dict[str, str]] = {
@@ -538,6 +548,8 @@ class _N:
     """The title before the node took its short name (shown in its details)."""
     named: str | None = None
     """Where its short name came from: ``person``, ``factory`` or ``words`` (its first words)."""
+    review: ReviewState | None = None
+    """A feature's done review (it reads done only once one passed)."""
 
 
 def _proposal_text(proposal: FactoryProposal) -> str:
@@ -976,6 +988,8 @@ class Tree:
             )
             if row.status == "done":
                 node.own, node.leaf = "done", True
+            else:
+                node.review = review_state(plan)
             node.acceptance = _acceptance(row)
             node.steps = _steps(row, node.acceptance)
             node.surfaces = tuple(str(s) for s in plan.get("user_facing") or [])
@@ -1799,6 +1813,7 @@ class Tree:
             state = _worst(live) if live else "done"
             if state == "done" and node.level == "project" and node.own != "done":
                 state = node.own
+        state = self._reviewed(node, state)
         if state != "done" and node.waits:
             state = _worst([state, "waiting"])
         if state not in ("done", "later", "ghost") and any(
@@ -1806,6 +1821,37 @@ class Tree:
         ):
             state = "needs"
         return state
+
+    def _reviewed(self, node: _N, state: str) -> str:
+        """
+        A feature reads done only after a passing done review: built work with
+        none (or with follow-ups still running) moves; a person who said it is
+        done makes it done.
+        """
+        review = node.review
+        if review is None or node.level != "feature":
+            return state
+        if review.said_by and state in ("done", "moving"):
+            return "done"
+        if state == "done" and not review.passed:
+            return "moving"
+        return state
+
+    def review_phrase(self, node: _N) -> str | None:
+        """``Built · in review`` / ``Follow-ups running`` of a feature no review passed yet."""
+        review = node.review
+        if review is None or node.level != "feature" or review.passed:
+            return None
+        if review.phase == "follow_ups":
+            return PHRASE_FOLLOW_UPS
+        kids = [
+            k
+            for k in self.shown_children(node.ref)
+            if not k.ghost and not k.later and k.level != "run"
+        ]
+        if kids and all(self.state(k.ref) == "done" for k in kids):
+            return PHRASE_IN_REVIEW
+        return None
 
     def shown_state(self, node: _N) -> str:
         """
@@ -2071,6 +2117,12 @@ class Tree:
 
     def _status(self, node: _N, *, compact: bool) -> dict[str, Any]:
         out = self.paths.line(node, compact=compact) or self._state_line(node)
+        phrase = self.review_phrase(node)
+        if phrase and out["kind"] in ("moving", "done", "idle") and node.review is not None:
+            # Built, or its follow-ups run: the review says where it is, never "Done".
+            out = {**out, "kind": "moving", "label": phrase, "ends": "moving"}
+            if node.review.line and not compact:
+                out["detail"] = node.review.line
         if not compact and out["kind"] != "done" and (note := self.paths.note(node)):
             out["note"] = note
         return out
@@ -2223,6 +2275,8 @@ class Tree:
             change = next((k for k in self.children(node.ref) if k.level == "change"), None)
             if change is not None and change.tag:
                 out["change"] = {"ref": change.ref, "label": change.tag}
+        if phrase := self.review_phrase(node):
+            out["review_phrase"] = phrase
         return out
 
     def _responder_seat(self, node: _N) -> str | None:
@@ -3016,6 +3070,36 @@ class Tree:
             if not can_edit:
                 item["reason"] = _READ_ONLY
             out.append(item)
+        if self._verb_applies("review", node, state):
+            out += self._review_verbs(node, can_edit=can_edit)
+        return out
+
+    def _review_verbs(self, node: _N, *, can_edit: bool) -> list[dict[str, Any]]:
+        """
+        A stored feature's done review: "Is this done?" (off while a review
+        runs), and a person's change of direction once one answered: it is
+        done, drop a follow-up. Served on every stored feature (no structure
+        changes), whatever ``structure.verbs`` lists.
+        """
+        review = node.review
+        assert review is not None
+        label, keys = _VERB_LABELS["review"]
+        ask: dict[str, Any] = {"verb": "review", "label": label, "key": keys, "enabled": can_edit}
+        if review.phase == "in_review" and can_edit:
+            ask["enabled"] = False
+            ask["reason"] = f"{review.reviewer or 'A reviewer'} is reviewing it now."
+        out: list[dict[str, Any]] = [ask]
+        if not review.n:
+            if not can_edit:
+                ask["reason"] = _READ_ONLY
+            return out
+        if not review.passed:
+            out.append({"verb": "done", "label": _VERB_LABELS["done"][0], "enabled": can_edit})
+        if any(gap_live(g) for g in review.gaps):
+            out.append({"verb": "drop", "label": _VERB_LABELS["drop"][0], "enabled": can_edit})
+        if not can_edit:
+            for item in out:
+                item["reason"] = _READ_ONLY
         return out
 
     def _verb_applies(self, verb: str, node: _N, state: str) -> bool:
@@ -3044,6 +3128,12 @@ class Tree:
             "name": lambda: self.materializes(node) or self.renames(node),
             # The level names live in the definition: renamed from its area only.
             "rename": lambda: node.ref == _DEFINITION,
+            "review": lambda: (
+                stored
+                and node.level == "feature"
+                and node.kind == "feature"
+                and node.review is not None
+            ),
         }
         check = checks.get(verb)
         return check() if check is not None else True
@@ -3295,6 +3385,8 @@ class Tree:
             out["results"] = self.results(node)
         if node.parent is None:
             out["home"] = self.home.get(node.tree) or (self.ladder[node.tree][1:2] or [""])[0]
+        if node.review is not None and (review := node.review.view()) is not None:
+            out["review"] = review
         return your_move.mark_repeats(out, (i["id"] for i in moves["items"]))
 
     def level_view(

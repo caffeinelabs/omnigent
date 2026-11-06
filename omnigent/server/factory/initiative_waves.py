@@ -31,7 +31,7 @@ things keep one moving once its first wave lands:
    person's input is built mock-first, behind a flag the notice asks for when
    the initiative has none.
 
-How far the waves are, in words ("wave 1 done · wave 2 started"), is pure and
+How far the waves are, in words ("wave 1 built · wave 2 started"), is pure and
 lives in :mod:`.initiative_view` (:func:`.initiative_view.wave_phrase`).
 
 Nothing here names a product: every word that is not fixed copy comes from
@@ -825,6 +825,12 @@ def notice_text(
             "final wording, scope the ask does not cover): keep it; if it marks no "
             "recommended option, withdraw it and ask again with one."
         )
+    lines.append(
+        f"An independent done review of wave {state.current} runs now: its fixes and "
+        f"completions start on their own in {ref}, product choices go to a person, and the "
+        f"scope it finds unbuilt is wave {n}'s input (you get its verdict). Never report "
+        f"{ref} as done: it reads done only after a review passes."
+    )
     lines += [
         f'Now, in this turn: run load_skill("factory-planning") and follow "3c. The next '
         f'wave": propose wave {n} with sys_factory_project and the analysis initiative '
@@ -888,7 +894,7 @@ def due(
     return out
 
 
-def _subject_slug(store: Any, factory_id: str, subject: str | None) -> str | None:
+def subject_slug(store: Any, factory_id: str, subject: str | None) -> str | None:
     """The project a decision's subject names: itself, its PR's or its task's (sync)."""
     from omnigent.server.factory import node_refs
 
@@ -942,7 +948,7 @@ def work_questions(
         if is_initiative_subject(d.subject, row.ref):
             continue
         mine = norm_id(d.asked_by_session_id or "") == lead
-        slug = _subject_slug(store, factory_id, d.subject) or d.project_slug
+        slug = subject_slug(store, factory_id, d.subject) or d.project_slug
         if slug is None and mine and named.search(f"{d.question} {d.context or ''}"):
             slug = next(iter(slugs))  # the lead's question names a project of it
         if slug not in slugs:
@@ -1048,6 +1054,7 @@ __all__ = [
     "parked_in",
     "parked_scope",
     "slug_of",
+    "subject_slug",
     "sweep",
     "title_for",
     "told",

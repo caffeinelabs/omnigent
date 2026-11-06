@@ -161,6 +161,10 @@ relay surface (Claude Code sees `mcp__omnigent__<name>`).
 - `sys_factory_rules()` (every role), `sys_factory_insights(kind, …)` (leads,
   PLs, the planner), `sys_factory_retro(…)` and `sys_factory_propose(kind, …)`
   (leads and PLs) — see Self-modification.
+- `sys_factory_review(initiative, review?, verdict, summary, gaps?, accepted?)`
+  (leads) — the independent done reviewer's verdict on a feature (see Done
+  review). An older server answers `not_served`; an older host without the
+  tool files it with `sys_factory_retro(target="review:I-<n>")`.
 - `sys_factory_node(op="read", ref, children_page?)` (leads, PLs, Scout, the
   planner) — one node of cockpit v3's work tree as people see it (`GET
   /v1/factory/agent/node`: the node page, verbs disabled; agents change the
@@ -297,6 +301,8 @@ if they stay silent the board is still right.
 | `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
 | `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
 | `POST /v1/factory/agent/proposals`, `GET …/agent/projects` | runner (`sys_factory_project`) | Propose project changes; leads for every project, a PL for its own. |
+| `POST /v1/factory/agent/reviews` | runner (`sys_factory_review`, leads) | The independent reviewer's done-review verdict (see Done review). |
+| `POST /v1/factory/factories/{fid}/n/{ref}/review` | human (EDIT) | "Is this done?" on a feature: a done review now, or the one in progress (preview-free: it only reads). |
 | `GET /v1/factory/factories/{fid}/tasks?project=`, `POST …/{fid}/tasks`, `PATCH …/{fid}/tasks/{id or T-n}`, `GET …/{fid}/graph?kind=work\|bus\|flow\|org&project=&window=` | human (READ; EDIT and human origin to write) | The work graph (see below); adds and edits mail the PL `[Factory control · TASK ADD\|TASK EDIT …]`. |
 | `PUT /v1/factory/agent/tasks`, `GET …/agent/tasks?view=list\|ready\|get`, `POST …/agent/tasks/{key}/start\|done\|fail\|cancel\|report` | runner (`sys_factory_task`) | The PL writes its project's tasks; leads read; the bound worker reports. |
 | `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled; `default_repo`, `default_base` and `max_projects` for the start form. |
@@ -680,7 +686,7 @@ acceptance runs; its state is computed from the projects and runs.
   option. It asks for a flag when the initiative has none. A next wave
   that leaves `waves` out keeps what it did not build planned in the wave
   after it (never past wave 8); an explicit `"waves": []` says nothing is
-  left. Lines read "wave 1 done · wave 2 planned | started", "… · needs
+  left. Lines read "wave 1 built · wave 2 planned | started", "… · needs
   <that ask>" or, for a blocking ask only, "… · wave 2 blocked on <it>"
   (the asks' and status summary's `initiatives[].waves`, the digest, and
   `your_move.waves` on the node pages at or above the feature).
@@ -705,6 +711,90 @@ acceptance runs; its state is computed from the projects and runs.
   never re-parents a project another initiative owns. Each candidate's
   outcome is logged once at info ("backfilled C-n → I-n …", "skipped C-n:
   …"), and a settled pass reads only the newest applied projects proposal.
+
+### Done review
+
+A feature (initiative) reads done only after an independent done review
+passes (`server/factory/done_review.py`, the pure views in
+`done_review_view.py`, the people's verbs in `done_review_verbs.py`). The
+lead that planned the work never judges it.
+
+- **Who.** Sentinel: an active lead that is not the factory root and filed
+  none of the feature's plans (a review's own follow-up proposals do not
+  count). With none on the roster, or `done_review.reviewer: server`, the
+  server's own reading of the evidence is the verdict. The reviewer only
+  proposes; the server files what follows.
+- **When.** The proposals sweep, right after the wave-done notice (which now
+  says a review runs), asks for a review once every counted project of the
+  feature is finished and no review covers the work as it is (a plan filed
+  since, other than the review's own follow-ups, makes it stale); again
+  once a not-done review's follow-ups all finished, at most
+  `done_review.rounds` (3) per wave, then it is a person's call; and when a
+  person asks "is this done?" (`POST …/n/{ref}/review`, preview-free since
+  it only reads; the feature's `review` verb, "Is this done?" in its ⋯ menu
+  or those words in its chat). At most 2 new reviews per sweep per factory.
+- **Evidence** (server-side, one brief): the ask verbatim, the acceptance
+  steps and the latest run, every demo's newest verdict per PR with what was
+  partial, open and answered questions about the work (its subject is the
+  feature, a project of it, or a PR or task of one), findings and unfinished
+  tasks left in finished projects, the flag and what turns it on, and scope
+  parked for later waves. Each becomes a numbered line `E1`… with a stable
+  key, a severity, the rubric line it bears on and a suggested follow-up.
+  `[Factory review · I-<n> review <k> · wave <w> built] <title>: is it truly
+  done?` carries them with the rubric to the reviewer (`factory-done-review`).
+- **Verdict** (`POST /v1/factory/agent/reviews`, `sys_factory_review`):
+  `done`, `done_with_follow_ups` or `not_done`, one line per gap (severity,
+  evidence ids, rubric key, follow-up). Every evidence line is a gap the
+  reviewer listed or one it accepted with why; the server adds the rest
+  ("from the evidence") and floors the verdict: a high gap, or one on a
+  blocking rubric line, is `not_done`; any other gap with a follow-up is at
+  least `done_with_follow_ups`. 403 `not_independent` for the root lead or a
+  planner, 409 `review_closed` once a verdict is in, 400
+  `recommendation_required` for a choice without exactly one recommended
+  option. A review nobody answers in `done_review.answer_h` (4 h) gets the
+  server's evidence verdict.
+- **Follow-ups**, under the autonomy rules: `task` (a fix or completion in
+  an active project; its PL gets it in its work graph) and `project` (a new
+  project of the feature in its current wave: one projects proposal per
+  review, filed by the reviewer on behalf of the person who asked, so it
+  applies at once unless the autonomy is `confirm`) start on their own; a
+  `choice` goes to that person with a recommended option (a new `D-n` whose
+  subject is the feature and whose answer reaches the lead, or the open
+  question it names); an `input` (credentials, spend, personal data) is
+  asked for while its work is built mock-first behind the flag; `next_wave`
+  scope stays (or is put) in the next planned wave, the next wave's input.
+  An open question a started fix answers is closed by the server with its
+  cause. The lead hears `[Factory review · I-<n> review <k> · <verdict>]`
+  with what was filed.
+- **States.** The initiative's state is `in_review` ("built · in review")
+  once every live project is closed and no passing review covers it,
+  `follow_ups` ("follow-ups running · Review: not done · 2 follow-ups
+  started · 1 needs you · rest in wave 2") while a review's follow-ups run,
+  and `done` only once a review passed (`done`, or `done_with_follow_ups`
+  whose follow-ups finished) or a person said so. A wave is "built", never
+  "done". The node tree, the one-line status (`review_phrase` on a feature
+  row, the page's `review`), the asks, the status summary and the Slack
+  digest read the same.
+- **Change direction.** The feature's verbs `done` ("It is done") and
+  `drop` ("Drop a follow-up", `args.gap`) preview and apply like every
+  structural verb, with Undo for 10 minutes; each is an
+  `initiative.review_changed` event and a line to the lead. Dropping
+  withdraws its question, cancels its task, undoes its proposal (else
+  cancels its project) or leaves it out of the next wave, and a later
+  review accepts that evidence as the person's call. Undo files it again.
+- **Record.** Reviews live on the initiative (`plan.reviews`, the newest
+  12) with their evidence, gaps and who decided; `initiative.review_requested`
+  and `initiative.reviewed` events. Where the store keeps checkpoints
+  (decide-first), the verdict is also a checkpoint (`decision_class:
+  done_review`) and a person's change of direction one over it.
+- **Rubric.** `done_review.rubric` in the definition (`[{key, text,
+  blocking}]`, class B: owners apply it, agents propose it with
+  `sys_factory_propose(kind="tuning")`; never on trial), with `reviewer`,
+  `answer_h` and `rounds`. Versions store the block only once it changed.
+- **Reopened.** A feature that read done and is not done after all (a later
+  review, or a person reopening a closed one) is an
+  `initiative.done_reopened` event; the `done_reopened` KPI counts them for
+  Sentinel's retro.
 
 ### Factory previews
 
@@ -2607,6 +2697,7 @@ with a managed sandbox launcher configured.
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
 | Base lane and demo mirror | `omnigent/server/factory/base.py`, `demo_mirror.py`, `omnigent/factory_gates.py` (`base` gate) | `tests/server/factory/test_base_watcher.py`, `test_demo_mirror.py`, `tests/test_factory_gates.py` |
 | Work graph | `omnigent/server/factory/tasks.py`, `graph.py`, `binder.py`, `api/tasks.py`, `api/graph.py` | `tests/server/factory/test_graph.py`, `test_binder.py`, `test_tasks_routes.py`, `test_graph_api.py` |
+| Done review | `omnigent/server/factory/done_review.py`, `done_review_view.py`, `done_review_verbs.py`, `api/done_review.py`, `examples/factory/factory-lead/skills/factory-done-review/` | `tests/server/factory/test_done_review.py`, `test_done_review_view.py`, `tests/runner/test_factory_review_tool.py`, web `v3/doneReview.test.tsx` |
 | Loop engine | `omnigent/server/factory/loops.py`, `loop_escalation.py`, `pipeline.py`, `budgets.py`, `api/loops.py` | `tests/server/factory/test_loops.py`, `test_pipeline.py`, `test_budgets.py` |
 | Telemetry | `omnigent/server/factory/telemetry/`, `api/telemetry_read.py`, `background/prune.py` | `tests/server/factory/test_telemetry_*.py` (replays `fixtures/live_run_2026_10_26.json`), `test_prune.py` |
 | Slack DMs | `omnigent/server/factory/slackdm/`, `background/slack_dm.py`, `api/slack_dm.py`, `web/src/components/factory/settings/{NotificationsSettings,SlackAppCard,TeamReachability}.tsx` | `tests/server/factory/test_slack_dm_*.py` (a fake Slack behind `httpx.MockTransport`, a fake clock), web `notify*.test.tsx` |

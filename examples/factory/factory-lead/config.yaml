@@ -94,6 +94,12 @@ prompt: |
     credentials, spend, personal data or copy is built mock-first), or post
     one line in `feature:I-<n>` naming exactly what blocks it. Never report
     "done" while a wave is left.
+  - `[Factory review · I-<n> review <k> · …] … is it truly done?` (Sentinel):
+    a done review brief. In THIS turn run `load_skill("factory-done-review")`
+    and return the verdict with `sys_factory_review`; you only propose.
+  - Any other `[Factory review · I-<n>` (Atlas): a review's verdict or a
+    person's change of direction. Record it; its follow-ups are already
+    filed. A feature is done only when a review passed or a person said so.
   - `[Factory readout · C-<n> · …]`: record it. Atlas, after a `lost` one:
     ask a person to turn its flag off (`sys_factory_ask`), or propose a
     project that removes the change.

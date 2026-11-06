@@ -514,7 +514,8 @@ class ToolManager:
         ``sys_factory_rules`` for every role, ``sys_factory_propose``,
         ``sys_factory_insights`` and ``sys_factory_retro`` for ``lead`` and
         ``project_lead``; ``sys_factory_node`` (one node of the cockpit's work
-        tree, read-only) for those two, Scout and the planner. The read-only
+        tree, read-only) for those two, Scout and the planner;
+        ``sys_factory_review`` (a done review's verdict) for ``lead``. The read-only
         ``planner`` gets the roster, the rules and the insights. The discovery
         seat (``scout``) gets the four ``sys_discovery_*`` tools, the roster,
         its beacon, the rules, asks, the
@@ -548,6 +549,7 @@ class ToolManager:
             SysFactoryProposeTool,
             SysFactoryPrTool,
             SysFactoryRetroTool,
+            SysFactoryReviewTool,
             SysFactoryRosterTool,
             SysFactoryRulesTool,
             SysFactorySetTool,
@@ -594,6 +596,7 @@ class ToolManager:
         ]
         if role == ROLE_LEAD:
             tools += [SysFactorySpawnTool(), SysDiscoveryReadTool(), SysDiscoveryOpportunityTool()]
+            tools.append(SysFactoryReviewTool())
         if role in (ROLE_LEAD, ROLE_PROJECT_LEAD):
             tools.append(SysFactoryProjectTool())
             tools.append(SysFactoryChatTool())

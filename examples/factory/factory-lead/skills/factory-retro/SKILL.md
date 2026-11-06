@@ -14,6 +14,8 @@ metric definitions, secrets): the server refuses it with `tier0`.
 - `sys_factory_insights(kind="findings")`: open findings, new retros, and the humans'
   calibration of your past labels. Treat confirmed and corrected labels as examples.
 - `sys_factory_insights(kind="loops")` for stuck loops; `kind="metrics", names="<a,b>"` to drill in.
+- `done_reopened` (a KPI): features that read done (a passing done review or a person's word)
+  and were reopened later. Code each one: what did the review miss?
 
 ## 2. Open coding
 For each failure in the window (a PR closed without merge, an escalated or unnecessary
@@ -39,6 +41,7 @@ Drop every one an open proposal already covers (your ledger's `C-n` lines).
 | heartbeat_share high | slower `cadence.project_lead` (class A) |
 | claim_mismatch_rate high | PL rule: claim ready only when `sys_factory_pr` says ready |
 | merge_acceptance low with wrong_scope closures | planning rule for Atlas |
+| done_reopened above 0 | a sharper rubric line: `changes=[{op: "replace", path: "done_review.rubric", value: [{key, text, blocking}, …]}]` (owners approve) |
 
 `sys_factory_propose(kind="tuning"|"rules", changes=[…] or rule={role, project, text}, rationale="…", evidence=[ids], expected_effect={metric, direction})`.
 Cheaper or safer numbers are class A: Atlas co-signs and it runs as a trial. Rules and

@@ -26,6 +26,8 @@ export const STATE_META: Record<InitiativeState, StateMeta> = {
   on_base: { label: "On the base env", meaning: "working" },
   accepting: { label: "Acceptance running", meaning: "working" },
   failing: { label: "Acceptance failing", meaning: "broken" },
+  in_review: { label: "Built · in review", meaning: "working" },
+  follow_ups: { label: "Follow-ups running", meaning: "working" },
   done: { label: "Done", meaning: "working" },
   closed: { label: "Closed", meaning: "idle" },
   cancelled: { label: "Cancelled", meaning: "idle" },
@@ -65,6 +67,8 @@ export interface CardModel {
   /** `Waiting on core (a merge of !12)` (at most two, then `+N`). */
   waiting: string | null;
   next: string | null;
+  /** Its done review: `Review: not done · 2 follow-ups started` (null before one). */
+  review: string | null;
   cost: string | null;
 }
 
@@ -123,13 +127,21 @@ export function cardModel(line: InitiativeLine): CardModel {
       ? `Waiting on ${waiting.slice(0, 2).join(", ")}${waiting.length > 2 ? ` +${waiting.length - 2}` : ""}`
       : null,
     next: line.next_wave ? `Next: ${line.next_wave}` : null,
+    review: line.review ?? null,
     cost: formatUsd(line.cost_usd ?? null),
   };
 }
 
 /** Home lists the initiatives that are not cancelled, the ones in motion first. */
 export function homeInitiatives(lines: readonly InitiativeLine[] | undefined): InitiativeLine[] {
-  const rank: Record<string, number> = { failing: 0, accepting: 1, on_base: 2, building: 3 };
+  const rank: Record<string, number> = {
+    failing: 0,
+    accepting: 1,
+    follow_ups: 2,
+    in_review: 2,
+    on_base: 2,
+    building: 3,
+  };
   return [...(lines ?? [])]
     .filter((line) => line.state !== "cancelled")
     .sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9) || b.since - a.since);

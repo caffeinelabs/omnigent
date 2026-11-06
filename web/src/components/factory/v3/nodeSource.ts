@@ -25,6 +25,7 @@ import type {
   MoneyView,
   NeedsYouList,
   NodePage,
+  ReviewAsked,
   TeamSheet,
   TimelineView,
   VerbApplied,
@@ -97,6 +98,11 @@ export interface NodeSource {
   find?: (factoryId: string, q: string, signal?: AbortSignal) => Promise<FindHit[]>;
   /** This person looked at this node now (`PUT …/n/{ref}/seen`). */
   seen?: (factoryId: string, ref: string) => Promise<void>;
+  /**
+   * "Is this done?" on a feature: an independent done review now, or the one in
+   * progress (`POST …/n/{ref}/review`). Preview-free: it only reads.
+   */
+  review?: (factoryId: string, ref: string) => Promise<ReviewAsked>;
   /** Where the node came from, what is below it, where it landed (`GET …/n/{ref}/lineage`). */
   lineage?: (factoryId: string, ref: string, signal?: AbortSignal) => Promise<LineageView | null>;
   /** One lane per child over the last day (`GET …/n/{ref}/timeline`). */
@@ -143,7 +149,7 @@ function factoryPath(fid: string): string {
 }
 
 type SteerRoutes = Required<
-  Pick<NodeSource, "preview" | "apply" | "undo" | "needsYou" | "find" | "seen">
+  Pick<NodeSource, "preview" | "apply" | "undo" | "needsYou" | "find" | "seen" | "review">
 >;
 
 /** The steering routes, as api.md §3.8 and §4 name them. */
@@ -181,13 +187,19 @@ export const steerRoutes: SteerRoutes = {
   seen: async (fid, ref) => {
     await sendJson(`${nodePath(fid, ref)}/seen`, "PUT");
   },
+  review: async (fid, ref) => {
+    const res = await sendJson(`${nodePath(fid, ref)}/review`, "POST", {});
+    const asked = (await res.json()) as ReviewAsked;
+    return asked.result ? { ...asked, result: normalizeNodePage(asked.result) } : asked;
+  },
 };
 
 /**
  * The steering routes this server has: every one api.md §3.8 and §4 names is
  * on the server (S9 Needs you and Find, S10 last look, S12 preview, apply and
- * Undo), so the live source carries them all. A source without one (an
- * older server behind a story) still falls back where a panel needs it.
+ * Undo, and a feature's "Is this done?"), so the live source carries them all.
+ * A source without one (an older server behind a story) still falls back
+ * where a panel needs it.
  */
 export const SERVED_STEER: readonly (keyof SteerRoutes)[] = [
   "preview",
@@ -196,6 +208,7 @@ export const SERVED_STEER: readonly (keyof SteerRoutes)[] = [
   "needsYou",
   "find",
   "seen",
+  "review",
 ];
 
 function served(): Partial<NodeSource> {

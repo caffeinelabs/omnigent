@@ -1,6 +1,6 @@
 // Plain words in a node's chat, read on the client: "why", "apply c-16",
 // "start the panel now", "also plan google ads", "swap luz to codex",
-// "auto-merge this", "research …", "pause". The words are always posted
+// "auto-merge this", "research …", "pause", "is this done?". The words are always posted
 // first (a bare "why" stays here); then a short, command-shaped message also
 // opens something beside them: the why card, the ask's card (its answer
 // stays a click), or a verb's preview. Nothing here applies a change, and a
@@ -21,6 +21,9 @@ const BARE_WHY = /^\/?why[?!.]*$/;
 /** "why is it not moving", "why hasn't it started", "what is it waiting on": the whole message. */
 const WHY =
   /^(?:why (?:is|isn'?t|has|hasn'?t|did|does|doesn'?t|are|aren'?t) (?:it|this|that)(?: not)? (?:moving|started|starting|running|stuck|waiting|blocked|done|finished|merged|going)|what(?:'?s| is) (?:it|this) waiting (?:on|for))[?!.]*$/;
+/** "is this done?", "is it really done", "are we done yet": a feature's done review. */
+const DONE_ASK =
+  /^(?:is (?:it|this|that)(?: (?:really|truly|actually))? (?:done|finished)|are we (?:done|finished))(?: yet)?[?!.]*$/;
 /** A command is short: at most this many words. */
 const COMMAND_WORDS = 6;
 /** Words that turn a verb around ("don't auto-merge this"): never a command. */
@@ -135,9 +138,11 @@ export function parseIntent(text: string, page: NodePage): ChatIntent | null {
   if (!t) return null;
   if (BARE_WHY.test(t)) return { kind: "why", bare: true };
   if (WHY.test(t)) return { kind: "why", bare: false };
-  if (t.includes("?") || NEGATION.test(t) || t.split(" ").length > COMMAND_WORDS) return null;
   const verbs = page.verbs;
   const here = page.node.ref;
+  if (DONE_ASK.test(t))
+    return has(verbs, "review") ? { kind: "verb", verb: "review", at: here } : null;
+  if (t.includes("?") || NEGATION.test(t) || t.split(" ").length > COMMAND_WORDS) return null;
   const answer = t.match(ANSWER);
   if (answer) {
     const decision = findDecision(page, answer[2]!);

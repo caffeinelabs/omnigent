@@ -239,6 +239,93 @@ class DecisionsDef(_Block):
     escalate_owners_after_m: int = 120
 
 
+class ReviewCriterion(_Block):
+    """
+    One line of the done review's rubric: what counts as done.
+
+    :param key: A short id the reviewer cites (``ask_covered``).
+    :param blocking: A gap on it makes the verdict "not done", whatever its severity.
+    """
+
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    text: str = Field(min_length=1, max_length=300)
+    blocking: bool = False
+
+
+DEFAULT_RUBRIC: Final[tuple[tuple[str, str, bool], ...]] = (
+    (
+        "ask_covered",
+        "Everything the person asked for is built, or planned in a later wave with what it "
+        "waits for; scope still parked means the feature is not done yet.",
+        True,
+    ),
+    (
+        "acceptance_passes",
+        "The latest acceptance run on the base env passes every step; a step the env could "
+        "not run is a gap unless a person accepted it.",
+        True,
+    ),
+    (
+        "reachable",
+        "People can reach it: an entry point where users would look, behind its flag.",
+        True,
+    ),
+    (
+        "demos_pass",
+        "Every demo of the feature's changes passes; PARTIAL or FAIL is a gap, with what "
+        "was partial.",
+        False,
+    ),
+    (
+        "asks_settled",
+        "No question about the feature's work is still open, and every answered one was "
+        "carried out.",
+        False,
+    ),
+    (
+        "gaps_closed",
+        "Every gap an agent raised (a finding, a failing check, an unfinished task) is fixed "
+        "or has a follow-up.",
+        False,
+    ),
+    (
+        "flags_ready",
+        "Each flag still off says what turning it on needs, and who provides it.",
+        False,
+    ),
+)
+"""The rubric a factory starts with: ``(key, text, blocking)``."""
+
+
+def _default_rubric() -> list[ReviewCriterion]:
+    return [ReviewCriterion(key=k, text=t, blocking=b) for k, t, b in DEFAULT_RUBRIC]
+
+
+def _unique_keys(items: list[ReviewCriterion]) -> list[ReviewCriterion]:
+    if len({c.key for c in items}) != len(items):
+        raise ValueError("a rubric key is listed twice")
+    return items
+
+
+class DoneReviewDef(_Block):
+    """
+    How a feature's done review judges and who reviews it.
+
+    :param rubric: What counts as done (owners edit it; agents propose changes).
+    :param reviewer: ``sentinel`` (the lead that did not plan the work) or
+        ``server`` (the server's own reading of the evidence).
+    :param answer_h: Hours the reviewer has; then the server's evidence verdict stands.
+    :param rounds: Reviews the server asks for per wave before it is a person's call.
+    """
+
+    rubric: Annotated[list[ReviewCriterion], AfterValidator(_unique_keys)] = Field(
+        default_factory=_default_rubric, min_length=1, max_length=12
+    )
+    reviewer: Literal["sentinel", "server"] = "sentinel"
+    answer_h: float = 4.0
+    rounds: int = 3
+
+
 class AlertsDef(_Block):
     """The detectors' thresholds (the Slack webhook is a secret: Tier 0)."""
 
@@ -318,6 +405,7 @@ class FactoryDefinitionDoc(_Block):
     goal_seq: int = 0
     team: TeamDef = Field(default_factory=TeamDef)
     structure: StructureDef = Field(default_factory=StructureDef)
+    done_review: DoneReviewDef = Field(default_factory=DoneReviewDef)
 
     @field_validator("rules")
     @classmethod
@@ -426,6 +514,8 @@ BOUNDS: Final[dict[str, tuple[float, float]]] = {
     "discovery.rubric.map.confidence_high": (0, 1),
     "discovery.rubric.human_minute_usd": (0, 100),
     "structure.tiles_max": blocks.TILES_MAX_BOUNDS,
+    "done_review.answer_h": (0.25, 48),
+    "done_review.rounds": (1, 6),
 }
 """Code bounds of every numeric path (an env default outside them widens them)."""
 ENV_CEILINGS: Final = frozenset(
@@ -483,6 +573,7 @@ CLASS_MAP: Final[dict[str, Callable[[Any, Any], Klass]]] = {
     "briefs.*": _always("B"),
     "role_defaults.*": _always("B"),
     "structure.*": _always("B"),
+    "done_review.*": _always("B"),
 }
 """``path pattern -> (before, after) -> class``; the first matching pattern wins."""
 CLASS_TABLE: Final = (
@@ -507,6 +598,7 @@ CLASS_TABLE: Final = (
     ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
     ("briefs.*, role_defaults.*", "B (owners)"),
     ("structure.*", "B (owners only: agents never propose it); applies as a version"),
+    ("done_review.*", "B (owners; agents propose the rubric); applies as a version"),
     ("team.templates.*", "B (owners); never on trial (it reaches a project on a switch)"),
     (
         "team.projects.<slug> members",
@@ -736,8 +828,9 @@ def set_path(doc: dict[str, Any], path: str, value: Any) -> None:
     node[last] = value
 
 
-SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq", team_spec.TEAM)
-"""Keys a version stores only once they differ from their defaults (see :func:`stored_form`)."""
+SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq", team_spec.TEAM, "done_review")
+"""Keys a version stores only once they differ from their defaults (see :func:`stored_form`):
+a server from before one of them still reads every version that never changed it."""
 SPARSE_FIELDS: Final = (
     "product.delivery.auto_merge",
     "product.delivery.auto_merge_scopes",
@@ -1921,6 +2014,7 @@ _UNTRIALABLE_NAMES: Final = {
     "briefs.scout": "Scout's brief",
     team_spec.PROJECTS: "a project's team",
     team_spec.TEMPLATES: "team template",
+    "done_review": "done review",
 }
 _UNTRIALABLE_WHY: Final = {
     blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
@@ -1945,6 +2039,10 @@ _UNTRIALABLE_WHY: Final = {
     blocks.NO_PROJECT_FOLLOWS: (
         "reach a project only when it switches to the template, so a trial would measure "
         "nothing yet"
+    ),
+    blocks.TOO_FEW_REVIEWS: (
+        "are judged by how often a done feature is reopened, and too few features finish "
+        "in a trial's window"
     ),
 }
 

@@ -154,6 +154,8 @@ export interface VerbArgs {
   /** "swap luz to codex": the member, and what to swap to. */
   member?: string;
   to?: string;
+  /** Drop a follow-up: its gap's number in the feature's done review. */
+  gap?: number;
 }
 
 /** The node's own chat thread. */
@@ -245,6 +247,11 @@ export interface NodeSummary {
   idle?: number;
   /** The node's one change, shown inline in a task row ("#9876 · merged"). (client) */
   change?: { ref: string; label: string };
+  /**
+   * A feature no done review passed yet: "Built · in review" or "Follow-ups
+   * running" (it never reads done until one passes). Its row's one phrase.
+   */
+  review_phrase?: string;
 }
 
 export interface AcceptanceStep {
@@ -416,6 +423,45 @@ export interface NodePage {
    * Absent on older servers: the page derives it from the status line and Needs you.
    */
   your_move?: YourMove;
+  /** A feature's done review: its one line and, in Details, its gaps. */
+  review?: ReviewView;
+}
+
+// ── Done review ─────────────────────────────────────────────────
+
+/** One gap a done review found and what follows it. */
+export interface ReviewGap {
+  n: number;
+  line: string;
+  severity: "high" | "medium" | "low";
+  kind: "task" | "project" | "choice" | "input" | "next_wave" | "none";
+  /** `started`, `asked`, `waiting`, `next_wave`, `to_lead`, `finished`, `noted`, `dropped`. */
+  status: string;
+  /** Its follow-up still runs or waits. */
+  live: boolean;
+  refs?: string[];
+  /** What was filed, in words ("project fix-live-search (C-5)"). */
+  follow?: string;
+  /** `evidence`: the server added it (the reviewer left it out). */
+  added?: string;
+}
+
+/** "Review: not done · 2 follow-ups started · 1 needs you · rest in wave 2". */
+export interface ReviewView {
+  n: number;
+  phase: "none" | "in_review" | "follow_ups" | "settled" | "passed";
+  verdict?: "done" | "done_with_follow_ups" | "not_done" | null;
+  line?: string | null;
+  said_by?: string | null;
+  gaps: ReviewGap[];
+}
+
+/** What "Is this done?" answers (`POST …/n/{ref}/review`). */
+export interface ReviewAsked {
+  review: { n: number; status?: string | null; reviewer?: string | null; verdict?: string | null };
+  line?: string | null;
+  message: string;
+  result?: NodePage | null;
 }
 
 // ── Your move (calm rule 1) ─────────────────────────────────────
@@ -448,7 +494,7 @@ export interface YourMoveItem {
   decision: DecisionRef;
 }
 
-/** Where an initiative of several waves is ("Agent assistant: wave 1 done · wave 2 started"). */
+/** Where an initiative of several waves is ("Agent assistant: wave 1 built · wave 2 started"). */
 export interface WaveLine {
   /** The initiative (`I-3`). */
   ref: string;

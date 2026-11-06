@@ -14,7 +14,7 @@ asks (the status line, a child's line, a segment) is marked ``in_your_move``
 (:func:`mark_repeats`), so the cockpit draws no second button, banner or card.
 
 Above the feature level, Your move also says where each initiative of several
-waves under the node is (``waves``: "Agent assistant: wave 1 done · wave 2
+waves under the node is (``waves``: "Agent assistant: wave 1 built · wave 2
 started", :func:`wave_lines`), so the person sees the next wave move, or the
 one input it is blocked on, without opening the feature.
 
@@ -191,7 +191,7 @@ def _wave_lines(tree: Tree) -> dict[str, dict[str, str]]:
 def wave_lines(tree: Tree, node: _N) -> list[dict[str, str]]:
     """
     Where each initiative of several waves at or under *node* is, as one line
-    (``{ref, title, line}``: "Agent assistant: wave 1 done · wave 2 started"),
+    (``{ref, title, line}``: "Agent assistant: wave 1 built · wave 2 started"),
     for a product, goal, need or feature page.
     """
     if node.tree != PRODUCT_TREE or node.level not in WAVE_LEVELS:

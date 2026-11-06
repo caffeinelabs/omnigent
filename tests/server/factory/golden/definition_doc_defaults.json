@@ -110,6 +110,48 @@
       "validated_min_level": "moderate"
     }
   },
+  "done_review": {
+    "answer_h": 4.0,
+    "reviewer": "sentinel",
+    "rounds": 3,
+    "rubric": [
+      {
+        "blocking": true,
+        "key": "ask_covered",
+        "text": "Everything the person asked for is built, or planned in a later wave with what it waits for; scope still parked means the feature is not done yet."
+      },
+      {
+        "blocking": true,
+        "key": "acceptance_passes",
+        "text": "The latest acceptance run on the base env passes every step; a step the env could not run is a gap unless a person accepted it."
+      },
+      {
+        "blocking": true,
+        "key": "reachable",
+        "text": "People can reach it: an entry point where users would look, behind its flag."
+      },
+      {
+        "blocking": false,
+        "key": "demos_pass",
+        "text": "Every demo of the feature's changes passes; PARTIAL or FAIL is a gap, with what was partial."
+      },
+      {
+        "blocking": false,
+        "key": "asks_settled",
+        "text": "No question about the feature's work is still open, and every answered one was carried out."
+      },
+      {
+        "blocking": false,
+        "key": "gaps_closed",
+        "text": "Every gap an agent raised (a finding, a failing check, an unfinished task) is fixed or has a follow-up."
+      },
+      {
+        "blocking": false,
+        "key": "flags_ready",
+        "text": "Each flag still off says what turning it on needs, and who provides it."
+      }
+    ]
+  },
   "engine": {
     "mode": "assist",
     "next_hints": true,

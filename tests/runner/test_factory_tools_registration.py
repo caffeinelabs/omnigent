@@ -9,7 +9,8 @@ and env_keeper, ``sys_factory_demo`` for those two and the demo agent,
 (the server scopes a PL to its own project and threads), and
 ``sys_factory_task`` (the work graph) for leads, project leads and ICs.
 ``sys_factory_node`` (one node of the cockpit's work tree, read-only) is for
-leads, project leads, Scout and the read-only planner.
+leads, project leads, Scout and the read-only planner; ``sys_factory_review``
+(a done review's verdict) is for leads.
 Native harnesses see nothing but the relay, so the tools must also ride
 ``build_native_relay_tool_schemas`` — that is what puts
 ``mcp__omnigent__sys_session_post`` in front of Claude Code.
@@ -59,18 +60,21 @@ _TASK = "sys_factory_task"
 _CHAT = "sys_factory_chat"
 _RULES = "sys_factory_rules"
 _NODE = "sys_factory_node"
+_REVIEW = "sys_factory_review"
 _LEARN = {"sys_factory_propose", "sys_factory_insights", "sys_factory_retro"}
 _READ = "sys_discovery_read"
 _IDEA = "sys_discovery_opportunity"
 _DISCOVERY = {_READ, "sys_discovery_query", "sys_discovery_code", _IDEA}
 _ALL = (
     _EVERY_ROLE
-    | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES, _NODE}
+    | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES, _NODE, _REVIEW}
     | _LEARN
     | _DISCOVERY
 )
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES, _READ, _IDEA, _NODE} | _LEARN,
+    "lead": _EVERY_ROLE
+    | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES, _READ, _IDEA, _NODE, _REVIEW}
+    | _LEARN,
     "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES, _NODE} | _LEARN,
     "env_keeper": _EVERY_ROLE | {_ENV, _DEMO, _RULES},
     "ic": _EVERY_ROLE | {_TASK, _RULES},

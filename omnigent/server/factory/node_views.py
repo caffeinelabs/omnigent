@@ -168,6 +168,9 @@ class NodeSummaryView(_View):
     working: list[ActorView] | None = None
     idle: int | None = None
     change: ChangeLinkView | None = None
+    review_phrase: str | None = None
+    """A feature's few words while no done review passed: "Built · in review",
+    "Follow-ups running" (it is never shown as done until one does)."""
 
 
 class AcceptanceStepView(_View):
@@ -424,7 +427,7 @@ class YourMoveItemView(_View):
 
 
 class WaveLineView(_View):
-    """Where an initiative of several waves is: "Agent assistant: wave 1 done · wave 2 started"."""
+    """Where a feature of several waves is: "Agent assistant: wave 1 built · wave 2 started"."""
 
     ref: str
     title: str
@@ -440,6 +443,34 @@ class YourMoveView(_View):
     items: list[YourMoveItemView] = Field(max_length=3)
     more: int
     waves: list[WaveLineView] | None = None
+
+
+class ReviewGapView(_View):
+    """One gap a done review found: its line, severity and what follows it."""
+
+    n: int
+    line: str
+    severity: Literal["high", "medium", "low"]
+    kind: Literal["task", "project", "choice", "input", "next_wave", "none"]
+    status: str
+    live: bool
+    refs: list[str] | None = None
+    follow: str | None = None
+    added: str | None = None
+
+
+class ReviewView(_View):
+    """
+    A feature's done review: "Review: not done · 2 follow-ups started" and its gaps
+    (the gaps live in Details; a person drops one with the ``drop`` verb).
+    """
+
+    n: int
+    phase: Literal["none", "in_review", "follow_ups", "settled", "passed"]
+    verdict: Literal["done", "done_with_follow_ups", "not_done"] | None = None
+    line: str | None = None
+    said_by: str | None = None
+    gaps: list[ReviewGapView]
 
 
 class NodePageView(_View):
@@ -460,6 +491,7 @@ class NodePageView(_View):
     thread: ThreadRefView
     version: str
     home: str | None = None
+    review: ReviewView | None = None
 
 
 class GroupParentView(CrumbView):
