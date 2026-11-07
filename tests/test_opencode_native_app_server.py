@@ -152,6 +152,8 @@ def test_filtered_server_env_points_gh_at_real_config_dir(
     assert env["GH_CONFIG_DIR"] == "/home/omnigent/.config/gh"
     # OpenCode's own config stays isolated.
     assert env["XDG_CONFIG_HOME"] == str(tmp_path / "xdg-config")
+
+
 def test_filtered_server_env_honors_runner_passthrough(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

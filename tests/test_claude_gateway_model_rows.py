@@ -47,7 +47,9 @@ async def test_gateway_rows_strip_prefix_and_dedup(monkeypatch: pytest.MonkeyPat
         )
 
     _mock_client(monkeypatch, handler)
-    rows = await m._databricks_gateway_model_rows(_cfg("https://ws.example.com/ai-gateway/anthropic"))
+    rows = await m._databricks_gateway_model_rows(
+        _cfg("https://ws.example.com/ai-gateway/anthropic")
+    )
     assert [r["model"] for r in rows] == [
         "system.ai.claude-opus-4-8",
         "system.ai.kimi-k3",
@@ -77,5 +79,7 @@ async def test_gateway_rows_best_effort_on_http_error(monkeypatch: pytest.Monkey
         return httpx.Response(500, json={"error": "boom"})
 
     _mock_client(monkeypatch, handler)
-    rows = await m._databricks_gateway_model_rows(_cfg("https://ws.example.com/ai-gateway/anthropic"))
+    rows = await m._databricks_gateway_model_rows(
+        _cfg("https://ws.example.com/ai-gateway/anthropic")
+    )
     assert rows == []
